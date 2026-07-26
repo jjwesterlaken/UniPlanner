@@ -62,9 +62,7 @@
         "AppImage"
       ],
       "icon": "build/icon.png",
-      "category": "Education",
-      "desktopName": "university-planner.desktop",
-      "synchronizeDesktopName": true
+      "category": "Education"
     }
   }
 }
