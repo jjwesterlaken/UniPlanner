@@ -1,0 +1,21 @@
+{
+  "name": "university-planner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "University Planner - courses, assignments, notes and study cards.",
+  "scripts": {
+    "build:web": "node scripts/build-web.mjs",
+    "prepare:native": "node scripts/prepare-native.mjs",
+    "build": "npm run build:web && npm run prepare:native"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^3.4.17"
+  },
+  "dependencies": {
+    "lucide-react": "^1.27.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "university-planner",
+  "productName": "University Planner",
+  "version": "1.0.0",
+  "description": "Plan courses, assignments, readings and study cards.",
+  "main": "main.js",
+  "author": "University Planner",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.uniplanner.app",
+    "productName": "University Planner",
+    "files": [
+      "main.js",
+      "www/**/*"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.education",
+      "icon": "build/icon.png",
+      "identity": null
+    },
+    "dmg": {
+      "title": "University Planner"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "University Planner",
+      "artifactName": "University Planner Setup ${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "University Planner Portable ${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "build/icon.png",
+      "category": "Education",
+      "desktopName": "university-planner.desktop",
+      "synchronizeDesktopName": true
+    }
+  }
+}
