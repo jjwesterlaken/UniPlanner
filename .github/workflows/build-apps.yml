@@ -42,10 +42,28 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+
+      - name: Show what we're working with
+        shell: bash
+        run: |
+          echo "node:     $(node --version)"
+          echo "npm:      $(npm --version)"
+          echo "NODE_ENV: '${NODE_ENV:-not set}'"
+          echo "--- files checked out ---"
+          ls -la
+          echo "--- src ---"
+          ls -la src
 
       - name: Install web build tools
         run: npm install
+
+      - name: Confirm build tools installed
+        shell: bash
+        run: |
+          test -d node_modules/esbuild || { echo "ERROR: esbuild missing"; exit 1; }
+          test -d node_modules/tailwindcss || { echo "ERROR: tailwindcss missing"; exit 1; }
+          echo "build tools present"
 
       - name: Build the planner
         run: npm run build
