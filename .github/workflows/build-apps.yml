@@ -76,7 +76,11 @@ jobs:
         working-directory: desktop
         run: npx electron-builder ${{ matrix.flags }} --publish never
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Note: GITHUB_TOKEN is deliberately NOT set here. Its presence makes
+          # electron-builder try to publish and generate auto-update metadata,
+          # which fails the build. The finished files are collected by the
+          # upload step below instead.
+          #
           # ---- Code signing (optional, add later) -------------------------
           # Signing is what removes the "unidentified developer" / "Windows
           # protected your PC" warnings. Until these secrets exist, the build
@@ -93,6 +97,7 @@ jobs:
           #   CSC_LINK: ${{ secrets.WIN_CERT_PFX_BASE64 }}
           #   CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
           # -----------------------------------------------------------------
+          ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: "true"
 
       - name: Collect the finished files
         uses: actions/upload-artifact@v4
