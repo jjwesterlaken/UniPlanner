@@ -24,11 +24,22 @@ await build({
   logLevel: "info",
 });
 
-// 2. Stylesheet (Tailwind CLI). npx.cmd on Windows, npx elsewhere.
-const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+// 2. Stylesheet. Call the locally installed Tailwind binary directly rather
+//    than going through npx, which behaves inconsistently on build servers.
+const binName = process.platform === "win32" ? "tailwindcss.cmd" : "tailwindcss";
+const tailwindBin = path.join("node_modules", ".bin", binName);
+
+if (!fs.existsSync(tailwindBin)) {
+  throw new Error(
+    `Tailwind was not found at ${tailwindBin}. ` +
+      `This usually means "npm install" did not install devDependencies. ` +
+      `Check that NODE_ENV is not set to "production" before installing.`
+  );
+}
+
 execFileSync(
-  npx,
-  ["tailwindcss", "-i", "src/input.css", "-o", path.join(OUT, "app.css"), "--minify"],
+  tailwindBin,
+  ["-i", "src/input.css", "-o", path.join(OUT, "app.css"), "--minify"],
   { stdio: "inherit" }
 );
 
