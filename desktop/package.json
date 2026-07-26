@@ -6,6 +6,10 @@
   "main": "main.js",
   "author": "University Planner",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jjwesterlaken/UniPlanner.git"
+  },
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --mac",
