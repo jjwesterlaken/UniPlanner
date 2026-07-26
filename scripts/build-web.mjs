@@ -4,6 +4,7 @@
 
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -24,22 +25,34 @@ await build({
   logLevel: "info",
 });
 
-// 2. Stylesheet. Call the locally installed Tailwind binary directly rather
-//    than going through npx, which behaves inconsistently on build servers.
-const binName = process.platform === "win32" ? "tailwindcss.cmd" : "tailwindcss";
-const tailwindBin = path.join("node_modules", ".bin", binName);
+// 2. Stylesheet.
+//    Tailwind is run by pointing Node straight at its JavaScript entry point.
+//    We deliberately avoid both `npx` (unreliable on build servers) and the
+//    node_modules/.bin shim, because on Windows that shim is a .cmd file and
+//    modern Node refuses to execute .cmd directly (throws EINVAL).
+const require = createRequire(import.meta.url);
 
-if (!fs.existsSync(tailwindBin)) {
+let tailwindCli;
+try {
+  const pkgPath = require.resolve("tailwindcss/package.json");
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+  const rel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin.tailwindcss;
+  tailwindCli = path.join(path.dirname(pkgPath), rel);
+} catch (err) {
   throw new Error(
-    `Tailwind was not found at ${tailwindBin}. ` +
-      `This usually means "npm install" did not install devDependencies. ` +
-      `Check that NODE_ENV is not set to "production" before installing.`
+    'Could not find Tailwind. This usually means "npm install" did not install ' +
+      `devDependencies. Original error: ${err.message}`
   );
 }
 
+if (!fs.existsSync(tailwindCli)) {
+  throw new Error(`Tailwind CLI not found at ${tailwindCli}`);
+}
+
+// process.execPath is the Node binary currently running - works on every OS.
 execFileSync(
-  tailwindBin,
-  ["-i", "src/input.css", "-o", path.join(OUT, "app.css"), "--minify"],
+  process.execPath,
+  [tailwindCli, "-i", "src/input.css", "-o", path.join(OUT, "app.css"), "--minify"],
   { stdio: "inherit" }
 );
 
