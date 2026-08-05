@@ -24,9 +24,15 @@ for (const target of TARGETS) {
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(target, { recursive: true });
 
-  for (const file of fs.readdirSync(SRC)) {
-    if (file === "sw.js") continue; // not wanted inside a packaged app
-    fs.copyFileSync(path.join(SRC, file), path.join(target, file));
+  for (const entry of fs.readdirSync(SRC, { withFileTypes: true })) {
+    if (entry.name === "sw.js") continue; // not wanted inside a packaged app
+    const from = path.join(SRC, entry.name);
+    const to = path.join(target, entry.name);
+    if (entry.isDirectory()) {
+      fs.cpSync(from, to, { recursive: true });
+    } else {
+      fs.copyFileSync(from, to);
+    }
   }
 
   const htmlPath = path.join(target, "index.html");

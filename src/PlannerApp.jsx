@@ -32,6 +32,16 @@ import {
   MoreVertical,
   Folder,
   FolderPlus,
+  Type,
+  PenLine,
+  Bold,
+  Italic,
+  Underline,
+  Baseline,
+  Highlighter,
+  Droplet,
+  Eraser,
+  Undo2,
   Save,
   UserRound,
   LogOut,
@@ -868,55 +878,645 @@ function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) 
 }
 
 /* ------------------------------------------------------------------ */
-/*  Notes (free notebook pages with titles, lined or blank)           */
+/*  Notes (typed pages with formatting, or handwritten pages)         */
 /* ------------------------------------------------------------------ */
 
-/* ---- Shared note pieces ---- */
+/* ---- Formatting options ---- */
 
-function PageTypeChooser({ onPick, onCancel }) {
+const NOTE_FONTS = [
+  { id: "sans", label: "Default", css: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif' },
+  { id: "times", label: "Times New Roman", css: '"Times New Roman", Times, serif' },
+  { id: "comfortaa", label: "Comfortaa", css: '"Comfortaa", ui-rounded, sans-serif' },
+];
+
+const TEXT_COLORS = [
+  { id: "black", label: "Black", hex: "#1c1917" },
+  { id: "blue", label: "Blue", hex: "#1d4ed8" },
+  { id: "red", label: "Red", hex: "#dc2626" },
+];
+
+const HIGHLIGHTERS = [
+  { id: "pink", label: "Pink", hex: "#fbcfe8" },
+  { id: "blue", label: "Blue", hex: "#bfdbfe" },
+  { id: "purple", label: "Purple", hex: "#e9d5ff" },
+  { id: "yellow", label: "Yellow", hex: "#fef08a" },
+];
+
+/* ---- Keeping saved HTML safe ----
+   Notes are stored as HTML so formatting survives. Anything loaded back
+   is rebuilt from an allow-list of tags and styles, so a note can never
+   carry scripts or anything else executable. */
+
+const ALLOWED_TAGS = new Set(["B", "STRONG", "I", "EM", "U", "SPAN", "DIV", "P", "BR", "UL", "OL", "LI"]);
+const ALLOWED_STYLES = ["color", "background-color", "font-family", "font-weight", "font-style", "text-decoration"];
+
+function sanitizeHtml(dirty) {
+  if (!dirty) return "";
+  try {
+    const doc = new DOMParser().parseFromString(`<div>${dirty}</div>`, "text/html");
+    const root = doc.body.firstChild;
+
+    const clean = (node) => {
+      for (const child of Array.from(node.childNodes)) {
+        if (child.nodeType === 3) continue; // plain text is fine
+        if (child.nodeType !== 1) {
+          child.remove();
+          continue;
+        }
+        if (!ALLOWED_TAGS.has(child.tagName)) {
+          // keep the words, drop the tag
+          const text = doc.createTextNode(child.textContent || "");
+          child.replaceWith(text);
+          continue;
+        }
+        const keep = [];
+        for (const prop of ALLOWED_STYLES) {
+          const val = child.style.getPropertyValue(prop);
+          if (val && !/expression|javascript:|url\s*\(/i.test(val)) keep.push(`${prop}: ${val}`);
+        }
+        for (const attr of Array.from(child.attributes)) child.removeAttribute(attr.name);
+        if (keep.length) child.setAttribute("style", keep.join("; "));
+        clean(child);
+      }
+    };
+
+    clean(root);
+    return root.innerHTML;
+  } catch (e) {
+    return "";
+  }
+}
+
+/** Plain text version, used for list previews and the study cards. */
+function htmlToText(html) {
+  if (!html) return "";
+  try {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    return (doc.body.textContent || "").trim();
+  } catch (e) {
+    return "";
+  }
+}
+
+/* ---- Choosing what kind of note to make ---- */
+
+function PageTypeChooser({ onCreate, onCancel }) {
+  const [style, setStyle] = useState("lined");
+  const [kind, setKind] = useState("text");
+
+  const Option = ({ active, onClick, preview, label, hint }) => (
+    <button
+      onClick={onClick}
+      className={`rounded-xl border p-3 text-left u-focus ${active ? "u-accent-border u-accent-soft" : "border-stone-300 u-hover-border"}`}
+    >
+      {preview}
+      <span className="block text-sm font-medium text-stone-800">{label}</span>
+      {hint && <span className="block text-xs text-stone-500">{hint}</span>}
+    </button>
+  );
+
   return (
     <div>
-      <p className="mb-3 text-sm text-stone-500">Choose a page type for your new note.</p>
+      <p className={labelCls}>Page style</p>
       <div className="grid grid-cols-2 gap-3">
-        <button onClick={() => onPick("lined")} className="rounded-xl border border-stone-300 p-3 text-left u-hover-border u-hover-soft u-focus">
-          <div className="mb-2 h-20 rounded-md border border-stone-200 lined-paper" />
-          <span className="text-sm font-medium text-stone-800">Lined page</span>
-        </button>
-        <button onClick={() => onPick("blank")} className="rounded-xl border border-stone-300 p-3 text-left u-hover-border u-hover-soft u-focus">
-          <div className="mb-2 h-20 rounded-md border border-stone-200 bg-white" />
-          <span className="text-sm font-medium text-stone-800">Blank page</span>
-        </button>
+        <Option
+          active={style === "lined"}
+          onClick={() => setStyle("lined")}
+          preview={<div className="mb-2 h-16 rounded-md border border-stone-200 lined-paper" />}
+          label="Lined page"
+        />
+        <Option
+          active={style === "blank"}
+          onClick={() => setStyle("blank")}
+          preview={<div className="mb-2 h-16 rounded-md border border-stone-200 bg-white" />}
+          label="Blank page"
+        />
       </div>
-      <div className="mt-3 flex justify-end">
+
+      <p className={`${labelCls} mt-4`}>Note type</p>
+      <div className="grid grid-cols-2 gap-3">
+        <Option
+          active={kind === "text"}
+          onClick={() => setKind("text")}
+          preview={
+            <div className="mb-2 flex h-16 items-center justify-center rounded-md border border-stone-200 bg-white text-stone-400">
+              <Type size={22} />
+            </div>
+          }
+          label="Typed"
+          hint="Fonts, colours, highlighters"
+        />
+        <Option
+          active={kind === "drawing"}
+          onClick={() => setKind("drawing")}
+          preview={
+            <div className="mb-2 flex h-16 items-center justify-center rounded-md border border-stone-200 bg-white text-stone-400">
+              <PenLine size={22} />
+            </div>
+          }
+          label="Handwritten"
+          hint="Draw with a stylus or finger"
+        />
+      </div>
+
+      <div className="mt-4 flex justify-end gap-2">
         <button className={btnGhost} onClick={onCancel}>
           <X size={15} /> Cancel
+        </button>
+        <button className={btnPrimary} onClick={() => onCreate({ style, kind })}>
+          <Check size={15} /> Create note
         </button>
       </div>
     </div>
   );
 }
 
+/* ---- Typed notes: fonts, text colour, highlighters ---- */
+
+function RichTextEditor({ draft, setDraft }) {
+  const ref = useRef(null);
+  const [activeFont, setActiveFont] = useState("sans");
+
+  // Load the saved note in once; after that the div owns its own content
+  // (rewriting it on every keystroke would move the cursor to the start).
+  useEffect(() => {
+    if (ref.current && ref.current.innerHTML !== (draft.html || "")) {
+      ref.current.innerHTML = sanitizeHtml(draft.html || "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.id]);
+
+  const save = () => {
+    if (!ref.current) return;
+    const html = sanitizeHtml(ref.current.innerHTML);
+    setDraft((d) => ({ ...d, html, body: htmlToText(html) }));
+  };
+
+  /* Toolbar buttons must not steal focus, or the text selection is lost
+     before the formatting can be applied - hence preventDefault on mousedown. */
+  const hold = (e) => e.preventDefault();
+
+  const run = (command, value) => {
+    if (!ref.current) return;
+    ref.current.focus();
+    try {
+      document.execCommand("styleWithCSS", false, true);
+      if (command === "highlight") {
+        // Safari historically only understands backColor
+        if (!document.execCommand("hiliteColor", false, value)) {
+          document.execCommand("backColor", false, value);
+        }
+      } else {
+        document.execCommand(command, false, value);
+      }
+    } catch (e) {
+      /* formatting unavailable - typing still works */
+    }
+    save();
+  };
+
+  const ToolButton = ({ onClick, title, children, active }) => (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onMouseDown={hold}
+      onClick={onClick}
+      className={`flex h-8 w-8 items-center justify-center rounded-md u-focus ${
+        active ? "u-accent-soft u-accent-deeptext" : "text-stone-600 hover:bg-stone-100"
+      }`}
+    >
+      {children}
+    </button>
+  );
+
+  const fontCss = (NOTE_FONTS.find((f) => f.id === activeFont) || NOTE_FONTS[0]).css;
+
+  return (
+    <div>
+      {/* Toolbar */}
+      <div className="rounded-t-lg border border-b-0 border-stone-300 bg-stone-50 p-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Font */}
+          <select
+            className="rounded-md border border-stone-300 bg-white px-2 py-1 text-sm text-stone-700 u-field"
+            value={activeFont}
+            onMouseDown={hold}
+            onChange={(e) => {
+              setActiveFont(e.target.value);
+              const font = NOTE_FONTS.find((f) => f.id === e.target.value);
+              if (font) run("fontName", font.css);
+            }}
+            style={{ fontFamily: fontCss }}
+            aria-label="Font"
+          >
+            {NOTE_FONTS.map((f) => (
+              <option key={f.id} value={f.id} style={{ fontFamily: f.css }}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+
+          <span className="h-5 w-px bg-stone-300" />
+
+          <ToolButton title="Bold" onClick={() => run("bold")}>
+            <Bold size={15} />
+          </ToolButton>
+          <ToolButton title="Italic" onClick={() => run("italic")}>
+            <Italic size={15} />
+          </ToolButton>
+          <ToolButton title="Underline" onClick={() => run("underline")}>
+            <Underline size={15} />
+          </ToolButton>
+
+          <span className="h-5 w-px bg-stone-300" />
+
+          {/* Text colour */}
+          <span className="flex items-center gap-1">
+            <Baseline size={15} className="text-stone-500" />
+            {TEXT_COLORS.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                title={`${c.label} text`}
+                aria-label={`${c.label} text`}
+                onMouseDown={hold}
+                onClick={() => run("foreColor", c.hex)}
+                className="h-6 w-6 rounded-full border border-stone-300 u-focus"
+                style={{ backgroundColor: c.hex }}
+              />
+            ))}
+          </span>
+
+          <span className="h-5 w-px bg-stone-300" />
+
+          {/* Highlighters */}
+          <span className="flex items-center gap-1">
+            <Highlighter size={15} className="text-stone-500" />
+            {HIGHLIGHTERS.map((h) => (
+              <button
+                key={h.id}
+                type="button"
+                title={`${h.label} highlighter`}
+                aria-label={`${h.label} highlighter`}
+                onMouseDown={hold}
+                onClick={() => run("highlight", h.hex)}
+                className="h-6 w-6 rounded-full border border-stone-300 u-focus"
+                style={{ backgroundColor: h.hex }}
+              />
+            ))}
+            <ToolButton title="Remove highlight" onClick={() => run("highlight", "transparent")}>
+              <Droplet size={15} />
+            </ToolButton>
+          </span>
+        </div>
+      </div>
+
+      {/* Writing area */}
+      <div
+        ref={ref}
+        contentEditable
+        suppressContentEditableWarning
+        spellCheck
+        onInput={save}
+        onBlur={save}
+        data-placeholder="Start writing..."
+        className={`min-h-[220px] w-full rounded-b-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 u-field ${
+          draft.style === "lined" ? "lined-paper" : "bg-white"
+        }`}
+        style={{ fontFamily: fontCss, outline: "none" }}
+      />
+      <p className="mt-1 text-xs text-stone-400">
+        Select some words first, then pick a colour or highlighter.
+      </p>
+    </div>
+  );
+}
+
+/* ---- Handwritten notes ----
+   Works with Apple Pencil, other styluses, a finger, or a mouse.
+   Strokes are stored as points rather than as a picture, so notes stay
+   small, stay sharp at any zoom, and sync quickly. */
+
+const CANVAS_W = 1000;
+const CANVAS_H = 1400;
+
+const PEN_PRESETS = ["#1c1917", "#1d4ed8", "#dc2626", "#db2777", "#7c3aed", "#f59e0b", "#059669"];
+
+function DrawingCanvas({ draft, setDraft }) {
+  const canvasRef = useRef(null);
+  const wrapRef = useRef(null);
+  const drawing = useRef(false);
+  const currentStroke = useRef(null);
+  const penSeen = useRef(false);
+
+  const [hue, setHue] = useState(220);
+  const [light, setLight] = useState(35);
+  const [color, setColor] = useState("#1c1917");
+  const [width, setWidth] = useState(3);
+  const [erasing, setErasing] = useState(false);
+
+  const strokes = draft.strokes || [];
+
+  /* ---- drawing ---- */
+
+  const drawStroke = (ctx, stroke) => {
+    const pts = stroke.points;
+    if (!pts || pts.length === 0) return;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    if (stroke.erase) {
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.strokeStyle = "rgba(0,0,0,1)";
+    } else {
+      ctx.strokeStyle = stroke.color;
+    }
+
+    if (pts.length === 1) {
+      ctx.beginPath();
+      ctx.arc(pts[0][0], pts[0][1], (stroke.width * (pts[0][2] || 0.5) * 2) / 2, 0, Math.PI * 2);
+      ctx.fillStyle = stroke.erase ? "rgba(0,0,0,1)" : stroke.color;
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    // Each little segment is drawn at its own width, which is how pressure
+    // from a stylus turns into thick and thin lines.
+    for (let i = 1; i < pts.length; i++) {
+      const [x1, y1, p1] = pts[i - 1];
+      const [x2, y2, p2] = pts[i];
+      const pressure = ((p1 || 0.5) + (p2 || 0.5)) / 2;
+      ctx.lineWidth = Math.max(0.5, stroke.width * (0.4 + pressure * 1.6));
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  const redraw = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    for (const s of strokes) drawStroke(ctx, s);
+    if (currentStroke.current) drawStroke(ctx, currentStroke.current);
+  };
+
+  useEffect(redraw, [strokes, draft.id]);
+
+  // Keep the drawing crisp on high-resolution screens
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ratio = Math.min(window.devicePixelRatio || 1, 3);
+    canvas.width = CANVAS_W * ratio;
+    canvas.height = CANVAS_H * ratio;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(ratio, ratio);
+    redraw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ---- pointer handling ---- */
+
+  const toCanvas = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return [
+      ((e.clientX - rect.left) / rect.width) * CANVAS_W,
+      ((e.clientY - rect.top) / rect.height) * CANVAS_H,
+    ];
+  };
+
+  const pressureOf = (e) => {
+    // Mice report 0.5 when pressed; a stylus reports real pressure.
+    if (e.pointerType === "pen" && e.pressure > 0) return e.pressure;
+    if (e.pressure > 0 && e.pressure !== 0.5) return e.pressure;
+    return 0.5;
+  };
+
+  const onPointerDown = (e) => {
+    if (e.pointerType === "pen") penSeen.current = true;
+    // Once a stylus has been used, ignore fingers so a resting palm
+    // doesn't scribble on the page.
+    if (penSeen.current && e.pointerType === "touch") return;
+
+    e.preventDefault();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (err) {
+      /* not supported - drawing still works */
+    }
+    drawing.current = true;
+    const [x, y] = toCanvas(e);
+    currentStroke.current = {
+      color,
+      width: erasing ? width * 3 : width,
+      erase: erasing,
+      points: [[x, y, pressureOf(e)]],
+    };
+    redraw();
+  };
+
+  const onPointerMove = (e) => {
+    if (!drawing.current || !currentStroke.current) return;
+    if (penSeen.current && e.pointerType === "touch") return;
+    e.preventDefault();
+
+    // iPads report several points per frame; using them all gives a
+    // noticeably smoother line.
+    const events = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : [e];
+    for (const ev of events.length ? events : [e]) {
+      const [x, y] = toCanvas(ev);
+      currentStroke.current.points.push([x, y, pressureOf(ev)]);
+    }
+    redraw();
+  };
+
+  const endStroke = () => {
+    if (!drawing.current) return;
+    drawing.current = false;
+    const stroke = currentStroke.current;
+    currentStroke.current = null;
+    if (!stroke || stroke.points.length === 0) return;
+    setDraft((d) => ({ ...d, strokes: [...(d.strokes || []), stroke] }));
+  };
+
+  const undo = () => setDraft((d) => ({ ...d, strokes: (d.strokes || []).slice(0, -1) }));
+  const clearAll = () => setDraft((d) => ({ ...d, strokes: [] }));
+
+  const pickShade = (h, l) => {
+    setHue(h);
+    setLight(l);
+    setColor(`hsl(${h}, 75%, ${l}%)`);
+    setErasing(false);
+  };
+
+  return (
+    <div>
+      {/* Tools */}
+      <div className="rounded-t-lg border border-b-0 border-stone-300 bg-stone-50 p-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {PEN_PRESETS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              title="Pen colour"
+              aria-label={`Pen colour ${c}`}
+              onClick={() => {
+                setColor(c);
+                setErasing(false);
+              }}
+              className={`h-7 w-7 rounded-full border-2 u-focus ${
+                color === c && !erasing ? "border-stone-800" : "border-stone-300"
+              }`}
+              style={{ backgroundColor: c }}
+            />
+          ))}
+
+          <span className="h-5 w-px bg-stone-300" />
+
+          <button
+            type="button"
+            onClick={() => setErasing((v) => !v)}
+            title="Eraser"
+            aria-label="Eraser"
+            className={`flex h-8 w-8 items-center justify-center rounded-md u-focus ${
+              erasing ? "u-accent-soft u-accent-deeptext" : "text-stone-600 hover:bg-stone-100"
+            }`}
+          >
+            <Eraser size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={undo}
+            title="Undo"
+            aria-label="Undo"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-stone-600 hover:bg-stone-100 u-focus"
+          >
+            <Undo2 size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={clearAll}
+            title="Clear page"
+            aria-label="Clear page"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-stone-600 hover:bg-stone-100 u-focus"
+          >
+            <Trash2 size={16} />
+          </button>
+        </div>
+
+        {/* Colour and shade */}
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <span
+            className="h-8 w-8 flex-shrink-0 rounded-full border border-stone-300"
+            style={{ backgroundColor: erasing ? "#ffffff" : color }}
+            aria-label="Current colour"
+          />
+          <label className="flex min-w-[130px] flex-1 items-center gap-2 text-xs text-stone-500">
+            Colour
+            <input
+              type="range"
+              min="0"
+              max="360"
+              value={hue}
+              onChange={(e) => pickShade(Number(e.target.value), light)}
+              className="w-full"
+              style={{
+                background:
+                  "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
+                borderRadius: "999px",
+                height: "6px",
+                appearance: "none",
+              }}
+            />
+          </label>
+          <label className="flex min-w-[130px] flex-1 items-center gap-2 text-xs text-stone-500">
+            Shade
+            <input
+              type="range"
+              min="10"
+              max="85"
+              value={light}
+              onChange={(e) => pickShade(hue, Number(e.target.value))}
+              className="w-full"
+              style={{
+                background: `linear-gradient(to right, hsl(${hue},75%,10%), hsl(${hue},75%,50%), hsl(${hue},75%,85%))`,
+                borderRadius: "999px",
+                height: "6px",
+                appearance: "none",
+              }}
+            />
+          </label>
+          <label className="flex items-center gap-2 text-xs text-stone-500">
+            Size
+            <input
+              type="range"
+              min="1"
+              max="14"
+              value={width}
+              onChange={(e) => setWidth(Number(e.target.value))}
+              className="w-24"
+            />
+          </label>
+        </div>
+      </div>
+
+      {/* Page */}
+      <div ref={wrapRef} className="overflow-hidden rounded-b-lg border border-stone-300">
+        <canvas
+          ref={canvasRef}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endStroke}
+          onPointerCancel={endStroke}
+          onPointerLeave={endStroke}
+          className={draft.style === "lined" ? "lined-paper" : "bg-white"}
+          style={{
+            width: "100%",
+            aspectRatio: `${CANVAS_W} / ${CANVAS_H}`,
+            display: "block",
+            touchAction: "none", // stops the page scrolling while drawing
+            cursor: "crosshair",
+          }}
+        />
+      </div>
+      <p className="mt-1 text-xs text-stone-400">
+        {strokes.length} stroke{strokes.length === 1 ? "" : "s"} · Apple Pencil and other styluses
+        draw thicker when pressed harder. Once a stylus is used, your palm won't leave marks.
+      </p>
+    </div>
+  );
+}
+
+/* ---- The editor, which shows whichever kind the note is ---- */
+
 function NoteEditor({ draft, setDraft, onSave, onCancel }) {
+  const isDrawing = draft.kind === "drawing";
   return (
     <div className="space-y-3">
-      <span className="inline-flex items-center gap-1.5 rounded-full u-accent-soft u-accent-deeptext px-2.5 py-1 text-xs font-medium capitalize">
-        {draft.style} page
+      <span className="inline-flex items-center gap-1.5 rounded-full u-accent-soft u-accent-deeptext px-2.5 py-1 text-xs font-medium">
+        {isDrawing ? "Handwritten" : "Typed"} · {draft.style} page
       </span>
       <div>
         <label className={labelCls}>Title</label>
-        <input className={inputCls} spellCheck placeholder="Note title" value={draft.title} onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} />
-      </div>
-      <div>
-        <label className={labelCls}>Note</label>
-        <textarea
-          className={`w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 placeholder-stone-400 u-field ${draft.style === "lined" ? "lined-paper" : "bg-white"}`}
-          rows={8}
+        <input
+          className={inputCls}
           spellCheck
-          placeholder="Start writing..."
-          value={draft.body}
-          onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
+          placeholder="Note title"
+          value={draft.title}
+          onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
         />
       </div>
+      {isDrawing ? (
+        <DrawingCanvas draft={draft} setDraft={setDraft} />
+      ) : (
+        <RichTextEditor draft={draft} setDraft={setDraft} />
+      )}
       <div className="flex justify-end gap-2">
         <button className={btnGhost} onClick={onCancel}>
           <X size={15} /> Cancel
@@ -938,7 +1538,9 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
         <div className="min-w-0">
           <h3 className="font-medium text-stone-800">{p.title || <span className="text-stone-400">Untitled note</span>}</h3>
           <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-stone-400">
-            <span className="capitalize">{p.style} page</span>
+            <span className="capitalize">
+              {p.kind === "drawing" ? "Handwritten" : "Typed"} · {p.style} page
+            </span>
             {f && (
               <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5" style={{ backgroundColor: folderColor(f.color).soft, color: folderColor(f.color).text }}>
                 <Folder size={10} /> {f.name}
@@ -978,7 +1580,17 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
           )}
         </div>
       </div>
-      {p.body && <p className="mt-1.5 line-clamp-3 whitespace-pre-wrap text-sm text-stone-600">{p.body}</p>}
+      {p.kind === "drawing" ? (
+        (p.strokes || []).length > 0 && (
+          <p className="mt-1.5 flex items-center gap-1.5 text-sm text-stone-500">
+            <PenLine size={14} /> {p.strokes.length} stroke{p.strokes.length === 1 ? "" : "s"}
+          </p>
+        )
+      ) : (
+        (p.body || htmlToText(p.html)) && (
+          <p className="mt-1.5 line-clamp-3 text-sm text-stone-600">{p.body || htmlToText(p.html)}</p>
+        )
+      )}
     </li>
   );
 }
@@ -991,10 +1603,21 @@ function Notes({ pages, folders, addItem, patchItem, removeItem }) {
   const isNew = draft && !draft.id;
   const showList = !draft && !choosing;
 
-  const startWith = (style) => { setDraft({ title: "", body: "", style, folderId: null }); setChoosing(false); };
+  const startNew = ({ style, kind }) => {
+    setDraft({ title: "", body: "", html: "", strokes: [], style, kind, folderId: null });
+    setChoosing(false);
+  };
   const save = () => {
-    if (isNew) addItem("pages", { id: uid(), title: draft.title, body: draft.body, style: draft.style, folderId: draft.folderId || null });
-    else patchItem("pages", draft.id, { title: draft.title, body: draft.body, style: draft.style });
+    const fields = {
+      title: draft.title,
+      body: draft.body || "",
+      html: draft.html || "",
+      strokes: draft.strokes || [],
+      style: draft.style,
+      kind: draft.kind || "text",
+    };
+    if (isNew) addItem("pages", { id: uid(), ...fields, folderId: draft.folderId || null });
+    else patchItem("pages", draft.id, fields);
     setDraft(null);
   };
 
@@ -1008,7 +1631,7 @@ function Notes({ pages, folders, addItem, patchItem, removeItem }) {
           </button>
         </div>
       )}
-      {choosing && <PageTypeChooser onPick={startWith} onCancel={() => setChoosing(false)} />}
+      {choosing && <PageTypeChooser onCreate={startNew} onCancel={() => setChoosing(false)} />}
       {draft && <NoteEditor draft={draft} setDraft={setDraft} onSave={save} onCancel={() => setDraft(null)} />}
       {showList && pages.length === 0 && <Empty>No notes yet. Tap "New note" to add one.</Empty>}
       {showList && pages.length > 0 && (
@@ -1036,7 +1659,17 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
     else addItem("folders", { id: uid(), name, color: folderForm.color });
     setFolderForm(null);
   };
-  const saveNote = () => { patchItem("pages", draft.id, { title: draft.title, body: draft.body, style: draft.style }); setDraft(null); };
+  const saveNote = () => {
+    patchItem("pages", draft.id, {
+      title: draft.title,
+      body: draft.body || "",
+      html: draft.html || "",
+      strokes: draft.strokes || [],
+      style: draft.style,
+      kind: draft.kind || "text",
+    });
+    setDraft(null);
+  };
   const countFor = (fid) => pages.filter((p) => p.folderId === fid).length;
 
   if (draft) {
@@ -1673,6 +2306,51 @@ export default function PlannerApp() {
     setSession(null);
     setSyncError("");
   };
+
+  /* ---- automatic syncing ----
+     So the planner is up to date without anyone pressing a button:
+       - when the app starts (once signed in)
+       - when you come back to the window / reopen the app
+       - a few seconds after you stop making changes  */
+
+  const syncRef = useRef(runSync);
+  useEffect(() => {
+    syncRef.current = runSync;
+  });
+
+  // On launch, and whenever the window regains focus
+  useEffect(() => {
+    if (!session || !loaded) return;
+
+    syncRef.current(session);
+
+    const onFocus = () => syncRef.current(session);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") syncRef.current(session);
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // Runs when the signed-in user changes, not on every edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session && session.user.id, loaded]);
+
+  // A few seconds after edits stop, push them up
+  const lastPushed = useRef(null);
+  useEffect(() => {
+    if (!session || !loaded) return;
+    const stamp = (data.meta && data.meta.updatedAt) || null;
+    if (!stamp || stamp === lastPushed.current) return;
+
+    const t = setTimeout(() => {
+      lastPushed.current = stamp;
+      syncRef.current(session);
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [data, session, loaded]);
 
   // All content edits apply to the currently selected semester only.
   // Every change is timestamped so cross-device sync can tell which edit is newest.

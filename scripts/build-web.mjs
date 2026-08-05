@@ -56,10 +56,9 @@ execFileSync(
   { stdio: "inherit" }
 );
 
-// 3. Static files (html, icons, manifest, service worker)
-for (const file of fs.readdirSync("public")) {
-  fs.copyFileSync(path.join("public", file), path.join(OUT, file));
-}
+// 3. Static files (html, icons, manifest, service worker, fonts).
+//    Copied recursively so subfolders like public/fonts come across too.
+fs.cpSync("public", OUT, { recursive: true });
 
 // 4. Fail loudly rather than shipping something broken
 const js = fs.readFileSync(path.join(OUT, "app.js"), "utf8");

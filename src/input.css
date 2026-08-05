@@ -2,9 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Comfortaa, bundled with the app so it works offline and inside the
+   packaged desktop and phone builds (where there is no internet-loaded CSS). */
+@font-face {
+  font-family: "Comfortaa";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/comfortaa-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Comfortaa";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./fonts/comfortaa-700.woff2") format("woff2");
+}
+
 html, body { height: 100%; }
 body {
   background-color: #f5f5f4;
   -webkit-text-size-adjust: 100%;
   overscroll-behavior-y: none;
+}
+
+/* Placeholder text for the rich-text note editor (a contentEditable div
+   has no native placeholder attribute). */
+[contenteditable][data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: #a8a29e;
+  pointer-events: none;
 }
