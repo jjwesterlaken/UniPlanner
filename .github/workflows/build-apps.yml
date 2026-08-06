@@ -25,15 +25,22 @@ jobs:
             # "universal" = one download that works on both Apple Silicon and Intel Macs.
             # If this ever fails, replace with: --mac --arm64 --x64
             flags: --mac --universal
-            artifacts: desktop/dist/*.dmg
+            artifacts: |
+              desktop/dist/*.dmg
+              desktop/dist/*.zip
+              desktop/dist/latest-mac.yml
           - os: windows-latest
             label: Windows
             flags: --win
-            artifacts: desktop/dist/*.exe
+            artifacts: |
+              desktop/dist/*.exe
+              desktop/dist/latest.yml
           - os: ubuntu-latest
             label: Linux
             flags: --linux
-            artifacts: desktop/dist/*.AppImage
+            artifacts: |
+              desktop/dist/*.AppImage
+              desktop/dist/latest-linux.yml
 
     steps:
       - name: Get the code
@@ -107,6 +114,17 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # The plain web version, for hosting or for testing on a tablet.
+      # Only needs collecting once, so it rides along with the Linux job.
+      - name: Collect the web version
+        if: matrix.label == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: University-Planner-Web
+          path: dist-web
+          if-no-files-found: error
+          retention-days: 30
+
   release:
     name: Publish release
     needs: build
@@ -119,17 +137,43 @@ jobs:
         with:
           path: artifacts
 
-      - name: List what we got
-        run: find artifacts -type f | sort
+      - name: Gather the files into one folder
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          echo "--- files to publish ---"
+          ls -la release
 
-      - name: Attach the files to the release
+      - name: Check the update files are there
+        run: |
+          # These tell already-installed apps that a new version exists.
+          # Without them, auto-update silently does nothing.
+          missing=0
+          for f in latest.yml latest-mac.yml latest-linux.yml; do
+            if [ -f "release/$f" ]; then
+              echo "found  $f"
+            else
+              echo "MISSING $f - auto-update will not work for that platform"
+              missing=1
+            fi
+          done
+          exit 0  # a missing file is worth flagging, not worth failing the build
+
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "University Planner ${GITHUB_REF_NAME}" \
-            --notes "Download the file for your device and open it. On first launch your computer may warn that the app is from an unidentified developer - see the README for the one-time steps to allow it." \
-            --generate-notes=false \
-            $(find artifacts -type f) \
-          || gh release upload "${GITHUB_REF_NAME}" $(find artifacts -type f) --repo "${GITHUB_REPOSITORY}" --clobber
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release/* --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" release/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "University Planner ${GITHUB_REF_NAME}" \
+              --notes "Download the file for your device and open it.
+
+          - **Mac:** the .dmg file
+          - **Windows:** the Setup .exe (or the Portable .exe to run without installing)
+          - **Linux:** the .AppImage
+
+          Already have it installed? It will update itself automatically."
+          fi
