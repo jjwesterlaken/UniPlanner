@@ -14,7 +14,7 @@
    ================================================================== */
 
 export const SUPABASE_URL = "https://kuhtogvewcooigudmgwj.supabase.co";
-export const SUPABASE_ANON_KEY = "PASTE_YOUR_PUBLISHABLE_KEY_HERE";
+export const SUPABASE_ANON_KEY = "sb_publishable_qV6aCtMpj9EELS6vqZRskg_qhzhooeF";
 
 /* --------------------------------------------------------------
    Is it safe to have these in the app?
