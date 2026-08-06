@@ -4,23 +4,27 @@
    HOW THIS IS PUT TOGETHER
    ------------------------
    All server communication goes through one object: `backend`.
-   Today it points at `demoBackend`, which fakes a server using this
-   device's own storage so the whole sign-in / sync flow can be built
-   and tested with no server at all.
 
-   When the real server is ready, you implement `remoteBackend` below
-   (six functions) and change ONE line at the bottom of this file.
-   Nothing in the app's UI needs to change.
+   - Fill in src/config.js with your Supabase details -> the real
+     backend is used, and data syncs between devices for real.
+   - Leave config.js untouched -> a demo backend runs instead, keeping
+     everything on this device so the app still works offline-only.
 
-   ⚠️  SECURITY — READ BEFORE SELLING THIS
-   ---------------------------------------
-   `demoBackend` is a stand-in for development only. It keeps accounts
-   in this device's storage and does NOT provide real security or real
-   syncing between devices. Never ship it to paying customers.
-   Real authentication must happen on a server: passwords hashed
-   server-side (bcrypt/argon2), sessions as signed tokens, and every
-   request authorised so one user can never read another's data.
+   The switch is automatic. Nothing else in the app needs changing.
+
+   ⚠️  SECURITY
+   ------------
+   `demoBackend` does NOT check passwords and does NOT sync. It exists
+   so the app is usable before a server is set up. Never rely on it for
+   anything private.
+
+   The real backend relies on Row Level Security in the database to keep
+   users' data separate. Run the SQL in SUPABASE-SETUP.md exactly -- if
+   RLS is off, every signed-in user could read everyone else's planner.
    ================================================================== */
+
+import { createClient } from "@supabase/supabase-js";
+import { SUPABASE_URL, SUPABASE_ANON_KEY, isConfigured } from "./config.js";
 
 /* ---------- small helpers ---------- */
 
@@ -225,94 +229,126 @@ export const demoBackend = {
   },
 };
 
-/* ---------- the real backend (to be filled in) ----------
+/* ---------- the real backend: Supabase ----------
 
-   Point API_BASE at your server, implement these six calls, then set
-   `backend = remoteBackend` at the bottom of this file.
+   Turns on automatically once src/config.js has your project details.
+   Supabase handles accounts, sessions and password resets; the database
+   stores one row per user containing the whole planner.
+------------------------------------------------ */
 
-   Suggested server routes:
-     POST /auth/signup   {email, password}          -> {user, token}
-     POST /auth/login    {email, password}          -> {user, token}
-     POST /auth/logout   (Authorization: Bearer …)  -> {}
-     GET  /planner       (Authorization: Bearer …)  -> {data} | 404
-     PUT  /planner       {data}                     -> {serverUpdatedAt}
-
-   Everything the app stores is one JSON blob per user, so the database
-   can be as simple as: users(id, email, password_hash) and
-   planner_data(user_id, data JSON, updated_at).
---------------------------------------------------------- */
-
-const API_BASE = "https://REPLACE-ME.example.com";
-
-async function api(path, { method = "GET", body, token } = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+let supabase = null;
+if (isConfigured) {
+  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      // The app isn't served from a normal web address in the desktop and
+      // phone builds, so there is never a login link in the URL to read.
+      detectSessionInUrl: false,
     },
-    body: body ? JSON.stringify(body) : undefined,
   });
-  if (res.status === 404) return null;
-  if (!res.ok) {
-    let message = "Something went wrong. Please try again.";
-    try {
-      const err = await res.json();
-      if (err && err.message) message = err.message;
-    } catch (e) {
-      /* keep the generic message */
-    }
-    throw new Error(message);
-  }
-  return res.status === 204 ? null : res.json();
 }
 
-export const remoteBackend = {
-  name: "remote",
+const TABLE = "planner_data";
+
+/** Turn Supabase's technical errors into something a person can act on. */
+function readable(error) {
+  const raw = (error && error.message) || "";
+  const lower = raw.toLowerCase();
+  if (lower.includes("invalid login credentials")) return "That email or password isn't right.";
+  if (lower.includes("email not confirmed")) return "Please confirm your email address first - check your inbox.";
+  if (lower.includes("user already registered")) return "An account already exists for that email. Try signing in.";
+  if (lower.includes("password should be")) return "Password must be at least 6 characters.";
+  if (lower.includes("rate limit") || lower.includes("too many")) return "Too many attempts. Please wait a minute and try again.";
+  if (lower.includes("failed to fetch") || lower.includes("network")) return "Can't reach the server. Check your internet connection.";
+  return raw || "Something went wrong. Please try again.";
+}
+
+const shapeSession = (session) =>
+  session
+    ? {
+        user: { id: session.user.id, email: session.user.email },
+        token: session.access_token,
+      }
+    : null;
+
+export const supabaseBackend = {
+  name: "supabase",
   isDemo: false,
 
   async signUp({ email, password }) {
-    const out = await api("/auth/signup", { method: "POST", body: { email, password } });
-    writeJSON(DEMO_SESSION_KEY, out);
-    return out;
+    const { data, error } = await supabase.auth.signUp({
+      email: (email || "").trim(),
+      password: password || "",
+    });
+    if (error) throw new Error(readable(error));
+
+    // If the project requires email confirmation there's no session yet.
+    if (!data.session) {
+      throw new Error(
+        "Account created. Please check your email to confirm it, then sign in."
+      );
+    }
+    return shapeSession(data.session);
   },
 
   async signIn({ email, password }) {
-    const out = await api("/auth/login", { method: "POST", body: { email, password } });
-    writeJSON(DEMO_SESSION_KEY, out);
-    return out;
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: (email || "").trim(),
+      password: password || "",
+    });
+    if (error) throw new Error(readable(error));
+    return shapeSession(data.session);
   },
 
   async signOut() {
-    const session = readJSON(DEMO_SESSION_KEY, null);
     try {
-      if (session) await api("/auth/logout", { method: "POST", token: session.token });
+      await supabase.auth.signOut();
     } catch (e) {
-      /* signing out locally still matters even if the server call fails */
-    }
-    try {
-      localStorage.removeItem(DEMO_SESSION_KEY);
-    } catch (e) {
-      /* ignore */
+      /* clearing the local session is what matters */
     }
   },
 
   async getSession() {
-    return readJSON(DEMO_SESSION_KEY, null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      return shapeSession(data.session);
+    } catch (e) {
+      return null;
+    }
+  },
+
+  async resetPassword({ email }) {
+    const { error } = await supabase.auth.resetPasswordForEmail((email || "").trim());
+    if (error) throw new Error(readable(error));
   },
 
   async pull({ session }) {
-    const out = await api("/planner", { token: session.token });
-    return out ? out.data : null;
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("data")
+      .eq("user_id", session.user.id)
+      .maybeSingle();
+    if (error) throw new Error(readable(error));
+    return data ? data.data : null; // null means nothing saved yet
   },
 
   async push({ session, data }) {
-    return api("/planner", { method: "PUT", token: session.token, body: { data } });
+    const updatedAt = nowISO();
+    const { error } = await supabase
+      .from(TABLE)
+      .upsert(
+        { user_id: session.user.id, data, updated_at: updatedAt },
+        { onConflict: "user_id" }
+      );
+    if (error) throw new Error(readable(error));
+    return { serverUpdatedAt: updatedAt };
   },
 };
 
 /* ==================================================================
-   THE ONE LINE TO CHANGE when the server is ready:
+   Which backend is in use.
+
+   No line to change: fill in src/config.js and the real one takes over.
    ================================================================== */
-export const backend = demoBackend;
-// export const backend = remoteBackend;
+export const backend = isConfigured ? supabaseBackend : demoBackend;
