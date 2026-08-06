@@ -42,6 +42,9 @@ import {
   Droplet,
   Eraser,
   Undo2,
+  Download,
+  Upload,
+  DatabaseBackup,
   Save,
   UserRound,
   LogOut,
@@ -952,7 +955,7 @@ function htmlToText(html) {
   if (!html) return "";
   try {
     const doc = new DOMParser().parseFromString(html, "text/html");
-    return (doc.body.textContent || "").trim();
+    return (doc.body.textContent || "").replace(/\u200B/g, "").trim();
   } catch (e) {
     return "";
   }
@@ -1035,7 +1038,7 @@ function PageTypeChooser({ onCreate, onCancel }) {
 
 function RichTextEditor({ draft, setDraft }) {
   const ref = useRef(null);
-  const [activeFont, setActiveFont] = useState("sans");
+  const [hint, setHint] = useState("");
 
   // Load the saved note in once; after that the div owns its own content
   // (rewriting it on every keystroke would move the cursor to the start).
@@ -1056,6 +1059,46 @@ function RichTextEditor({ draft, setDraft }) {
      before the formatting can be applied - hence preventDefault on mousedown. */
   const hold = (e) => e.preventDefault();
 
+  /** Is any text actually selected inside this editor? */
+  const hasSelection = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
+    return ref.current && ref.current.contains(sel.anchorNode);
+  };
+
+  /* After highlighting, the cursor is left sitting inside the coloured span,
+     so anything typed next would come out highlighted too. This drops the
+     cursor just outside that span so typing continues clean. */
+  const stepOutOfHighlight = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !ref.current) return;
+
+    let node = sel.getRangeAt(0).endContainer;
+    let span = null;
+    while (node && node !== ref.current) {
+      if (
+        node.nodeType === 1 &&
+        node.style &&
+        node.style.backgroundColor &&
+        node.style.backgroundColor !== "transparent"
+      ) {
+        span = node;
+      }
+      node = node.parentNode;
+    }
+    if (!span || !span.parentNode) return;
+
+    // An invisible character placed after the span gives the cursor
+    // somewhere to sit that isn't inside the highlight.
+    const escapeHatch = document.createTextNode("\u200B");
+    span.parentNode.insertBefore(escapeHatch, span.nextSibling);
+    const range = document.createRange();
+    range.setStart(escapeHatch, 1);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+
   const run = (command, value) => {
     if (!ref.current) return;
     ref.current.focus();
@@ -1066,6 +1109,7 @@ function RichTextEditor({ draft, setDraft }) {
         if (!document.execCommand("hiliteColor", false, value)) {
           document.execCommand("backColor", false, value);
         }
+        stepOutOfHighlight();
       } else {
         document.execCommand(command, false, value);
       }
@@ -1073,6 +1117,31 @@ function RichTextEditor({ draft, setDraft }) {
       /* formatting unavailable - typing still works */
     }
     save();
+  };
+
+  /* Highlighters only ever colour text you've selected. Without this they
+     "arm" themselves and highlight whatever you type next, which isn't what
+     a highlighter should do. */
+  const highlight = (hex) => {
+    if (!hasSelection()) {
+      setHint("Select some words first, then tap a highlighter.");
+      return;
+    }
+    setHint("");
+    run("highlight", hex);
+  };
+
+  /* Clearing works on a selection if there is one, and always frees the
+     cursor from any highlight it's sitting in. */
+  const clearHighlight = () => {
+    if (hasSelection()) {
+      run("highlight", "transparent");
+    } else {
+      ref.current.focus();
+      stepOutOfHighlight();
+      save();
+    }
+    setHint("");
   };
 
   const ToolButton = ({ onClick, title, children, active }) => (
@@ -1090,23 +1159,18 @@ function RichTextEditor({ draft, setDraft }) {
     </button>
   );
 
-  const fontCss = (NOTE_FONTS.find((f) => f.id === activeFont) || NOTE_FONTS[0]).css;
+  const fontCss = (NOTE_FONTS.find((f) => f.id === (draft.font || "sans")) || NOTE_FONTS[0]).css;
 
   return (
     <div>
       {/* Toolbar */}
       <div className="rounded-t-lg border border-b-0 border-stone-300 bg-stone-50 p-2">
         <div className="flex flex-wrap items-center gap-2">
-          {/* Font */}
+          {/* Font — applies to the whole note, and is saved with it */}
           <select
             className="rounded-md border border-stone-300 bg-white px-2 py-1 text-sm text-stone-700 u-field"
-            value={activeFont}
-            onMouseDown={hold}
-            onChange={(e) => {
-              setActiveFont(e.target.value);
-              const font = NOTE_FONTS.find((f) => f.id === e.target.value);
-              if (font) run("fontName", font.css);
-            }}
+            value={draft.font || "sans"}
+            onChange={(e) => setDraft((d) => ({ ...d, font: e.target.value }))}
             style={{ fontFamily: fontCss }}
             aria-label="Font"
           >
@@ -1160,12 +1224,12 @@ function RichTextEditor({ draft, setDraft }) {
                 title={`${h.label} highlighter`}
                 aria-label={`${h.label} highlighter`}
                 onMouseDown={hold}
-                onClick={() => run("highlight", h.hex)}
+                onClick={() => highlight(h.hex)}
                 className="h-6 w-6 rounded-full border border-stone-300 u-focus"
                 style={{ backgroundColor: h.hex }}
               />
             ))}
-            <ToolButton title="Remove highlight" onClick={() => run("highlight", "transparent")}>
+            <ToolButton title="Remove highlight" onClick={clearHighlight}>
               <Droplet size={15} />
             </ToolButton>
           </span>
@@ -1186,8 +1250,8 @@ function RichTextEditor({ draft, setDraft }) {
         }`}
         style={{ fontFamily: fontCss, outline: "none" }}
       />
-      <p className="mt-1 text-xs text-stone-400">
-        Select some words first, then pick a colour or highlighter.
+      <p className={`mt-1 text-xs ${hint ? "u-accent-text" : "text-stone-400"}`}>
+        {hint || "Select some words first, then tap a highlighter."}
       </p>
     </div>
   );
@@ -1482,6 +1546,11 @@ function DrawingCanvas({ draft, setDraft }) {
             display: "block",
             touchAction: "none", // stops the page scrolling while drawing
             cursor: "crosshair",
+            // Stops iPad selecting text or popping up the copy/paste menu
+            // when the Pencil or a finger rests on the page.
+            WebkitUserSelect: "none",
+            userSelect: "none",
+            WebkitTouchCallout: "none",
           }}
         />
       </div>
@@ -1604,7 +1673,7 @@ function Notes({ pages, folders, addItem, patchItem, removeItem }) {
   const showList = !draft && !choosing;
 
   const startNew = ({ style, kind }) => {
-    setDraft({ title: "", body: "", html: "", strokes: [], style, kind, folderId: null });
+    setDraft({ title: "", body: "", html: "", strokes: [], style, kind, font: "sans", folderId: null });
     setChoosing(false);
   };
   const save = () => {
@@ -1615,6 +1684,7 @@ function Notes({ pages, folders, addItem, patchItem, removeItem }) {
       strokes: draft.strokes || [],
       style: draft.style,
       kind: draft.kind || "text",
+      font: draft.font || "sans",
     };
     if (isNew) addItem("pages", { id: uid(), ...fields, folderId: draft.folderId || null });
     else patchItem("pages", draft.id, fields);
@@ -1667,6 +1737,7 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
       strokes: draft.strokes || [],
       style: draft.style,
       kind: draft.kind || "text",
+      font: draft.font || "sans",
     });
     setDraft(null);
   };
@@ -2027,6 +2098,149 @@ function StudyGame({ notes }) {
           </button>
         </div>
       )}
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Backup: save everything to a file, and restore from one           */
+/* ------------------------------------------------------------------ */
+
+function BackupPanel({ data, onRestore }) {
+  const fileRef = useRef(null);
+  const [status, setStatus] = useState("");
+  const [pending, setPending] = useState(null); // parsed file waiting for a choice
+
+  const counts = useMemo(() => {
+    let items = 0;
+    for (const sem of Object.values(data.semesters || {})) {
+      for (const key of COLLECTIONS) items += live(sem[key]).length;
+    }
+    return items;
+  }, [data]);
+
+  const download = () => {
+    try {
+      const stamp = new Date().toISOString().slice(0, 10).split("-").reverse().join("-");
+      const payload = JSON.stringify({ app: "university-planner", exportedAt: nowISO(), data }, null, 2);
+      const blob = new Blob([payload], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `university-planner-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setStatus("Backup saved to your downloads.");
+    } catch (e) {
+      setStatus("Couldn't save the backup on this device.");
+    }
+  };
+
+  const pickFile = () => fileRef.current && fileRef.current.click();
+
+  const readFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // let the same file be chosen again later
+    if (!file) return;
+    setStatus("");
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const restored = parsed && parsed.data ? parsed.data : parsed;
+      if (!restored || typeof restored !== "object" || !restored.semesters) {
+        setStatus("That doesn't look like a planner backup file.");
+        return;
+      }
+      let found = 0;
+      for (const sem of Object.values(restored.semesters || {})) {
+        for (const key of COLLECTIONS) found += ((sem || {})[key] || []).length;
+      }
+      setPending({ data: normalizeData(restored), found });
+    } catch (err) {
+      setStatus("Couldn't read that file - it may be damaged.");
+    }
+  };
+
+  return (
+    <Card className="mb-5">
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full u-accent-soft u-accent-deeptext">
+          <DatabaseBackup size={19} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-stone-800">Backup</p>
+          <p className="text-xs text-stone-500">
+            {counts} item{counts === 1 ? "" : "s"} across your semesters
+          </p>
+        </div>
+      </div>
+
+      {!pending && (
+        <>
+          <div className="mt-4 flex gap-2">
+            <button className={`${btnPrimary} flex-1`} onClick={download}>
+              <Download size={15} /> Save a backup
+            </button>
+            <button className={btnGhost} onClick={pickFile}>
+              <Upload size={15} /> Restore
+            </button>
+          </div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            onChange={readFile}
+            style={{ display: "none" }}
+            aria-hidden="true"
+          />
+          <p className="mt-3 text-xs text-stone-400">
+            The backup is a single file holding everything - courses, notes, drawings, assignments,
+            both semesters. Keep it somewhere safe like a cloud drive.
+          </p>
+        </>
+      )}
+
+      {pending && (
+        <div className={`mt-4 ${editBox}`}>
+          <p className="text-sm text-stone-700">
+            That backup holds <strong>{pending.found}</strong> item
+            {pending.found === 1 ? "" : "s"}. How should it be brought in?
+          </p>
+          <div className="mt-3 space-y-2">
+            <button
+              className={`${btnPrimary} w-full justify-start`}
+              onClick={() => {
+                onRestore(pending.data, "merge");
+                setPending(null);
+                setStatus("Backup merged in.");
+              }}
+            >
+              <Check size={15} /> Merge with what's here now
+            </button>
+            <button
+              className="inline-flex w-full items-center justify-start gap-1.5 rounded-lg bg-rose-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-rose-700 u-focus"
+              onClick={() => {
+                onRestore(pending.data, "replace");
+                setPending(null);
+                setStatus("Everything replaced with the backup.");
+              }}
+            >
+              <RotateCcw size={15} /> Replace everything with the backup
+            </button>
+            <button className={`${btnGhost} w-full`} onClick={() => setPending(null)}>
+              <X size={15} /> Cancel
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-stone-500">
+            <strong>Merge</strong> keeps both, newest edit winning - safe. <strong>Replace</strong>
+            {" "}throws away what's on this device first - use it when restoring after losing data.
+          </p>
+        </div>
+      )}
+
+      {status && <p className="mt-3 text-sm u-accent-text">{status}</p>}
     </Card>
   );
 }
@@ -2394,6 +2608,19 @@ export default function PlannerApp() {
       ),
     }));
 
+  const restoreBackup = (incoming, mode) => {
+    setData((current) => {
+      const next =
+        mode === "replace"
+          ? incoming
+          : purgeOldTombstones(mergeData(current, incoming));
+      const stamped = { ...next, meta: { ...(next.meta || {}), updatedAt: nowISO() } };
+      dataRef.current = stamped;
+      store.set(STORAGE_KEY, JSON.stringify(stamped));
+      return stamped;
+    });
+  };
+
   // What the UI works with: the active semester, minus anything deleted.
   const rawSem = data.semesters[data.semester] || makeSemester();
   const sem = useMemo(() => {
@@ -2578,6 +2805,7 @@ export default function PlannerApp() {
 
         {tab === "account" && (
           <Section icon={UserRound} title="Account" subtitle="Sync your planner across your devices">
+            <BackupPanel data={data} onRestore={restoreBackup} />
             <AccountPanel
               session={session}
               syncing={syncing}
