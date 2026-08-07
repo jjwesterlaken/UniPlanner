@@ -1,7 +1,7 @@
 {
   "name": "university-planner",
   "productName": "University Planner",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Plan courses, assignments, readings and study cards.",
   "main": "main.js",
   "author": "University Planner",
