@@ -7,7 +7,8 @@
   "scripts": {
     "build:web": "node scripts/build-web.mjs",
     "prepare:native": "node scripts/prepare-native.mjs",
-    "build": "npm run build:web && npm run prepare:native"
+    "build": "npm run build:web && npm run prepare:native",
+    "test": "node scripts/build-web.mjs && node scripts/test-ai-notes.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

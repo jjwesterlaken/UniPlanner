@@ -51,7 +51,9 @@ import {
   RefreshCw,
   CloudCheck,
   TriangleAlert,
+  Mic,
 } from "lucide-react";
+import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
 
 /* ------------------------------------------------------------------ */
 /*  Setup                                                             */
@@ -307,6 +309,10 @@ function CourseSelect({ value, onChange, courses, allowNone = true }) {
     </select>
   );
 }
+
+// Re-exported so aiNotes.jsx can match the app's existing look and id scheme
+// instead of inventing its own.
+export { inputCls, labelCls, btnPrimary, btnGhost, iconBtn, editBox, Section, Card, Empty, CourseChip, CourseSelect, uid };
 
 /* ------------------------------------------------------------------ */
 /*  Courses                                                           */
@@ -1669,6 +1675,7 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
 function Notes({ pages, folders, addItem, patchItem, removeItem }) {
   const [draft, setDraft] = useState(null);
   const [choosing, setChoosing] = useState(false);
+  const [aiViewId, setAiViewId] = useState(null);
   const isNew = draft && !draft.id;
   const showList = !draft && !choosing;
 
@@ -1707,9 +1714,12 @@ function Notes({ pages, folders, addItem, patchItem, removeItem }) {
       {showList && pages.length > 0 && (
         <ul className="mt-3 space-y-2">
           {pages.map((p) => (
-            <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => setDraft({ ...n })} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
+            <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => (n.aiMeta ? setAiViewId(n.id) : setDraft({ ...n }))} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
           ))}
         </ul>
+      )}
+      {aiViewId && (
+        <AiLectureNoteView page={pages.find((p) => p.id === aiViewId)} patchItem={patchItem} onClose={() => setAiViewId(null)} />
       )}
     </Card>
   );
@@ -1722,6 +1732,7 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
   const [confirmId, setConfirmId] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [draft, setDraft] = useState(null);
+  const [aiViewId, setAiViewId] = useState(null);
 
   const saveFolder = () => {
     const name = (folderForm.name || "").trim() || "Untitled folder";
@@ -1831,7 +1842,7 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
                   ) : (
                     <ul className="space-y-2">
                       {notes.map((p) => (
-                        <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => setDraft({ ...n })} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
+                        <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => (n.aiMeta ? setAiViewId(n.id) : setDraft({ ...n }))} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
                       ))}
                     </ul>
                   )}
@@ -1841,6 +1852,9 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
           );
         })}
       </ul>
+      {aiViewId && (
+        <AiLectureNoteView page={pages.find((p) => p.id === aiViewId)} patchItem={patchItem} onClose={() => setAiViewId(null)} />
+      )}
     </Card>
   );
 }
@@ -2394,6 +2408,7 @@ const TABS = [
   { id: "notes", label: "Notes", icon: StickyNote },
   { id: "folders", label: "Folders", icon: Folder },
   { id: "study", label: "Study", icon: Brain },
+  { id: "ai-notes", label: "AI Notes", icon: Mic },
   { id: "account", label: "Account", icon: UserRound },
 ];
 
@@ -2801,6 +2816,17 @@ export default function PlannerApp() {
               <StudyGame notes={sem.notes} />
             </Section>
           </>
+        )}
+
+        {tab === "ai-notes" && (
+          // AI notes are saved into the existing `pages`/`notes` collections
+          // (below), so they ride along inside the single `planner_data`
+          // JSON blob that syncs in full on every change (4-BACKEND-GUIDE.md).
+          // They're bigger than manual notes — if sync ever gets noticeably
+          // slower, splitting AI notes into their own table/row is the fix.
+          <Section icon={Mic} title="AI lecture notes" subtitle="Record a lecture and get an AI-generated summary and study cards">
+            <AiNotesPanel session={session} backend={backend} courses={sem.courses} data={data} setData={setData} addItem={addItem} />
+          </Section>
         )}
 
         {tab === "account" && (

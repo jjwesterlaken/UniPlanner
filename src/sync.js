@@ -91,6 +91,20 @@ function mergeSemester(a = {}, b = {}) {
   return out;
 }
 
+// AI-notes consent has its own survival rule, same idea as tombstones just
+// below: "newest object wins" is wrong for a fact that shouldn't ever be
+// allowed to disappear once granted. Whichever side has an acceptance is
+// kept; if both do, a newer consentVersion always wins (it represents
+// agreeing to updated wording), and only when versions match does the
+// earliest acceptedAt decide (the original acceptance of that wording is
+// the true one).
+function mergeConsent(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  if (a.version !== b.version) return a.version > b.version ? a : b;
+  return (a.acceptedAt || "") <= (b.acceptedAt || "") ? a : b;
+}
+
 export function mergeData(local, remote) {
   if (!remote) return local;
   if (!local) return remote;
@@ -117,6 +131,7 @@ export function mergeData(local, remote) {
     meta: {
       ...(local.meta || {}),
       ...(newer.meta || {}),
+      aiConsent: mergeConsent((local.meta || {}).aiConsent, (remote.meta || {}).aiConsent),
       updatedAt: localTime > remoteTime ? localTime : remoteTime,
     },
   };
@@ -248,6 +263,10 @@ if (isConfigured) {
     },
   });
 }
+// Exported (null when running against the demo backend) so aiNotesClient.js
+// can query ai_usage / upload to Storage directly under RLS, without a
+// second client instance.
+export { supabase };
 
 const TABLE = "planner_data";
 

@@ -1,0 +1,6 @@
+node_modules/
+dist-web/
+desktop/www/
+mobile/www/
+.ai-notes-test-tmp/
+.claude/
