@@ -1,0 +1,41 @@
+name: Deploy Supabase function
+
+# Deploys the ai-notes Edge Function without needing a terminal.
+# Run it from the Actions tab whenever the function changes.
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy ai-notes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Install the Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Check the function exists
+        run: |
+          if [ ! -d "supabase/functions/ai-notes" ]; then
+            echo "ERROR: supabase/functions/ai-notes not found."
+            echo "Has the AI notes code been pushed to this repository?"
+            exit 1
+          fi
+          echo "Found these files:"
+          find supabase/functions -type f | sort
+
+      - name: Deploy
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy ai-notes \
+            --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+
+      - name: Done
+        run: |
+          echo "Deployed. Check it under Edge Functions in the Supabase dashboard."
+          echo "If a call fails, Edge Functions -> Logs shows what happened."
