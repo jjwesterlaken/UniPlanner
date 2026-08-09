@@ -24,13 +24,16 @@ import {
   CONSENT_TEXT,
   describeRecorderError,
   parseAiNotesError,
+  PERMANENT_FAILURE_CODES,
   mapAiResultToItems,
   recorderReducer,
   INITIAL_RECORDER_STATE,
 } from "../src/aiNotesLogic.js";
 import { fetchUsage, callAiNotes } from "../src/aiNotesClient.js";
 import { mergeData } from "../src/sync.js";
-import { checkRequestGuards } from "../supabase/functions/ai-notes/guards.js";
+import { checkRequestGuards, selectTranscriber, minutesFromSeconds } from "../supabase/functions/ai-notes/guards.js";
+import { deepgramAdapter } from "../supabase/functions/ai-notes/deepgram.js";
+import { groqAdapter, isSizeError } from "../supabase/functions/ai-notes/groq.js";
 
 /* ---------- tiny test harness ---------- */
 
@@ -295,6 +298,107 @@ async function run() {
       maxBodyBytes: 46_000_000,
     });
     assert.equal(g.ok, true);
+  });
+
+  /* ---------- swapping the transcription provider can't silently break billing ---------- */
+
+  await test("groqAdapter and deepgramAdapter return the identical shape given equivalent mocked responses", async () => {
+    const fakeGroqFetch = async () => ({ ok: true, json: async () => ({ text: "hello world", duration: 12.5 }) });
+    const groqResult = await groqAdapter.transcribe({
+      audioUrl: "https://example.com/a.webm",
+      apiKey: "k",
+      fetchImpl: fakeGroqFetch,
+    });
+    assert.deepEqual(Object.keys(groqResult).sort(), ["durationSeconds", "transcript"]);
+    assert.equal(groqResult.transcript, "hello world");
+    assert.equal(groqResult.durationSeconds, 12.5);
+
+    const fakeDeepgramFetch = async () => ({
+      ok: true,
+      json: async () => ({
+        results: { channels: [{ alternatives: [{ transcript: "hello world" }] }] },
+        metadata: { duration: 12.5 },
+      }),
+    });
+    const dgResult = await deepgramAdapter.transcribe({
+      audioUrl: "https://example.com/a.webm",
+      apiKey: "k",
+      fetchImpl: fakeDeepgramFetch,
+    });
+    assert.deepEqual(groqResult, dgResult, "swapping providers must not change the shape billing/saving code relies on");
+  });
+
+  await test("a provider's reported duration flows through to billed minutes correctly", () => {
+    assert.equal(minutesFromSeconds(120), 2);
+    assert.equal(minutesFromSeconds(90), 1.5);
+    assert.equal(minutesFromSeconds(0), 0);
+    assert.equal(minutesFromSeconds(undefined), 0, "a missing/zero duration must bill zero, not throw or bill NaN");
+  });
+
+  await test("selectTranscriber actually switches which adapter gets called", () => {
+    const providers = { deepgram: deepgramAdapter, groq: groqAdapter };
+    assert.equal(selectTranscriber(providers, "groq", "deepgram").name, "groq");
+    assert.equal(selectTranscriber(providers, "deepgram", "groq").name, "deepgram");
+    // Missing/unknown override falls back to the configured default rather
+    // than silently calling no adapter at all.
+    assert.equal(selectTranscriber(providers, undefined, "groq").name, "groq");
+    assert.equal(selectTranscriber(providers, "not-a-real-provider", "deepgram").name, "deepgram");
+  });
+
+  await test("a Groq failure is handled the same way a Deepgram failure is (both throw, so index.ts's single catch-all covers either)", async () => {
+    const emptyGroqFetch = async () => ({ ok: true, json: async () => ({ text: "", duration: 0 }) });
+    await assert.rejects(() => groqAdapter.transcribe({ audioUrl: "u", apiKey: "k", fetchImpl: emptyGroqFetch }));
+
+    const failedGroqFetch = async () => ({ ok: false, status: 500 });
+    await assert.rejects(() => groqAdapter.transcribe({ audioUrl: "u", apiKey: "k", fetchImpl: failedGroqFetch }));
+
+    const emptyDeepgramFetch = async () => ({
+      ok: true,
+      json: async () => ({ results: { channels: [{ alternatives: [{ transcript: "" }] }] } }),
+    });
+    await assert.rejects(() => deepgramAdapter.transcribe({ audioUrl: "u", apiKey: "k", fetchImpl: emptyDeepgramFetch }));
+  });
+
+  /* ---------- a size/duration rejection can't strand the recording in a retry loop ---------- */
+
+  await test("isSizeError recognizes Groq's documented 413 status regardless of body", () => {
+    assert.equal(isSizeError(413, null), true);
+    assert.equal(isSizeError(413, {}), true);
+  });
+
+  await test("isSizeError falls back to matching size/duration wording for a non-413 rejection", () => {
+    assert.equal(isSizeError(400, { error: { message: "File size exceeds the maximum allowed.", type: "invalid_request_error" } }), true);
+    assert.equal(isSizeError(400, { error: { message: "Audio duration is too long for this model.", type: "invalid_request_error" } }), true);
+  });
+
+  await test("isSizeError does not misclassify an unrelated failure", () => {
+    assert.equal(isSizeError(500, null), false);
+    assert.equal(isSizeError(401, { error: { message: "Invalid API key", type: "invalid_request_error" } }), false);
+  });
+
+  await test("groqAdapter throws a distinguishable, actionable error on a 413 rejection", async () => {
+    const tooLargeFetch = async () => ({
+      ok: false,
+      status: 413,
+      json: async () => ({ error: { message: "Payload too large", type: "invalid_request_error" } }),
+    });
+    let thrown = null;
+    try {
+      await groqAdapter.transcribe({ audioUrl: "u", apiKey: "k", fetchImpl: tooLargeFetch });
+    } catch (err) {
+      thrown = err;
+    }
+    assert.ok(thrown, "expected groqAdapter to throw");
+    assert.equal(thrown.code, "too_large");
+    assert.match(thrown.message, /shorter segments|too long/i);
+  });
+
+  await test("parseAiNotesError and PERMANENT_FAILURE_CODES agree on which codes shouldn't invite a retry", () => {
+    assert.equal(parseAiNotesError({ code: "transcription_too_long" }, 413), "This recording is too long to process — try recording in shorter segments.");
+    assert.ok(PERMANENT_FAILURE_CODES.has("transcription_too_long"));
+    assert.ok(PERMANENT_FAILURE_CODES.has("recording_too_long"));
+    // A transient failure must still be retryable.
+    assert.ok(!PERMANENT_FAILURE_CODES.has("transcription_failed"));
   });
 
   /* ---------- a sync merge can't silently drop consent ---------- */

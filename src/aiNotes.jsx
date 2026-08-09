@@ -22,6 +22,7 @@ import {
   MONTHLY_MINUTES_LIMIT_HINT,
   describeRecorderError,
   parseAiNotesError,
+  PERMANENT_FAILURE_CODES,
   mapAiResultToItems,
   recorderReducer,
   INITIAL_RECORDER_STATE,
@@ -514,7 +515,7 @@ function Recorder({ session, courses, addItem }) {
             <button className={btnGhost} onClick={discard}>
               <X size={15} /> Discard
             </button>
-            {state.blob && (
+            {state.blob && !PERMANENT_FAILURE_CODES.has(state.errorCode) && (
               <button className={btnPrimary} onClick={runUpload}>
                 <RefreshCw size={15} /> Try again
               </button>

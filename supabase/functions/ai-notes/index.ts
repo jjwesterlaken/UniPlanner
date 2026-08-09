@@ -1,7 +1,8 @@
 // ai-notes — record a lecture, get an AI-generated summary and study
 // cards. This is the only network entrypoint; the client never talks
-// to Deepgram or OpenAI directly, and neither of those API keys ever
-// reaches the browser (they only exist as Edge Function secrets).
+// to the transcription provider (Groq by default, Deepgram also
+// supported) or OpenAI directly, and none of those API keys ever
+// reach the browser (they only exist as Edge Function secrets).
 //
 // Request body is small JSON — the audio itself is uploaded straight
 // from the browser to a private Storage bucket beforehand (see
@@ -10,10 +11,13 @@
 
 import { corsHeaders, jsonResponse } from "./_shared/cors.ts";
 import { supabaseAdmin } from "../_shared/supabaseAdmin.ts";
-import { checkRequestGuards } from "./guards.js";
-import { deepgramAdapter } from "./deepgram.ts";
+import { checkRequestGuards, selectTranscriber, minutesFromSeconds } from "./guards.js";
+import { deepgramAdapter } from "./deepgram.js";
+import { groqAdapter } from "./groq.js";
 import { openaiAdapter } from "./openai.ts";
 import {
+  TRANSCRIPTION_PROVIDER,
+  PROVIDER_API_KEY_ENV,
   MONTHLY_MINUTES_LIMIT,
   MAX_REQUEST_SECONDS,
   MAX_BODY_BYTES,
@@ -24,7 +28,8 @@ import {
   ORPHAN_SWEEP_HOURS,
 } from "./config.ts";
 
-const TRANSCRIBERS: Record<string, typeof deepgramAdapter> = { deepgram: deepgramAdapter };
+// deno-lint-ignore no-explicit-any
+const TRANSCRIBERS: Record<string, any> = { deepgram: deepgramAdapter, groq: groqAdapter };
 const SUMMARIZERS: Record<string, typeof openaiAdapter> = { openai: openaiAdapter };
 
 function currentMonthKey(d = new Date()) {
@@ -187,15 +192,56 @@ Deno.serve(async (req: Request) => {
 
     // 9. Transcribe. Object is left in place on failure so a retry can
     // reuse it (no re-upload needed).
-    const transcriber = TRANSCRIBERS[Deno.env.get("AI_NOTES_TRANSCRIPTION_PROVIDER") || "deepgram"] || deepgramAdapter;
+    //
+    // Provider is a single switch (config.ts's TRANSCRIPTION_PROVIDER,
+    // Groq by default), optionally overridden per-deployment via the
+    // AI_NOTES_TRANSCRIPTION_PROVIDER secret for A/B testing without a
+    // redeploy. The API key is looked up from the *resolved* adapter's
+    // own name (not the raw override string), so an invalid/unset
+    // override can't leave the wrong secret being read.
+    const requestedProvider = Deno.env.get("AI_NOTES_TRANSCRIPTION_PROVIDER") || TRANSCRIPTION_PROVIDER;
+    const transcriber = selectTranscriber(TRANSCRIBERS, requestedProvider, TRANSCRIPTION_PROVIDER);
+    const transcriptionApiKey = Deno.env.get(PROVIDER_API_KEY_ENV[transcriber.name])!;
+
+    // Vocabulary hint: the app already knows which course this recording
+    // belongs to, so bias recognition toward it — this is the app's main
+    // free mitigation against misheard technical terms becoming wrong
+    // study cards. The two providers want different shapes (Whisper/Groq:
+    // a free-text prompt; Deepgram nova-2: individual boosted keywords),
+    // so both are built from the same `course` string and the unused one
+    // is simply ignored by whichever adapter doesn't need it.
+    const promptHint = course ? `Lecture for ${course}` : undefined;
+    const keywordHint = course ? course.split(/\s+/).filter((w: string) => w.length > 1) : undefined;
+
     let transcript = "";
     let durationSeconds = 0;
     try {
-      const result = await transcriber.transcribe({ audioUrl: signed.signedUrl, apiKey: Deno.env.get("DEEPGRAM_API_KEY")! });
+      const result = await transcriber.transcribe({
+        audioUrl: signed.signedUrl,
+        apiKey: transcriptionApiKey,
+        prompt: promptHint,
+        keywords: keywordHint,
+      });
       transcript = result.transcript;
       durationSeconds = result.durationSeconds || estimatedDurationSeconds || 0;
     } catch (err) {
       await markFailed(idempotencyKey);
+      // A size/duration rejection from the provider is permanent, not
+      // transient — retrying with the same audio would fail identically,
+      // so it gets its own code (client suppresses the "try again" option
+      // for it) rather than the generic transcription_failed, which
+      // otherwise strands the recording in an endless failed-retry loop.
+      // deno-lint-ignore no-explicit-any
+      if ((err as any)?.code === "too_large") {
+        return jsonResponse(
+          {
+            ok: false,
+            code: "transcription_too_long",
+            error: "This recording is too long to process — try recording in shorter segments.",
+          },
+          413
+        );
+      }
       return jsonResponse({ ok: false, code: "transcription_failed", error: "We couldn't transcribe that recording. Please try again." }, 502);
     }
 
@@ -204,7 +250,7 @@ Deno.serve(async (req: Request) => {
     const { error: removeErr } = await supabaseAdmin.storage.from(LECTURE_AUDIO_BUCKET).remove([path]);
     if (removeErr) console.error(`ai-notes: failed to delete ${path} after successful transcription`, removeErr);
 
-    // 11. Summarize. On failure, don't discard the transcript — Deepgram
+    // 11. Summarize. On failure, don't discard the transcript — transcription
     // already succeeded and is about to be billed regardless.
     const summarizer = SUMMARIZERS[Deno.env.get("AI_NOTES_SUMMARY_PROVIDER") || "openai"] || openaiAdapter;
     let result: Record<string, unknown>;
@@ -215,8 +261,10 @@ Deno.serve(async (req: Request) => {
       result = { ok: true, transcript, summaryFailed: true, original: null, translated: null };
     }
 
-    // 12. Bill usage using the server-reported Deepgram duration.
-    const minutesBilled = durationSeconds / 60;
+    // 12. Bill usage using the server-reported duration (whichever provider
+    // ran) — minutesFromSeconds is the one, directly-tested calculation
+    // between "how long was this recording" and what gets billed.
+    const minutesBilled = minutesFromSeconds(durationSeconds);
     await supabaseAdmin.from("ai_usage").upsert(
       { user_id: userId, month, minutes_used: minutesUsedThisMonth + minutesBilled, updated_at: new Date().toISOString() },
       { onConflict: "user_id,month" }

@@ -39,3 +39,25 @@ export function checkRequestGuards({
   }
   return { ok: true };
 }
+
+/**
+ * Which transcription adapter a request should use. Pulled out as a pure
+ * lookup (not inlined in index.ts) so "switching provider in config
+ * actually changes which adapter gets called" is a directly-tested
+ * property, not just something asserted by reading the code. Falls back
+ * to `defaultProvider` if `requestedProvider` is missing or unknown.
+ */
+export function selectTranscriber(providers, requestedProvider, defaultProvider) {
+  return providers[requestedProvider] || providers[defaultProvider];
+}
+
+/**
+ * Seconds -> minutes billed. The one calculation between "how long was
+ * this recording" (whatever a provider reports) and "how much of the
+ * user's allowance did it use." Pulled out so a provider's reported
+ * duration is proven to flow through to the usage number correctly,
+ * rather than just assumed by reading index.ts.
+ */
+export function minutesFromSeconds(durationSeconds) {
+  return (durationSeconds || 0) / 60;
+}

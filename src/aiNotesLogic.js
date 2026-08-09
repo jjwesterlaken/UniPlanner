@@ -94,6 +94,12 @@ export function describeRecorderError(err) {
   }
 }
 
+// Codes in this set mean retrying with the same recording would fail
+// identically (the provider rejected it outright, not a transient
+// hiccup) — the UI uses this to withhold the "Try again" option, since
+// offering it would just strand the user in a loop.
+export const PERMANENT_FAILURE_CODES = new Set(["recording_too_long", "transcription_too_long"]);
+
 const ERROR_MESSAGES = {
   no_access: "AI notes isn't enabled for your account yet.",
   usage_exceeded: "You've used all your AI minutes for this month.",
@@ -101,6 +107,7 @@ const ERROR_MESSAGES = {
   recording_too_long: "Recordings are limited to about 3 hours.",
   recording_missing: "We couldn't find that recording — please record it again.",
   transcription_failed: "We couldn't transcribe that recording. Please try again.",
+  transcription_too_long: "This recording is too long to process — try recording in shorter segments.",
   unauthenticated: "Please sign in again to use AI notes.",
 };
 
