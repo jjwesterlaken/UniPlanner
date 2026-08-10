@@ -78,6 +78,48 @@ blob after a restore and thinks the 9.8KB ceiling has been breached.
 Treat `mergeData` as fragile. It is the most-tested function here and the
 one most able to lose a user's data silently.
 
+## The service-role client bypasses RLS — you are the ownership check
+
+**Any query made with the service-role client must explicitly scope to the
+requesting user's id. The database policy will not save you.** That client
+exists precisely to bypass Row Level Security, so every `.eq("user_id",
+userId)` that RLS would have applied has to be written by hand, on every
+query, including the ones that look like internal bookkeeping.
+
+The concrete failure: `ai-notes` looked up an in-flight request by its
+idempotency key alone.
+
+```js
+.from("ai_notes_requests").select("*").eq("idempotency_key", key)  // no user_id
+if (existing?.status === "done") return { result: existing.result }
+```
+
+`result` holds the full transcript and summary, so anyone presenting a key
+that already had a completed row received another user's lecture. The
+policy `ai_notes_requests_select_own` was correct the whole time and never
+ran. The key was being treated as an internal coordination token, and it
+is really a shared identifier — it's also the audio's filename.
+
+Three things follow:
+
+- **Scope every service-role query**, not just the obvious reads. The
+  writes matter too: a mis-scoped update is a takeover rather than a
+  disclosure, and it is harder to notice because nothing is returned.
+- **Reject "exists but isn't yours" identically to "malformed."** Same
+  status, same code, same body. If the two differ, the endpoint answers
+  "does this key exist?" for any key someone cares to try. Tell them apart
+  in the logs, never in the response.
+- **Test it at the function level.** `scripts/test-ai-notes-function.mjs`
+  runs the real handler against a fake database that models ownership.
+  Note that once the first lookup is scoped, a non-owner never reaches the
+  later queries, so those scopes can't be caught by behaviour alone —
+  hence the source-level invariant in that file asserting no query filters
+  on `idempotency_key` without `user_id`.
+
+This applies to anything server-side that comes later. The Stripe webhook
+will run service-role against `profiles`; the same mistake there flips the
+wrong user's tier.
+
 ## Demo mode is a real mode
 
 With no Supabase key in `src/config.js`, `backend` falls through to

@@ -52,11 +52,27 @@ const logFailure = (stage: string, err: any, extra: Record<string, unknown> = {}
 const errorResponse = (stage: string, code: string, error: string, status: number) =>
   jsonResponse({ ok: false, code, stage, error }, status);
 
-async function markFailed(idempotencyKey: string) {
+/* The one rejection used for BOTH a malformed idempotency key and a
+   well-formed key that belongs to somebody else.
+
+   Deliberately identical — same status, same code, same stage, same
+   message. If the two differed in any observable way, the endpoint would
+   answer "does this key exist?" for any key an attacker cared to try.
+   The two cases are told apart in the logs, never in the response. */
+const rejectIdempotencyKey = () =>
+  errorResponse("idempotency_insert", "bad_idempotency_key", "Please reload the app and try recording again.", 400);
+
+async function markFailed(idempotencyKey: string, userId: string) {
   // Its own catch: this runs on paths that are already failing, and an
   // exception here would replace the real error with a less useful one.
+  // Scoped by user_id like every other service-role write: the key alone
+  // is a shared token, not proof of ownership.
   try {
-    await supabaseAdmin.from("ai_notes_requests").update({ status: "failed" }).eq("idempotency_key", idempotencyKey);
+    await supabaseAdmin
+      .from("ai_notes_requests")
+      .update({ status: "failed" })
+      .eq("idempotency_key", idempotencyKey)
+      .eq("user_id", userId);
   } catch (err) {
     logFailure("mark_failed", err);
   }
@@ -189,12 +205,7 @@ Deno.serve(async (req: Request) => {
       logFailure("idempotency_insert", new Error("idempotencyKey is not a UUID"), {
         received: String(idempotencyKey).slice(0, 64),
       });
-      return errorResponse(
-        "idempotency_insert",
-        "bad_idempotency_key",
-        "Please reload the app and try recording again.",
-        400
-      );
+      return rejectIdempotencyKey();
     }
 
     // 5. Race-safe idempotency claim.
@@ -212,21 +223,38 @@ Deno.serve(async (req: Request) => {
         logFailure("idempotency_insert", insertErr);
         return errorResponse("idempotency_insert", "server_error", "Something went wrong. Please try again.", 500);
       }
+      /* Scoped to the caller. supabaseAdmin is the service-role client,
+         so RLS is bypassed and the ownership check the policy would have
+         applied has to be written here instead. Without the user_id
+         filter this returned `result` -- a full transcript and summary --
+         to anyone presenting a key that already had a completed row. */
       const { data: existing } = await supabaseAdmin
         .from("ai_notes_requests")
         .select("*")
         .eq("idempotency_key", idempotencyKey)
-        .single();
+        .eq("user_id", userId)
+        .maybeSingle();
 
-      if (existing?.status === "done") {
+      if (!existing) {
+        // The key is taken (23505) but not by this user. Rejected exactly
+        // as a malformed key is, so the response reveals nothing about
+        // whether the key exists or who holds it.
+        logFailure("idempotency_insert", new Error("idempotency key is held by another user"), {
+          outcome: "not_owner",
+        });
+        return rejectIdempotencyKey();
+      }
+
+      if (existing.status === "done") {
         return jsonResponse({ ok: true, result: existing.result });
       }
-      if (existing?.status === "processing") {
+      if (existing.status === "processing") {
         const staleCutoff = new Date(Date.now() - PROCESSING_STALE_MINUTES * 60_000).toISOString();
         const { data: reclaimed } = await supabaseAdmin
           .from("ai_notes_requests")
           .update({ status: "processing", created_at: new Date().toISOString() })
           .eq("idempotency_key", idempotencyKey)
+          .eq("user_id", userId)
           .eq("status", "processing")
           .lt("created_at", staleCutoff)
           .select();
@@ -234,11 +262,12 @@ Deno.serve(async (req: Request) => {
           return errorResponse("idempotency_insert", "already_processing", "This recording is already being processed — try again shortly.", 409);
         }
         // else: reclaimed the abandoned row, fall through and proceed.
-      } else if (existing?.status === "failed") {
+      } else if (existing.status === "failed") {
         const { data: reclaimed } = await supabaseAdmin
           .from("ai_notes_requests")
           .update({ status: "processing" })
           .eq("idempotency_key", idempotencyKey)
+          .eq("user_id", userId)
           .eq("status", "failed")
           .select();
         if (!reclaimed || reclaimed.length === 0) {
@@ -260,7 +289,7 @@ Deno.serve(async (req: Request) => {
       // not audio and not a credential, and it is the one thing that makes
       // a missing upload diagnosable.
       logFailure("size_guard", new Error("uploaded object not found in the bucket"), { bucket: LECTURE_AUDIO_BUCKET });
-      await markFailed(idempotencyKey);
+      await markFailed(idempotencyKey, userId);
       return errorResponse("size_guard", "recording_missing", "We couldn't find that recording — please record it again.", 404);
     }
     const receivedBytes = objectMeta.metadata?.size || 0;
@@ -290,7 +319,7 @@ Deno.serve(async (req: Request) => {
       // Expected outcome, not a fault — logged at stage level so the logs
       // still show why a request stopped here.
       logStage("size_guard", { rejected: guard.code });
-      await markFailed(idempotencyKey);
+      await markFailed(idempotencyKey, userId);
       return errorResponse("size_guard", guard.code, guard.error, guard.code === "usage_exceeded" ? 403 : 413);
     }
 
@@ -303,7 +332,7 @@ Deno.serve(async (req: Request) => {
       .createSignedUrl(path, SIGNED_URL_TTL_SECONDS);
     if (signErr || !signed?.signedUrl) {
       logFailure("signed_url", signErr || new Error("no signed URL returned for an object that was listed"));
-      await markFailed(idempotencyKey);
+      await markFailed(idempotencyKey, userId);
       return errorResponse("signed_url", "recording_missing", "We couldn't find that recording — please record it again.", 404);
     }
 
@@ -345,7 +374,7 @@ Deno.serve(async (req: Request) => {
       durationSeconds = result.durationSeconds || estimatedDurationSeconds || 0;
     } catch (err) {
       logFailure("transcribe", err, { provider: transcriber.name });
-      await markFailed(idempotencyKey);
+      await markFailed(idempotencyKey, userId);
       // A size/duration rejection from the provider is permanent, not
       // transient — retrying with the same audio would fail identically,
       // so it gets its own code (client suppresses the "try again" option
@@ -399,7 +428,8 @@ Deno.serve(async (req: Request) => {
     await supabaseAdmin
       .from("ai_notes_requests")
       .update({ status: "done", result, minutes_billed: minutesBilled })
-      .eq("idempotency_key", idempotencyKey);
+      .eq("idempotency_key", idempotencyKey)
+      .eq("user_id", userId);
 
     // 14. Best-effort housekeeping, doesn't block the response.
     scheduleCleanup();

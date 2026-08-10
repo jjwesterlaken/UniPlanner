@@ -1294,6 +1294,13 @@ async function run() {
     );
   });
 
+  await test("npm test still runs the function ownership tests", () => {
+    // They guard a cross-user data disclosure; dropping them from the
+    // suite would remove the only thing checking it.
+    const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    assert.match(pkg.scripts.test, /test-ai-notes-function\.mjs/, "the ownership tests were dropped from `npm test`");
+  });
+
   await test("CI forces the migration tests to run rather than skip", () => {
     const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
     // REQUIRE_POSTGRES is the whole reason local skipping is acceptable:
