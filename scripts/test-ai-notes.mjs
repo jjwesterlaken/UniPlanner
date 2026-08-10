@@ -201,7 +201,7 @@ async function run() {
     let thrown = null;
     try {
       await callAiNotes(
-        { token: "t", path: "p", mimeType: "audio/webm", course: "", week: "", translateTo: null, idempotencyKey: "k", estimatedDurationSeconds: 10 },
+        { token: "t", course: "", translateTo: null, idempotencyKey: "k", estimatedDurationSeconds: 10 },
         fakeFetch
       );
     } catch (err) {
@@ -910,6 +910,28 @@ async function run() {
     assert.equal(clampSessionMinutes(-5), 0);
     assert.equal(clampSessionMinutes(NaN), 0);
     assert.equal(clampSessionMinutes(undefined), 0);
+  });
+
+  await test("the request to the function carries no field the function ignores", async () => {
+    // The function derives the path from the JWT and the key. Sending one
+    // would put an attacker-controlled value in front of the service-role
+    // storage client, which is the bug this contract change removes.
+    let sentBody = null;
+    const fakeFetch = async (_url, init) => {
+      sentBody = JSON.parse(init.body);
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: {} }) };
+    };
+    await callAiNotes(
+      { token: "t", course: "BIO", translateTo: null, idempotencyKey: "k", estimatedDurationSeconds: 10 },
+      fakeFetch
+    );
+    assert.ok(sentBody, "expected a request body");
+    // path: derived server-side. mimeType/week: never read by the function.
+    for (const dead of ["path", "mimeType", "week"]) {
+      assert.ok(!(dead in sentBody), `the request still sends ${dead}: ${JSON.stringify(sentBody)}`);
+    }
+    assert.equal(sentBody.idempotencyKey, "k", "the key is what the function needs, and it is still sent");
+    assert.equal(sentBody.course, "BIO", "the fields the function does read must survive");
   });
 
   /* ---------- the idempotency key must be a real UUID ---------- */

@@ -62,12 +62,23 @@ export async function uploadAudio({ session, audioBlob, mimeType, idempotencyKey
 }
 
 /**
- * Calls the ai-notes Edge Function with just metadata (the storage
- * path, not the audio itself) and returns its parsed JSON result.
- * `fetchImpl` is injectable so this is testable with a mocked fetch.
+ * Calls the ai-notes Edge Function with just metadata (never the audio)
+ * and returns its parsed JSON result. `fetchImpl` is injectable so this
+ * is testable with a mocked fetch.
+ *
+ * The storage path is deliberately NOT sent. The function derives it from
+ * the verified user id and the idempotency key, so a path in the request
+ * would be an attacker-controlled input pointing at the service-role
+ * storage client. Uploading still needs the path locally -- see
+ * uploadAudio -- it just isn't part of this contract.
+ *
+ * `mimeType` and `week` are gone for a duller reason: the function never
+ * read either. A field that is parsed but unused invites someone to start
+ * trusting it later, which is how the path became a vulnerability. `week`
+ * can come back if it earns its place, validated.
  */
 export async function callAiNotes(
-  { token, path, mimeType, course, week, translateTo, idempotencyKey, estimatedDurationSeconds },
+  { token, course, translateTo, idempotencyKey, estimatedDurationSeconds },
   fetchImpl = fetch
 ) {
   const res = await fetchImpl(`${SUPABASE_URL}/functions/v1/ai-notes`, {
@@ -77,7 +88,7 @@ export async function callAiNotes(
       Authorization: `Bearer ${token}`,
       apikey: SUPABASE_ANON_KEY,
     },
-    body: JSON.stringify({ path, mimeType, course, week, translateTo, idempotencyKey, estimatedDurationSeconds }),
+    body: JSON.stringify({ course, translateTo, idempotencyKey, estimatedDurationSeconds }),
   });
   let json = null;
   try {
