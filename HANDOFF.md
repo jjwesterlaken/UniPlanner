@@ -22,11 +22,16 @@ Edge Function; no provider key ever reaches the client.
 | Money/size guards (pure, tested) | `.../guards.js` |
 | Schema, RLS, triggers | `supabase/migrations/0001_ai_notes.sql` |
 | Setup instructions | `SUPABASE-SETUP.md` |
-| Tests | `scripts/test-ai-notes.mjs` (`npm test`) |
+| Tests | `scripts/test-ai-notes.mjs`, `scripts/test-migrations.mjs` (`npm test`) |
 
-`npm test` builds the web bundle then runs 30 tests. All passing as of
-`c45ad5f`. One of them greps `dist-web/app.js` to prove no API key
-leaked into the shipped bundle — keep that passing.
+`npm test` builds the web bundle then runs 35 tests, followed by 10
+migration tests. All passing. One of the 35 greps `dist-web/app.js` to
+prove no API key leaked into the shipped bundle — keep that passing.
+
+The migration tests need a local PostgreSQL and **skip themselves
+silently** without one, which is the normal case on a Mac unless you've
+run `brew install postgresql@16`. A clean `npm test` on your machine
+therefore proves the 35, not the 10.
 
 ## Design decisions worth not re-litigating
 
@@ -58,18 +63,17 @@ leaked into the shipped bundle — keep that passing.
 2. **Never exercised against live provider APIs.** Both adapters are
    only covered by mocked `fetch`. The first real end-to-end run is
    still unproven.
-3. **Mobile native projects aren't scaffolded.** No `mobile/ios/` or
-   `mobile/android/` yet, so the mic permission strings aren't in place.
-   Strings to paste in after `cap add ios` / `cap add android`:
-   - `Info.plist` → `NSMicrophoneUsageDescription`: "University Planner
-     uses your microphone to record lectures so it can generate an AI
-     summary and study cards. Recordings are sent to our transcription
-     provider for processing only and are not stored."
-   - `AndroidManifest.xml` → `<uses-permission
-     android:name="android.permission.RECORD_AUDIO" />`
-4. **`delete_my_account()`** isn't tracked in this repo. The snippet to
-   merge into it is in `SUPABASE-SETUP.md` §2h — unconfirmed whether
-   that's been done.
+3. **Mobile native projects still aren't scaffolded** — but the mic
+   permissions no longer need pasting in by hand. `npm run add:ios` /
+   `add:android` / `sync` (in `mobile/`) apply them via
+   `mobile/scripts/native-permissions.mjs`, idempotently, every time.
+   Still unverified on a real device, since there's no `mobile/ios/` or
+   `mobile/android/` to build yet.
+4. **`delete_my_account()` is now tracked**, as
+   `supabase/migrations/0002_account_deletion.sql`. It won't overwrite a
+   function your project already has — it raises a notice telling you the
+   one line to add instead. **Not yet run against the real project**, so
+   whether that project already had one is still unknown.
 5. **Cross-device sync of an AI note** has never been tested with two
    real signed-in sessions.
 6. **No billing UI.** `profiles.tier` is flipped by hand in the
