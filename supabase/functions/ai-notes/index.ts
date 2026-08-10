@@ -6,8 +6,10 @@
 //
 // Request body is small JSON — the audio itself is uploaded straight
 // from the browser to a private Storage bucket beforehand (see
-// src/aiNotesClient.js uploadAudio), and this function is handed only
-// the resulting storage path.
+// src/aiNotesClient.js uploadAudio). The function does NOT take the
+// storage path from the request: it derives it from the verified user id
+// and the validated idempotency key, so there is no client-controlled
+// path that could point at another user's folder.
 
 import { corsHeaders, jsonResponse } from "./_shared/cors.ts";
 import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
@@ -24,6 +26,7 @@ import {
   MAX_BODY_BYTES,
   PROCESSING_STALE_MINUTES,
   LECTURE_AUDIO_BUCKET,
+  AUDIO_EXTENSIONS,
   SIGNED_URL_TTL_SECONDS,
   REQUEST_RETENTION_DAYS,
   ORPHAN_SWEEP_HOURS,
@@ -186,12 +189,14 @@ Deno.serve(async (req: Request) => {
 
     // 4. Parse the (small, JSON-only) request body.
     const body = await req.json();
-    const { path, mimeType, course, week, translateTo, estimatedDurationSeconds, idempotencyKey } = body || {};
-    if (!path || !idempotencyKey) {
-      logFailure("idempotency_insert", new Error("request body missing path or idempotencyKey"), {
-        hasPath: Boolean(path),
-        hasKey: Boolean(idempotencyKey),
-      });
+    /* `path` is deliberately NOT read from the body. The storage path is
+       derived below from the verified user id and the validated key, so
+       there is no client-supplied path to check, forget to check, or
+       smuggle a traversal through. Older clients still send the field;
+       it is ignored. */
+    const { course, week, translateTo, estimatedDurationSeconds, idempotencyKey } = body || {};
+    if (!idempotencyKey) {
+      logFailure("idempotency_insert", new Error("request body missing idempotencyKey"));
       return errorResponse("idempotency_insert", "bad_request", "Missing recording details.", 400);
     }
 
@@ -279,12 +284,23 @@ Deno.serve(async (req: Request) => {
     // 6. Real, server-measured size of the uploaded object.
     stage = "size_guard";
     logStage(stage);
-    const lastSlash = path.lastIndexOf("/");
-    const folder = path.slice(0, lastSlash);
-    const filename = path.slice(lastSlash + 1);
-    const { data: listing } = await supabaseAdmin.storage.from(LECTURE_AUDIO_BUCKET).list(folder, { search: filename });
-    const objectMeta = (listing || []).find((f) => f.name === filename);
-    if (!objectMeta) {
+    /* Both halves of the path are server-derived: the folder is the user
+       id from the verified JWT, and the name is the idempotency key,
+       already validated as a UUID (so it contains only hex and hyphens
+       and cannot carry a separator or a regex metacharacter).
+
+       The extension is discovered rather than assumed — iOS Safari
+       records mp4/aac, not webm — by listing the caller's own folder and
+       accepting only a name matching the server-side AUDIO_EXTENSIONS
+       allowlist. That keeps the whole path free of request input. */
+    const folder = userId;
+    const nameAllowed = new RegExp(`^${idempotencyKey}\\.(${AUDIO_EXTENSIONS.join("|")})$`, "i");
+    const { data: listing } = await supabaseAdmin.storage
+      .from(LECTURE_AUDIO_BUCKET)
+      .list(folder, { search: idempotencyKey });
+    const objectMeta = (listing || []).find((f) => nameAllowed.test(f.name));
+    const objectPath = objectMeta ? `${folder}/${objectMeta.name}` : null;
+    if (!objectMeta || !objectPath) {
       // Path is logged: it is a storage key of the form "<user>/<uuid>.webm",
       // not audio and not a credential, and it is the one thing that makes
       // a missing upload diagnosable.
@@ -329,7 +345,7 @@ Deno.serve(async (req: Request) => {
     logStage(stage);
     const { data: signed, error: signErr } = await supabaseAdmin.storage
       .from(LECTURE_AUDIO_BUCKET)
-      .createSignedUrl(path, SIGNED_URL_TTL_SECONDS);
+      .createSignedUrl(objectPath, SIGNED_URL_TTL_SECONDS);
     if (signErr || !signed?.signedUrl) {
       logFailure("signed_url", signErr || new Error("no signed URL returned for an object that was listed"));
       await markFailed(idempotencyKey, userId);
@@ -394,8 +410,8 @@ Deno.serve(async (req: Request) => {
 
     // 10. Transcription succeeded — delete the object now. This is the one
     // and only success-path delete, and what fulfills "audio isn't retained".
-    const { error: removeErr } = await supabaseAdmin.storage.from(LECTURE_AUDIO_BUCKET).remove([path]);
-    if (removeErr) console.error(`ai-notes: failed to delete ${path} after successful transcription`, removeErr);
+    const { error: removeErr } = await supabaseAdmin.storage.from(LECTURE_AUDIO_BUCKET).remove([objectPath]);
+    if (removeErr) logFailure("cleanup_audio", removeErr, { bucket: LECTURE_AUDIO_BUCKET });
 
     // 11. Summarize. On failure, don't discard the transcript — transcription
     // already succeeded and is about to be billed regardless.

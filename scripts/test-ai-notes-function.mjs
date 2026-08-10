@@ -77,12 +77,13 @@ const OWNER = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
 const KEY = "3f9a1c2e-7b4d-4e6f-9a1b-2c3d4e5f6a7b";
 
-function makeDb(rows, missingObject = false) {
+function makeDb(rows, missingObject = false, storedExt = "webm") {
   // Every filter applied to a request-row query is recorded, so a test can
   // assert that writes are scoped even where the effect isn't observable
   // (the key is a primary key, so a mis-scoped update can't hit another
   // row -- but the scope still has to be there).
   const writes = [];
+  const storageCalls = [];
 
   const matches = (row, filters) => filters.every(([col, val]) => row[col] === val);
 
@@ -159,19 +160,30 @@ function makeDb(rows, missingObject = false) {
     },
     storage: {
       from: () => ({
-        list: async () => ({ data: missingObject ? [] : [{ name: `${KEY}.webm`, metadata: { size: 1000 } }], error: null }),
-        createSignedUrl: async () => ({ data: { signedUrl: "https://groq.test/audio" }, error: null }),
-        remove: async () => ({ error: null }),
+        // Records exactly which folder and paths the function asked for,
+        // so a test can prove the request body never influenced them.
+        list: async (folder, opts) => {
+          storageCalls.push({ op: "list", folder, search: opts && opts.search });
+          return { data: missingObject ? [] : [{ name: `${KEY}.${storedExt}`, metadata: { size: 1000 } }], error: null };
+        },
+        createSignedUrl: async (p) => {
+          storageCalls.push({ op: "sign", path: p });
+          return { data: { signedUrl: "https://groq.test/audio" }, error: null };
+        },
+        remove: async (paths) => {
+          storageCalls.push({ op: "remove", paths });
+          return { error: null };
+        },
       }),
     },
   };
-  return { client, rows, writes };
+  return { client, rows, writes, storageCalls };
 }
 
 /* ---------- invoke the handler ---------- */
 
-async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false } = {}) {
-  const db = makeDb(rows, missingObject);
+async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath } = {}) {
+  const db = makeDb(rows, missingObject, storedExt);
   db.client.auth.getUser = async () => ({ data: { user: { id: callerId } }, error: null });
 
   let handler = null;
@@ -207,14 +219,21 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
     new Request("https://x/ai-notes", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
-      body: JSON.stringify({ path: `${callerId}/${key}.webm`, mimeType: "audio/webm", idempotencyKey: key }),
+      body: JSON.stringify({
+        path: bodyPath !== undefined ? bodyPath : `${callerId}/${key}.webm`,
+        mimeType: "audio/webm",
+        idempotencyKey: key,
+      }),
     })
   );
   const bodyText = await res.text();
   console.log = origLog;
   console.error = origErr;
 
-  return { status: res.status, bodyText, body: JSON.parse(bodyText), rows: db.rows, writes: db.writes, logs };
+  return {
+    status: res.status, bodyText, body: JSON.parse(bodyText),
+    rows: db.rows, writes: db.writes, storageCalls: db.storageCalls, logs,
+  };
 }
 
 const doneRow = (userId) => ({
@@ -313,6 +332,76 @@ async function run() {
         `a write filtered on ${JSON.stringify(cols)} without user_id — service-role writes bypass RLS`
       );
     }
+  });
+
+  await test("the storage path is derived from the caller, not from the request body", async () => {
+    // A path naming another user's folder must have no effect at all --
+    // not be rejected, simply be irrelevant.
+    const hostile = `${OTHER}/${KEY}.webm`;
+    const r = await invoke({ bodyPath: hostile });
+
+    // No storage call anywhere may mention the other user -- that is the
+    // security property, and it covers the housekeeping sweep too.
+    for (const c of r.storageCalls) {
+      const target = String(c.folder ?? c.path ?? (c.paths || []).join(","));
+      assert.ok(!target.includes(OTHER), `storage was addressed with the body's path: ${JSON.stringify(c)}`);
+    }
+
+    /* The calls made on behalf of THIS request must all sit in the
+       caller's own folder. scheduleCleanup's orphan sweep is excluded: it
+       deliberately lists the whole bucket with no search term, which is
+       what makes it a sweep, and it is not driven by request input. */
+    const requestCalls = r.storageCalls.filter((c) => c.search || c.op === "sign");
+    assert.ok(requestCalls.length >= 2, `expected the request to list and sign, saw ${JSON.stringify(r.storageCalls)}`);
+    for (const c of requestCalls) {
+      const target = String(c.folder ?? c.path);
+      assert.ok(target.startsWith(OWNER), `storage target did not start with the caller's id: ${JSON.stringify(c)}`);
+    }
+  });
+
+  await test("a traversal in the supplied path cannot escape the caller's folder", async () => {
+    for (const evil of [
+      `${OWNER}/../${OTHER}/${KEY}.webm`,
+      `../../${OTHER}/${KEY}.webm`,
+      `${OTHER}/${KEY}.webm`,
+      "", null, 42, { nested: true },
+    ]) {
+      const r = await invoke({ bodyPath: evil });
+      for (const c of r.storageCalls) {
+        const target = String(c.folder ?? c.path ?? (c.paths || []).join(","));
+        assert.ok(!target.includes(".."), `traversal reached storage: ${target}`);
+        assert.ok(!target.includes(OTHER), `another user's folder reached storage: ${target}`);
+      }
+    }
+  });
+
+  await test("the extension is discovered from storage, not assumed to be webm", async () => {
+    // iOS Safari records mp4/aac, so a hardcoded .webm would make every
+    // iPhone recording look missing.
+    for (const ext of ["webm", "m4a", "aac"]) {
+      const r = await invoke({ storedExt: ext });
+      const signed = r.storageCalls.find((c) => c.op === "sign");
+      assert.ok(signed, `nothing was signed for a .${ext} recording`);
+      assert.equal(signed.path, `${OWNER}/${KEY}.${ext}`);
+    }
+  });
+
+  await test("an object with an extension outside the allowlist is not signed", async () => {
+    // Only the formats the recorder can produce are accepted, so a stray
+    // object in the folder can't be fed to the transcription provider.
+    const r = await invoke({ storedExt: "exe" });
+    assert.equal(r.status, 404);
+    assert.equal(r.body.code, "recording_missing");
+    assert.ok(!r.storageCalls.some((c) => c.op === "sign"), "an unexpected file type was signed");
+  });
+
+  await test("the source never reads a path from the request body", async () => {
+    // The property that makes this stronger than a guard: there is no
+    // client-supplied path for a future code path to forget to check.
+    const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/index.ts"), "utf8");
+    const destructure = src.match(/const \{[^}]*\} = body \|\| \{\};/);
+    assert.ok(destructure, "could not find the request body destructure");
+    assert.ok(!/\bpath\b/.test(destructure[0]), `path is still read from the body: ${destructure[0]}`);
   });
 
   await test("no query in the source filters on idempotency_key without user_id", async () => {

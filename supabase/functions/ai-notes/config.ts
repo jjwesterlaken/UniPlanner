@@ -43,3 +43,15 @@ export const LECTURE_AUDIO_BUCKET = "lecture-audio";
 export const SIGNED_URL_TTL_SECONDS = 600; // 10 minutes
 export const REQUEST_RETENTION_DAYS = 7;
 export const ORPHAN_SWEEP_HOURS = 1;
+
+/* Audio file extensions the recorder can actually produce, mirroring
+   EXTENSION_FOR_MIME in src/aiNotesClient.js — which is itself driven by
+   CANDIDATE_MIME_TYPES in src/aiNotesLogic.js. iOS Safari does not record
+   webm, so this genuinely varies and the extension cannot be hardcoded.
+
+   This is a server-side allowlist, not a hint: the object's real
+   extension is discovered by listing the caller's own folder, and only a
+   name matching one of these is accepted. Nothing about the stored path
+   comes from the request body. If the recorder ever gains a format, this
+   list and EXTENSION_FOR_MIME have to change together. */
+export const AUDIO_EXTENSIONS = ["webm", "m4a", "aac"];
