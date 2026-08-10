@@ -68,6 +68,15 @@ import { checkRequestGuards, selectTranscriber, minutesFromSeconds } from "../su
 import { deepgramAdapter } from "../supabase/functions/ai-notes/deepgram.js";
 import { groqAdapter, isSizeError } from "../supabase/functions/ai-notes/groq.js";
 import {
+  STAGES,
+  requiredEnvNames,
+  missingEnv,
+  envPresence,
+  redact,
+  describeError,
+  failureLine,
+} from "../supabase/functions/ai-notes/diagnostics.js";
+import {
   patchInfoPlist,
   patchAndroidManifest,
   MIC_USAGE_DESCRIPTION,
@@ -887,6 +896,112 @@ async function run() {
     assert.equal(clampSessionMinutes(-5), 0);
     assert.equal(clampSessionMinutes(NaN), 0);
     assert.equal(clampSessionMinutes(undefined), 0);
+  });
+
+  /* ---------- ai-notes failure diagnostics ---------- */
+
+  await test("the env check names every variable the resolved provider needs, and no others", () => {
+    // Demanding DEEPGRAM_API_KEY on a Groq deployment would fail a
+    // perfectly working install -- SUPABASE-SETUP.md says it's optional.
+    const groq = requiredEnvNames("groq");
+    assert.deepEqual(groq, ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "GROQ_API_KEY", "OPENAI_API_KEY"]);
+    assert.ok(!groq.includes("DEEPGRAM_API_KEY"));
+    assert.ok(requiredEnvNames("deepgram").includes("DEEPGRAM_API_KEY"));
+    // An unknown override must not silently require nothing.
+    assert.ok(requiredEnvNames("not-a-provider").includes("GROQ_API_KEY"));
+  });
+
+  await test("missingEnv reports absent and blank variables by name", () => {
+    const env = { SUPABASE_URL: "https://x.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "   ", GROQ_API_KEY: "gsk_realkey" };
+    const missing = missingEnv(requiredEnvNames("groq"), (n) => env[n]);
+    // Whitespace counts as missing: a secret set to an empty string is the
+    // shape a half-finished migration leaves behind.
+    assert.deepEqual(missing, ["SUPABASE_SERVICE_ROLE_KEY", "OPENAI_API_KEY"]);
+    assert.deepEqual(missingEnv(requiredEnvNames("groq"), () => "set"), []);
+  });
+
+  await test("envPresence reports booleans, never values", () => {
+    const env = { SUPABASE_URL: "https://x.supabase.co", GROQ_API_KEY: "gsk_supersecretvalue" };
+    const presence = envPresence(requiredEnvNames("groq"), (n) => env[n]);
+    assert.deepEqual(presence, {
+      SUPABASE_URL: true,
+      SUPABASE_SERVICE_ROLE_KEY: false,
+      GROQ_API_KEY: true,
+      OPENAI_API_KEY: false,
+    });
+    assert.ok(!JSON.stringify(presence).includes("gsk_supersecretvalue"));
+    assert.ok(!JSON.stringify(presence).includes("supabase.co"));
+  });
+
+  await test("nothing secret survives into a log line", () => {
+    // The realistic leak is a provider quoting the signed audio URL back
+    // at us -- its query string carries an access token.
+    const signedUrl =
+      "https://proj.supabase.co/storage/v1/object/sign/lecture-audio/u1/abc.webm?token=eyJhbGciOiJIUzI1NiJ9.averylongsignaturevaluegoeshere";
+    const cases = [
+      new Error(`Groq rejected ${signedUrl}`),
+      new Error("Authorization failed for key gsk_liveKeyValue1234567890abcdef"),
+      new Error("openai said sk-proj-abcdef1234567890abcdef1234567890"),
+      { name: "AuthError", message: "bad jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.body.sig" },
+    ];
+    for (const err of cases) {
+      const line = failureLine("transcribe", err);
+      for (const secret of ["token=eyJ", "gsk_liveKeyValue", "sk-proj-abcdef", "IkpXVCJ9"]) {
+        assert.ok(!line.includes(secret), `log line leaked "${secret}": ${line}`);
+      }
+    }
+    // The useful part still survives.
+    assert.match(failureLine("transcribe", cases[0]), /Groq rejected/);
+  });
+
+  await test("a failure line always carries the stage, name, message and stack", () => {
+    const err = new Error("something broke");
+    const parsed = JSON.parse(failureLine("tier_lookup", err).replace("ai-notes FAILURE ", ""));
+    assert.equal(parsed.stage, "tier_lookup");
+    assert.equal(parsed.name, "Error");
+    assert.equal(parsed.message, "something broke");
+    assert.ok(parsed.stack.length > 0, "a stack is the difference between a guess and a line number");
+  });
+
+  await test("describeError survives whatever it's handed", () => {
+    // A catch block receives anything at all, and diagnostics that throw
+    // while reporting a failure are worse than no diagnostics.
+    for (const weird of [null, undefined, "a string", 42, {}, { message: null }, new TypeError("x")]) {
+      const d = describeError(weird);
+      assert.equal(typeof d.name, "string");
+      assert.equal(typeof d.message, "string");
+      assert.equal(typeof d.stack, "string");
+    }
+    // A Supabase PostgrestError has `code` rather than `name`.
+    assert.equal(describeError({ code: "23505", message: "duplicate key" }).name, "23505");
+  });
+
+  await test("every stage in STAGES is actually used by the function", () => {
+    const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/index.ts"), "utf8");
+    for (const stage of STAGES) {
+      assert.ok(src.includes(`"${stage}"`), `stage "${stage}" is declared but never reported`);
+    }
+  });
+
+  await test("the service-role client is built lazily, not at module scope", () => {
+    // This is the shape of the original outage: a client constructed while
+    // the module is evaluated throws before Deno.serve registers, so the
+    // handler's catch never runs and the logs show only boot and shutdown.
+    const src = fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/supabaseAdmin.ts"), "utf8");
+    assert.ok(!/^export const supabaseAdmin = createClient\(/m.test(src), "createClient must not run at module scope");
+    assert.match(src, /export function getSupabaseAdmin/, "there must be an explicit, catchable way to build the client");
+  });
+
+  await test("the ai-notes insert only writes columns the table actually has", () => {
+    // Columns per supabase/migrations/0001_ai_notes.sql. A column that
+    // doesn't exist makes the insert throw, which was a live suspect.
+    const table = new Set(["idempotency_key", "user_id", "status", "result", "minutes_billed", "created_at"]);
+    const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/index.ts"), "utf8");
+    const inserted = src.match(/\.insert\(\{([^}]*)\}\)/);
+    assert.ok(inserted, "could not find the ai_notes_requests insert");
+    for (const key of inserted[1].split(",").map((p) => p.split(":")[0].trim()).filter(Boolean)) {
+      assert.ok(table.has(key), `insert writes "${key}", which is not a column on ai_notes_requests`);
+    }
   });
 
   /* ---------- the study timer's transitions ---------- */

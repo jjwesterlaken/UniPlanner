@@ -10,7 +10,8 @@
 // the resulting storage path.
 
 import { corsHeaders, jsonResponse } from "./_shared/cors.ts";
-import { supabaseAdmin } from "../_shared/supabaseAdmin.ts";
+import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
+import { requiredEnvNames, missingEnv, envPresence, failureLine, stageLine } from "./diagnostics.js";
 import { checkRequestGuards, selectTranscriber, minutesFromSeconds } from "./guards.js";
 import { deepgramAdapter } from "./deepgram.js";
 import { groqAdapter } from "./groq.js";
@@ -36,8 +37,29 @@ function currentMonthKey(d = new Date()) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
+/* Diagnostics helpers. `stage` is threaded through the handler so a
+   failure says how far the request got, in the logs and in the response.
+   Nothing here prints a value from the environment, a JWT, the signed
+   audio URL, or transcript text — see diagnostics.js. */
+
+const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra));
+
+// deno-lint-ignore no-explicit-any
+const logFailure = (stage: string, err: any, extra: Record<string, unknown> = {}) =>
+  console.error(failureLine(stage, err, extra));
+
+/** Error response that also carries the stage, for debugging. The user-facing `error` string is untouched. */
+const errorResponse = (stage: string, code: string, error: string, status: number) =>
+  jsonResponse({ ok: false, code, stage, error }, status);
+
 async function markFailed(idempotencyKey: string) {
-  await supabaseAdmin.from("ai_notes_requests").update({ status: "failed" }).eq("idempotency_key", idempotencyKey);
+  // Its own catch: this runs on paths that are already failing, and an
+  // exception here would replace the real error with a less useful one.
+  try {
+    await supabaseAdmin.from("ai_notes_requests").update({ status: "failed" }).eq("idempotency_key", idempotencyKey);
+  } catch (err) {
+    logFailure("mark_failed", err);
+  }
 }
 
 // Best-effort housekeeping that shouldn't add latency to the response.
@@ -69,35 +91,97 @@ function scheduleCleanup() {
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
+  // Tracks how far we got. The outer catch reports it, so an unexpected
+  // throw is attributable to a step instead of to the whole function.
+  let stage = "env_check";
+
   try {
+    // 0. Environment. Checked before anything touches the service-role
+    // client, because a client built with a missing key throws during
+    // module evaluation — outside this try/catch, where nothing can log
+    // it. Names only, never values.
+    const provider = Deno.env.get("AI_NOTES_TRANSCRIPTION_PROVIDER") || TRANSCRIPTION_PROVIDER;
+    const required = requiredEnvNames(provider);
+    const absent = missingEnv(required, (n: string) => Deno.env.get(n));
+    logStage("env_check", { provider, present: envPresence(required, (n: string) => Deno.env.get(n)) });
+    if (absent.length > 0) {
+      logFailure("env_check", new Error(`missing environment variables: ${absent.join(", ")}`), { missing: absent });
+      return errorResponse("env_check", "server_error", "Something went wrong. Please try again.", 500);
+    }
+    if (!LECTURE_AUDIO_BUCKET) {
+      logFailure("env_check", new Error("LECTURE_AUDIO_BUCKET is empty in config.ts"));
+      return errorResponse("env_check", "server_error", "Something went wrong. Please try again.", 500);
+    }
+
+    // 0b. Build the service-role client explicitly, so a failure here is
+    // reported as client_init rather than surfacing later as whichever
+    // query happened to touch it first.
+    stage = "client_init";
+    logStage(stage);
+    try {
+      getSupabaseAdmin();
+    } catch (err) {
+      logFailure("client_init", err);
+      return errorResponse("client_init", "server_error", "Something went wrong. Please try again.", 500);
+    }
+
     // 1-2. Verify the caller
+    stage = "auth_user";
+    logStage(stage);
     const authHeader = req.headers.get("authorization") || "";
     const jwt = authHeader.replace(/^Bearer\s+/i, "");
-    if (!jwt) return jsonResponse({ ok: false, code: "unauthenticated", error: "Please sign in again to use AI notes." }, 401);
+    if (!jwt) return errorResponse("auth_user", "unauthenticated", "Please sign in again to use AI notes.", 401);
 
     const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(jwt);
     if (userErr || !userData?.user) {
-      return jsonResponse({ ok: false, code: "unauthenticated", error: "Please sign in again to use AI notes." }, 401);
+      // Logged because a service-role client that can't reach auth at all
+      // looks identical, from the client, to a genuinely expired token.
+      logFailure("auth_user", userErr || new Error("no user on a token that verified"));
+      return errorResponse("auth_user", "unauthenticated", "Please sign in again to use AI notes.", 401);
     }
     const userId = userData.user.id;
 
-    // 3. Tier check. A missing row is an anomaly (the signup trigger should
-    // always create one) — still 403 no_access either way, no user-facing
-    // difference, but worth a log line since it means the trigger didn't run.
-    const { data: profile } = await supabaseAdmin.from("profiles").select("tier").eq("user_id", userId).maybeSingle();
-    if (!profile) console.error(`ai-notes: no profiles row for user ${userId} — signup trigger may have failed`);
-    if (!profile || profile.tier !== "ai") {
-      return jsonResponse({ ok: false, code: "no_access", error: "AI notes isn't enabled for your account yet." }, 403);
+    // 3. Tier check.
+    stage = "tier_lookup";
+    logStage(stage);
+    const { data: profile, error: profileErr } = await supabaseAdmin
+      .from("profiles")
+      .select("tier")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    // A failed query and an absent row both leave `profile` null. Treating
+    // them alike reports a broken database as "your account isn't
+    // enabled", which sends everyone looking in the wrong place.
+    if (profileErr) {
+      logFailure("tier_lookup", profileErr);
+      return errorResponse("tier_lookup", "server_error", "Something went wrong. Please try again.", 500);
+    }
+    if (!profile) {
+      // An anomaly rather than a crash: maybeSingle() returns null instead
+      // of throwing, and the signup trigger should always have made a row.
+      logFailure("tier_lookup", new Error("no profiles row for this user — the signup trigger may not have run"));
+      return errorResponse("tier_lookup", "no_access", "AI notes isn't enabled for your account yet.", 403);
+    }
+    if (profile.tier !== "ai") {
+      logStage("tier_lookup", { outcome: "not_entitled" });
+      return errorResponse("tier_lookup", "no_access", "AI notes isn't enabled for your account yet.", 403);
     }
 
     // 4. Parse the (small, JSON-only) request body.
     const body = await req.json();
     const { path, mimeType, course, week, translateTo, estimatedDurationSeconds, idempotencyKey } = body || {};
     if (!path || !idempotencyKey) {
-      return jsonResponse({ ok: false, code: "bad_request", error: "Missing recording details." }, 400);
+      logFailure("idempotency_insert", new Error("request body missing path or idempotencyKey"), {
+        hasPath: Boolean(path),
+        hasKey: Boolean(idempotencyKey),
+      });
+      return errorResponse("idempotency_insert", "bad_request", "Missing recording details.", 400);
     }
 
     // 5. Race-safe idempotency claim.
+    stage = "idempotency_insert";
+    logStage(stage);
     const { error: insertErr } = await supabaseAdmin
       .from("ai_notes_requests")
       .insert({ idempotency_key: idempotencyKey, user_id: userId, status: "processing" });
@@ -105,7 +189,10 @@ Deno.serve(async (req: Request) => {
     if (insertErr) {
       // 23505 = unique_violation: someone already holds this key.
       if (insertErr.code !== "23505") {
-        return jsonResponse({ ok: false, code: "server_error", error: "Something went wrong. Please try again." }, 500);
+        // The insert uses the service-role client, so RLS is bypassed and
+        // this is a genuine schema/connection failure, not a policy denial.
+        logFailure("idempotency_insert", insertErr);
+        return errorResponse("idempotency_insert", "server_error", "Something went wrong. Please try again.", 500);
       }
       const { data: existing } = await supabaseAdmin
         .from("ai_notes_requests")
@@ -126,7 +213,7 @@ Deno.serve(async (req: Request) => {
           .lt("created_at", staleCutoff)
           .select();
         if (!reclaimed || reclaimed.length === 0) {
-          return jsonResponse({ ok: false, code: "already_processing", error: "This recording is already being processed — try again shortly." }, 409);
+          return errorResponse("idempotency_insert", "already_processing", "This recording is already being processed — try again shortly.", 409);
         }
         // else: reclaimed the abandoned row, fall through and proceed.
       } else if (existing?.status === "failed") {
@@ -137,20 +224,26 @@ Deno.serve(async (req: Request) => {
           .eq("status", "failed")
           .select();
         if (!reclaimed || reclaimed.length === 0) {
-          return jsonResponse({ ok: false, code: "already_processing", error: "This recording is already being processed — try again shortly." }, 409);
+          return errorResponse("idempotency_insert", "already_processing", "This recording is already being processed — try again shortly.", 409);
         }
       }
     }
 
     // 6. Real, server-measured size of the uploaded object.
+    stage = "size_guard";
+    logStage(stage);
     const lastSlash = path.lastIndexOf("/");
     const folder = path.slice(0, lastSlash);
     const filename = path.slice(lastSlash + 1);
     const { data: listing } = await supabaseAdmin.storage.from(LECTURE_AUDIO_BUCKET).list(folder, { search: filename });
     const objectMeta = (listing || []).find((f) => f.name === filename);
     if (!objectMeta) {
+      // Path is logged: it is a storage key of the form "<user>/<uuid>.webm",
+      // not audio and not a credential, and it is the one thing that makes
+      // a missing upload diagnosable.
+      logFailure("size_guard", new Error("uploaded object not found in the bucket"), { bucket: LECTURE_AUDIO_BUCKET });
       await markFailed(idempotencyKey);
-      return jsonResponse({ ok: false, code: "recording_missing", error: "We couldn't find that recording — please record it again." }, 404);
+      return errorResponse("size_guard", "recording_missing", "We couldn't find that recording — please record it again.", 404);
     }
     const receivedBytes = objectMeta.metadata?.size || 0;
 
@@ -176,18 +269,24 @@ Deno.serve(async (req: Request) => {
     if (!guard.ok) {
       // Left in place deliberately (not deleted) — a permanent-not-transient
       // failure, cleaned up later by the orphan sweep (step 14b).
+      // Expected outcome, not a fault — logged at stage level so the logs
+      // still show why a request stopped here.
+      logStage("size_guard", { rejected: guard.code });
       await markFailed(idempotencyKey);
-      return jsonResponse({ ok: false, code: guard.code, error: guard.error }, guard.code === "usage_exceeded" ? 403 : 413);
+      return errorResponse("size_guard", guard.code, guard.error, guard.code === "usage_exceeded" ? 403 : 413);
     }
 
     // 8. Sign a short-lived URL rather than downloading — the function
     // never allocates the audio in memory at all.
+    stage = "signed_url";
+    logStage(stage);
     const { data: signed, error: signErr } = await supabaseAdmin.storage
       .from(LECTURE_AUDIO_BUCKET)
       .createSignedUrl(path, SIGNED_URL_TTL_SECONDS);
     if (signErr || !signed?.signedUrl) {
+      logFailure("signed_url", signErr || new Error("no signed URL returned for an object that was listed"));
       await markFailed(idempotencyKey);
-      return jsonResponse({ ok: false, code: "recording_missing", error: "We couldn't find that recording — please record it again." }, 404);
+      return errorResponse("signed_url", "recording_missing", "We couldn't find that recording — please record it again.", 404);
     }
 
     // 9. Transcribe. Object is left in place on failure so a retry can
@@ -213,6 +312,8 @@ Deno.serve(async (req: Request) => {
     const promptHint = course ? `Lecture for ${course}` : undefined;
     const keywordHint = course ? course.split(/\s+/).filter((w: string) => w.length > 1) : undefined;
 
+    stage = "transcribe";
+    logStage(stage, { provider: transcriber.name });
     let transcript = "";
     let durationSeconds = 0;
     try {
@@ -225,6 +326,7 @@ Deno.serve(async (req: Request) => {
       transcript = result.transcript;
       durationSeconds = result.durationSeconds || estimatedDurationSeconds || 0;
     } catch (err) {
+      logFailure("transcribe", err, { provider: transcriber.name });
       await markFailed(idempotencyKey);
       // A size/duration rejection from the provider is permanent, not
       // transient — retrying with the same audio would fail identically,
@@ -233,16 +335,14 @@ Deno.serve(async (req: Request) => {
       // otherwise strands the recording in an endless failed-retry loop.
       // deno-lint-ignore no-explicit-any
       if ((err as any)?.code === "too_large") {
-        return jsonResponse(
-          {
-            ok: false,
-            code: "transcription_too_long",
-            error: "This recording is too long to process — try recording in shorter segments.",
-          },
+        return errorResponse(
+          "transcribe",
+          "transcription_too_long",
+          "This recording is too long to process — try recording in shorter segments.",
           413
         );
       }
-      return jsonResponse({ ok: false, code: "transcription_failed", error: "We couldn't transcribe that recording. Please try again." }, 502);
+      return errorResponse("transcribe", "transcription_failed", "We couldn't transcribe that recording. Please try again.", 502);
     }
 
     // 10. Transcription succeeded — delete the object now. This is the one
@@ -252,18 +352,25 @@ Deno.serve(async (req: Request) => {
 
     // 11. Summarize. On failure, don't discard the transcript — transcription
     // already succeeded and is about to be billed regardless.
+    stage = "summarise";
+    logStage(stage);
     const summarizer = SUMMARIZERS[Deno.env.get("AI_NOTES_SUMMARY_PROVIDER") || "openai"] || openaiAdapter;
     let result: Record<string, unknown>;
     try {
       const summary = await summarizer.summarize({ transcript, translateTo, apiKey: Deno.env.get("OPENAI_API_KEY")! });
       result = { ok: true, transcript, summaryFailed: false, original: summary.original, translated: summary.translated };
     } catch (err) {
+      // Previously swallowed entirely: summarising could fail on every
+      // request and the only evidence was summaryFailed in the payload.
+      logFailure("summarise", err);
       result = { ok: true, transcript, summaryFailed: true, original: null, translated: null };
     }
 
     // 12. Bill usage using the server-reported duration (whichever provider
     // ran) — minutesFromSeconds is the one, directly-tested calculation
     // between "how long was this recording" and what gets billed.
+    stage = "billing";
+    logStage(stage, { minutes: minutesFromSeconds(durationSeconds) });
     const minutesBilled = minutesFromSeconds(durationSeconds);
     await supabaseAdmin.from("ai_usage").upsert(
       { user_id: userId, month, minutes_used: minutesUsedThisMonth + minutesBilled, updated_at: new Date().toISOString() },
@@ -282,7 +389,9 @@ Deno.serve(async (req: Request) => {
     // 15. Done.
     return jsonResponse({ ok: true, result });
   } catch (err) {
-    console.error("ai-notes: unhandled error", err);
-    return jsonResponse({ ok: false, code: "server_error", error: "Something went wrong. Please try again." }, 500);
+    // The line that was missing. Structured, greppable, and carrying the
+    // stage, so "it returns 500" is never again the whole evidence.
+    logFailure(stage, err, { unhandled: true });
+    return errorResponse(stage, "server_error", "Something went wrong. Please try again.", 500);
   }
 });
