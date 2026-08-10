@@ -2343,13 +2343,23 @@ function StudyTimer({ courses, onLog, semester }) {
     setStartedAt(null);
     persist({ course, accumulatedMs: acc, startedAt: null });
   };
+  /* liveRef is cleared synchronously, before the state updates that will
+     eventually clear it anyway. The unmount cleanup below reads liveRef,
+     and if the component were torn down in this same tick -- committed
+     minutes still sitting in the ref -- it would re-park time that has
+     already been logged, and the user could save it a second time. That
+     ordering isn't reachable by clicking (saving and switching semester
+     are separate events), but one assignment makes it impossible rather
+     than unlikely. */
   const stop = () => {
     onLog(course, minutes);
+    liveRef.current = { course, startedAt: null, accumulatedMs: 0 };
     setAccumulatedMs(0);
     setStartedAt(null);
     persist(null);
   };
   const discard = () => {
+    liveRef.current = { course, startedAt: null, accumulatedMs: 0 };
     setAccumulatedMs(0);
     setStartedAt(null);
     persist(null);
