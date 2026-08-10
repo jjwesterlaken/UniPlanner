@@ -450,3 +450,73 @@ export function clampSessionMinutes(minutes) {
   if (!Number.isFinite(minutes) || minutes <= 0) return 0;
   return round1(Math.min(MAX_SESSION_MINUTES, minutes));
 }
+
+/* ---------- the study timer, as pure transitions ----------
+
+   The timer lives in a component, but its transitions are here so the
+   one rule that actually matters can be tested: minutes that have been
+   committed must not still be sitting somewhere that could commit them
+   a second time.
+
+   The component mirrors this state into a ref, because parking the timer
+   on unmount has to read the latest values from a cleanup closure. That
+   ref is what made the rule worth pinning down -- if a transition
+   returned state that still held committed minutes, an unmount in the
+   same tick would write them back to localStorage and offer them for a
+   second save. Every transition therefore returns the complete next
+   state and the component funnels all of them through one setter, so
+   there is no path that updates one copy and not the other.
+   ---------------------------------------------------------- */
+
+// Minutes are recorded to 0.1 (6 seconds). Below half of that there is
+// nothing to record -- and rounding it up to a minute would be inventing
+// study time the user didn't do.
+export const MIN_RECORDABLE_MINUTES = 0.1;
+
+export const idleTimer = (course = "") => ({ course, startedAt: null, accumulatedMs: 0 });
+
+export function timerElapsedMs(t, now) {
+  if (!t) return 0;
+  const acc = Number(t.accumulatedMs) || 0;
+  return acc + (t.startedAt ? Math.max(0, now - t.startedAt) : 0);
+}
+
+export const timerMinutes = (t, now) => clampSessionMinutes(timerElapsedMs(t, now) / 60000);
+
+export function timerStart(t, now) {
+  return t.startedAt ? t : { ...t, startedAt: now };
+}
+
+export function timerPause(t, now) {
+  return { ...t, accumulatedMs: timerElapsedMs(t, now), startedAt: null };
+}
+
+/**
+ * Ends a run. Returns the next state plus what should be logged.
+ *
+ * A run too short to register keeps its state rather than resetting: the
+ * user pressed save on a few seconds, and silently throwing their timer
+ * away would be worse than telling them there was nothing to record.
+ */
+export function timerStop(t, now) {
+  const minutes = timerMinutes(t, now);
+  if (minutes < MIN_RECORDABLE_MINUTES) {
+    return { next: t, minutes: 0, recorded: false, tooShort: timerElapsedMs(t, now) > 0 };
+  }
+  return { next: idleTimer(t.course), minutes, recorded: true, tooShort: false };
+}
+
+export const timerDiscard = (t) => idleTimer(t.course);
+
+/**
+ * What to persist when the timer goes away -- switching semester, or
+ * leaving the screen. Paused rather than running, so time doesn't accrue
+ * while the user is elsewhere, and null when there is nothing left to
+ * keep. Returning null for committed state is the whole point: it is
+ * what stops already-logged minutes being offered a second time.
+ */
+export function timerPark(t, now) {
+  const total = timerElapsedMs(t, now);
+  if (total <= 0) return null;
+  return { course: t.course, accumulatedMs: total, startedAt: null };
+}

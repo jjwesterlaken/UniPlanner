@@ -48,6 +48,13 @@ import {
   windowDays,
   studySummary,
   clampSessionMinutes,
+  idleTimer,
+  timerElapsedMs,
+  timerStart,
+  timerPause,
+  timerStop,
+  timerDiscard,
+  timerPark,
   findTotals,
   dayId,
   EASE_MIN,
@@ -880,6 +887,77 @@ async function run() {
     assert.equal(clampSessionMinutes(-5), 0);
     assert.equal(clampSessionMinutes(NaN), 0);
     assert.equal(clampSessionMinutes(undefined), 0);
+  });
+
+  /* ---------- the study timer's transitions ---------- */
+
+  const T0 = 1_760_000_000_000; // a fixed "now" in ms
+  const running = (mins) => ({ course: "BIO101", startedAt: T0, accumulatedMs: 0 });
+  const min = (n) => n * 60000;
+
+  await test("committed minutes cannot be parked again", () => {
+    // The regression for the same-tick re-park: the component mirrors the
+    // timer into a ref so it can park on unmount, and if a save left the
+    // committed minutes in that state, an unmount in the same tick would
+    // write them back to localStorage and offer them for a second save.
+    const t = running();
+    const stopped = timerStop(t, T0 + min(30));
+    assert.equal(stopped.recorded, true);
+    assert.equal(stopped.minutes, 30);
+    assert.equal(
+      timerPark(stopped.next, T0 + min(30)),
+      null,
+      "minutes that were just logged must leave nothing behind to log again"
+    );
+    // ...and still nothing even if the park happens some time later.
+    assert.equal(timerPark(stopped.next, T0 + min(90)), null);
+  });
+
+  await test("discarding a timer leaves nothing to park either", () => {
+    const t = { course: "BIO101", startedAt: T0, accumulatedMs: min(12) };
+    assert.equal(timerPark(timerDiscard(t), T0 + min(20)), null);
+  });
+
+  await test("parking a running timer keeps the time but stops the clock", () => {
+    const parked = timerPark(running(), T0 + min(8));
+    assert.equal(parked.accumulatedMs, min(8));
+    assert.equal(parked.startedAt, null, "a parked timer must not keep accruing while the user is elsewhere");
+    assert.equal(parked.course, "BIO101");
+    // Re-parking later must not add the time spent away.
+    assert.equal(timerPark(parked, T0 + min(99)).accumulatedMs, min(8));
+  });
+
+  await test("pause then start again resumes from where it stopped", () => {
+    const paused = timerPause(running(), T0 + min(5));
+    assert.equal(paused.accumulatedMs, min(5));
+    const resumed = timerStart(paused, T0 + min(60)); // 55 minutes later
+    assert.equal(timerElapsedMs(resumed, T0 + min(61)), min(6), "the gap while paused must not count");
+  });
+
+  await test("starting an already-running timer changes nothing", () => {
+    const t = running();
+    assert.equal(timerStart(t, T0 + min(5)), t, "a second Start must not reset the clock");
+  });
+
+  await test("a session too short to record keeps the timer instead of eating it", () => {
+    const t = { course: "BIO101", startedAt: T0, accumulatedMs: 0 };
+    const stopped = timerStop(t, T0 + 2000); // two seconds
+    assert.equal(stopped.recorded, false);
+    assert.equal(stopped.minutes, 0, "a couple of seconds must not be rounded up into study time");
+    assert.equal(stopped.tooShort, true, "the user pressed save -- they have to be told why nothing happened");
+    assert.equal(stopped.next, t, "and their running timer must survive being told");
+  });
+
+  await test("a stopped timer that never ran reports nothing rather than 'too short'", () => {
+    const stopped = timerStop(idleTimer("BIO101"), T0);
+    assert.equal(stopped.recorded, false);
+    assert.equal(stopped.tooShort, false, "there is nothing to explain when the timer was never started");
+  });
+
+  await test("an abandoned timer is capped when it's saved, not silently logged whole", () => {
+    const stopped = timerStop(running(), T0 + min(14 * 60));
+    assert.equal(stopped.minutes, MAX_SESSION_MINUTES);
+    assert.equal(stopped.recorded, true);
   });
 
   /* ---------- demo mode: no backend, no crash ---------- */

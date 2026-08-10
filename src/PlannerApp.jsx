@@ -21,6 +21,14 @@ import {
   studySummary,
   clampSessionMinutes,
   MAX_SESSION_MINUTES,
+  idleTimer,
+  timerElapsedMs,
+  timerMinutes,
+  timerStart,
+  timerPause,
+  timerStop,
+  timerDiscard,
+  timerPark,
 } from "./srs.js";
 import {
   GraduationCap,
@@ -2287,82 +2295,73 @@ function writeTimer(semester, v) {
 }
 
 function StudyTimer({ courses, onLog, semester }) {
-  const [course, setCourse] = useState("");
-  const [startedAt, setStartedAt] = useState(null); // ms, or null when paused
-  const [accumulatedMs, setAccumulatedMs] = useState(0);
-  const [tick, setTick] = useState(0);
+  const [timer, setTimerState] = useState(idleTimer(""));
+  const [note, setNote] = useState("");
+  const [, setTick] = useState(0);
 
-  // Restore a timer left running when the app was closed.
+  /* One funnel for every transition. The ref exists because the unmount
+     cleanup below runs from a closure and needs the latest values; going
+     through here means state and ref can never disagree, so a cleanup
+     firing in the same tick as a save cannot re-park minutes that have
+     just been committed. */
+  const timerRef = useRef(timer);
+  const apply = (next) => {
+    timerRef.current = next;
+    setTimerState(next);
+  };
+
+  // Restore a timer left behind when the app was closed or the semester
+  // was switched away from.
   useEffect(() => {
     const saved = readTimer(semester);
-    if (!saved) return;
-    setCourse(saved.course || "");
-    setAccumulatedMs(saved.accumulatedMs || 0);
-    setStartedAt(saved.startedAt || null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [semester]);
-
-  /* On unmount -- switching semester or leaving the tab -- park the timer
-     rather than letting it keep accruing wall-clock time in the
-     background. The elapsed minutes are kept, not committed and not
-     discarded: the user decides where they go when they come back. A ref
-     is used because a cleanup closure would otherwise capture the state
-     as it was on first render. */
-  const liveRef = useRef({});
-  liveRef.current = { course, startedAt, accumulatedMs };
-  useEffect(() => {
-    return () => {
-      const { course: c, startedAt: st, accumulatedMs: acc } = liveRef.current;
-      const total = acc + (st ? Date.now() - st : 0);
-      writeTimer(semester, total > 0 ? { course: c, accumulatedMs: total, startedAt: null } : null);
-    };
+    if (saved) apply({ course: saved.course || "", accumulatedMs: saved.accumulatedMs || 0, startedAt: saved.startedAt || null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [semester]);
 
   useEffect(() => {
-    if (startedAt === null) return;
+    if (!timer.startedAt) return;
     const t = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(t);
-  }, [startedAt]);
+  }, [timer.startedAt]);
 
-  const elapsedMs = accumulatedMs + (startedAt ? Date.now() - startedAt : 0);
-  const minutes = elapsedMs / 60000;
-  const clamped = clampSessionMinutes(minutes);
-  const atCap = minutes > MAX_SESSION_MINUTES;
+  // Park on unmount rather than letting a running clock accrue in the
+  // background while the user is in another semester.
+  useEffect(() => {
+    return () => writeTimer(semester, timerPark(timerRef.current, Date.now()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [semester]);
 
-  const persist = (next) => writeTimer(semester, next);
+  const persist = (next) => writeTimer(semester, next.startedAt || next.accumulatedMs ? next : null);
+  const move = (next) => {
+    apply(next);
+    persist(next);
+  };
+
+  const now = Date.now();
+  const elapsedMs = timerElapsedMs(timer, now);
+  const minutes = timerMinutes(timer, now);
+  const atCap = elapsedMs / 60000 > MAX_SESSION_MINUTES;
 
   const start = () => {
-    const now = Date.now();
-    setStartedAt(now);
-    persist({ course, accumulatedMs, startedAt: now });
+    setNote("");
+    move(timerStart(timer, Date.now()));
   };
-  const pause = () => {
-    const acc = elapsedMs;
-    setAccumulatedMs(acc);
-    setStartedAt(null);
-    persist({ course, accumulatedMs: acc, startedAt: null });
-  };
-  /* liveRef is cleared synchronously, before the state updates that will
-     eventually clear it anyway. The unmount cleanup below reads liveRef,
-     and if the component were torn down in this same tick -- committed
-     minutes still sitting in the ref -- it would re-park time that has
-     already been logged, and the user could save it a second time. That
-     ordering isn't reachable by clicking (saving and switching semester
-     are separate events), but one assignment makes it impossible rather
-     than unlikely. */
-  const stop = () => {
-    onLog(course, minutes);
-    liveRef.current = { course, startedAt: null, accumulatedMs: 0 };
-    setAccumulatedMs(0);
-    setStartedAt(null);
-    persist(null);
+  const pause = () => move(timerPause(timer, Date.now()));
+  const save = () => {
+    const { next, minutes: mins, recorded, tooShort } = timerStop(timer, Date.now());
+    if (recorded) {
+      onLog(next.course || timer.course, mins);
+      setNote("");
+    } else if (tooShort) {
+      // Never silently do nothing, and never round a few seconds up into
+      // study time that didn't happen.
+      setNote("That session was too short to record — keep going and save again.");
+    }
+    move(next);
   };
   const discard = () => {
-    liveRef.current = { course, startedAt: null, accumulatedMs: 0 };
-    setAccumulatedMs(0);
-    setStartedAt(null);
-    persist(null);
+    setNote("");
+    move(timerDiscard(timer));
   };
 
   const hh = Math.floor(elapsedMs / 3600000);
@@ -2374,11 +2373,8 @@ function StudyTimer({ courses, onLog, semester }) {
       <div className="flex flex-wrap items-center gap-3">
         <select
           className={inputCls + " w-auto min-w-[10rem]"}
-          value={course}
-          onChange={(e) => {
-            setCourse(e.target.value);
-            persist({ course: e.target.value, accumulatedMs, startedAt });
-          }}
+          value={timer.course}
+          onChange={(e) => move({ ...timer, course: e.target.value })}
         >
           <option value="">No course</option>
           {(courses || []).map((c) => (
@@ -2389,13 +2385,16 @@ function StudyTimer({ courses, onLog, semester }) {
           {hh > 0 ? `${hh}:` : ""}{String(mm).padStart(2, "0")}:{String(ss).padStart(2, "0")}
         </span>
         <div className="ml-auto flex gap-2">
-          {startedAt === null ? (
+          {!timer.startedAt ? (
             <button className={btnPrimary} onClick={start}>Start</button>
           ) : (
             <button className={btnGhost} onClick={pause}>Pause</button>
           )}
-          <button className={btnPrimary} onClick={stop} disabled={clamped <= 0}>
-            Save {clamped > 0 ? `${clamped}m` : ""}
+          {/* Deliberately not disabled on a short session: a dead control
+              with no explanation is worse than a button that tells you
+              why nothing happened. */}
+          <button className={btnPrimary} onClick={save}>
+            Save{minutes > 0 ? ` ${minutes}m` : ""}
           </button>
           {elapsedMs > 0 && (
             <button className={iconBtn} onClick={discard} aria-label="Discard timer">
@@ -2404,9 +2403,10 @@ function StudyTimer({ courses, onLog, semester }) {
           )}
         </div>
       </div>
+      {note && <p className="mt-2 text-xs text-stone-500">{note}</p>}
       {atCap && (
         <p className="mt-2 text-xs text-stone-500">
-          A single session is capped at {MAX_SESSION_MINUTES / 60} hours — saving will log {clamped} minutes.
+          A single session is capped at {MAX_SESSION_MINUTES / 60} hours — saving will log {minutes} minutes.
         </p>
       )}
     </Card>

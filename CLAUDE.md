@@ -67,6 +67,14 @@ by id. `purgeOldTombstones` clears them after 60 days — but note it only
 runs on sync and restore, so anything that prunes on a schedule of its own
 has to clean up after itself or it will grow forever in demo mode.
 
+That 60 days is an assumption every collection makes, and restoring a
+backup older than it brings back rows whose tombstones are long gone.
+For `studyStats` this leaves ~5KB of stale day rows that are invisible
+(readers filter to the 42-day window regardless) and are reclaimed by the
+next two study writes — the first tombstones them, the second drops the
+tombstones. Nothing to fix; worth knowing before someone re-measures the
+blob after a restore and thinks the 9.8KB ceiling has been breached.
+
 Treat `mergeData` as fragile. It is the most-tested function here and the
 one most able to lose a user's data silently.
 
