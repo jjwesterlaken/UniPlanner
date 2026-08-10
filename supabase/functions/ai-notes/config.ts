@@ -55,3 +55,35 @@ export const ORPHAN_SWEEP_HOURS = 1;
    comes from the request body. If the recorder ever gains a format, this
    list and EXTENSION_FOR_MIME have to change together. */
 export const AUDIO_EXTENSIONS = ["webm", "m4a", "aac"];
+
+
+/* Languages the app offers translation into. Mirrors TRANSLATION_LANGUAGES
+   in src/aiNotesLogic.js — duplicated rather than imported because an Edge
+   Function can't reach into src/, and a test asserts the two agree.
+
+   This is an allowlist, not a hint: translateTo is interpolated into the
+   summariser's system prompt, so an arbitrary string is both an unbounded
+   output cost and free text in a prompt. Anything not on this list is
+   treated as "no translation". */
+export const TRANSLATION_CODES = ["zh", "hi", "ne", "vi", "bn", "id", "ko", "th", "es", "ar"];
+
+/* The course name becomes a vocabulary hint for the transcription
+   provider. It is short by nature ("BIOL1010 Cell Biology"), so 80
+   characters is generous, and capping it keeps an unbounded string out of
+   a paid API call. */
+export const MAX_COURSE_LENGTH = 80;
+
+/* Ceiling on summariser output tokens.
+
+   gpt-4o-mini defaults to its full 16,384-token output, which is the
+   quiet cost risk: transcription is ~$0.04/hour, but 300 short recordings
+   in a month (the allowance is 300 MINUTES, so that is reachable) at 16k
+   output tokens each is several dollars of summarising against twenty
+   cents of transcription — the summariser, not Whisper, would set the
+   price of the product.
+
+   8000 sits above what the structured notes actually need — a 3-hour
+   lecture summarised into two languages lands around 6k — while halving
+   the theoretical worst case. Hitting it is treated as a failure rather
+   than silently returning truncated notes; see openai.ts. */
+export const SUMMARY_MAX_TOKENS = 8000;

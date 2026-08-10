@@ -2,6 +2,8 @@
 // requested) translation, so translation costs an extra output length,
 // not a second round trip.
 
+import { SUMMARY_MAX_TOKENS } from "./config.ts";
+
 const SUMMARY_SCHEMA_OBJECT = {
   type: "object",
   properties: {
@@ -66,6 +68,10 @@ export const openaiAdapter = {
           { role: "user", content: transcript },
         ],
         response_format: { type: "json_schema", json_schema: LECTURE_SUMMARY_SCHEMA },
+        // Without this the model may emit its full 16,384-token output.
+        // See SUMMARY_MAX_TOKENS in config.ts for why that matters to the
+        // price of the product rather than just to one request.
+        max_tokens: SUMMARY_MAX_TOKENS,
       }),
     });
 
@@ -73,7 +79,14 @@ export const openaiAdapter = {
       throw new Error(`OpenAI request failed (${res.status})`);
     }
     const json = await res.json();
-    const content = json?.choices?.[0]?.message?.content;
+    const choice = json?.choices?.[0];
+    // Hitting the ceiling truncates the JSON mid-structure, so JSON.parse
+    // would fail with something unrelated-looking. Named explicitly so the
+    // logs say "the cap was too low" rather than "the model misbehaved".
+    if (choice?.finish_reason === "length") {
+      throw new Error(`OpenAI hit the ${SUMMARY_MAX_TOKENS}-token output cap and returned truncated notes`);
+    }
+    const content = choice?.message?.content;
     if (!content) throw new Error("OpenAI returned no content");
     return JSON.parse(content);
   },

@@ -14,7 +14,14 @@
 import { corsHeaders, jsonResponse } from "./_shared/cors.ts";
 import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { requiredEnvNames, missingEnv, envPresence, failureLine, stageLine } from "./diagnostics.js";
-import { checkRequestGuards, selectTranscriber, minutesFromSeconds, isUuid } from "./guards.js";
+import {
+  checkRequestGuards,
+  selectTranscriber,
+  minutesFromSeconds,
+  isUuid,
+  sanitizeCourse,
+  normalizeTranslateTo,
+} from "./guards.js";
 import { deepgramAdapter } from "./deepgram.js";
 import { groqAdapter } from "./groq.js";
 import { openaiAdapter } from "./openai.ts";
@@ -27,6 +34,8 @@ import {
   PROCESSING_STALE_MINUTES,
   LECTURE_AUDIO_BUCKET,
   AUDIO_EXTENSIONS,
+  TRANSLATION_CODES,
+  MAX_COURSE_LENGTH,
   SIGNED_URL_TTL_SECONDS,
   REQUEST_RETENTION_DAYS,
   ORPHAN_SWEEP_HOURS,
@@ -194,7 +203,12 @@ Deno.serve(async (req: Request) => {
        there is no client-supplied path to check, forget to check, or
        smuggle a traversal through. Older clients still send the field;
        it is ignored. */
-    const { course, week, translateTo, estimatedDurationSeconds, idempotencyKey } = body || {};
+    /* `mimeType` and `week` are not read either. Both were destructured
+       and never used, and a parsed-but-unused field is an invitation for
+       someone later to start trusting it — which is exactly how `path`
+       became a vulnerability. If `week` is wanted, it comes back
+       validated. */
+    const { course: rawCourse, translateTo: rawTranslateTo, estimatedDurationSeconds, idempotencyKey } = body || {};
     if (!idempotencyKey) {
       logFailure("idempotency_insert", new Error("request body missing idempotencyKey"));
       return errorResponse("idempotency_insert", "bad_request", "Missing recording details.", 400);
@@ -372,6 +386,9 @@ Deno.serve(async (req: Request) => {
     // a free-text prompt; Deepgram nova-2: individual boosted keywords),
     // so both are built from the same `course` string and the unused one
     // is simply ignored by whichever adapter doesn't need it.
+    // Capped and stripped of control characters: it is posted to a paid
+    // API, so an unbounded string is a cost question before anything else.
+    const course = sanitizeCourse(rawCourse, MAX_COURSE_LENGTH);
     const promptHint = course ? `Lecture for ${course}` : undefined;
     const keywordHint = course ? course.split(/\s+/).filter((w: string) => w.length > 1) : undefined;
 
@@ -387,7 +404,12 @@ Deno.serve(async (req: Request) => {
         keywords: keywordHint,
       });
       transcript = result.transcript;
-      durationSeconds = result.durationSeconds || estimatedDurationSeconds || 0;
+      /* Billed minutes come from the provider and only from the provider.
+         This used to fall back to estimatedDurationSeconds — a number
+         chosen by the client — so a crafted request could bill itself
+         zero. A missing duration is now a loud anomaly rather than a
+         silent free ride. */
+      durationSeconds = result.durationSeconds || 0;
     } catch (err) {
       logFailure("transcribe", err, { provider: transcriber.name });
       await markFailed(idempotencyKey, userId);
@@ -416,7 +438,13 @@ Deno.serve(async (req: Request) => {
     // 11. Summarize. On failure, don't discard the transcript — transcription
     // already succeeded and is about to be billed regardless.
     stage = "summarise";
-    logStage(stage);
+    // Unknown codes become "no translation" rather than reaching the
+    // prompt: the app's own UI can only produce valid ones.
+    const translateTo = normalizeTranslateTo(rawTranslateTo, TRANSLATION_CODES);
+    if (rawTranslateTo && !translateTo) {
+      logStage(stage, { ignoredTranslateTo: true });
+    }
+    logStage(stage, { translateTo });
     const summarizer = SUMMARIZERS[Deno.env.get("AI_NOTES_SUMMARY_PROVIDER") || "openai"] || openaiAdapter;
     let result: Record<string, unknown>;
     try {
@@ -433,8 +461,15 @@ Deno.serve(async (req: Request) => {
     // ran) — minutesFromSeconds is the one, directly-tested calculation
     // between "how long was this recording" and what gets billed.
     stage = "billing";
-    logStage(stage, { minutes: minutesFromSeconds(durationSeconds) });
     const minutesBilled = minutesFromSeconds(durationSeconds);
+    if (!(durationSeconds > 0)) {
+      // Never silent: billing zero for work that was actually done is a
+      // revenue hole, and it means the provider's response changed shape.
+      logFailure("billing", new Error("provider returned no duration — billing zero minutes for this request"), {
+        provider: transcriber.name,
+      });
+    }
+    logStage(stage, { minutes: minutesBilled });
     await supabaseAdmin.from("ai_usage").upsert(
       { user_id: userId, month, minutes_used: minutesUsedThisMonth + minutesBilled, updated_at: new Date().toISOString() },
       { onConflict: "user_id,month" }

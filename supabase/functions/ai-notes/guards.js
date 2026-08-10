@@ -78,3 +78,32 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 export function isUuid(value) {
   return typeof value === "string" && UUID_PATTERN.test(value);
 }
+
+
+/* Course names reach the transcription provider as a vocabulary hint, so
+   they are capped and stripped of anything that isn't ordinary text.
+   Newlines and control characters go because the hint is a single line;
+   the cap is there so an unbounded string can't be posted into a paid
+   API call. */
+export function sanitizeCourse(course, maxLength) {
+  if (typeof course !== "string") return "";
+  return course
+    .replace(/[\u0000-\u001F\u007F]/g, " ") // control characters, incl. newlines and tabs
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+/**
+ * The requested translation language, or null.
+ *
+ * Anything not on the allowlist becomes null — no translation — rather
+ * than an error: the app's own UI can only produce valid codes, so an
+ * invalid one means a hand-built request, and failing the whole recording
+ * over it would be a worse outcome than simply not translating.
+ */
+export function normalizeTranslateTo(value, allowed) {
+  if (typeof value !== "string") return null;
+  const code = value.trim().toLowerCase();
+  return (allowed || []).includes(code) ? code : null;
+}
