@@ -30,8 +30,12 @@ download the Android SDK it needs.
 ### 1. Create the Android project
 
 ```bash
-npx cap add android
+npm run add:android
 ```
+
+(Use the `npm run` commands rather than `npx cap ...` directly — they also
+add the microphone permission the AI lecture recorder needs. Without it the
+mic prompt never appears and recording can't start.)
 
 ### 2. Generate all the app icons and splash screens
 
@@ -44,7 +48,7 @@ This takes the images in `assets/` and produces every size Android wants.
 ### 3. Copy the app in and open it
 
 ```bash
-npx cap sync
+npm run sync
 npx cap open android
 ```
 
@@ -85,7 +89,7 @@ Open it once and accept the licence agreement.
 ### 1. Create the iOS project
 
 ```bash
-npx cap add ios
+npm run add:ios
 ```
 
 ### 2. Generate icons and splash screens
@@ -99,7 +103,7 @@ npm run assets
 ### 3. Copy the app in and open it
 
 ```bash
-npx cap sync
+npm run sync
 npx cap open ios
 ```
 
@@ -149,7 +153,7 @@ built has no expiry at all — worth considering for iPhone.
 When I send you a new version, replace the `www` folder inside `mobile`, then:
 
 ```bash
-npx cap sync
+npm run sync
 ```
 
 Then press Run again in Xcode / Android Studio.

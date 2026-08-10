@@ -34,6 +34,13 @@ import { mergeData } from "../src/sync.js";
 import { checkRequestGuards, selectTranscriber, minutesFromSeconds } from "../supabase/functions/ai-notes/guards.js";
 import { deepgramAdapter } from "../supabase/functions/ai-notes/deepgram.js";
 import { groqAdapter, isSizeError } from "../supabase/functions/ai-notes/groq.js";
+import {
+  patchInfoPlist,
+  patchAndroidManifest,
+  MIC_USAGE_DESCRIPTION,
+  IOS_PLIST_KEY,
+  ANDROID_PERMISSION,
+} from "../mobile/scripts/native-permissions.mjs";
 
 /* ---------- tiny test harness ---------- */
 
@@ -429,6 +436,126 @@ async function run() {
     const v2 = { semesters: {}, meta: { updatedAt: "2024-01-01T00:00:00.000Z", aiConsent: { version: 2, acceptedAt: "2024-01-15T00:00:00.000Z" } } };
     assert.equal(mergeData(v1, v2).meta.aiConsent.version, 2);
     assert.equal(mergeData(v2, v1).meta.aiConsent.version, 2);
+  });
+
+  /* ---------- the native apps can actually reach the microphone ---------- */
+
+  /* Fixtures mirror what `cap add ios` / `cap add android` actually
+     generate — neither declares a microphone, which is the whole reason
+     mobile/scripts/native-permissions.mjs exists. */
+
+  const CAP_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+\t<key>CFBundleDisplayName</key>
+\t<string>University Planner</string>
+\t<key>UIApplicationSceneManifest</key>
+\t<dict>
+\t\t<key>UIApplicationSupportsMultipleScenes</key>
+\t\t<false/>
+\t</dict>
+\t<key>UIRequiredDeviceCapabilities</key>
+\t<array>
+\t\t<string>armv7</string>
+\t</array>
+</dict>
+</plist>
+`;
+
+  const CAP_ANDROID_MANIFEST = `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="@string/app_name">
+        <activity android:name=".MainActivity" />
+    </application>
+
+    <!-- Permissions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>
+`;
+
+  function parseXml(xml, label) {
+    const dom = new JSDOM(xml, { contentType: "text/xml" });
+    const errors = dom.window.document.getElementsByTagName("parsererror");
+    assert.equal(errors.length, 0, `${label} is no longer well-formed XML after patching`);
+    return dom.window.document;
+  }
+
+  /** Direct <key> children of the plist's root <dict>, in document order. */
+  function rootDictKeys(doc) {
+    const rootDict = doc.documentElement.getElementsByTagName("dict")[0];
+    return [...rootDict.children].filter((el) => el.tagName === "key").map((el) => el.textContent);
+  }
+
+  await test("patchInfoPlist adds the microphone usage string Apple requires", () => {
+    const { xml, changed } = patchInfoPlist(CAP_INFO_PLIST);
+    assert.equal(changed, true);
+    const doc = parseXml(xml, "Info.plist");
+
+    // It has to land in the ROOT dict — dropped inside the nested
+    // UIApplicationSceneManifest dict it parses fine and does nothing.
+    assert.ok(rootDictKeys(doc).includes(IOS_PLIST_KEY), `${IOS_PLIST_KEY} must be a key of the root dict`);
+
+    const rootDict = doc.documentElement.getElementsByTagName("dict")[0];
+    const children = [...rootDict.children];
+    const keyIndex = children.findIndex((el) => el.tagName === "key" && el.textContent === IOS_PLIST_KEY);
+    const value = children[keyIndex + 1];
+    assert.equal(value.tagName, "string", "a plist key must be followed by its value element");
+    assert.equal(value.textContent, MIC_USAGE_DESCRIPTION);
+    // Everything Capacitor generated is still there.
+    assert.ok(rootDictKeys(doc).includes("CFBundleDisplayName"));
+  });
+
+  await test("patchInfoPlist is idempotent and never overwrites a reworded description", () => {
+    const once = patchInfoPlist(CAP_INFO_PLIST);
+    const twice = patchInfoPlist(once.xml);
+    assert.equal(twice.changed, false, "re-running cap sync must not append a second copy of the key");
+    assert.equal(twice.xml, once.xml);
+
+    const reworded = patchInfoPlist(CAP_INFO_PLIST, "A deliberately different wording.");
+    const left = patchInfoPlist(reworded.xml);
+    assert.equal(left.changed, false);
+    assert.ok(left.xml.includes("A deliberately different wording."), "a hand-edited description must survive");
+  });
+
+  await test("patchAndroidManifest declares RECORD_AUDIO exactly once, alongside the existing permissions", () => {
+    const { xml, changed } = patchAndroidManifest(CAP_ANDROID_MANIFEST);
+    assert.equal(changed, true);
+    const doc = parseXml(xml, "AndroidManifest.xml");
+
+    const declared = [...doc.getElementsByTagName("uses-permission")].map((el) =>
+      el.getAttribute("android:name")
+    );
+    assert.deepEqual(declared, ["android.permission.INTERNET", ANDROID_PERMISSION]);
+
+    const again = patchAndroidManifest(xml);
+    assert.equal(again.changed, false, "re-running cap sync must not duplicate the permission");
+    assert.equal(again.xml, xml);
+  });
+
+  await test("patchAndroidManifest still works on a manifest that declares no permissions at all", () => {
+    const bare = `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="@string/app_name" />
+</manifest>
+`;
+    const { xml, changed } = patchAndroidManifest(bare);
+    assert.equal(changed, true);
+    const doc = parseXml(xml, "AndroidManifest.xml");
+    const permissions = [...doc.getElementsByTagName("uses-permission")];
+    assert.equal(permissions.length, 1);
+    assert.equal(permissions[0].getAttribute("android:name"), ANDROID_PERMISSION);
+    assert.equal(permissions[0].parentNode.tagName, "manifest", "uses-permission belongs directly under <manifest>");
+  });
+
+  await test("the OS permission prompt makes the same promise the in-app consent does", () => {
+    // Two places tell the user what happens to their audio: the consent
+    // gate and iOS's own microphone dialog. If they ever disagree, one of
+    // them is misleading — this is the nag that stops that drifting.
+    const consentPromise = CONSENT_TEXT.bullets.find((b) => /not retained/i.test(b));
+    assert.ok(consentPromise, "consent wording no longer promises audio isn't retained — update MIC_USAGE_DESCRIPTION to match");
+    assert.match(MIC_USAGE_DESCRIPTION, /not retained/i);
+    assert.match(MIC_USAGE_DESCRIPTION, /record lectures/i, "Apple rejects a usage string that doesn't say what the mic is for");
   });
 
   /* ---------- no API key ever ends up in the shipped bundle ---------- */

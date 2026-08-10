@@ -2,5 +2,9 @@ node_modules/
 dist-web/
 desktop/www/
 mobile/www/
+# Generated per machine by `cap add` — and regenerated freely, which is why
+# the mic permission is re-applied by a script rather than committed here.
+mobile/ios/
+mobile/android/
 .ai-notes-test-tmp/
 .claude/
