@@ -8,6 +8,21 @@ import {
   COLLECTIONS,
 } from "./sync.js";
 import {
+  schedule,
+  readSrs,
+  isDue,
+  localDay,
+  buildReviewSession,
+  buildPracticeSession,
+  nextDueDay,
+  daysBetween,
+  weakSpots,
+  recordStudy,
+  studySummary,
+  clampSessionMinutes,
+  MAX_SESSION_MINUTES,
+} from "./srs.js";
+import {
   GraduationCap,
   Plus,
   Trash2,
@@ -19,6 +34,9 @@ import {
   FileText,
   ListTodo,
   StickyNote,
+  Flame,
+  Timer,
+  TrendingDown,
   Brain,
   CalendarDays,
   ChevronLeft,
@@ -114,6 +132,11 @@ const store = {
 
 const SEMESTER_NAMES = ["Semester 1", "Semester 2"];
 
+// Collections the user thinks of as "their stuff". studyStats syncs like
+// any other collection but is bookkeeping, not content -- counting its ~43
+// rows per semester would make "247 items" in the backup panel meaningless.
+const COUNTABLE = COLLECTIONS.filter((k) => k !== "studyStats");
+
 // Each semester holds its own independent set of content.
 const makeSemester = () => ({
   courses: [],
@@ -124,6 +147,7 @@ const makeSemester = () => ({
   events: [], // calendar entries
   pages: [], // free notebook pages with titles
   folders: [], // folders for organising notebook pages
+  studyStats: [], // one row per studied day + one totals row (src/srs.js)
 });
 
 const DEFAULT = {
@@ -1973,69 +1997,126 @@ function shuffle(arr) {
   return a;
 }
 
-function StudyGame({ notes }) {
-  const [selected, setSelected] = useState("");
+/* Two ways to study, deliberately kept separate:
+
+   REVIEW is spaced repetition. It pulls only what's due, interleaves it
+   across courses, and writes scheduling state.
+
+   PRACTICE is the night-before-the-exam drill. It walks every card in a
+   course regardless of due date and writes NOTHING -- cramming shouldn't
+   be able to push a card the student is actually shaky on out to a
+   three-week interval. This is also the pre-existing behaviour of this
+   screen, kept for anyone who preferred it. */
+
+const RATING_BUTTONS = [
+  { key: "again", label: "Again", hint: "Didn't know it", cls: "border-stone-200 text-stone-700 hover:bg-stone-50" },
+  { key: "good", label: "Good", hint: "Got there", cls: "border-stone-200 text-stone-700 hover:bg-stone-50" },
+  { key: "easy", label: "Easy", hint: "Instant", cls: "border-stone-200 text-stone-700 hover:bg-stone-50" },
+];
+
+function StudyGame({ notes, onRate }) {
+  const [mode, setMode] = useState(""); // "" | "review" | "practice"
   const [queue, setQueue] = useState([]);
   const [current, setCurrent] = useState(null);
   const [revealed, setRevealed] = useState(false);
-  const [mastered, setMastered] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [reviews, setReviews] = useState(0);
+  const [done, setDone] = useState(0);
+  const [courseName, setCourseName] = useState("");
+
+  const today = localDay();
 
   const coursesWithNotes = useMemo(() => {
     const counts = {};
-    notes.forEach((n) => {
+    (notes || []).forEach((n) => {
       const key = n.course || "No course";
       counts[key] = (counts[key] || 0) + 1;
     });
     return Object.entries(counts);
   }, [notes]);
 
+  const dueCount = useMemo(() => (notes || []).filter((n) => isDue(n, today)).length, [notes, today]);
+
   const cardFront = (n) => n.term || (n.week ? `Week ${n.week}` : "Recall this note");
   const cardBack = (n) => n.content || "(No notes written for this card)";
 
-  const start = (courseName) => {
-    const deck = shuffle(notes.filter((n) => (n.course || "No course") === courseName));
-    setSelected(courseName);
-    setQueue(deck.slice(1));
+  const startReview = () => {
+    const deck = buildReviewSession(notes || [], { today });
+    setMode("review");
+    setCourseName("");
     setCurrent(deck[0] || null);
-    setTotal(deck.length);
-    setMastered(0);
-    setReviews(0);
+    setQueue(deck.slice(1));
+    setDone(0);
     setRevealed(false);
   };
 
-  const next = (got) => {
-    if (got) setMastered((m) => m + 1);
-    let q = queue;
-    if (!got) {
-      setReviews((r) => r + 1);
-      q = [...queue, current];
+  const startPractice = (name) => {
+    const deck = buildPracticeSession(notes || [], name);
+    setMode("practice");
+    setCourseName(name);
+    setCurrent(deck[0] || null);
+    setQueue(deck.slice(1));
+    setDone(0);
+    setRevealed(false);
+  };
+
+  const exit = () => {
+    setMode("");
+    setCurrent(null);
+    setQueue([]);
+    setDone(0);
+    setRevealed(false);
+  };
+
+  const rate = (rating) => {
+    if (!current) return;
+    // Practice writes no scheduling state at all.
+    if (mode === "review") {
+      onRate(current.id, rating);
     }
+    // "Again" sends the card back to the end of this session, matching
+    // the scheduler putting it due today rather than days out.
+    const q = rating === "again" ? [...queue, current] : queue;
+    if (rating !== "again") setDone((d) => d + 1);
     setCurrent(q[0] || null);
     setQueue(q.slice(1));
     setRevealed(false);
   };
 
-  const exit = () => {
-    setSelected("");
-    setCurrent(null);
-    setQueue([]);
-    setTotal(0);
-    setMastered(0);
-  };
-
-  if (!selected) {
+  /* ---- picker ---- */
+  if (!mode) {
+    const next = nextDueDay(notes || [], today);
+    const daysAway = next ? daysBetween(today, next) : null;
     return (
       <Card>
         {coursesWithNotes.length === 0 ? (
           <Empty>Add some class notes above first, then come back to study them.</Empty>
         ) : (
           <>
-            <p className="mb-3 text-sm text-stone-500">Pick a course to study. Each note becomes a card; recall the answer, then mark how you went. Cards you miss come back around.</p>
+            <button
+              onClick={startReview}
+              disabled={dueCount === 0}
+              className="mb-3 flex w-full items-center justify-between rounded-xl border border-stone-200 px-4 py-3 text-left u-hover-border u-hover-soft u-focus disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span>
+                <span className="flex items-center gap-2 font-medium text-stone-800">
+                  <Brain size={16} /> Review what's due
+                </span>
+                <span className="mt-0.5 block text-sm text-stone-500">
+                  {dueCount > 0
+                    ? `${dueCount} card${dueCount === 1 ? "" : "s"} across all your courses`
+                    : daysAway !== null && daysAway > 0
+                      ? `Nothing due — next review in ${daysAway} day${daysAway === 1 ? "" : "s"}`
+                      : "Nothing due right now"}
+                </span>
+              </span>
+              {dueCount > 0 && <ArrowRight size={15} className="shrink-0 text-stone-400" />}
+            </button>
+
+            <p className="mb-2 text-sm text-stone-500">
+              Or drill one course — practice runs through every card and doesn't affect your review schedule.
+            </p>
             <div className="flex flex-col gap-2">
               {coursesWithNotes.map(([name, count]) => (
-                <button key={name} onClick={() => start(name)} className="flex items-center justify-between rounded-xl border border-stone-200 px-4 py-3 text-left u-hover-border u-hover-soft u-focus">
+                <button key={name} onClick={() => startPractice(name)} className="flex items-center justify-between rounded-xl border border-stone-200 px-4 py-3 text-left u-hover-border u-hover-soft u-focus">
                   <span className="flex items-center gap-2">
                     <CourseChip name={name === "No course" ? "" : name} />
                     <span className="font-medium text-stone-800">{name}</span>
@@ -2052,42 +2133,55 @@ function StudyGame({ notes }) {
     );
   }
 
+  /* ---- session finished ---- */
   if (!current) {
+    const next = nextDueDay(notes || [], today);
+    const daysAway = next ? daysBetween(today, next) : null;
     return (
       <Card className="text-center">
         <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full u-accent-soft u-accent-deeptext">
           <Check size={24} />
         </div>
-        <h3 className="font-serif text-xl font-semibold text-stone-800">All cards mastered</h3>
+        <h3 className="font-serif text-xl font-semibold text-stone-800">
+          {mode === "review" ? "Review done" : "Practice done"}
+        </h3>
         <p className="mt-1 text-sm text-stone-500">
-          {total} card{total === 1 ? "" : "s"} in {selected}
-          {reviews > 0 && ` · ${reviews} needed another look`}
+          {done} card{done === 1 ? "" : "s"}
+          {mode === "review"
+            ? daysAway !== null && daysAway > 0
+              ? ` · next review in ${daysAway} day${daysAway === 1 ? "" : "s"}`
+              : ""
+            : ` in ${courseName}`}
         </p>
-        <div className="mt-4 flex justify-center gap-2">
-          <button className={btnGhost} onClick={exit}>Pick another course</button>
-          <button className={btnPrimary} onClick={() => start(selected)}>
-            <RotateCcw size={15} /> Study again
-          </button>
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          <button className={btnGhost} onClick={exit}>Back to study</button>
+          {mode === "review" && courseName === "" && coursesWithNotes.length > 0 && (
+            <button className={btnPrimary} onClick={() => startPractice(coursesWithNotes[0][0])}>
+              <RotateCcw size={15} /> Practice a course
+            </button>
+          )}
+          {mode === "practice" && (
+            <button className={btnPrimary} onClick={() => startPractice(courseName)}>
+              <RotateCcw size={15} /> Practice again
+            </button>
+          )}
         </div>
       </Card>
     );
   }
 
-  const progress = total ? Math.round((mastered / total) * 100) : 0;
+  /* ---- a card ---- */
+  const remaining = queue.length + 1;
   return (
     <Card>
       <div className="mb-3 flex items-center justify-between">
         <span className="flex items-center gap-2 text-sm text-stone-500">
-          <CourseChip name={selected === "No course" ? "" : selected} />
-          {mastered} / {total} mastered
+          <CourseChip name={(current.course || "") === "No course" ? "" : current.course || ""} />
+          {mode === "practice" ? "Practice" : "Review"} · {remaining} to go
         </span>
         <button className={iconBtn} onClick={exit} aria-label="Exit study">
           <X size={18} />
         </button>
-      </div>
-
-      <div className="mb-4 h-1.5 w-full overflow-hidden rounded-full bg-stone-100">
-        <div className="h-full rounded-full u-accent-bg transition-all" style={{ width: `${progress}%` }} />
       </div>
 
       <div className="rounded-2xl border border-stone-200 bg-stone-50 p-6 text-center">
@@ -2103,16 +2197,258 @@ function StudyGame({ notes }) {
       {!revealed ? (
         <button className={`${btnPrimary} mt-4 w-full`} onClick={() => setRevealed(true)}>Show answer</button>
       ) : (
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <button className={`${btnGhost} justify-center`} onClick={() => next(false)}>
-            <RotateCcw size={15} /> Review again
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          {RATING_BUTTONS.map((b) => (
+            <button
+              key={b.key}
+              onClick={() => rate(b.key)}
+              className={`flex flex-col items-center justify-center rounded-xl border px-2 py-2.5 u-focus ${b.cls}`}
+            >
+              <span className="text-sm font-medium">{b.label}</span>
+              <span className="text-xs text-stone-400">{b.hint}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {mode === "practice" && revealed && (
+        <p className="mt-2 text-center text-xs text-stone-400">Practice doesn't change your review schedule.</p>
+      )}
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Weak spots — derived entirely from scheduling state               */
+/* ------------------------------------------------------------------ */
+
+function WeakSpots({ notes }) {
+  const groups = useMemo(() => weakSpots(notes || []), [notes]);
+  if (groups.size === 0) {
+    return (
+      <Card>
+        <Empty>Nothing to flag yet. Cards you get wrong in a review will show up here.</Empty>
+      </Card>
+    );
+  }
+  return (
+    <Card>
+      <p className="mb-3 text-sm text-stone-500">Cards you've missed most often, worst first.</p>
+      <div className="flex flex-col gap-4">
+        {[...groups.entries()].map(([course, rows]) => (
+          <div key={course}>
+            <div className="mb-1.5 flex items-center gap-2">
+              <CourseChip name={course === "No course" ? "" : course} />
+              <span className="text-sm font-medium text-stone-700">{course}</span>
+            </div>
+            <ul className="flex flex-col gap-1">
+              {rows.map(({ card, lapses }) => (
+                <li key={card.id} className="flex items-center justify-between rounded-lg border border-stone-100 px-3 py-2 text-sm">
+                  <span className="truncate text-stone-800">{card.term || "(untitled card)"}</span>
+                  <span className="ml-3 shrink-0 text-xs text-stone-500">
+                    missed {lapses}×
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Study timer                                                       */
+/* ------------------------------------------------------------------ */
+
+/* The running timer is deliberately NOT part of the synced planner data:
+   "currently running on this device" is not a fact other devices should
+   inherit, and syncing it would make two devices fight over one clock.
+   It lives in localStorage, keyed per semester, so a refresh doesn't lose
+   it and Semester 1's clock can't be mistaken for Semester 2's. Only the
+   finished minutes are ever committed to the semester. */
+const timerKey = (semester) => `uni-planner-timer:${semester}`;
+
+function readTimer(semester) {
+  try {
+    const raw = window.localStorage.getItem(timerKey(semester));
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+function writeTimer(semester, v) {
+  try {
+    if (v) window.localStorage.setItem(timerKey(semester), JSON.stringify(v));
+    else window.localStorage.removeItem(timerKey(semester));
+  } catch (e) {
+    /* ignore -- a timer that can't persist still works for this session */
+  }
+}
+
+function StudyTimer({ courses, onLog, semester }) {
+  const [course, setCourse] = useState("");
+  const [startedAt, setStartedAt] = useState(null); // ms, or null when paused
+  const [accumulatedMs, setAccumulatedMs] = useState(0);
+  const [tick, setTick] = useState(0);
+
+  // Restore a timer left running when the app was closed.
+  useEffect(() => {
+    const saved = readTimer(semester);
+    if (!saved) return;
+    setCourse(saved.course || "");
+    setAccumulatedMs(saved.accumulatedMs || 0);
+    setStartedAt(saved.startedAt || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [semester]);
+
+  /* On unmount -- switching semester or leaving the tab -- park the timer
+     rather than letting it keep accruing wall-clock time in the
+     background. The elapsed minutes are kept, not committed and not
+     discarded: the user decides where they go when they come back. A ref
+     is used because a cleanup closure would otherwise capture the state
+     as it was on first render. */
+  const liveRef = useRef({});
+  liveRef.current = { course, startedAt, accumulatedMs };
+  useEffect(() => {
+    return () => {
+      const { course: c, startedAt: st, accumulatedMs: acc } = liveRef.current;
+      const total = acc + (st ? Date.now() - st : 0);
+      writeTimer(semester, total > 0 ? { course: c, accumulatedMs: total, startedAt: null } : null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [semester]);
+
+  useEffect(() => {
+    if (startedAt === null) return;
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [startedAt]);
+
+  const elapsedMs = accumulatedMs + (startedAt ? Date.now() - startedAt : 0);
+  const minutes = elapsedMs / 60000;
+  const clamped = clampSessionMinutes(minutes);
+  const atCap = minutes > MAX_SESSION_MINUTES;
+
+  const persist = (next) => writeTimer(semester, next);
+
+  const start = () => {
+    const now = Date.now();
+    setStartedAt(now);
+    persist({ course, accumulatedMs, startedAt: now });
+  };
+  const pause = () => {
+    const acc = elapsedMs;
+    setAccumulatedMs(acc);
+    setStartedAt(null);
+    persist({ course, accumulatedMs: acc, startedAt: null });
+  };
+  const stop = () => {
+    onLog(course, minutes);
+    setAccumulatedMs(0);
+    setStartedAt(null);
+    persist(null);
+  };
+  const discard = () => {
+    setAccumulatedMs(0);
+    setStartedAt(null);
+    persist(null);
+  };
+
+  const hh = Math.floor(elapsedMs / 3600000);
+  const mm = Math.floor((elapsedMs % 3600000) / 60000);
+  const ss = Math.floor((elapsedMs % 60000) / 1000);
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-center gap-3">
+        <select
+          className={inputCls + " w-auto min-w-[10rem]"}
+          value={course}
+          onChange={(e) => {
+            setCourse(e.target.value);
+            persist({ course: e.target.value, accumulatedMs, startedAt });
+          }}
+        >
+          <option value="">No course</option>
+          {(courses || []).map((c) => (
+            <option key={c.id} value={c.name}>{c.name}</option>
+          ))}
+        </select>
+        <span className="font-mono text-2xl tabular-nums text-stone-800">
+          {hh > 0 ? `${hh}:` : ""}{String(mm).padStart(2, "0")}:{String(ss).padStart(2, "0")}
+        </span>
+        <div className="ml-auto flex gap-2">
+          {startedAt === null ? (
+            <button className={btnPrimary} onClick={start}>Start</button>
+          ) : (
+            <button className={btnGhost} onClick={pause}>Pause</button>
+          )}
+          <button className={btnPrimary} onClick={stop} disabled={clamped <= 0}>
+            Save {clamped > 0 ? `${clamped}m` : ""}
           </button>
-          <button className={`${btnPrimary} w-full`} onClick={() => next(true)}>
-            <Check size={15} /> Got it
-          </button>
+          {elapsedMs > 0 && (
+            <button className={iconBtn} onClick={discard} aria-label="Discard timer">
+              <X size={18} />
+            </button>
+          )}
+        </div>
+      </div>
+      {atCap && (
+        <p className="mt-2 text-xs text-stone-500">
+          A single session is capped at {MAX_SESSION_MINUTES / 60} hours — saving will log {clamped} minutes.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Streaks and stats — all derived at read time                      */
+/* ------------------------------------------------------------------ */
+
+function StudyStats({ studyStats }) {
+  const s = useMemo(() => studySummary(studyStats || [], localDay()), [studyStats]);
+  const courseRows = Object.entries(s.byCourse).sort((a, b) => b[1] - a[1]);
+  const fmt = (m) => (m >= 60 ? `${Math.floor(m / 60)}h ${Math.round(m % 60)}m` : `${Math.round(m)}m`);
+
+  return (
+    <Card>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Current streak" value={s.current === 0 ? "—" : `${s.current} day${s.current === 1 ? "" : "s"}`} />
+        <Stat label="Longest streak" value={s.longest === 0 ? "—" : `${s.longest} day${s.longest === 1 ? "" : "s"}`} />
+        <Stat label="Cards today" value={s.cardsToday} />
+        <Stat label="Studied today" value={fmt(s.minutesToday)} />
+      </div>
+      <p className="mt-3 text-sm text-stone-500">
+        {fmt(s.minutesWeek)} this week · {s.activeDays} active day{s.activeDays === 1 ? "" : "s"} in the last 6 weeks
+      </p>
+      {courseRows.length > 0 && (
+        <div className="mt-3 border-t border-stone-100 pt-3">
+          <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-stone-400">Time by course</p>
+          <ul className="flex flex-col gap-1">
+            {courseRows.map(([name, mins]) => (
+              <li key={name} className="flex items-center justify-between text-sm">
+                <span className="flex items-center gap-2">
+                  <CourseChip name={name === "No course" ? "" : name} />
+                  <span className="text-stone-700">{name}</span>
+                </span>
+                <span className="text-stone-500">{fmt(mins)}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </Card>
+  );
+}
+
+function Stat({ label, value }) {
+  return (
+    <div className="rounded-xl border border-stone-100 bg-stone-50 px-3 py-2">
+      <p className="text-xs text-stone-500">{label}</p>
+      <p className="mt-0.5 text-lg font-semibold text-stone-800">{value}</p>
+    </div>
   );
 }
 
@@ -2128,7 +2464,7 @@ function BackupPanel({ data, onRestore }) {
   const counts = useMemo(() => {
     let items = 0;
     for (const sem of Object.values(data.semesters || {})) {
-      for (const key of COLLECTIONS) items += live(sem[key]).length;
+      for (const key of COUNTABLE) items += live(sem[key]).length;
     }
     return items;
   }, [data]);
@@ -2169,7 +2505,7 @@ function BackupPanel({ data, onRestore }) {
       }
       let found = 0;
       for (const sem of Object.values(restored.semesters || {})) {
-        for (const key of COLLECTIONS) found += ((sem || {})[key] || []).length;
+        for (const key of COUNTABLE) found += ((sem || {})[key] || []).length;
       }
       setPending({ data: normalizeData(restored), found });
     } catch (err) {
@@ -2606,6 +2942,53 @@ export default function PlannerApp() {
       ),
     }));
 
+  /* Study bookkeeping.
+
+     Both of these read the CURRENT collection inside the updater and
+     increment it. Nothing is captured when a session starts: a sync can
+     land mid-session (the app syncs on window focus, not just on the
+     4-second debounce), and a cached copy written back afterwards would
+     silently discard whatever the other device recorded. */
+
+  const rateCard = (cardId, rating) =>
+    updateSem((s) => {
+      const day = localDay();
+      const card = (s.notes || []).find((n) => n.id === cardId);
+      // The card can be gone: deleted on another device and synced away
+      // mid-session. Rating it must be a no-op rather than logging a
+      // review of a card that no longer exists.
+      if (!card || card.deletedAt) return s;
+      const notes = (s.notes || []).map((n) =>
+        n.id === cardId ? { ...n, srs: schedule(n, rating, day), updatedAt: nowISO() } : n
+      );
+      return {
+        ...s,
+        notes,
+        studyStats: recordStudy(s.studyStats || [], {
+          day,
+          course: (card && card.course) || "",
+          minutes: 0,
+          cards: 1,
+          now: nowISO(),
+        }),
+      };
+    });
+
+  const logStudyMinutes = (course, minutes) => {
+    const mins = clampSessionMinutes(minutes);
+    if (mins <= 0) return;
+    updateSem((s) => ({
+      ...s,
+      studyStats: recordStudy(s.studyStats || [], {
+        day: localDay(),
+        course,
+        minutes: mins,
+        cards: 0,
+        now: nowISO(),
+      }),
+    }));
+  };
+
   const reset = () => {
     setData({ ...DEFAULT, semesters: { "Semester 1": makeSemester(), "Semester 2": makeSemester() } });
     store.del(STORAGE_KEY);
@@ -2809,11 +3192,25 @@ export default function PlannerApp() {
 
         {tab === "study" && (
           <>
+            <Section icon={Flame} title="Your studying" subtitle="Streaks, time and cards — this semester only">
+              <StudyStats studyStats={sem.studyStats} />
+            </Section>
+            <Section icon={Timer} title="Study timer" subtitle="Track time against a course">
+              {/* Keyed by semester so switching semesters tears the timer
+                  down rather than letting it keep running and then commit
+                  its minutes to the wrong semester. */}
+              <StudyTimer key={data.semester} courses={sem.courses} onLog={logStudyMinutes} semester={data.semester} />
+            </Section>
             <Section icon={StickyNote} title="Class notes" subtitle="These become your study cards">
               <ClassNotes notes={sem.notes} courses={sem.courses} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} />
             </Section>
-            <Section icon={Brain} title="Study cards" subtitle="Turn your class notes into a recall game">
-              <StudyGame notes={sem.notes} />
+            <Section icon={Brain} title="Study cards" subtitle="Review what's due, or drill a course">
+              {/* Same reason: a half-finished session must not survive a
+                  semester switch and rate cards that are no longer here. */}
+              <StudyGame key={data.semester} notes={sem.notes} onRate={rateCard} />
+            </Section>
+            <Section icon={TrendingDown} title="Weak spots" subtitle="The cards you keep missing">
+              <WeakSpots notes={sem.notes} />
             </Section>
           </>
         )}

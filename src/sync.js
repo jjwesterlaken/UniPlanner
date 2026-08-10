@@ -57,6 +57,11 @@ export const COLLECTIONS = [
   "events",
   "pages",
   "folders",
+  // Study scheduling stats (see src/srs.js). Listed here because
+  // mergeSemester rebuilds each semester from this whitelist alone --
+  // a collection missing from it is silently dropped on every sync,
+  // while still working locally and in demo mode.
+  "studyStats",
 ];
 
 /* ---------- merging two copies of the data ----------
