@@ -28,6 +28,7 @@ import {
   mapAiResultToItems,
   recorderReducer,
   INITIAL_RECORDER_STATE,
+  newIdempotencyKey,
 } from "../src/aiNotesLogic.js";
 import { fetchUsage, callAiNotes } from "../src/aiNotesClient.js";
 import { mergeData, COLLECTIONS, purgeOldTombstones } from "../src/sync.js";
@@ -64,7 +65,7 @@ import {
   TOMBSTONE_DAYS,
   MAX_SESSION_MINUTES,
 } from "../src/srs.js";
-import { checkRequestGuards, selectTranscriber, minutesFromSeconds } from "../supabase/functions/ai-notes/guards.js";
+import { checkRequestGuards, selectTranscriber, minutesFromSeconds, isUuid } from "../supabase/functions/ai-notes/guards.js";
 import { deepgramAdapter } from "../supabase/functions/ai-notes/deepgram.js";
 import { groqAdapter, isSizeError } from "../supabase/functions/ai-notes/groq.js";
 import {
@@ -896,6 +897,107 @@ async function run() {
     assert.equal(clampSessionMinutes(-5), 0);
     assert.equal(clampSessionMinutes(NaN), 0);
     assert.equal(clampSessionMinutes(undefined), 0);
+  });
+
+  /* ---------- the idempotency key must be a real UUID ---------- */
+
+  const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  await test("the key generator produces a v4 UUID via crypto.randomUUID", () => {
+    let used = false;
+    const key = newIdempotencyKey({
+      randomUUID: () => {
+        used = true;
+        return "3f9a1c2e-7b4d-4e6f-9a1b-2c3d4e5f6a7b";
+      },
+    });
+    assert.ok(used, "randomUUID must be preferred when it exists");
+    assert.match(key, UUID_V4);
+  });
+
+  await test("the getRandomValues fallback still produces a v4 UUID", () => {
+    // The path taken in a non-secure context, where randomUUID is absent
+    // but getRandomValues is not — i.e. an app served over plain http, or
+    // an older WebView.
+    const cryptoObj = {
+      getRandomValues: (arr) => {
+        for (let i = 0; i < arr.length; i++) arr[i] = (i * 37 + 11) % 256;
+        return arr;
+      },
+    };
+    const key = newIdempotencyKey(cryptoObj);
+    assert.match(key, UUID_V4, `fallback produced "${key}", which is not a UUID`);
+  });
+
+  await test("the last-resort fallback with no crypto at all still produces a v4 UUID", () => {
+    // A fallback that returns some other random string would reintroduce
+    // the 22P02 failure on exactly the platforms hardest to debug.
+    for (const noCrypto of [undefined, null, {}, { randomUUID: null, getRandomValues: undefined }]) {
+      const key = newIdempotencyKey(noCrypto);
+      assert.match(key, UUID_V4, `produced "${key}" for ${JSON.stringify(noCrypto)}`);
+    }
+  });
+
+  await test("generated keys are unique across many calls", () => {
+    const seen = new Set();
+    for (let i = 0; i < 2000; i++) seen.add(newIdempotencyKey({}));
+    assert.equal(seen.size, 2000, "an idempotency key that collides would drop someone's recording");
+  });
+
+  await test("every generated key passes the server's own validator", () => {
+    // The two halves of this fix, checked against each other rather than
+    // each against its own idea of what a UUID is.
+    for (const cryptoObj of [undefined, { getRandomValues: (a) => a.fill(7) }]) {
+      for (let i = 0; i < 50; i++) {
+        assert.ok(isUuid(newIdempotencyKey(cryptoObj)), "the client mints keys the server would reject");
+      }
+    }
+  });
+
+  await test("the validator rejects the planner's short id format that caused 22P02", () => {
+    // The exact generator that produced "msn0duf5-hk684".
+    const plannerUid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    for (let i = 0; i < 20; i++) {
+      assert.equal(isUuid(plannerUid()), false, "the old short id must not be accepted");
+    }
+    assert.equal(isUuid("msn0duf5-hk684"), false, "the captured failing value itself");
+  });
+
+  await test("the validator rejects everything else malformed, and accepts real UUIDs", () => {
+    for (const bad of ["", "   ", null, undefined, 123, {}, [], "not-a-uuid",
+      "3f9a1c2e7b4d4e6f9a1b2c3d4e5f6a7b",                     // unhyphenated
+      "3f9a1c2e-7b4d-4e6f-9a1b-2c3d4e5f6a7",                  // one char short
+      "3f9a1c2e-7b4d-4e6f-9a1b-2c3d4e5f6a7bb",                // one char long
+      "zzzzzzzz-7b4d-4e6f-9a1b-2c3d4e5f6a7b",                 // non-hex
+      "3f9a1c2e-7b4d-0e6f-9a1b-2c3d4e5f6a7b",                 // version 0
+      "3f9a1c2e-7b4d-4e6f-0a1b-2c3d4e5f6a7b",                 // bad variant
+    ]) {
+      assert.equal(isUuid(bad), false, `should have rejected ${JSON.stringify(bad)}`);
+    }
+    for (const good of [
+      "3f9a1c2e-7b4d-4e6f-9a1b-2c3d4e5f6a7b",
+      "3F9A1C2E-7B4D-4E6F-9A1B-2C3D4E5F6A7B",                 // uppercase
+      "c232ab00-9414-11ec-b3c8-9f6bdeced846",                 // v1, also valid for the column
+    ]) {
+      assert.ok(isUuid(good), `should have accepted ${good}`);
+    }
+  });
+
+  await test("a malformed key is reported as a client error, not a retryable one", () => {
+    assert.equal(parseAiNotesError({ code: "bad_idempotency_key" }, 400), "Please reload the app and try recording again.");
+    // The key is minted once and reused across retries, so "Try again"
+    // would fail identically -- the fix is reloading.
+    assert.ok(PERMANENT_FAILURE_CODES.has("bad_idempotency_key"));
+  });
+
+  await test("the recorder mints its key with the UUID generator, not the planner's uid", () => {
+    // The actual regression: aiNotes.jsx used uid() here, whose output is
+    // not a UUID, and the insert failed with 22P02 on every recording.
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    const stopDispatch = src.match(/type: "stop"[^}]*}/);
+    assert.ok(stopDispatch, "could not find the recorder's stop dispatch");
+    assert.match(stopDispatch[0], /idempotencyKey: newIdempotencyKey\(\)/);
+    assert.ok(!/idempotencyKey: uid\(\)/.test(src), "uid() must not be used for the idempotency key");
   });
 
   /* ---------- ai-notes failure diagnostics ---------- */

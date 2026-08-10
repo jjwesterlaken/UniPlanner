@@ -35,6 +35,61 @@ export function buildConsentPatch(version = AI_CONSENT_VERSION, nowISO = () => n
   return { aiConsent: { version, acceptedAt: nowISO() } };
 }
 
+/* ---------- the idempotency key ----------
+
+   Must be a real UUID. `ai_notes_requests.idempotency_key` is typed
+   `uuid`, so anything else is rejected by Postgres with 22P02 (invalid
+   input syntax) and the recording never gets processed.
+
+   This is deliberately NOT the planner's `uid()` helper, which mints
+   short ids like "msn0duf5-hk684" for notes and pages. Those are stored
+   in the user's own JSON blob where the format doesn't matter; this one
+   crosses into a typed database column where it does. Using uid() here
+   is exactly the bug this replaces.
+   ------------------------------------------ */
+
+const UUID_HEX = "0123456789abcdef";
+
+/**
+ * A v4 UUID.
+ *
+ * `crypto.randomUUID` is the right answer where it exists, but it is
+ * absent in non-secure contexts and on older WebKit — which is precisely
+ * where this app runs once it's wrapped in an iOS or Android WebView, and
+ * the hardest place to notice a bad value. So the fallbacks matter, and
+ * every one of them must produce a genuinely well-formed UUID: a
+ * fallback that returns some other random string would reintroduce the
+ * 22P02 failure on exactly the platforms that are hardest to debug.
+ *
+ * `cryptoObj` is injected so the fallback paths are testable.
+ */
+export function newIdempotencyKey(cryptoObj = typeof globalThis !== "undefined" ? globalThis.crypto : undefined) {
+  if (cryptoObj && typeof cryptoObj.randomUUID === "function") {
+    return cryptoObj.randomUUID();
+  }
+
+  const bytes = new Uint8Array(16);
+  if (cryptoObj && typeof cryptoObj.getRandomValues === "function") {
+    // Available in non-secure contexts and much older browsers than
+    // randomUUID, so this covers most of the gap.
+    cryptoObj.getRandomValues(bytes);
+  } else {
+    // Last resort. Weaker randomness, but an idempotency key only has to
+    // be unique per recording, not unguessable.
+    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1 (RFC 4122)
+
+  let out = "";
+  for (let i = 0; i < 16; i++) {
+    if (i === 4 || i === 6 || i === 8 || i === 10) out += "-";
+    out += UUID_HEX[bytes[i] >> 4] + UUID_HEX[bytes[i] & 0x0f];
+  }
+  return out;
+}
+
 /* ---------- recording format ---------- */
 
 // Speech doesn't need music-quality bitrate. 32kbps keeps a 3-hour
@@ -98,7 +153,13 @@ export function describeRecorderError(err) {
 // identically (the provider rejected it outright, not a transient
 // hiccup) — the UI uses this to withhold the "Try again" option, since
 // offering it would just strand the user in a loop.
-export const PERMANENT_FAILURE_CODES = new Set(["recording_too_long", "transcription_too_long"]);
+export const PERMANENT_FAILURE_CODES = new Set([
+  "recording_too_long",
+  "transcription_too_long",
+  // The key is minted once and reused across retries, so a malformed one
+  // fails identically every time — the fix is reloading, not retrying.
+  "bad_idempotency_key",
+]);
 
 const ERROR_MESSAGES = {
   no_access: "AI notes isn't enabled for your account yet.",
@@ -109,6 +170,9 @@ const ERROR_MESSAGES = {
   transcription_failed: "We couldn't transcribe that recording. Please try again.",
   transcription_too_long: "This recording is too long to process — try recording in shorter segments.",
   unauthenticated: "Please sign in again to use AI notes.",
+  // Only reachable from a stale cached copy of the app: current builds
+  // mint a UUID. Telling the user to reload is what actually fixes it.
+  bad_idempotency_key: "Please reload the app and try recording again.",
 };
 
 /** Maps the ai-notes Edge Function's JSON error body to a friendly sentence. */

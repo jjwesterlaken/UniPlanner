@@ -61,3 +61,20 @@ export function selectTranscriber(providers, requestedProvider, defaultProvider)
 export function minutesFromSeconds(durationSeconds) {
   return (durationSeconds || 0) / 60;
 }
+
+/* Idempotency keys go into `ai_notes_requests.idempotency_key`, which is
+   typed `uuid`. Postgres rejects anything else with 22P02 — an error that
+   surfaces as a failed insert rather than as a validation message, so it
+   reads like a server fault when it is a malformed request. Checking the
+   shape first turns that into a clean 400.
+
+   Accepts any RFC 4122 version, not just v4: the client mints v4, but a
+   well-formed v1 or v7 from some future client is still a perfectly valid
+   key and the column would accept it. The point is to catch "not a UUID
+   at all", which is the actual failure. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** True when `value` is a well-formed UUID string. */
+export function isUuid(value) {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}

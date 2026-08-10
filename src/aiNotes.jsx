@@ -27,6 +27,7 @@ import {
   recorderReducer,
   INITIAL_RECORDER_STATE,
   TRANSLATION_LANGUAGES,
+  newIdempotencyKey,
 } from "./aiNotesLogic.js";
 import { fetchUsage, uploadAudio, callAiNotes } from "./aiNotesClient.js";
 import { nowISO } from "./sync.js";
@@ -226,7 +227,8 @@ function useLectureRecorder() {
           Math.floor((Date.now() - startTimeRef.current - pausedMsRef.current) / 1000)
         );
         cleanupStream();
-        dispatch({ type: "stop", blob, mimeType, idempotencyKey: uid(), estimatedDurationSeconds });
+        // A UUID, not uid(): this value goes into a `uuid` column.
+        dispatch({ type: "stop", blob, mimeType, idempotencyKey: newIdempotencyKey(), estimatedDurationSeconds });
         resolve();
       };
       recorder.stop();

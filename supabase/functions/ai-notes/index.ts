@@ -12,7 +12,7 @@
 import { corsHeaders, jsonResponse } from "./_shared/cors.ts";
 import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { requiredEnvNames, missingEnv, envPresence, failureLine, stageLine } from "./diagnostics.js";
-import { checkRequestGuards, selectTranscriber, minutesFromSeconds } from "./guards.js";
+import { checkRequestGuards, selectTranscriber, minutesFromSeconds, isUuid } from "./guards.js";
 import { deepgramAdapter } from "./deepgram.js";
 import { groqAdapter } from "./groq.js";
 import { openaiAdapter } from "./openai.ts";
@@ -177,6 +177,24 @@ Deno.serve(async (req: Request) => {
         hasKey: Boolean(idempotencyKey),
       });
       return errorResponse("idempotency_insert", "bad_request", "Missing recording details.", 400);
+    }
+
+    // idempotency_key is a `uuid` column. A non-UUID reaches Postgres as
+    // 22P02 "invalid input syntax", which fails the insert and reads like
+    // a server fault — so it is checked here and reported as what it is:
+    // a malformed request. The key is logged because it is a
+    // client-generated identifier, not a credential, and its shape is the
+    // whole diagnosis.
+    if (!isUuid(idempotencyKey)) {
+      logFailure("idempotency_insert", new Error("idempotencyKey is not a UUID"), {
+        received: String(idempotencyKey).slice(0, 64),
+      });
+      return errorResponse(
+        "idempotency_insert",
+        "bad_idempotency_key",
+        "Please reload the app and try recording again.",
+        400
+      );
     }
 
     // 5. Race-safe idempotency claim.
