@@ -404,7 +404,9 @@ function Recorder({ session, courses, addItem }) {
   const runUpload = async () => {
     dispatch({ type: "upload" });
     try {
-      const path = await uploadAudio({
+      // The upload needs a path; the function does not. It derives its
+      // own from the JWT and the idempotency key.
+      await uploadAudio({
         session,
         audioBlob: state.blob,
         mimeType: state.mimeType,
@@ -412,10 +414,7 @@ function Recorder({ session, courses, addItem }) {
       });
       const result = await callAiNotes({
         token: session.token,
-        path,
-        mimeType: state.mimeType,
         course,
-        week,
         translateTo: translateTo || null,
         idempotencyKey: state.idempotencyKey,
         estimatedDurationSeconds: state.estimatedDurationSeconds,
