@@ -28,10 +28,17 @@ Edge Function; no provider key ever reaches the client.
 migration tests. All passing. One of the 35 greps `dist-web/app.js` to
 prove no API key leaked into the shipped bundle — keep that passing.
 
-The migration tests need a local PostgreSQL and **skip themselves
-silently** without one, which is the normal case on a Mac unless you've
-run `brew install postgresql@16`. A clean `npm test` on your machine
-therefore proves the 35, not the 10.
+The migration tests need a real PostgreSQL and **skip themselves** without
+one, which is the normal case on a Mac unless you've run `brew install
+postgresql@16` — so a clean `npm test` on your machine proves the 37, not
+the 10.
+
+That's only safe because CI always runs them: `.github/workflows/test.yml`
+runs on every push with a postgres service container and
+`REQUIRE_POSTGRES=1`, which turns every skip path into a failed build. Two
+of the 37 guard that wiring itself, so dropping the migration tests from
+`npm test`, or the strict flag from the workflow, fails the suite rather
+than going quiet.
 
 ## Design decisions worth not re-litigating
 

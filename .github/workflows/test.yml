@@ -1,0 +1,76 @@
+name: Tests
+
+# Runs on every push and pull request. Nothing here touches your Supabase
+# project or any provider account -- the database below is a throwaway
+# container that exists for the length of the job.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: npm test
+    runs-on: ubuntu-latest
+
+    services:
+      # The migration tests need a real PostgreSQL. Locally they skip when
+      # there isn't one, which is fine because this container means they
+      # always run somewhere -- see REQUIRE_POSTGRES below, which turns that
+      # skip into a failure here.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        # Without a health check the job can reach the tests before the
+        # server accepts connections, which would look like a broken test
+        # rather than a race.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Set together, these say "a server is already running, connect to
+      # it" -- psql reads all four itself.
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      # Makes every "skipped: no postgres" path exit 1 instead. A test that
+      # quietly stops running is worse than no test, so CI refuses to pass
+      # on one.
+      REQUIRE_POSTGRES: "1"
+
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm install
+
+      - name: Check the postgres client is present
+        # The migration tests need psql to talk to the service container.
+        # It's part of the ubuntu-latest image, but if that ever changes,
+        # fail here with the reason rather than inside a test.
+        run: |
+          if ! command -v psql >/dev/null; then
+            echo "ERROR: psql not found on the runner, so the migration tests cannot connect."
+            echo "Add a step installing postgresql-client before this one."
+            exit 1
+          fi
+          psql --version
+
+      # Builds the web bundle, then runs the app tests and the migration
+      # tests. REQUIRE_POSTGRES (above) means the migration half can't
+      # silently skip.
+      - name: Run the tests
+        run: npm test

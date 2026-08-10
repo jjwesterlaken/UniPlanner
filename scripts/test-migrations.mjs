@@ -10,9 +10,23 @@
    Nothing here touches your Supabase project — it's entirely local, and
    the cluster is deleted afterwards.
 
-   **Skips itself (exit 0) when PostgreSQL isn't installed**, which is the
-   normal case on the machines this app is usually built from. Install it
-   (macOS: `brew install postgresql@16`) if you want this coverage.
+   Two ways to get a database:
+
+   - **A server that's already running**, used when PGHOST is set. That's
+     the CI path: the workflow starts a postgres service container and
+     points this at it. libpq's own environment variables (PGHOST, PGPORT,
+     PGUSER, PGPASSWORD) do the connecting, so only `psql` is needed.
+   - **A throwaway cluster this script creates**, otherwise. Needs a full
+     local postgres install (initdb, pg_ctl, psql).
+
+   **Skips itself (exit 0) when neither is available**, which is the normal
+   case on the machines this app is usually built from. Install postgres
+   (macOS: `brew install postgresql@16`) if you want this coverage locally.
+
+   That skip is only acceptable because somewhere always runs it for real.
+   Set REQUIRE_POSTGRES=1 (or pass --require-postgres) and every skip path
+   becomes a hard failure instead — CI sets it, so a test that quietly
+   stops running fails the build rather than going unnoticed.
 
    Run via `npm run test:migrations`, or as part of `npm test`. */
 
@@ -27,12 +41,33 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
 const migrationsDir = path.join(rootDir, "supabase", "migrations");
 
+/* ---------- strict mode ---------- */
+
+const strict = process.env.REQUIRE_POSTGRES === "1" || process.argv.includes("--require-postgres");
+
+/** In strict mode a skip is a failure; otherwise it's a quiet exit 0. */
+function skip(reason, fix) {
+  if (strict) {
+    console.error(`migration tests could NOT run: ${reason}`);
+    console.error(`Strict mode (REQUIRE_POSTGRES / --require-postgres) is on, so this is a failure rather than a skip. ${fix}`);
+    process.exit(1);
+  }
+  console.log(`migration tests skipped: ${reason}`);
+  console.log("(fine locally — CI runs them for real against a postgres service container)");
+  process.exit(0);
+}
+
 /* ---------- locating postgres ---------- */
 
-function findBinDir() {
+/* PGHOST means "a server is already running, just connect to it" — the CI
+   service container, or a local server someone would rather reuse. Only
+   psql is needed then; initdb and pg_ctl aren't in the picture at all. */
+const useExistingServer = Boolean(process.env.PGHOST);
+
+function findBinDir(required) {
   // A packaged postgres usually isn't on PATH (Debian/Ubuntu hides it in
   // /usr/lib/postgresql/<version>/bin), so look there too before giving up.
-  const onPath = spawnSync("initdb", ["--version"], { stdio: "ignore" });
+  const onPath = spawnSync(required, ["--version"], { stdio: "ignore" });
   if (onPath.status === 0) return "";
 
   const candidates = [];
@@ -40,7 +75,7 @@ function findBinDir() {
     if (!fs.existsSync(base)) continue;
     for (const entry of fs.readdirSync(base)) {
       const bin = path.join(base, entry, "bin");
-      if (fs.existsSync(path.join(bin, "initdb"))) candidates.push(bin);
+      if (fs.existsSync(path.join(bin, required))) candidates.push(bin);
     }
   }
   // Highest version number wins.
@@ -48,18 +83,25 @@ function findBinDir() {
   return candidates.length ? candidates[candidates.length - 1] : null;
 }
 
-const binDir = findBinDir();
+const binDir = findBinDir(useExistingServer ? "psql" : "initdb");
 if (binDir === null) {
-  console.log("migration tests skipped: no PostgreSQL install found (this is fine — see the comment in scripts/test-migrations.mjs)");
-  process.exit(0);
+  skip(
+    useExistingServer
+      ? "PGHOST is set but no psql client was found"
+      : "no PostgreSQL install found",
+    useExistingServer
+      ? "Install the postgres client package on the runner."
+      : "Install postgres, or point PGHOST at a running server."
+  );
 }
 
 const bin = (name) => (binDir ? path.join(binDir, name) : name);
 
-/* initdb and postgres refuse to run as root. In a root container (CI, some
+/* initdb and postgres refuse to run as root. In a root container (some
    Docker images) fall back to the `postgres` system user, which owns the
-   data dir in that setup anyway. */
-const asRoot = typeof process.getuid === "function" && process.getuid() === 0;
+   data dir in that setup anyway. Irrelevant when connecting to a server
+   someone else started — psql is happy to run as root. */
+const asRoot = !useExistingServer && typeof process.getuid === "function" && process.getuid() === 0;
 const unprivilegedUser = asRoot ? "postgres" : null;
 
 function exec(command, args, { input, allowFail = false } = {}) {
@@ -68,21 +110,27 @@ function exec(command, args, { input, allowFail = false } = {}) {
     : [command, args];
   const result = spawnSync(cmd, cmdArgs, { input, encoding: "utf8" });
   if (!allowFail && result.status !== 0) {
-    throw new Error(`${path.basename(command)} failed:\n${result.stderr || result.stdout}`);
+    // result.error covers the case where the command couldn't be launched
+    // at all (missing binary), where stderr is undefined and reporting it
+    // alone would print a bare "undefined".
+    const detail = result.error ? result.error.message : result.stderr || result.stdout;
+    throw new Error(`${path.basename(command)} failed:\n${detail}`);
   }
   return result;
 }
 
 /* ---------- cluster lifecycle ---------- */
 
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "uniplanner-pg-"));
-const dataDir = path.join(tmpRoot, "data");
-const sockDir = path.join(tmpRoot, "sock");
-fs.mkdirSync(sockDir);
-if (asRoot) {
-  // The unprivileged user needs to traverse in and write to both.
-  fs.chmodSync(tmpRoot, 0o777);
-  fs.chmodSync(sockDir, 0o777);
+const tmpRoot = useExistingServer ? null : fs.mkdtempSync(path.join(os.tmpdir(), "uniplanner-pg-"));
+const dataDir = tmpRoot && path.join(tmpRoot, "data");
+const sockDir = tmpRoot && path.join(tmpRoot, "sock");
+if (tmpRoot) {
+  fs.mkdirSync(sockDir);
+  if (asRoot) {
+    // The unprivileged user needs to traverse in and write to both.
+    fs.chmodSync(tmpRoot, 0o777);
+    fs.chmodSync(sockDir, 0o777);
+  }
 }
 
 let started = false;
@@ -92,7 +140,7 @@ function stopCluster() {
     exec(bin("pg_ctl"), ["-D", dataDir, "-m", "immediate", "stop"], { allowFail: true });
     started = false;
   }
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  if (tmpRoot) fs.rmSync(tmpRoot, { recursive: true, force: true });
 }
 
 process.on("exit", stopCluster);
@@ -100,7 +148,8 @@ process.on("exit", stopCluster);
 function psql(db, sql) {
   // -v ON_ERROR_STOP=1 makes a failing statement fail the whole script
   // rather than psql plowing on and exiting 0.
-  const result = exec(bin("psql"), ["-h", sockDir, "-d", db, "-v", "ON_ERROR_STOP=1", "-X", "-q", "-t", "-A", "-f", "-"], {
+  const connection = useExistingServer ? [] : ["-h", sockDir];
+  const result = exec(bin("psql"), [...connection, "-d", db, "-v", "ON_ERROR_STOP=1", "-X", "-q", "-t", "-A", "-f", "-"], {
     input: sql,
     allowFail: true,
   });
@@ -201,10 +250,21 @@ function seedTwoUsers(db, { withPlannerData = true } = {}) {
 }
 
 async function run() {
-  console.log(`using postgres at ${binDir || "(on PATH)"}`);
-  exec(bin("initdb"), ["-D", dataDir, "-A", "trust", "-U", "postgres"]);
-  exec(bin("pg_ctl"), ["-D", dataDir, "-o", `-k ${sockDir} -h ""`, "-l", path.join(tmpRoot, "log"), "-w", "start"]);
-  started = true;
+  if (useExistingServer) {
+    console.log(`connecting to the postgres already running at ${process.env.PGHOST}:${process.env.PGPORT || 5432}`);
+    // A server that's named but unreachable is a broken setup, never a
+    // skip — skipping here is exactly the silence this mode exists to
+    // prevent, so it fails loudly in both modes.
+    const reachable = psql("postgres", "select 1;");
+    if (!reachable.ok) {
+      throw new Error(`PGHOST is set but the server can't be reached:\n${reachable.err}`);
+    }
+  } else {
+    console.log(`using postgres at ${binDir || "(on PATH)"}`);
+    exec(bin("initdb"), ["-D", dataDir, "-A", "trust", "-U", "postgres"]);
+    exec(bin("pg_ctl"), ["-D", dataDir, "-o", `-k ${sockDir} -h ""`, "-l", path.join(tmpRoot, "log"), "-w", "start"]);
+    started = true;
+  }
 
   await test("every migration applies cleanly to an empty database, in order", () => {
     const db = freshDb();
@@ -331,6 +391,14 @@ async function run() {
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
+
+  // "Ran to completion having tested nothing" is the other way this could
+  // go quiet — an exit 0 that means nothing. Caught here rather than left
+  // to be noticed.
+  if (passed === 0) {
+    console.error("migration tests reported no results at all — treating that as a failure, not a pass");
+    process.exit(1);
+  }
 }
 
 run().catch((err) => {

@@ -558,6 +558,33 @@ async function run() {
     assert.match(MIC_USAGE_DESCRIPTION, /record lectures/i, "Apple rejects a usage string that doesn't say what the mic is for");
   });
 
+  /* ---------- the migration tests can't quietly stop running ---------- */
+
+  /* These two guard the wiring rather than the app, and they live in this
+     file specifically because this is the suite that always runs. Putting
+     them in test-migrations.mjs would be circular: that file skips itself
+     without a database, so a guard inside it would skip too, in exactly
+     the situation it's meant to catch. */
+
+  await test("npm test still runs the migration tests", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    assert.match(
+      pkg.scripts.test,
+      /test-migrations\.mjs/,
+      "the migration tests were dropped from `npm test` — CI's postgres run goes through this script"
+    );
+  });
+
+  await test("CI forces the migration tests to run rather than skip", () => {
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
+    // REQUIRE_POSTGRES is the whole reason local skipping is acceptable:
+    // it turns "no postgres, never mind" into a failed build. Without it
+    // CI would still be green while testing none of the SQL.
+    assert.match(workflow, /REQUIRE_POSTGRES:\s*"1"/, "the test workflow no longer forces the migration tests to run");
+    assert.match(workflow, /PGHOST:/, "the test workflow no longer points the tests at its postgres service");
+    assert.match(workflow, /image:\s*postgres:/, "the test workflow no longer starts a postgres service container");
+  });
+
   /* ---------- no API key ever ends up in the shipped bundle ---------- */
 
   await test("dist-web/app.js contains no leaked provider keys or secrets", () => {
