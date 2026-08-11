@@ -108,6 +108,29 @@ if (studyTab) {
     check(text.includes(phrase), `stats render from an empty semester: "${phrase}"`);
   }
 
+  // Batch 2 lands on three tabs; each renders from an empty semester,
+  // which is the shape that has crashed demo mode before.
+  for (const [tabName, phrases] of [
+    ["Courses", ["Grades", "Add assessment"]],
+    ["Planner", ["What's coming", "Assignments"]],
+    ["Study", ["Exams"]],
+    ["To-do", ["Nothing on the list yet"]],
+  ]) {
+    const tabButton = findButton(tabName);
+    check(!!tabButton, `the ${tabName} tab is reachable`);
+    if (tabButton) {
+      tabButton.click();
+      await new Promise((r) => setTimeout(r, 150));
+      const text = doc.body.textContent || "";
+      for (const phrase of phrases) {
+        check(text.includes(phrase), `${tabName} renders "${phrase}" from an empty semester`);
+      }
+    }
+  }
+
+  findButton("Study").click();
+  await new Promise((r) => setTimeout(r, 150));
+
   const start = findButton("Start");
   check(!!start, "the study timer offers a Start button");
   if (start) {

@@ -31,6 +31,26 @@ import {
   timerPark,
 } from "./srs.js";
 import {
+  GRADE_BANDS,
+  bandByCode,
+  summarise,
+  hurdleOf,
+  requiredForBand,
+  bestReachableBand,
+  displayMark,
+  describeRequirement,
+} from "./grades.js";
+import {
+  forecastWorkload,
+  buildBreakdown,
+  reconcileBreakdown,
+  strandedSubTasks,
+  examCountdowns,
+  buildStudyPlan,
+  topicsForCourse,
+  BREAKDOWN_TEMPLATES,
+} from "./workload.js";
+import {
   GraduationCap,
   Plus,
   Trash2,
@@ -45,6 +65,9 @@ import {
   Flame,
   Timer,
   TrendingDown,
+  Target,
+  AlarmClock,
+  CalendarClock,
   Brain,
   CalendarDays,
   ChevronLeft,
@@ -155,6 +178,7 @@ const makeSemester = () => ({
   events: [], // calendar entries
   pages: [], // free notebook pages with titles
   folders: [], // folders for organising notebook pages
+  assessments: [], // weights and marks per course (src/grades.js)
   studyStats: [], // one row per studied day + one totals row (src/srs.js)
 });
 
@@ -407,7 +431,7 @@ function Courses({ courses, addItem, removeItem, focused, onToggleFocus }) {
 /*  To-do                                                             */
 /* ------------------------------------------------------------------ */
 
-function Todos({ todos, addItem, patchItem, removeItem }) {
+function Todos({ todos, addItem, patchItem, removeItem, assignments = [] }) {
   const [text, setText] = useState("");
   const add = () => {
     const t = text.trim();
@@ -439,7 +463,14 @@ function Todos({ todos, addItem, patchItem, removeItem }) {
             {todos.map((t) => (
               <li key={t.id} className="flex items-center gap-2.5">
                 <button
-                  onClick={() => patchItem("todos", t.id, { done: !t.done })}
+                  onClick={() =>
+                    patchItem("todos", t.id, {
+                      done: !t.done,
+                      // Ticking a generated step counts as touching it, so
+                      // regenerating can never resurrect it as unfinished.
+                      ...(t.gen ? { edited: true } : {}),
+                    })
+                  }
                   className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded border ${
                     t.done ? "u-accent-bg u-accent-border text-white" : "border-stone-300 bg-white u-hover-border"
                   }`}
@@ -447,7 +478,22 @@ function Todos({ todos, addItem, patchItem, removeItem }) {
                 >
                   {t.done && <Check size={13} />}
                 </button>
-                <span className={`flex-1 text-sm ${t.done ? "text-stone-400 line-through" : "text-stone-800"}`}>{t.text}</span>
+                <span className={`flex-1 text-sm ${t.done ? "text-stone-400 line-through" : "text-stone-800"}`}>
+                  {t.text}
+                  {/* Sub-tasks live in this list rather than a parallel one,
+                      so they need to say what they belong to and when. */}
+                  {t.due && (
+                    <span className="ml-1.5 text-xs text-stone-400">
+                      {t.due < localDay() && !t.done ? "overdue · " : ""}
+                      {formatAU(t.due)}
+                    </span>
+                  )}
+                  {t.parentId && (
+                    <span className="ml-1.5 text-xs text-stone-400">
+                      {(assignments.find((a) => a.id === t.parentId) || {}).title || "assignment"}
+                    </span>
+                  )}
+                </span>
                 <button className={iconBtn} onClick={() => removeItem("todos", t.id)}>
                   <Trash2 size={15} />
                 </button>
@@ -626,7 +672,7 @@ function AssignmentFields({ state, set, courses }) {
   );
 }
 
-function Assignments({ assignments, courses, addItem, patchItem, removeItem, focused }) {
+function Assignments({ assignments, courses, addItem, patchItem, removeItem, focused, todos = [], onBreakdown }) {
   const blank = { course: "", title: "", due: "", requirements: "", notes: "" };
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
@@ -701,6 +747,9 @@ function Assignments({ assignments, courses, addItem, patchItem, removeItem, foc
                 </div>
                 {a.requirements && <p className="mt-2 whitespace-pre-wrap text-sm text-stone-600">{a.requirements}</p>}
                 {a.notes && <p className="mt-1.5 whitespace-pre-wrap text-sm text-stone-400">{a.notes}</p>}
+                {onBreakdown && (
+                  <BreakdownPanel assignment={a} todos={todos} onBreakdown={onBreakdown} patchItem={patchItem} />
+                )}
               </li>
             );
           })}
@@ -2746,6 +2795,402 @@ function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onS
 /*  App                                                               */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/*  Assignment breakdown — sub-tasks that live in the real to-do list  */
+/* ------------------------------------------------------------------ */
+
+function BreakdownPanel({ assignment, todos, onBreakdown, patchItem }) {
+  const [open, setOpen] = useState(false);
+  const [templateId, setTemplateId] = useState("essay");
+
+  const mine = useMemo(
+    () => (todos || []).filter((t) => t.parentId === assignment.id).sort((a, b) => (a.due || "") < (b.due || "") ? -1 : 1),
+    [todos, assignment.id]
+  );
+  const stranded = useMemo(
+    () => strandedSubTasks({ assignment, todos, today: localDay() }),
+    [assignment, todos]
+  );
+
+  if (!assignment.due) return null;
+
+  return (
+    <div className="mt-2 border-t border-stone-100 pt-2">
+      <button className="text-xs font-medium u-accent-deeptext u-focus" onClick={() => setOpen(!open)}>
+        {mine.length > 0 ? `${mine.filter((t) => !t.done).length} of ${mine.length} steps left` : "Break this into steps"}
+      </button>
+
+      {stranded.length > 0 && (
+        <div className="mt-1.5 rounded-lg bg-stone-50 px-2.5 py-2">
+          <p className="text-xs text-stone-600">
+            {stranded.length === 1 ? "A step is" : `${stranded.length} steps are`} scheduled after this is due.
+          </p>
+          <ul className="mt-1 flex flex-col gap-1">
+            {stranded.map((sub) => (
+              <li key={sub.id} className="flex items-center gap-2 text-xs">
+                <span className="flex-1 truncate text-stone-600">{sub.text}</span>
+                <span className="shrink-0 text-stone-400">{formatAU(sub.due)}</span>
+                {/* Never rewritten automatically: the user edited this, so
+                    moving it is their call. */}
+                <button
+                  className="shrink-0 underline u-focus"
+                  onClick={() => patchItem("todos", sub.id, { due: assignment.due, edited: true })}
+                >
+                  move to {formatAU(assignment.due)}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {open && (
+        <div className="mt-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select className={inputCls + " w-auto"} value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+              {BREAKDOWN_TEMPLATES.map((t) => (
+                <option key={t.id} value={t.id}>{t.label}</option>
+              ))}
+            </select>
+            <button className={btnPrimary} onClick={() => onBreakdown(assignment, templateId)}>
+              {mine.length > 0 ? "Regenerate steps" : "Add steps to my to-do list"}
+            </button>
+          </div>
+          {mine.length > 0 && (
+            <>
+              <ul className="mt-2 flex flex-col gap-1">
+                {mine.map((t) => (
+                  <li key={t.id} className="flex items-center gap-2 text-xs">
+                    <span className={`flex-1 truncate ${t.done ? "text-stone-400 line-through" : "text-stone-700"}`}>{t.text}</span>
+                    {t.edited && <span className="shrink-0 text-stone-400">edited</span>}
+                    <span className="shrink-0 text-stone-400">{t.due ? formatAU(t.due) : ""}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 text-xs text-stone-400">
+                Regenerating leaves anything you've edited or ticked off exactly as it is.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Grades — weighted mark and the "what do I need" calculator         */
+/* ------------------------------------------------------------------ */
+
+const ASSESSMENT_KINDS = [
+  { id: "assignment", label: "Assignment" },
+  { id: "exam", label: "Exam" },
+  { id: "quiz", label: "Quiz" },
+  { id: "other", label: "Other" },
+];
+
+function Grades({ assessments, courses, addItem, patchItem, removeItem, focused }) {
+  const blank = { course: "", title: "", w: "", mark: "", kind: "assignment", due: "", hurdle: "" };
+  const [form, setForm] = useState(blank);
+  const [targets, setTargets] = useState({}); // course -> band code the student is aiming at
+
+  const byCourse = useMemo(() => {
+    const map = new Map();
+    for (const a of assessments) {
+      const key = a.course || "No course";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(a);
+    }
+    return map;
+  }, [assessments]);
+
+  const shown = [...byCourse.entries()].filter(([name]) => !focused || name === focused);
+
+  const add = () => {
+    const w = Number(form.w);
+    if (!form.title.trim() || !Number.isFinite(w) || w <= 0) return;
+    addItem("assessments", {
+      id: uid(),
+      course: form.course,
+      title: form.title.trim(),
+      w,
+      // Absent, not zero: an unmarked assessment and one marked zero are
+      // different things and must never be conflated.
+      ...(form.mark === "" ? {} : { mark: Number(form.mark) }),
+      kind: form.kind,
+      ...(form.due ? { due: form.due } : {}),
+      ...(form.hurdle === "" ? {} : { hurdle: Number(form.hurdle) }),
+    });
+    setForm({ ...blank, course: form.course, kind: form.kind });
+  };
+
+  return (
+    <>
+      <Card className="mb-4">
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div>
+            <label className={labelCls}>Course</label>
+            <CourseSelect courses={courses} value={form.course} onChange={(v) => setForm({ ...form, course: v })} />
+          </div>
+          <div>
+            <label className={labelCls}>What is it</label>
+            <input className={inputCls} placeholder="Essay 1" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          </div>
+          <div>
+            <label className={labelCls}>Worth (% of the unit)</label>
+            <input className={inputCls} type="number" inputMode="decimal" placeholder="30" value={form.w} onChange={(e) => setForm({ ...form, w: e.target.value })} />
+          </div>
+          <div>
+            <label className={labelCls}>Your mark (%) — leave blank if not marked yet</label>
+            <input className={inputCls} type="number" inputMode="decimal" placeholder="" value={form.mark} onChange={(e) => setForm({ ...form, mark: e.target.value })} />
+          </div>
+          <div>
+            <label className={labelCls}>Type</label>
+            <select className={inputCls} value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+              {ASSESSMENT_KINDS.map((k) => (
+                <option key={k.id} value={k.id}>{k.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Due / exam date</label>
+            <input className={inputCls} type="date" value={form.due} onChange={(e) => setForm({ ...form, due: e.target.value })} />
+          </div>
+          <div>
+            <label className={labelCls}>Hurdle minimum (%) — only if the unit has one</label>
+            <input className={inputCls} type="number" inputMode="decimal" placeholder="e.g. 45" value={form.hurdle} onChange={(e) => setForm({ ...form, hurdle: e.target.value })} />
+          </div>
+        </div>
+        <button className={`${btnPrimary} mt-3`} onClick={add} disabled={!form.title.trim() || !Number(form.w)}>
+          <Plus size={16} /> Add assessment
+        </button>
+      </Card>
+
+      {shown.length === 0 ? (
+        <Card><Empty>Add your assessments from the unit outline and this works out what you need.</Empty></Card>
+      ) : (
+        shown.map(([course, list]) => (
+          <CourseGrades
+            key={course}
+            course={course}
+            list={list}
+            target={targets[course]}
+            onTarget={(code) => setTargets({ ...targets, [course]: code })}
+            patchItem={patchItem}
+            removeItem={removeItem}
+          />
+        ))
+      )}
+    </>
+  );
+}
+
+function CourseGrades({ course, list, target, onTarget, patchItem, removeItem }) {
+  const summary = useMemo(() => summarise(list), [list]);
+  const best = useMemo(() => bestReachableBand(list), [list]);
+  const bandCode = target || best.code;
+  const band = bandByCode(bandCode) || GRADE_BANDS[GRADE_BANDS.length - 1];
+  const result = useMemo(() => requiredForBand(list, band.min), [list, band]);
+  const sentence = describeRequirement(result, band.label);
+  const hurdles = result.hurdles;
+
+  return (
+    <Card className="mb-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="flex items-center gap-2">
+          <CourseChip name={course === "No course" ? "" : course} />
+          <span className="font-medium text-stone-800">{course}</span>
+        </span>
+        <span className="text-sm text-stone-500">
+          {summary.average === null ? "Nothing marked yet" : `${displayMark(summary.average)}% so far`}
+          {summary.markedWeight > 0 && ` · ${summary.markedWeight}% of the unit marked`}
+        </span>
+      </div>
+
+      <ul className="mb-3 flex flex-col gap-1">
+        {list.map((a) => (
+          <li key={a.id} className="flex items-center gap-2 rounded-lg border border-stone-100 px-3 py-2 text-sm">
+            <span className="flex-1 truncate text-stone-800">
+              {a.title}
+              {a.kind === "exam" && <span className="ml-1.5 text-xs text-stone-400">exam</span>}
+              {hurdleOf(a) !== null && <span className="ml-1.5 text-xs text-stone-400">hurdle {hurdleOf(a)}%</span>}
+            </span>
+            <span className="shrink-0 text-xs text-stone-500">{a.w}%</span>
+            <input
+              className="w-16 shrink-0 rounded border border-stone-200 px-2 py-1 text-right text-sm u-field"
+              type="number"
+              inputMode="decimal"
+              placeholder="—"
+              value={a.mark ?? ""}
+              onChange={(e) =>
+                patchItem("assessments", a.id, e.target.value === "" ? { mark: null } : { mark: Number(e.target.value) })
+              }
+              aria-label={`Mark for ${a.title}`}
+            />
+            <button className={iconBtn} onClick={() => removeItem("assessments", a.id)} aria-label={`Remove ${a.title}`}>
+              <Trash2 size={15} />
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      {summary.weightSum !== 100 && (
+        <p className="mb-2 flex items-start gap-1.5 text-xs text-stone-500">
+          <TriangleAlert size={13} className="mt-0.5 shrink-0" />
+          Your weights add up to {summary.weightSum}%, not 100% — worth checking against the unit outline. Nothing is
+          scaled, so the most you can finish on is {displayMark(summary.ceiling)}%.
+        </p>
+      )}
+
+      <div className="rounded-xl u-accent-soft p-3">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-stone-500">Aiming for</span>
+          {GRADE_BANDS.map((b) => (
+            <button
+              key={b.code}
+              onClick={() => onTarget(b.code)}
+              className={`rounded-full px-2.5 py-1 text-xs font-medium u-focus ${
+                b.code === bandCode ? "u-accent-bg text-white" : "bg-white text-stone-600 hover:bg-stone-50"
+              }`}
+            >
+              {b.code} {b.min}+
+            </button>
+          ))}
+        </div>
+        <p className="text-sm font-medium u-accent-deeptext">{sentence}</p>
+        <p className="mt-1 text-xs text-stone-500">
+          Final marks are rounded to the nearest whole number, so {band.min - 0.5}% is enough for {band.label}.
+        </p>
+        {hurdles.failed.length > 0 && (
+          <p className="mt-1.5 text-xs text-stone-600">
+            {hurdles.failed.map((h) => `${h.title} is below its ${h.min}% hurdle`).join("; ")}.
+          </p>
+        )}
+        {hurdles.pending.length > 0 && !result.hurdleBinds && (
+          <p className="mt-1.5 text-xs text-stone-500">
+            Still to clear: {hurdles.pending.map((h) => `${h.title} (${h.min}%)`).join(", ")}.
+          </p>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Workload forecast — crunch weeks, derived from existing dates      */
+/* ------------------------------------------------------------------ */
+
+function WorkloadForecast({ assignments, assessments }) {
+  const weeks = useMemo(
+    () => forecastWorkload({ assignments, assessments, today: localDay() }),
+    [assignments, assessments]
+  );
+  if (weeks.length === 0) {
+    return <Card><Empty>Nothing due in the next six weeks. Add due dates and this fills in.</Empty></Card>;
+  }
+  return (
+    <Card>
+      <div className="flex flex-col gap-3">
+        {weeks.map((w) => (
+          <div key={w.weekStart} className={`rounded-xl border px-3 py-2 ${w.crunch ? "border-stone-300 bg-stone-50" : "border-stone-100"}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-medium text-stone-800">Week of {formatAU(w.weekStart)}</span>
+              <span className="text-xs text-stone-500">
+                {w.items.length} due{w.totalWeight > 0 && ` · ${w.totalWeight}% of your grade`}
+              </span>
+            </div>
+            {w.crunch && (
+              <p className="mt-1 text-xs font-medium u-accent-deeptext">
+                Busy week — {w.items.length > 2 ? `${w.items.length} things land together` : "a lot of your grade lands here"}. Start early.
+              </p>
+            )}
+            <ul className="mt-1.5 flex flex-col gap-1">
+              {w.items.map((i) => (
+                <li key={i.id} className="flex items-center gap-2 text-sm">
+                  <CourseChip name={i.course} />
+                  <span className={`flex-1 truncate ${i.overdue ? "text-stone-500 line-through" : "text-stone-700"}`}>{i.title}</span>
+                  <span className="shrink-0 text-xs text-stone-400">
+                    {i.overdue ? "overdue" : formatAU(i.due)}
+                    {i.weight ? ` · ${i.weight}%` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Exam countdown + a derived study plan                             */
+/* ------------------------------------------------------------------ */
+
+function ExamPlanner({ assessments, notes, addItem }) {
+  const today = localDay();
+  const exams = useMemo(() => examCountdowns(assessments, today), [assessments, today]);
+  const [openId, setOpenId] = useState(null);
+
+  if (exams.length === 0) {
+    return <Card><Empty>Add an assessment with the type "Exam" and a date, and its countdown appears here.</Empty></Card>;
+  }
+
+  return (
+    <Card>
+      <div className="flex flex-col gap-2">
+        {exams.map((e) => {
+          const topics = topicsForCourse(notes, e.course);
+          const plan = buildStudyPlan({ exam: e, topics, today });
+          const open = openId === e.id;
+          return (
+            <div key={e.id} className="rounded-xl border border-stone-100 px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-2">
+                  <CourseChip name={e.course} />
+                  <span className="font-medium text-stone-800">{e.title}</span>
+                </span>
+                <span className="text-sm text-stone-500">
+                  {e.past ? `was ${Math.abs(e.days)} day${Math.abs(e.days) === 1 ? "" : "s"} ago` : e.today ? "today" : `${e.days} day${e.days === 1 ? "" : "s"} to go`}
+                  {" · "}{formatAU(e.due)}
+                </span>
+              </div>
+              {plan.length > 0 && (
+                <>
+                  <button className="mt-1 text-xs font-medium u-accent-deeptext u-focus" onClick={() => setOpenId(open ? null : e.id)}>
+                    {open ? "Hide" : "Show"} a study plan ({plan.length} sessions across {topics.length} topic{topics.length === 1 ? "" : "s"})
+                  </button>
+                  {open && (
+                    <ul className="mt-1.5 flex flex-col gap-1">
+                      {plan.map((p) => (
+                        <li key={p.day} className="flex items-center gap-2 text-sm">
+                          <span className="w-20 shrink-0 text-xs text-stone-400">{formatAU(p.day)}</span>
+                          <span className={`flex-1 ${p.review ? "font-medium text-stone-800" : "text-stone-700"}`}>{p.topic}</span>
+                          <button
+                            className="shrink-0 text-xs text-stone-500 underline u-focus"
+                            onClick={() => addItem("events", { id: uid(), title: `Study: ${p.topic}`, course: e.course, date: p.day, start: "", end: "", location: "", repeat: "none" })}
+                          >
+                            add to calendar
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+              {plan.length === 0 && !e.past && (
+                <p className="mt-1 text-xs text-stone-400">
+                  {topics.length === 0 ? "Add study cards for this course and a plan appears here." : "No days left to plan."}
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 const TABS = [
   { id: "courses", label: "Courses", icon: BookOpen },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
@@ -2999,6 +3444,44 @@ export default function PlannerApp() {
     }));
   };
 
+  /* Generate or regenerate an assignment's sub-tasks.
+
+     Everything happens inside one updateSem so the decision is made
+     against the CURRENT todos, not a copy captured when the panel
+     rendered -- the same rule the study stats follow. reconcileBreakdown
+     decides what to create, update, leave and tombstone; nothing the
+     user has edited or completed is ever rewritten. */
+  const applyBreakdown = (assignment, templateId) =>
+    updateSem((s) => {
+      const slots = buildBreakdown({ assignment, templateId, today: localDay() });
+      const plan = reconcileBreakdown({ slots, existing: s.todos || [], parentId: assignment.id });
+      const stamp = nowISO();
+
+      let todos = (s.todos || []).map((t) => {
+        const patch = plan.update.find((u) => u.id === t.id);
+        if (patch) return { ...t, ...patch.patch, updatedAt: stamp };
+        // Tombstoned, never removed: a hard delete comes back on the next sync.
+        if (plan.tombstone.includes(t.id)) return { ...t, deletedAt: stamp, updatedAt: stamp };
+        return t;
+      });
+
+      todos = todos.concat(
+        plan.create.map((slot) => ({
+          id: uid(),
+          text: slot.text,
+          done: false,
+          course: slot.course,
+          due: slot.due,
+          parentId: slot.parentId,
+          gen: slot.gen,
+          slot: slot.slot,
+          updatedAt: stamp,
+        }))
+      );
+
+      return { ...s, todos };
+    });
+
   const reset = () => {
     setData({ ...DEFAULT, semesters: { "Semester 1": makeSemester(), "Semester 2": makeSemester() } });
     store.del(STORAGE_KEY);
@@ -3160,9 +3643,21 @@ export default function PlannerApp() {
         )}
 
         {tab === "courses" && (
-          <Section icon={BookOpen} title="Courses" subtitle="Your units this semester">
-            <Courses courses={sem.courses} addItem={addItem} removeItem={removeItem} focused={focused} onToggleFocus={toggleFocus} />
-          </Section>
+          <>
+            <Section icon={BookOpen} title="Courses" subtitle="Your units this semester">
+              <Courses courses={sem.courses} addItem={addItem} removeItem={removeItem} focused={focused} onToggleFocus={toggleFocus} />
+            </Section>
+            <Section icon={Target} title="Grades" subtitle="What you've got, and what you still need">
+              <Grades
+                assessments={sem.assessments}
+                courses={sem.courses}
+                addItem={addItem}
+                patchItem={patchItem}
+                removeItem={removeItem}
+                focused={focused}
+              />
+            </Section>
+          </>
         )}
 
         {tab === "calendar" && (
@@ -3173,18 +3668,30 @@ export default function PlannerApp() {
 
         {tab === "planner" && (
           <>
+            <Section icon={CalendarClock} title="What's coming" subtitle="Crunch weeks, from your due dates">
+              <WorkloadForecast assignments={sem.assignments} assessments={sem.assessments} />
+            </Section>
             <Section icon={ClipboardList} title="Weekly reading planner" subtitle="Add as many weeks per course as you need">
               <Textbook textbook={sem.textbook} courses={sem.courses} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} />
             </Section>
             <Section icon={FileText} title="Assignments" subtitle="Editable, with due dates in DD/MM/YYYY">
-              <Assignments assignments={sem.assignments} courses={sem.courses} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} />
+              <Assignments
+                assignments={sem.assignments}
+                courses={sem.courses}
+                addItem={addItem}
+                patchItem={patchItem}
+                removeItem={removeItem}
+                focused={focused}
+                todos={sem.todos}
+                onBreakdown={applyBreakdown}
+              />
             </Section>
           </>
         )}
 
         {tab === "todo" && (
           <Section icon={ListTodo} title="To-do list">
-            <Todos todos={sem.todos} addItem={addItem} patchItem={patchItem} removeItem={removeItem} />
+            <Todos todos={sem.todos} addItem={addItem} patchItem={patchItem} removeItem={removeItem} assignments={sem.assignments} />
           </Section>
         )}
 
@@ -3221,6 +3728,9 @@ export default function PlannerApp() {
             </Section>
             <Section icon={TrendingDown} title="Weak spots" subtitle="The cards you keep missing">
               <WeakSpots notes={sem.notes} />
+            </Section>
+            <Section icon={AlarmClock} title="Exams" subtitle="Countdown, and a plan for the time left">
+              <ExamPlanner assessments={sem.assessments} notes={sem.notes} addItem={addItem} />
             </Section>
           </>
         )}
