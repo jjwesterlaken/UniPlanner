@@ -389,6 +389,39 @@ async function run() {
     assert.equal(count(db, "auth.users", `id = ${USER}`), 0);
   });
 
+  await test("0003 gives failed requests a column the retention sweep can filter on", () => {
+    const db = freshDb();
+    applyMigration(db, "0001_ai_notes.sql");
+    applyMigration(db, "0003_failed_request_retention.sql");
+    // NOT NULL DEFAULT false is what makes the two sweeps work: an
+    // in-flight row (result still null) has nothing to recover, so it
+    // must fall under the SHORT retention, not the long one.
+    assert.equal(
+      one(db, `select is_nullable from information_schema.columns
+                where table_name = 'ai_notes_requests' and column_name = 'summary_failed';`),
+      "NO",
+      "a nullable summary_failed would make the 7-day sweep skip in-flight rows"
+    );
+    assert.match(
+      one(db, `select column_default from information_schema.columns
+                where table_name = 'ai_notes_requests' and column_name = 'summary_failed';`) || "",
+      /false/,
+      "rows that predate this migration must default to the short retention"
+    );
+  });
+
+  await test("0003 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = freshDb();
+    applyMigration(db, "0001_ai_notes.sql");
+    applyMigration(db, "0003_failed_request_retention.sql");
+    applyMigration(db, "0003_failed_request_retention.sql");
+    assert.equal(
+      one(db, `select count(*)::text from information_schema.columns
+                where table_name = 'ai_notes_requests' and column_name = 'summary_failed';`),
+      "1"
+    );
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 

@@ -129,14 +129,24 @@ in `scripts/test-storage.mjs` exist to stop exactly that.
 escape hatch "if sync ever gets noticeably slower". Measurement says it
 is now due, and this is recorded here so it can't slip past launch.
 
-One AI lecture note currently costs ~12.9 KB (18.1 KB with a
-translation), because the summary is stored **twice** — rendered into
-`page.body` and verbatim in `page.aiMeta.translations.en` — and the terms
-are stored twice as well, once as `notes` items and once inside
-`aiMeta`. Sixty lectures a semester is **772 KB to 1.06 MB**, which
-exceeds the entire working budget on its own. At the 8000-token
-summariser cap it is 77 KB per lecture, 4.5 MB per semester — past the
-localStorage ceiling.
+One AI lecture note cost ~12.9 KB (18.1 KB with a translation) because
+the summary was stored **twice** — rendered into `page.body` and
+verbatim in `page.aiMeta.translations.en` — and the terms twice as well,
+once as `notes` items and once inside `aiMeta`. Both duplicates are now
+gone (`summaryForStorage`, and `body: ""` on AI pages), which takes a
+realistic note to ~6 KB. Readers fall back to `body` so notes saved
+before the change still render.
+
+`MAX_AI_NOTE_BYTES` (20 KB) then bounds one runaway note, since
+`SUMMARY_MAX_TOKENS` bounds what the model returns and not what gets
+written. **The drop order is not "translation first."** A student who
+asked for a translation is reading the translation; the language they
+*requested* is kept and the other one goes. Dropping the translation
+would only ever hurt the user who most needed it.
+
+None of that makes sixty lectures fit. At ~6 KB a note it is still
+~360 KB a semester, and the cap is a guard, not a budget. Only moving
+this data out of the blob solves it.
 
 **The trigger is the two-hour lecture test.** Every number above is
 modelled from a feature that has never successfully transcribed a real
@@ -146,6 +156,27 @@ lecture note and size the work against it. It must happen **before
 launch**: the cheapest moment to move this data is while no user has any,
 and afterwards it needs a migration for precisely the data that is
 hardest to migrate.
+
+### Known gap: there is no way to retry a summary
+
+When summarising fails, transcription has already succeeded and **has
+already been billed** — the audio is deleted at step 10, before
+summarising is attempted, and step 12 bills the transcription duration
+regardless. The user has paid and has no summary.
+
+They cannot retry. `ai-notes` only accepts an audio object path, and the
+audio is gone. Nothing dropped by a failure or by the size cap is
+**regenerable**, and user-facing copy must not use that word — it is
+*recoverable* from `ai_notes_requests` for the retention window, which is
+a different and weaker promise. `src/aiNotesCopy.js` holds the wording
+and a test greps it for the banned word.
+
+The proper fix is a **text-only re-summarise endpoint**: the transcript
+is already stored server-side and scoped to its owner, so a retry needs
+no audio, no transcription call and no new minutes. It is deliberately
+not built yet — the success path of this feature has never run once, and
+building a fix for the failure path of an unproven pipeline is how you
+build it twice. Revisit alongside the two-hour lecture test above.
 
 Already done, and independent of that decision: a failed summary no
 longer stores the whole transcript (~88 KB for a two-hour lecture) in the

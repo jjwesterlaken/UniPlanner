@@ -42,6 +42,13 @@ export const MAX_BODY_BYTES = 46_000_000;
 export const LECTURE_AUDIO_BUCKET = "lecture-audio";
 export const SIGNED_URL_TTL_SECONDS = 600; // 10 minutes
 export const REQUEST_RETENTION_DAYS = 7;
+
+/* A summary failure is retained four times as long. Transcription
+   succeeded and was billed, the audio is already deleted, and this row
+   holds the only copy of what the user paid for -- so it is the one
+   row worth keeping. Mirrored in src/aiNotesRetention.js, which is what
+   the user-facing copy reads; a test fails if the two disagree. */
+export const FAILED_REQUEST_RETENTION_DAYS = 30;
 export const ORPHAN_SWEEP_HOURS = 1;
 
 /* Audio file extensions the recorder can actually produce, mirroring

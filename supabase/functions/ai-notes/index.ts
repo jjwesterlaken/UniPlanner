@@ -36,6 +36,7 @@ import {
   AUDIO_EXTENSIONS,
   TRANSLATION_CODES,
   MAX_COURSE_LENGTH,
+  FAILED_REQUEST_RETENTION_DAYS,
   SIGNED_URL_TTL_SECONDS,
   REQUEST_RETENTION_DAYS,
   ORPHAN_SWEEP_HOURS,
@@ -93,8 +94,18 @@ async function markFailed(idempotencyKey: string, userId: string) {
 // Best-effort housekeeping that shouldn't add latency to the response.
 function scheduleCleanup() {
   const run = async () => {
+    // Two sweeps, because a failed summary is retained longer: its row
+    // holds the only copy of a transcript the user was already billed
+    // for, taken after the audio was deleted.
+    const longCutoff = new Date(Date.now() - FAILED_REQUEST_RETENTION_DAYS * 86400_000).toISOString();
+    await supabaseAdmin.from("ai_notes_requests").delete().lt("created_at", longCutoff);
+
     const requestCutoff = new Date(Date.now() - REQUEST_RETENTION_DAYS * 86400_000).toISOString();
-    await supabaseAdmin.from("ai_notes_requests").delete().lt("created_at", requestCutoff);
+    await supabaseAdmin
+      .from("ai_notes_requests")
+      .delete()
+      .lt("created_at", requestCutoff)
+      .eq("summary_failed", false);
 
     const orphanCutoff = Date.now() - ORPHAN_SWEEP_HOURS * 3600_000;
     const { data: users } = await supabaseAdmin.storage.from(LECTURE_AUDIO_BUCKET).list("");
@@ -447,6 +458,9 @@ Deno.serve(async (req: Request) => {
     logStage(stage, { translateTo });
     const summarizer = SUMMARIZERS[Deno.env.get("AI_NOTES_SUMMARY_PROVIDER") || "openai"] || openaiAdapter;
     let result: Record<string, unknown>;
+    // Mirrored onto the row itself (not just into `result`) so the
+    // retention sweep can filter on it without a JSON-path query.
+    let summaryFailed = false;
     try {
       const summary = await summarizer.summarize({ transcript, translateTo, apiKey: Deno.env.get("OPENAI_API_KEY")! });
       result = { ok: true, transcript, summaryFailed: false, original: summary.original, translated: summary.translated };
@@ -455,6 +469,7 @@ Deno.serve(async (req: Request) => {
       // request and the only evidence was summaryFailed in the payload.
       logFailure("summarise", err);
       result = { ok: true, transcript, summaryFailed: true, original: null, translated: null };
+      summaryFailed = true;
     }
 
     // 12. Bill usage using the server-reported duration (whichever provider
@@ -478,7 +493,7 @@ Deno.serve(async (req: Request) => {
     // 13. Mark the request done.
     await supabaseAdmin
       .from("ai_notes_requests")
-      .update({ status: "done", result, minutes_billed: minutesBilled })
+      .update({ status: "done", result, minutes_billed: minutesBilled, summary_failed: summaryFailed })
       .eq("idempotency_key", idempotencyKey)
       .eq("user_id", userId);
 

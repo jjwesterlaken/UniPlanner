@@ -29,7 +29,11 @@ import {
   TRANSLATION_LANGUAGES,
   newIdempotencyKey,
   TRANSCRIPT_EXCERPT_CHARS,
+  setPendingRecovery,
+  clearPendingRecovery,
+  pendingRecovery,
 } from "./aiNotesLogic.js";
+import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { fetchUsage, uploadAudio, callAiNotes } from "./aiNotesClient.js";
 import { nowISO } from "./sync.js";
 import { inputCls, labelCls, btnPrimary, btnGhost, iconBtn, Card, CourseSelect, uid } from "./PlannerApp.jsx";
@@ -330,10 +334,16 @@ function ReviewAndSave({ result, onSave, onDiscard }) {
     const willTruncate = full.length > TRANSCRIPT_EXCERPT_CHARS;
     return (
       <div className="space-y-3">
-        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          <TriangleAlert size={14} className="mr-1 inline" />
-          We transcribed your lecture but couldn't generate a summary. You can still save the transcript.
-        </p>
+        <div className="space-y-1.5 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+          <p className="font-medium">
+            <TriangleAlert size={14} className="mr-1 inline" />
+            {AI_NOTES_COPY.summaryFailed.title}
+          </p>
+          {/* Minutes were billed before summarising was even attempted.
+              Saying so here is not optional -- see aiNotesCopy.js. */}
+          <p className="text-amber-800">{AI_NOTES_COPY.summaryFailed.billing}</p>
+          <p className="text-amber-800">{AI_NOTES_COPY.summaryFailed.recoverable()}</p>
+        </div>
         <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
           {full}
         </div>
@@ -343,9 +353,7 @@ function ReviewAndSave({ result, onSave, onDiscard }) {
             screen on which it exists. */}
         {willTruncate && (
           <p className="text-xs text-stone-500">
-            Your note will keep the first {TRANSCRIPT_EXCERPT_CHARS.toLocaleString()} characters of{" "}
-            {full.length.toLocaleString()}, so it doesn't slow your planner down. Download the full text if you want to
-            keep it — it isn't stored after you leave this screen.
+            {AI_NOTES_COPY.transcriptTruncated({ kept: TRANSCRIPT_EXCERPT_CHARS, total: full.length })}
           </p>
         )}
         <div className="flex flex-wrap justify-end gap-2">
@@ -356,7 +364,7 @@ function ReviewAndSave({ result, onSave, onDiscard }) {
             <Download size={15} /> Download full transcript
           </button>
           <button className={btnPrimary} onClick={onSave}>
-            <Check size={15} /> Save transcript as a note
+            <Check size={15} /> {AI_NOTES_COPY.summaryFailed.action}
           </button>
         </div>
       </div>
@@ -433,7 +441,7 @@ function ReviewAndSave({ result, onSave, onDiscard }) {
 /*  Recorder — course/week form + drives the whole flow                */
 /* ------------------------------------------------------------------ */
 
-function Recorder({ session, courses, addItem }) {
+function Recorder({ session, courses, addItem, setData, initialRecovery = null }) {
   const { state, dispatch, elapsedSeconds, level, start, pause, resume, stop, discard } = useLectureRecorder();
   const [course, setCourse] = useState("");
   const [week, setWeek] = useState("");
@@ -441,6 +449,21 @@ function Recorder({ session, courses, addItem }) {
 
   const runUpload = async () => {
     dispatch({ type: "upload" });
+    /* Park the key in the synced blob BEFORE the upload, not after: the
+       whole point is to survive the app closing, and the window where
+       that matters starts here. It syncs, so recovery also works from
+       the device that didn't do the recording. */
+    if (setData) {
+      setData((d) => ({
+        ...d,
+        meta: setPendingRecovery(d.meta, {
+          key: state.idempotencyKey,
+          course,
+          week,
+          startedAt: nowISO(),
+        }),
+      }));
+    }
     try {
       // The upload needs a path; the function does not. It derives its
       // own from the JWT and the idempotency key.
@@ -464,6 +487,14 @@ function Recorder({ session, courses, addItem }) {
     }
   };
 
+  /* A recovered result re-enters the flow at exactly the point the app
+     closed: the review screen, with Save and Discard, rather than a
+     separate "recovered note" path that would need its own testing. */
+  useEffect(() => {
+    if (initialRecovery) dispatch({ type: "processed", result: initialRecovery });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialRecovery]);
+
   useEffect(() => {
     if (state.status === "stopped") runUpload();
     // Deliberately only re-runs when status itself changes (not on every
@@ -485,10 +516,16 @@ function Recorder({ session, courses, addItem }) {
       });
       addItem("pages", pageItem);
       noteItems.forEach((n) => addItem("notes", n));
+      if (setData) setData((d) => ({ ...d, meta: clearPendingRecovery(d.meta) }));
       dispatch({ type: "saved" });
     } catch (err) {
       dispatch({ type: "saveFailed", message: err.message || "Couldn't save this note. Please try again." });
     }
+  };
+
+  const onDiscard = () => {
+    if (setData) setData((d) => ({ ...d, meta: clearPendingRecovery(d.meta) }));
+    discard();
   };
 
   const showForm = state.status === "idle";
@@ -568,7 +605,7 @@ function Recorder({ session, courses, addItem }) {
           {state.errorMessage && (
             <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{state.errorMessage}</p>
           )}
-          <ReviewAndSave result={state.result} onSave={onSave} onDiscard={discard} />
+          <ReviewAndSave result={state.result} onSave={onSave} onDiscard={onDiscard} />
         </>
       )}
 
@@ -621,7 +658,79 @@ export function AiNotesPanel({ session, backend, courses, data, setData, addItem
     );
   }
 
-  return <Recorder session={session} courses={courses} addItem={addItem} />;
+  return (
+    <RecoveryGate session={session} courses={courses} addItem={addItem} data={data} setData={setData} />
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Recovering a result the app closed on                             */
+/* ------------------------------------------------------------------ */
+
+/* The Edge Function already stored the whole result, scoped to this
+   user, keyed by the idempotency key. Asking for it again is just
+   calling the function with the same key: the insert hits a unique
+   violation, the scoped lookup finds the completed row and returns it.
+   No new endpoint, no audio, and no minutes -- billing happens on the
+   transcription path this request never reaches. */
+function RecoveryGate({ session, courses, addItem, data, setData }) {
+  const pending = pendingRecovery(data.meta);
+  const [recovered, setRecovered] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const forget = () => setData((d) => ({ ...d, meta: clearPendingRecovery(d.meta) }));
+
+  const recover = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await callAiNotes({
+        token: session.token,
+        course: pending.course,
+        translateTo: null,
+        idempotencyKey: pending.key,
+        estimatedDurationSeconds: 0,
+      });
+      setRecovered(result);
+    } catch (err) {
+      // A swept row is the expected failure, not a bug: results are only
+      // kept for the retention window.
+      setError(AI_NOTES_COPY.recovery.expired);
+      forget();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      {pending && !recovered && (
+        <Card className="mb-3">
+          <p className="text-sm font-medium text-stone-800">{AI_NOTES_COPY.recovery.title}</p>
+          <p className="mt-1 text-sm text-stone-500">
+            {AI_NOTES_COPY.recovery.detail({ course: pending.course, week: pending.week })}
+          </p>
+          {error && <p className="mt-2 text-sm text-rose-700">{error}</p>}
+          <div className="mt-3 flex justify-end gap-2">
+            <button className={btnGhost} onClick={forget} disabled={busy}>
+              <X size={15} /> {AI_NOTES_COPY.recovery.dismiss}
+            </button>
+            <button className={btnPrimary} onClick={recover} disabled={busy}>
+              <RefreshCw size={15} className={busy ? "animate-spin" : ""} /> {AI_NOTES_COPY.recovery.action}
+            </button>
+          </div>
+        </Card>
+      )}
+      <Recorder
+        session={session}
+        courses={courses}
+        addItem={addItem}
+        setData={setData}
+        initialRecovery={recovered}
+      />
+    </>
+  );
 }
 
 /* ------------------------------------------------------------------ */

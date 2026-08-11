@@ -108,6 +108,7 @@ import {
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
 import { classifyStorageError, describeSaveFailure } from "./storageHealth.js";
+import { aiNotePreview } from "./aiNotesLogic.js";
 
 /* ------------------------------------------------------------------ */
 /*  Setup                                                             */
@@ -1757,8 +1758,12 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
           </p>
         )
       ) : (
-        (p.body || htmlToText(p.html)) && (
-          <p className="mt-1.5 line-clamp-3 text-sm text-stone-600">{p.body || htmlToText(p.html)}</p>
+        /* AI notes carry no body -- their text lives in aiMeta, stored
+           once rather than rendered into body as well. aiNotePreview
+           falls back to body so notes saved before that change still
+           preview correctly. */
+        (aiNotePreview(p) || htmlToText(p.html)) && (
+          <p className="mt-1.5 line-clamp-3 text-sm text-stone-600">{aiNotePreview(p) || htmlToText(p.html)}</p>
         )
       )}
     </li>
