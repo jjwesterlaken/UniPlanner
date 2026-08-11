@@ -364,6 +364,71 @@ CI, which rules out things that look fine locally:
 - `desktop/package.json` must keep its `repository` field — electron-builder
   requires it.
 
+## Hosting, and why merging is not deploying
+
+**The web app is hosted on Cloudflare Pages**, serving `uniplannerapp.com`
+from the `main` branch.
+
+| Setting | Value |
+|---|---|
+| Build command | `npm run build:web` |
+| Output directory | `dist-web` |
+| Root directory | `/` |
+| Production branch | `main` |
+| Node version | `NODE_VERSION` = `22`, and `.nvmrc` |
+
+`.nvmrc` exists so the Node version is reviewable in the repo rather than
+living only in a dashboard — the same reasoning as the generated cache
+name. Keep them in step.
+
+**Do not turn on "Single Page Application" handling.** It rewrites 404s
+to `index.html`, so a mistyped `/privacy` would render the planner
+instead of a legal document. Real files still win, so the policy pages
+would survive either way — but that is precisely the failure mode the
+service worker's network-only list exists to prevent, and there is
+nothing to gain by taking it.
+
+**Merging to `main` does not mean the change is live.** This has already
+been wrong for an unknown number of merges: Netlify paused production
+deploys when the account ran out of credits, and PR #6 — the fix that
+makes deploys reach users at all — sat merged and unshipped. Nothing in
+GitHub said so.
+
+So after any merge that matters, verify rather than assume:
+
+```
+curl -s https://uniplannerapp.com/sw.js | grep 'const CACHE'
+```
+
+That build id must match the one on the Account tab. If it doesn't, the
+deploy didn't happen, whatever the merge said. Remember that a docs-only
+commit legitimately leaves the build id unchanged.
+
+Netlify remains configured and is deliberately not deleted, so there are
+two working options rather than zero. It is no longer the origin of
+record.
+
+### Known broken: password reset, end to end
+
+Two independent faults, either of which alone would break it:
+
+1. The Supabase project's **Site URL** points at the old host, so the
+   reset email links somewhere wrong.
+2. `sync.js` creates the client with `detectSessionInUrl: false`, so even
+   landing on the correct host, the app never processes the recovery
+   token in the URL.
+
+A user who forgets their password therefore has no route back into their
+account, and nothing surfaces this until it happens to someone real.
+**Launch blocker, deliberately not fixed during the hosting migration.**
+When it is fixed it needs testing end to end with a real email — the code
+reads plausibly, which is exactly why it was never noticed.
+
+## When Netlify was the host
+
+Kept because the lesson generalises to any provider that reports its own
+outages as your fault.
+
 **A failed Netlify deploy is not always your diff.** Netlify can fail at
 the *configuration* stage, before the build script runs at all, with its
 own extensions API returning a 502:
@@ -382,8 +447,10 @@ unrelated to the code. Retry it, or ignore it on a preview; a failed
 preview affects nothing, and a failed production deploy leaves the last
 successful build serving rather than breaking the live site. **Don't go
 hunting for a break in the code.** The check that actually gates a merge
-is `npm test`; the three `… - uniplannergdog` checks are Netlify's own
-and read `neutral` when a deploy is fine, not `success`.
+is `npm test`; the three `… - uniplannergdog` checks were Netlify's own
+and read `neutral` when a deploy was fine, not `success` — which is worth
+knowing when reading the history of a PR from that era, since "not green"
+on those did not mean broken.
 
 ## Testing
 
