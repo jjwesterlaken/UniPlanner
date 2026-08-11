@@ -6,6 +6,11 @@
     <title>University Planner</title>
     <meta name="description" content="Plan courses, assignments, readings and study cards." />
 
+    <!-- Replaced at build time with a hash of app.js + app.css. Read by
+         the app and shown in Settings, so "which build is this user on"
+         has an answer without guessing. -->
+    <meta name="build-id" content="__BUILD_ID__" />
+
     <link rel="manifest" href="manifest.webmanifest" />
     <meta name="theme-color" content="#fafaf9" />
 
@@ -22,11 +27,42 @@
     <div id="root"></div>
     <script src="app.js"></script>
     <script>
-      if ("serviceWorker" in navigator) {
+      /* Only the hosted web build gets a service worker.
+
+         The desktop and mobile shells serve this same file from their own
+         packaged copy: Electron via file:// (where workers aren't allowed
+         at all) and Capacitor via capacitor://localhost on iOS or
+         http://localhost on Android. That Android origin IS a secure
+         context, so a worker registers there and caches the bundled
+         assets -- which would mean shipping an update through app review
+         and having users still run the old build, because the worker
+         serves its cache from before the files on disk were replaced.
+         A packaged app already updates through its store and already
+         works offline, so a worker there can only cause that. */
+      (function () {
+        if (!("serviceWorker" in navigator)) return;
+        var host = location.hostname;
+        var isHostedWeb =
+          location.protocol === "https:" && host !== "localhost" && host !== "127.0.0.1";
+
+        if (!isHostedWeb) {
+          // Heal any shell install that registered one before this rule
+          // existed, or it would keep serving its cache indefinitely.
+          navigator.serviceWorker
+            .getRegistrations()
+            .then(function (rs) {
+              rs.forEach(function (r) {
+                r.unregister();
+              });
+            })
+            .catch(function () {});
+          return;
+        }
+
         window.addEventListener("load", function () {
           navigator.serviceWorker.register("sw.js").catch(function () {});
         });
-      }
+      })();
     </script>
   </body>
 </html>

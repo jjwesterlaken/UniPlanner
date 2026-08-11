@@ -3314,6 +3314,29 @@ function SaveFailureBanner({ reason, bytes, signedIn }) {
   );
 }
 
+/* Which build this device is actually running.
+
+   Stamped into index.html by scripts/build-web.mjs and read back here.
+   Worth the four lines: until this existed there was no way to answer
+   "which version is this user on", which matters for any bug report and
+   mattered immediately for proving that a stale-cache fix had landed.
+   Reads "development" when unstamped, which is the case in the smoke
+   test and when serving public/ directly. */
+export function buildId() {
+  if (typeof document === "undefined") return "development";
+  const meta = document.querySelector('meta[name="build-id"]');
+  const value = (meta && meta.getAttribute("content")) || "";
+  return value && !value.startsWith("__") ? value : "development";
+}
+
+function BuildLine() {
+  return (
+    <p className="mt-4 text-center text-xs text-stone-400">
+      Version <span className="font-mono">{buildId()}</span>
+    </p>
+  );
+}
+
 export default function PlannerApp() {
   const [data, setData] = useState(DEFAULT);
   const [loaded, setLoaded] = useState(false);
@@ -3932,6 +3955,7 @@ export default function PlannerApp() {
               onSignOut={handleSignOut}
               onSync={() => runSync()}
             />
+            <BuildLine />
           </Section>
         )}
 
