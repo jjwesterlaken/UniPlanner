@@ -78,8 +78,10 @@ begin
     return;
   end if;
 
-  -- Read from Vault so no key is written into a tracked migration.
-  -- See SUPABASE-SETUP.md for creating these two secrets.
+  -- Read from Vault at schedule time so no secret is written into a
+  -- tracked migration. The job body reads the OTHER secret at execution
+  -- time, so the credential is never stored in cron.job's command text
+  -- either -- only the lookup that fetches it.
   select decrypted_secret into fn_url
   from vault.decrypted_secrets where name = 'ai_notes_function_url';
 
@@ -102,7 +104,7 @@ begin
         url := %L,
         headers := jsonb_build_object(
           'Content-Type', 'application/json',
-          'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'ai_notes_service_key')
+          'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'ai_notes_sweep_secret')
         ),
         body := jsonb_build_object('sweepOnly', true)
       );

@@ -195,8 +195,21 @@ Deno.serve(async (req: Request) => {
     }
     if (sweepOnly) {
       stage = "sweep";
-      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-      if (!serviceKey || jwt !== serviceKey) {
+      /* A DEDICATED secret, deliberately not the service role key.
+     
+         The scheduled caller is pg_cron -> pg_net, and pg_net stores each
+         outbound request, headers included, in net.http_request_queue
+         until its TTL expires. Whatever authenticates this job therefore
+         sits in a database table for a few hours at a time. The service
+         role key there would mean a full-database credential at rest in
+         a queue table; this secret only lets its holder trigger a
+         retention sweep, which is work the system does hourly anyway.
+     
+         Given this project has already produced two IDOR bugs from
+         service-role paths, narrowing the blast radius is worth one
+         extra secret. */
+      const sweepSecret = Deno.env.get("AI_NOTES_SWEEP_SECRET") || "";
+      if (!sweepSecret || jwt !== sweepSecret) {
         // Same response as any other bad token. Whether this endpoint has
         // a sweep mode is not something an unauthenticated caller learns.
         logFailure("sweep", new Error("sweepOnly requested without the service role key"));

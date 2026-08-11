@@ -53,7 +53,7 @@ async function test(name, fn) {
 
 /* A Supabase stand-in that records the order things happened in, which
    is the property that actually matters here. */
-function fakeClient({ listResult, removeError, rpcError } = {}) {
+function fakeClient({ listResult, removeError, rpcError, removeDenied } = {}) {
   const calls = [];
   return {
     calls,
@@ -67,7 +67,9 @@ function fakeClient({ listResult, removeError, rpcError } = {}) {
           },
           async remove(paths) {
             calls.push(`remove:${paths.join(",")}`);
-            return { error: removeError || null };
+            if (removeError) return { data: null, error: removeError };
+            // The real client returns the objects it actually removed.
+            return { data: removeDenied ? [] : paths.map((name) => ({ name })), error: null };
           },
         };
       },
@@ -131,6 +133,17 @@ async function run() {
   await test("deleting without a session is refused rather than silently doing nothing", async () => {
     await assert.rejects(() => deleteAccount({ supabaseClient: fakeClient(), session: null }), /signed in/i);
     await assert.rejects(() => deleteAccount({ supabaseClient: null, session: SESSION }), /server connection/i);
+  });
+
+  await test("a storage policy that silently denies the delete is reported, not counted as success", async () => {
+    // Supabase returns an empty result rather than an error when an RLS
+    // policy denies a storage delete. Before 0004 added the delete
+    // policy, that is exactly what would have happened -- and reporting
+    // success would have made the deletion page's promise false.
+    const c = fakeClient({ listResult: { data: [{ name: "k1.webm" }], error: null }, removeDenied: true });
+    const out = await deleteAccount({ supabaseClient: c, session: SESSION });
+    assert.equal(out.audioFailed, true, "a denied delete was reported as a successful one");
+    assert.ok(c.calls.includes("rpc:delete_my_account"), "the account should still be deleted");
   });
 
   await test("a listing failure is reported but not thrown", async () => {
@@ -298,15 +311,20 @@ async function run() {
     assert.match(sql, /auth\.uid\(\)::text/, "the delete policy isn't scoped to the caller's own folder");
   });
 
-  await test("the scheduled sweep requires the service role key, not any signed-in user", () => {
+  await test("the scheduled sweep requires a dedicated secret, not a user token or the service role key", () => {
     // The sweep runs unscoped by design, so anything that can trigger it
     // is deleting other people's rows.
     const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/index.ts"), "utf8");
     const branch = src.slice(src.indexOf("if (sweepOnly)"), src.indexOf("// 3. Tier check"));
     assert.ok(branch.length > 0, "couldn't find the sweep branch");
-    assert.match(branch, /SUPABASE_SERVICE_ROLE_KEY/, "the sweep isn't gated on the service role key");
-    assert.match(branch, /jwt !== serviceKey/, "the sweep doesn't compare the key");
-    assert.doesNotMatch(branch, /console\.log\([^)]*serviceKey/, "the service key must never be logged");
+    assert.match(branch, /AI_NOTES_SWEEP_SECRET/, "the sweep isn't gated on a secret");
+    assert.match(branch, /jwt !== sweepSecret/, "the sweep doesn't compare the secret");
+    /* Deliberately NOT the service role key: pg_net stores outbound
+       request headers in net.http_request_queue, so whatever
+       authenticates this job sits at rest in a database table. A
+       full-database credential does not belong there. */
+    assert.doesNotMatch(branch, /SUPABASE_SERVICE_ROLE_KEY/, "the sweep authenticates with the service role key");
+    assert.doesNotMatch(branch, /console\.log\([^)]*[sS]ecret/, "the secret must never be logged");
   });
 
   await test("npm test still runs the legal tests", () => {

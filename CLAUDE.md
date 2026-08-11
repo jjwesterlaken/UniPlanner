@@ -421,11 +421,28 @@ record.
    `Project Settings → Data API → Project URL` — that is the API
    endpoint, it is committed in `src/config.js`, and changing it breaks
    the app outright. The two fields are easy to confuse.
-3. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
-   two Vault secrets migration 0004 reads. Until then the retention sweep
+3. **Migration 0004, applied before the code that needs it.** It adds the
+   folder-scoped storage delete policy the in-app deletion depends on.
+   Without it `removeOwnAudio` cannot delete anything, and the deletion
+   page's "immediately" is false. **This was merged before the migration
+   was applied — the ordering mistake 0003 already taught us not to
+   make.** Migrations are applied by hand in the SQL editor; nothing in
+   CI or the deploy applies them, so the ordering is a habit, not a
+   mechanism.
+4. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+   Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states
    are aspirational rather than enforced. 0004 raises a notice saying so
    rather than failing.
+
+**The scheduled sweep authenticates with a dedicated secret, never the
+service role key.** pg_net stores each outbound request — headers
+included — in `net.http_request_queue` until its TTL expires, so
+whatever authenticates that job sits at rest in a database table for
+hours at a time. `AI_NOTES_SWEEP_SECRET` only lets its holder trigger a
+retention sweep, which the system does hourly anyway; the service role
+key there would be a full-database credential in a queue table. Don't
+"simplify" it back.
 
 ### Known broken: password reset, end to end
 

@@ -58,9 +58,17 @@ export async function removeOwnAudio({ supabaseClient, userId }) {
     if (error) return { removed: 0, failed: true };
     const paths = (files || []).filter((f) => f && f.name).map((f) => `${userId}/${f.name}`);
     if (paths.length === 0) return { removed: 0, failed: false };
-    const { error: removeErr } = await bucket.remove(paths);
+    const { data: removed, error: removeErr } = await bucket.remove(paths);
     if (removeErr) return { removed: 0, failed: true };
-    return { removed: paths.length, failed: false };
+    /* Trusting the absence of an error is not enough. When a storage RLS
+       policy denies a delete, Supabase returns an empty result rather
+       than an error -- so before migration 0004 added the folder-scoped
+       delete policy, this function would have reported success while
+       removing nothing, and the deletion page's "immediately" would have
+       been false with nothing to surface it. Count what actually went. */
+    const count = Array.isArray(removed) ? removed.length : 0;
+    if (count < paths.length) return { removed: count, failed: true };
+    return { removed: count, failed: false };
   } catch (e) {
     return { removed: 0, failed: true };
   }
