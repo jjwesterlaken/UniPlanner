@@ -36,7 +36,12 @@ export function ConsentGate({ onAccept }) {
             </li>
           ))}
         </ul>
-        <button className={`${acceptButtonCls} mt-5`} onClick={onAccept}>
+        <p className="mt-3 text-xs text-stone-500">
+        <a className="underline" href={CONSENT_TEXT.privacyUrl} target="_blank" rel="noreferrer">
+          {CONSENT_TEXT.privacyLabel}
+        </a>
+      </p>
+      <button className={`${acceptButtonCls} mt-5`} onClick={onAccept}>
           <Check size={16} /> {CONSENT_TEXT.acceptLabel}
         </button>
       </div>

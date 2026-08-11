@@ -408,6 +408,25 @@ Netlify remains configured and is deliberately not deleted, so there are
 two working options rather than zero. It is no longer the origin of
 record.
 
+### Pending, in order, once someone is at a desk
+
+1. **The nameserver switch at Squarespace.** Until it happens,
+   `uniplannerapp.com` still resolves to Netlify's A record and Cloudflare
+   only serves `uniplanner.pages.dev`. Half a nameserver change takes
+   Google Workspace mail down with it, so it is not a phone job. Verify
+   mail delivery before calling it done.
+2. **Supabase Auth URLs.** `Authentication → URL Configuration`: set
+   **Site URL** to `https://uniplannerapp.com` and add
+   `https://uniplannerapp.com/**` to **Redirect URLs**. Do *not* touch
+   `Project Settings → Data API → Project URL` — that is the API
+   endpoint, it is committed in `src/config.js`, and changing it breaks
+   the app outright. The two fields are easy to confuse.
+3. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+   two Vault secrets migration 0004 reads. Until then the retention sweep
+   only runs opportunistically and the periods the privacy policy states
+   are aspirational rather than enforced. 0004 raises a notice saying so
+   rather than failing.
+
 ### Known broken: password reset, end to end
 
 Two independent faults, either of which alone would break it:
@@ -451,6 +470,32 @@ is `npm test`; the three `… - uniplannergdog` checks were Netlify's own
 and read `neutral` when a deploy was fine, not `success` — which is worth
 knowing when reading the history of a PR from that era, since "not green"
 on those did not mean broken.
+
+## The published documents
+
+`public/privacy.html` and `public/delete-account.html` are plain static
+files, copied into `dist-web/` by the build like every other asset. No
+JavaScript, no external requests, stable paths, and the service worker
+treats both as network-only so a stale legal document can never be
+served from a cache. Google Play requires a publicly reachable deletion
+page; both stores require the policy URL.
+
+**Every claim in them is checked against the code by
+`scripts/test-legal.mjs`**, which is the point: a document is the one
+artifact where being quietly wrong costs the most and shows the least.
+The retention test is worth understanding before loosening it — asserting
+that "7 days" and "30 days" appear is not enough, because both already
+appear twice, so one could drift while the other kept the test green. It
+asserts instead that *every* day-count in the policy is one the server
+enforces.
+
+The wording lives where it can be reworked without touching logic:
+`src/legalLinks.js` for URLs and addresses, `src/aiNotesCopy.js` for the
+AI failure paths, `src/aiNotesRetention.js` for the periods, which the
+consent text interpolates rather than repeating.
+
+Neither document is legal advice, and both should be reviewed by someone
+qualified before store submission.
 
 ## Testing
 

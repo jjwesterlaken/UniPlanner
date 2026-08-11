@@ -6,6 +6,7 @@ import {
   getDeviceId,
   nowISO,
   COLLECTIONS,
+  supabase,
 } from "./sync.js";
 import {
   schedule,
@@ -109,6 +110,8 @@ import {
 import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
 import { classifyStorageError, describeSaveFailure } from "./storageHealth.js";
 import { aiNotePreview } from "./aiNotesLogic.js";
+import { deleteAccount, confirmationMatches, DELETE_CONFIRMATION_PHRASE } from "./accountDeletion.js";
+import { PRIVACY_URL, DELETE_ACCOUNT_URL } from "./legalLinks.js";
 
 /* ------------------------------------------------------------------ */
 /*  Setup                                                             */
@@ -2677,7 +2680,22 @@ function BackupPanel({ data, onRestore }) {
 /*  Account + sync                                                    */
 /* ------------------------------------------------------------------ */
 
-function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onSignUp, onSignOut, onSync }) {
+function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onSignUp, onSignOut, onSync, onDeleteAccount }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+
+  const runDelete = async () => {
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await onDeleteAccount();
+    } catch (e) {
+      setDeleteError(e.message || "We couldn't delete your account. Please try again.");
+      setDeleting(false);
+    }
+  };
   const [mode, setMode] = useState("signin"); // "signin" | "signup"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -2727,6 +2745,58 @@ function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onS
             <LogOut size={15} /> Sign out
           </button>
         </div>
+
+        {/* Deleting an account is irreversible and takes the user's notes
+            with it, so it is typed rather than tapped, and it is the last
+            thing on the panel rather than next to "Sign out". */}
+        {!backend.isDemo && (
+          <div className="mt-5 border-t border-stone-200 pt-4">
+            {!confirmDelete ? (
+              <button
+                className="text-xs font-medium text-stone-400 hover:text-rose-600"
+                onClick={() => { setConfirmDelete(true); setTyped(""); setDeleteError(""); }}
+              >
+                Delete account
+              </button>
+            ) : (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
+                <p className="text-sm font-medium text-rose-800">Delete your account permanently?</p>
+                <p className="mt-1 text-xs text-rose-700">
+                  This removes your planner, your notes and everything we hold, on every device.
+                  It can't be undone. Back up your planner first if you want to keep any of it.
+                </p>
+                <label className={`${labelCls} mt-3 text-rose-800`}>
+                  Type {DELETE_CONFIRMATION_PHRASE} to confirm
+                </label>
+                <input
+                  className={inputCls}
+                  value={typed}
+                  onChange={(e) => setTyped(e.target.value)}
+                  autoComplete="off"
+                  aria-label={`Type ${DELETE_CONFIRMATION_PHRASE} to confirm`}
+                />
+                {deleteError && <p className="mt-2 text-sm text-rose-700">{deleteError}</p>}
+                <div className="mt-3 flex justify-end gap-2">
+                  <button className={btnGhost} onClick={() => setConfirmDelete(false)} disabled={deleting}>
+                    Cancel
+                  </button>
+                  <button
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50 u-focus"
+                    disabled={!confirmationMatches(typed) || deleting}
+                    onClick={runDelete}
+                  >
+                    <Trash2 size={14} /> {deleting ? "Deleting…" : "Delete everything"}
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-rose-700">
+                  <a className="underline" href={DELETE_ACCOUNT_URL} target="_blank" rel="noreferrer">
+                    What gets deleted
+                  </a>
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         {backend.isDemo && (
           <p className="mt-4 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -3482,6 +3552,26 @@ export default function PlannerApp() {
     setSyncError("");
   };
 
+  /* Deleting the account. Order matters and is enforced in
+     accountDeletion.js: the staged audio has to go while the session is
+     still valid, because the RPC ends by deleting the auth user and
+     every request after that fails.
+
+     The local wipe happens only after the server confirms, so a failed
+     deletion leaves the user with their planner intact rather than with
+     an empty app and an account that still exists. */
+  const handleDeleteAccount = async () => {
+    await deleteAccount({ supabaseClient: supabase, session });
+    await backend.signOut();
+    await store.del(STORAGE_KEY);
+    const empty = { ...DEFAULT, semesters: { "Semester 1": makeSemester(), "Semester 2": makeSemester() } };
+    dataRef.current = empty;
+    setData(empty);
+    setSession(null);
+    setSyncError("");
+    setSaveError(null);
+  };
+
   /* ---- automatic syncing ----
      So the planner is up to date without anyone pressing a button:
        - when the app starts (once signed in)
@@ -3954,6 +4044,7 @@ export default function PlannerApp() {
               onSignUp={handleSignUp}
               onSignOut={handleSignOut}
               onSync={() => runSync()}
+              onDeleteAccount={handleDeleteAccount}
             />
             <BuildLine />
           </Section>

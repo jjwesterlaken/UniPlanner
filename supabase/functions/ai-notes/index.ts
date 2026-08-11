@@ -91,9 +91,10 @@ async function markFailed(idempotencyKey: string, userId: string) {
   }
 }
 
-// Best-effort housekeeping that shouldn't add latency to the response.
-function scheduleCleanup() {
-  const run = async () => {
+/* The retention sweep. Awaited by the scheduled (pg_cron) path so a
+   failure is visible to the caller, and fired-and-forgotten by the
+   opportunistic one so it never adds latency to a user's request. */
+async function runCleanup() {
     // Two sweeps, because a failed summary is retained longer: its row
     // holds the only copy of a transcript the user was already billed
     // for, taken after the audio was deleted.
@@ -116,14 +117,16 @@ function scheduleCleanup() {
         .map((f) => `${folder.name}/${f.name}`);
       if (stale.length) await supabaseAdmin.storage.from(LECTURE_AUDIO_BUCKET).remove(stale);
     }
-  };
+}
+
+function scheduleCleanup() {
   // @ts-ignore -- EdgeRuntime is injected by the Supabase Edge Runtime;
   // fall back to a plain non-awaited call if it's not available.
   if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
     // @ts-ignore
-    EdgeRuntime.waitUntil(run().catch(() => {}));
+    EdgeRuntime.waitUntil(runCleanup().catch(() => {}));
   } else {
-    run().catch(() => {});
+    runCleanup().catch(() => {});
   }
 }
 
@@ -170,6 +173,39 @@ Deno.serve(async (req: Request) => {
     const authHeader = req.headers.get("authorization") || "";
     const jwt = authHeader.replace(/^Bearer\s+/i, "");
     if (!jwt) return errorResponse("auth_user", "unauthenticated", "Please sign in again to use AI notes.", 401);
+
+    /* 1a. The scheduled retention sweep.
+   
+       scheduleCleanup() otherwise only runs after a real request, which
+       made "deleted after 7 days" true only if somebody happened to
+       record a lecture that week. pg_cron calls this instead (see
+       migration 0004) -- it has to come through the function rather than
+       run as SQL because removing the audio needs the Storage API.
+   
+       Gated on the SERVICE ROLE KEY, compared in full and never logged.
+       A user JWT must not reach this: the sweep runs unscoped by design,
+       so anything that can trigger it is deleting other people's rows.
+       Requiring the key rather than a role claim keeps that decision in
+       one obvious place. */
+    let sweepOnly = false;
+    try {
+      sweepOnly = (await req.clone().json())?.sweepOnly === true;
+    } catch (e) {
+      /* not JSON, or no body -- treat as a normal request */
+    }
+    if (sweepOnly) {
+      stage = "sweep";
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+      if (!serviceKey || jwt !== serviceKey) {
+        // Same response as any other bad token. Whether this endpoint has
+        // a sweep mode is not something an unauthenticated caller learns.
+        logFailure("sweep", new Error("sweepOnly requested without the service role key"));
+        return errorResponse("auth_user", "unauthenticated", "Please sign in again to use AI notes.", 401);
+      }
+      logStage(stage, { scheduled: true });
+      await runCleanup();
+      return jsonResponse({ ok: true, swept: true });
+    }
 
     const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(jwt);
     if (userErr || !userData?.user) {
