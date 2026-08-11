@@ -57,6 +57,9 @@ export const COLLECTIONS = [
   "events",
   "pages",
   "folders",
+  // Assessment weights and marks (see src/grades.js). User content, so
+  // unlike studyStats these DO count in the backup panel's item total.
+  "assessments",
   // Study scheduling stats (see src/srs.js). Listed here because
   // mergeSemester rebuilds each semester from this whitelist alone --
   // a collection missing from it is silently dropped on every sync,
