@@ -78,6 +78,81 @@ blob after a restore and thinks the 9.8KB ceiling has been breached.
 Treat `mergeData` as fragile. It is the most-tested function here and the
 one most able to lose a user's data silently.
 
+**There are exactly two semesters, and adding a third is not free.**
+`SEMESTER_NAMES` is `["Semester 1", "Semester 2"]`, and `normalizeData`
+rebuilds `data.semesters` by iterating *that list only* — any other key
+is dropped on load. But `mergeData` merges over the **union** of semester
+keys in local and remote. So a blob containing "Semester 3" merges
+cleanly, syncs, and then silently vanishes the next time it is loaded.
+Nothing produces one today. It matters because "just allow more
+semesters" looks like a one-line change to `SEMESTER_NAMES` and isn't:
+the two functions disagree about what a semester is, and only one of them
+is on the path that loses data.
+
+The corollary is that the planner has **no semester lifecycle at all** —
+nothing archives, prunes or clears. A student in second year is reusing
+"Semester 1" with first year's content still in it, so the blob grows
+without bound inside two fixed buckets rather than by accumulating new
+ones. See the budget section below.
+
+## What the blob costs, and the ceiling that actually binds
+
+Everything syncs as one JSON document, so size is a correctness concern,
+not a performance nicety. Measured rather than estimated:
+
+- A realistic populated two-semester account is **583 KB**. Study cards
+  (131 KB) and notebook pages (117 KB) per semester are 85% of it, and
+  both are uncapped.
+- **The binding ceiling is localStorage (~5 MB per origin), not Postgres
+  (256 MB for `jsonb`) or anything on the Supabase side.** In demo mode
+  it is really ~2.5 MB, because signing into a demo account writes the
+  blob twice — `uni-planner-v1` and `uni-planner-demo-cloud`.
+- `JSON.stringify` runs on every debounced save. 1 MB is imperceptible;
+  2 MB is ~45–75 ms per save on a mid-range phone.
+
+**The working budget is 1 MB**, with a user-visible warning above 1.5 MB.
+Any feature that stores user-typed text should have caps whose *sum*
+still fits inside that, and the arithmetic belongs in a test so raising a
+cap can't quietly skip it.
+
+`store.set` used to swallow every `localStorage` failure, which made the
+quota ceiling invisible: saving simply stopped. It now returns a result,
+every write goes through one `persist()` helper, and a failure raises a
+banner (`src/storageHealth.js`). Signed-in and signed-out get different
+wording on purpose — sync rescues the first and nothing rescues the
+second. Don't reintroduce a bare `catch {}` on a write path; three tests
+in `scripts/test-storage.mjs` exist to stop exactly that.
+
+### Pending decision: AI notes need their own row, before launch
+
+`aiNotesLogic.js` has always said that splitting AI notes out is the
+escape hatch "if sync ever gets noticeably slower". Measurement says it
+is now due, and this is recorded here so it can't slip past launch.
+
+One AI lecture note currently costs ~12.9 KB (18.1 KB with a
+translation), because the summary is stored **twice** — rendered into
+`page.body` and verbatim in `page.aiMeta.translations.en` — and the terms
+are stored twice as well, once as `notes` items and once inside
+`aiMeta`. Sixty lectures a semester is **772 KB to 1.06 MB**, which
+exceeds the entire working budget on its own. At the 8000-token
+summariser cap it is 77 KB per lecture, 4.5 MB per semester — past the
+localStorage ceiling.
+
+**The trigger is the two-hour lecture test.** Every number above is
+modelled from a feature that has never successfully transcribed a real
+lecture, and rebuilding storage around estimates is how you rebuild it
+twice. When that test runs, measure the actual stored size of one real
+lecture note and size the work against it. It must happen **before
+launch**: the cheapest moment to move this data is while no user has any,
+and afterwards it needs a migration for precisely the data that is
+hardest to migrate.
+
+Already done, and independent of that decision: a failed summary no
+longer stores the whole transcript (~88 KB for a two-hour lecture) in the
+blob — see `TRANSCRIPT_EXCERPT_CHARS`. The Edge Function returns
+`transcript` on the success path too, so a test asserts it reaches
+neither the page nor the notes items.
+
 ## Two notions of "week", deliberately not reconciled
 
 The app has two independent ideas of what week something is in, and they
@@ -204,6 +279,8 @@ smoke test, and the migration tests. All of it is plain Node and `assert`,
 no framework, matching the style of the build scripts.
 
 - `scripts/test-ai-notes.mjs` — AI notes, the scheduler, stats, merge behaviour
+- `scripts/test-storage.mjs` — save failures are reported, transcripts
+  aren't stored whole; both cover things that used to fail invisibly
 - `scripts/test-app-smoke.mjs` — the app mounts and renders in demo mode
 - `scripts/test-migrations.mjs` — SQL against a real postgres; **skips**
   without one locally, which is why CI forces it

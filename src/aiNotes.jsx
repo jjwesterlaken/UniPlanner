@@ -11,7 +11,7 @@
    ================================================================== */
 
 import { useEffect, useReducer, useRef, useState } from "react";
-import { Mic, Square, Pause, Play, Check, X, TriangleAlert, RefreshCw, Globe } from "lucide-react";
+import { Mic, Square, Pause, Play, Check, X, TriangleAlert, RefreshCw, Globe, Download } from "lucide-react";
 import { ConsentGate } from "./aiNotesConsent.jsx";
 import {
   AI_CONSENT_VERSION,
@@ -28,6 +28,7 @@ import {
   INITIAL_RECORDER_STATE,
   TRANSLATION_LANGUAGES,
   newIdempotencyKey,
+  TRANSCRIPT_EXCERPT_CHARS,
 } from "./aiNotesLogic.js";
 import { fetchUsage, uploadAudio, callAiNotes } from "./aiNotesClient.js";
 import { nowISO } from "./sync.js";
@@ -302,20 +303,57 @@ function RecorderControls({ status, elapsedSeconds, level, onStart, onPause, onR
 /*  Review + save                                                     */
 /* ------------------------------------------------------------------ */
 
+/* Saves the full transcript to a file. Same approach as the backup
+   panel's export: a Blob and an object URL, no server round trip, so
+   the text never leaves the device a second time. */
+function downloadTranscript(text) {
+  try {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([text || ""], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `lecture-transcript-${stamp}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    /* A blocked download shouldn't take the review screen down with it;
+       the transcript is still on screen to copy by hand. */
+  }
+}
+
 function ReviewAndSave({ result, onSave, onDiscard }) {
   if (result.summaryFailed) {
+    const full = result.transcript || "";
+    const willTruncate = full.length > TRANSCRIPT_EXCERPT_CHARS;
     return (
       <div className="space-y-3">
         <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
           <TriangleAlert size={14} className="mr-1 inline" />
-          We transcribed your lecture but couldn't generate a summary. You can still save the raw transcript.
+          We transcribed your lecture but couldn't generate a summary. You can still save the transcript.
         </p>
         <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
-          {result.transcript}
+          {full}
         </div>
-        <div className="flex justify-end gap-2">
+        {/* A full transcript is ~40x a normal note and would sync in full
+            on every change, so only the opening is saved. The rest is
+            offered here, while it is still in memory — this is the last
+            screen on which it exists. */}
+        {willTruncate && (
+          <p className="text-xs text-stone-500">
+            Your note will keep the first {TRANSCRIPT_EXCERPT_CHARS.toLocaleString()} characters of{" "}
+            {full.length.toLocaleString()}, so it doesn't slow your planner down. Download the full text if you want to
+            keep it — it isn't stored after you leave this screen.
+          </p>
+        )}
+        <div className="flex flex-wrap justify-end gap-2">
           <button className={btnGhost} onClick={onDiscard}>
             <X size={15} /> Discard
+          </button>
+          <button className={btnGhost} onClick={() => downloadTranscript(full)}>
+            <Download size={15} /> Download full transcript
           </button>
           <button className={btnPrimary} onClick={onSave}>
             <Check size={15} /> Save transcript as a note

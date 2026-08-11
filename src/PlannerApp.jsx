@@ -107,6 +107,7 @@ import {
   Mic,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
+import { classifyStorageError, describeSaveFailure } from "./storageHealth.js";
 
 /* ------------------------------------------------------------------ */
 /*  Setup                                                             */
@@ -133,19 +134,27 @@ const store = {
       return null;
     }
   },
+  /* Returns { ok } or { ok:false, reason, bytes }.
+     This used to swallow the failure. It must not: once the planner
+     outgrows the browser's quota, saving stops, and a demo-mode user
+     loses everything on refresh with nothing on screen to say so.
+     See src/storageHealth.js. */
   async set(key, val) {
+    const bytes = typeof val === "string" ? val.length : 0;
     try {
       if (typeof window !== "undefined" && window.storage && window.storage.set) {
         await window.storage.set(key, val);
-        return;
+        return { ok: true };
       }
     } catch (e) {
-      /* fall through */
+      /* fall through to localStorage rather than reporting — the
+         preview host being absent isn't a failure the user can act on */
     }
     try {
       window.localStorage.setItem(key, val);
+      return { ok: true };
     } catch (e) {
-      /* ignore */
+      return { ok: false, reason: classifyStorageError(e), bytes };
     }
   },
   async del(key) {
@@ -3278,6 +3287,28 @@ const TABS = [
   { id: "account", label: "Account", icon: UserRound },
 ];
 
+/* Shown when the planner could not be written to this device.
+   Deliberately not dismissible: the whole failure mode this exists to
+   fix is one the user can't otherwise see, and dismissing it would put
+   them back where they started. It clears itself when a save works. */
+function SaveFailureBanner({ reason, bytes, signedIn }) {
+  const { title, detail, severity } = describeSaveFailure({ reason, bytes, signedIn });
+  const danger = severity === "danger";
+  return (
+    <div
+      role="alert"
+      className={`mb-4 flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-sm ${
+        danger ? "border-rose-200 bg-rose-50 text-rose-800" : "border-amber-200 bg-amber-50 text-amber-900"
+      }`}
+    >
+      <TriangleAlert size={16} className="mt-0.5 flex-shrink-0" />
+      <span className="min-w-0">
+        <strong className="font-semibold">{title}</strong> {detail}
+      </span>
+    </div>
+  );
+}
+
 export default function PlannerApp() {
   const [data, setData] = useState(DEFAULT);
   const [loaded, setLoaded] = useState(false);
@@ -3289,6 +3320,8 @@ export default function PlannerApp() {
   const [session, setSession] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
+  // { reason, bytes } while the last local save failed, null once one succeeds.
+  const [saveError, setSaveError] = useState(null);
   const dataRef = useRef(DEFAULT);
   const toggleFocus = (name) => setFocusedCourse((cur) => (cur === name ? null : name));
   const navRef = useRef(null);
@@ -3331,13 +3364,32 @@ export default function PlannerApp() {
     };
   }, []);
 
+  /* The one place the planner is written to this device.
+     Every caller goes through here so a failure can never be reported
+     by one path and swallowed by another. */
+  const persist = async (next) => {
+    const res = await store.set(STORAGE_KEY, JSON.stringify(next));
+    setSaveError(res.ok ? null : { reason: res.reason, bytes: res.bytes });
+    return res;
+  };
+
   // Save whenever data changes (after the initial load)
   useEffect(() => {
     if (!loaded) return;
+    let cancelled = false;
+    let t;
     setSaveState("saving");
-    store.set(STORAGE_KEY, JSON.stringify(data));
-    const t = setTimeout(() => setSaveState("saved"), 300);
-    return () => clearTimeout(t);
+    persist(data).then((res) => {
+      if (cancelled) return;
+      // "Saved" has to be earned. Claiming it after a failed write is
+      // how the silent-quota bug stayed invisible for so long.
+      if (!res.ok) return setSaveState("error");
+      t = setTimeout(() => setSaveState("saved"), 300);
+    });
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
   }, [data, loaded]);
 
   // Keep a live reference to the newest data so sync never pushes a stale copy.
@@ -3375,7 +3427,7 @@ export default function PlannerApp() {
       };
       setData(stamped);
       dataRef.current = stamped;
-      await store.set(STORAGE_KEY, JSON.stringify(stamped));
+      await persist(stamped);
       await backend.push({ session: activeSession, data: stamped });
     } catch (e) {
       setSyncError(e.message || "Couldn't sync. Please try again.");
@@ -3595,7 +3647,7 @@ export default function PlannerApp() {
           : purgeOldTombstones(mergeData(current, incoming));
       const stamped = { ...next, meta: { ...(next.meta || {}), updatedAt: nowISO() } };
       dataRef.current = stamped;
-      store.set(STORAGE_KEY, JSON.stringify(stamped));
+      persist(stamped);
       return stamped;
     });
   };
@@ -3662,7 +3714,9 @@ export default function PlannerApp() {
             <div className="min-w-0 flex-1">
               <h1 className="font-serif text-xl font-semibold leading-none text-stone-800">University Planner</h1>
               <p className="mt-0.5 text-xs text-stone-500">
-                {saveState === "saving" ? (
+                {saveState === "error" ? (
+                  <span className="inline-flex items-center gap-1 font-medium text-rose-600"><TriangleAlert size={11} /> Not saved on this device</span>
+                ) : saveState === "saving" ? (
                   <span className="inline-flex items-center gap-1"><Save size={11} /> Saving…</span>
                 ) : saveState === "saved" ? (
                   <span className="inline-flex items-center gap-1 u-accent-text"><Check size={11} /> Saved</span>
@@ -3737,6 +3791,10 @@ export default function PlannerApp() {
       </header>
 
       <main className="mx-auto max-w-2xl px-4 py-5">
+        {/* A failed local save is invisible by nature, so it gets the most
+            prominent spot in the app and stays until a save succeeds. */}
+        {saveError && <SaveFailureBanner reason={saveError.reason} bytes={saveError.bytes} signedIn={!!session} />}
+
         {focused && (
           <div className="mb-4 flex items-center justify-between gap-2 rounded-xl u-accent-soft u-accent-deeptext px-3 py-2 text-sm">
             <span className="flex items-center gap-2">

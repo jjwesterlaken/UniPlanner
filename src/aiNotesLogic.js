@@ -211,6 +211,43 @@ export const TRANSLATION_LANGUAGES = [
    not a problem to pre-solve here.
 ------------------------------------------------------------------- */
 
+/* How much of a failed transcript is kept in the synced planner.
+
+   Transcripts are enormous relative to everything else in the blob: a
+   two-hour lecture is roughly 15,000 spoken words, which measures ~88KB
+   — forty times a typical notebook page. Storing one whole was a live
+   bug, and it fired at the worst moment, when summarising had already
+   failed and the user was least able to afford a second problem.
+
+   2000 characters is about 300 words: enough to recognise which lecture
+   this is and to see the transcription worked, at ~2KB instead of 88.
+   The rest isn't discarded — the full text is still in memory on the
+   review screen and is offered as a download (see aiNotes.jsx). What is
+   NOT done is silently putting 88KB into a blob that syncs in full on
+   every keystroke. */
+export const TRANSCRIPT_EXCERPT_CHARS = 2000;
+
+/**
+ * The opening of a transcript, cut at a word boundary.
+ *
+ * Returns what was kept along with the original length, so the caller
+ * can tell the user how much more there is rather than leaving them to
+ * wonder whether the recording cut out.
+ */
+export function truncateTranscript(transcript, limit = TRANSCRIPT_EXCERPT_CHARS) {
+  const full = typeof transcript === "string" ? transcript : "";
+  if (full.length <= limit) {
+    return { text: full, truncated: false, fullLength: full.length };
+  }
+  const slice = full.slice(0, limit);
+  const lastSpace = slice.lastIndexOf(" ");
+  // Only honour the word boundary if it isn't throwing away a big chunk
+  // of the excerpt -- a transcript with no spaces at all shouldn't
+  // collapse to nothing.
+  const text = lastSpace > limit * 0.8 ? slice.slice(0, lastSpace) : slice;
+  return { text, truncated: true, fullLength: full.length };
+}
+
 function formatBody({ overview, keyPoints, assessable, openQuestions }) {
   const parts = [overview || ""];
   if (keyPoints && keyPoints.length) {
@@ -233,11 +270,18 @@ export function mapAiResultToItems({ result, course, week, language, uid, nowISO
   const title = `${course || "Lecture"} — Week ${week || "?"} notes`;
 
   if (result.summaryFailed) {
+    const excerpt = truncateTranscript(result.transcript);
+    const header = "Transcript (AI summary failed — you can re-run summarizing later or edit this by hand):";
+    // No aiMeta on this page, deliberately. aiMeta routes a page to the
+    // AI viewer, which is read-only; this one has to open in the normal
+    // editor so "edit this by hand" is actually possible.
     return {
       pageItem: {
         id: uid(),
         title,
-        body: `Transcript (AI summary failed — you can re-run summarizing later or edit this by hand):\n\n${result.transcript || ""}`,
+        body: excerpt.truncated
+          ? `${header}\n\n${excerpt.text}\n\n[Only the first ${excerpt.text.length.toLocaleString()} characters are saved here, of ${excerpt.fullLength.toLocaleString()}. Download the full transcript from the recording screen before you leave it — it isn't kept afterwards.]`
+          : `${header}\n\n${excerpt.text}`,
         html: "",
         strokes: [],
         style: "lined",
