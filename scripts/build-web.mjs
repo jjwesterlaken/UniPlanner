@@ -5,8 +5,11 @@
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+
+const BUILD_ID_TOKEN = "__BUILD_ID__";
 
 const OUT = "dist-web";
 
@@ -60,13 +63,61 @@ execFileSync(
 //    Copied recursively so subfolders like public/fonts come across too.
 fs.cpSync("public", OUT, { recursive: true });
 
-// 4. Fail loudly rather than shipping something broken
+// 4. Stamp the build id into the service worker and the page.
+//
+//    THIS IS HOW USERS RECEIVE UPDATES. The cache name in sw.js is
+//    derived from the built bytes, so any change to the app produces a
+//    different worker, which is what makes the browser install it, run
+//    `install` again and re-fetch everything.
+//
+//    It replaced a hand-edited constant that was committed once and never
+//    touched, which meant that for as long as that lasted, every browser
+//    which had opened the app once kept serving that first build forever.
+//    Nothing failed visibly; deploys simply didn't arrive. If you change
+//    how assets are named or cached, keep this derivation intact.
 const js = fs.readFileSync(path.join(OUT, "app.js"), "utf8");
 const css = fs.readFileSync(path.join(OUT, "app.css"), "utf8");
+
+const buildId = crypto.createHash("sha256").update(js).update(css).digest("hex").slice(0, 12);
+
+/* The placeholder has to be checked where it MATTERS, not merely
+   somewhere in the file. Checking `includes(BUILD_ID_TOKEN)` passes on a
+   comment that happens to mention the token, which would let a
+   hardcoded cache name through while the build still looked happy --
+   the same class of silent failure this whole change exists to remove. */
+const MUST_CONTAIN_TOKEN = {
+  "sw.js": /const\s+CACHE\s*=\s*"[^"]*__BUILD_ID__[^"]*"\s*;/,
+  "index.html": /<meta\s+name="build-id"\s+content="[^"]*__BUILD_ID__[^"]*"\s*\/?>/,
+};
+
+for (const [file, required] of Object.entries(MUST_CONTAIN_TOKEN)) {
+  const target = path.join(OUT, file);
+  const before = fs.readFileSync(target, "utf8");
+  if (!required.test(before)) {
+    throw new Error(
+      `${file} does not use ${BUILD_ID_TOKEN} where it is required (expected ${required}). ` +
+        "Without it the cache name is fixed across builds, and users who have opened the app " +
+        "once will never receive another update — silently."
+    );
+  }
+  fs.writeFileSync(target, before.split(BUILD_ID_TOKEN).join(buildId));
+}
+
 if (js.length < 50_000) throw new Error("app.js looks too small - the build likely failed");
 if (!css.includes("u-accent-bg") && !css.includes("bg-stone-100")) {
   throw new Error("app.css is missing expected styles - the Tailwind build likely failed");
 }
 if (!fs.existsSync(path.join(OUT, "index.html"))) throw new Error("index.html was not copied");
 
-console.log(`\nweb build OK -> ${OUT}/ (app.js ${(js.length / 1024).toFixed(0)}kb, app.css ${(css.length / 1024).toFixed(0)}kb)`);
+// A leftover placeholder would ship a literal "__BUILD_ID__" as the cache
+// name -- fixed across every build, which is the original bug wearing a
+// different string.
+for (const file of ["sw.js", "index.html"]) {
+  const out = fs.readFileSync(path.join(OUT, file), "utf8");
+  if (out.includes(BUILD_ID_TOKEN)) throw new Error(`${file} still contains ${BUILD_ID_TOKEN} after stamping`);
+  if (!out.includes(buildId)) throw new Error(`${file} does not carry the build id`);
+}
+
+console.log(
+  `\nweb build OK -> ${OUT}/ (app.js ${(js.length / 1024).toFixed(0)}kb, app.css ${(css.length / 1024).toFixed(0)}kb, build ${buildId})`
+);

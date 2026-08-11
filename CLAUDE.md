@@ -279,6 +279,46 @@ component is assembled. If you add a screen, add it to the smoke test's
 tab walk — the whole value is that it renders the real thing from an
 empty semester.
 
+## How users actually receive an update
+
+**The service worker's cache name is generated from the built bytes.
+Any change to caching or asset naming must keep that derivation
+intact.** `scripts/build-web.mjs` hashes `app.js` + `app.css` and
+substitutes `__BUILD_ID__` in both `public/sw.js` and
+`public/index.html`; the build fails if either placeholder is missing
+from the line that needs it.
+
+What it cost to find: the cache name used to be a hand-edited constant
+(`"uni-planner-v6"`) with **one commit in the entire repository history**
+and no cache-busting on `app.js` or `app.css`. The fetch handler was
+cache-first for everything, so a browser that had opened the app once
+served that build forever — the worker never changed, so no new worker
+installed, so `install` never re-ran, so nothing was re-fetched. Weeks of
+deploys reached nobody who already had the app cached, and a security fix
+would have reached them just as little. Nothing errored; deploys simply
+didn't arrive.
+
+Two independent mechanisms now stop that, on purpose:
+
+1. the cache name changes whenever the build changes, and
+2. the app shell is network-first regardless, so even a broken (1) still
+   serves the current build to anyone online.
+
+`scripts/test-service-worker.mjs` asserts both, plus that the build
+refuses a hardcoded name. Don't "simplify" either one into the other.
+
+**Only the hosted web build registers a worker.** Electron loads over
+`file://` (workers aren't allowed there at all), but Capacitor serves
+Android from `http://localhost`, which *is* a secure context — so a
+worker registers and caches the bundled assets, and an app-store update
+that replaced those files on disk would still be shadowed by the cache.
+`index.html` registers only on `https:` and a non-localhost host, and
+unregisters anything it finds otherwise.
+
+The build id is shown in the app (Account tab). It is the only way to
+answer "which build is this user on", which is the first question after
+any caching bug.
+
 ## Build scripts
 
 `scripts/build-web.mjs` and `prepare-native.mjs` run on Windows, macOS and

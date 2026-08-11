@@ -140,6 +140,22 @@ if (studyTab) {
   }
 }
 
+// The build identifier: until this existed there was no way to answer
+// "which build is this user running", which is the first question after
+// any stale-cache bug. It reads "development" when unstamped, which is
+// what this jsdom page is.
+{
+  const accountTab = findButton("Account");
+  check(!!accountTab, "the Account tab is reachable");
+  if (accountTab) {
+    accountTab.click();
+    await new Promise((r) => setTimeout(r, 150));
+    const text = doc.body.textContent || "";
+    check(text.includes("Version"), "the Account tab shows which build is running");
+    check(!text.includes("__BUILD_ID__"), "an unstamped build shows a placeholder to the user");
+  }
+}
+
 check(complaints.length === 0, "nothing logged a React error or warning", complaints.slice(0, 3).join(" | ").slice(0, 400));
 
 fs.rmSync(tmp, { recursive: true, force: true });
