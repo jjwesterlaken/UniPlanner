@@ -39,6 +39,8 @@ import {
   bestReachableBand,
   displayMark,
   describeRequirement,
+  ROUNDING_RULES,
+  DEFAULT_ROUNDING,
 } from "./grades.js";
 import {
   forecastWorkload,
@@ -48,6 +50,7 @@ import {
   examCountdowns,
   buildStudyPlan,
   topicsForCourse,
+  weekLabel,
   BREAKDOWN_TEMPLATES,
 } from "./workload.js";
 import {
@@ -166,7 +169,7 @@ const SEMESTER_NAMES = ["Semester 1", "Semester 2"];
 // Collections the user thinks of as "their stuff". studyStats syncs like
 // any other collection but is bookkeeping, not content -- counting its ~43
 // rows per semester would make "247 items" in the backup panel meaningless.
-const COUNTABLE = COLLECTIONS.filter((k) => k !== "studyStats");
+const COUNTABLE = COLLECTIONS.filter((k) => k !== "studyStats" && k !== "settings");
 
 // Each semester holds its own independent set of content.
 const makeSemester = () => ({
@@ -179,6 +182,7 @@ const makeSemester = () => ({
   pages: [], // free notebook pages with titles
   folders: [], // folders for organising notebook pages
   assessments: [], // weights and marks per course (src/grades.js)
+  settings: [], // one row: teaching calendar + grade rounding rule
   studyStats: [], // one row per studied day + one totals row (src/srs.js)
 });
 
@@ -2879,6 +2883,71 @@ function BreakdownPanel({ assignment, todos, onBreakdown, patchItem }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Semester setup — the teaching calendar and the rounding rule       */
+/* ------------------------------------------------------------------ */
+
+function SemesterSetup({ settings, patchSettings }) {
+  const breaks = settings.breaks || [];
+  const first = breaks[0] || {};
+  const rule = settings.rounding || DEFAULT_ROUNDING;
+
+  const setBreak = (patch) => {
+    const next = { ...first, ...patch };
+    patchSettings({ breaks: next.from && next.to ? [next] : [] });
+  };
+
+  return (
+    <Card>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className={labelCls}>Semester starts (week 1, Monday)</label>
+          <input
+            className={inputCls}
+            type="date"
+            value={settings.start || ""}
+            onChange={(e) => patchSettings({ start: e.target.value })}
+          />
+          <p className="mt-1 text-xs text-stone-400">
+            Optional. Without it, deadlines are labelled by date instead of teaching week.
+          </p>
+        </div>
+        <div>
+          <label className={labelCls}>Mid-semester break</label>
+          <div className="flex gap-2">
+            <input className={inputCls} type="date" value={first.from || ""} onChange={(e) => setBreak({ from: e.target.value })} aria-label="Break starts" />
+            <input className={inputCls} type="date" value={first.to || ""} onChange={(e) => setBreak({ to: e.target.value })} aria-label="Break ends" />
+          </div>
+          <p className="mt-1 text-xs text-stone-400">
+            Counting straight through a non-teaching week puts everything after it a week out.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 border-t border-stone-100 pt-3">
+        <label className={labelCls}>How your university rounds the final mark</label>
+        <div className="flex flex-wrap gap-2">
+          {ROUNDING_RULES.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => patchSettings({ rounding: r.id })}
+              className={`rounded-full px-3 py-1.5 text-xs font-medium u-focus ${
+                r.id === rule ? "u-accent-bg text-white" : "border border-stone-200 bg-white text-stone-600 hover:bg-stone-50"
+              }`}
+            >
+              {r.label} <span className="opacity-70">({r.hint})</span>
+            </button>
+          ))}
+        </div>
+        <p className="mt-1.5 text-xs text-stone-400">
+          This changes what you need. Check your unit outline if you're unsure — the default is the
+          common case, and getting it wrong understates what you need by up to 1.7 marks.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Grades — weighted mark and the "what do I need" calculator         */
 /* ------------------------------------------------------------------ */
 
@@ -2889,7 +2958,7 @@ const ASSESSMENT_KINDS = [
   { id: "other", label: "Other" },
 ];
 
-function Grades({ assessments, courses, addItem, patchItem, removeItem, focused }) {
+function Grades({ assessments, courses, addItem, patchItem, removeItem, focused, rule = DEFAULT_ROUNDING }) {
   const blank = { course: "", title: "", w: "", mark: "", kind: "assignment", due: "", hurdle: "" };
   const [form, setForm] = useState(blank);
   const [targets, setTargets] = useState({}); // course -> band code the student is aiming at
@@ -2975,6 +3044,7 @@ function Grades({ assessments, courses, addItem, patchItem, removeItem, focused 
             course={course}
             list={list}
             target={targets[course]}
+            rule={rule}
             onTarget={(code) => setTargets({ ...targets, [course]: code })}
             patchItem={patchItem}
             removeItem={removeItem}
@@ -2985,12 +3055,12 @@ function Grades({ assessments, courses, addItem, patchItem, removeItem, focused 
   );
 }
 
-function CourseGrades({ course, list, target, onTarget, patchItem, removeItem }) {
+function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeItem }) {
   const summary = useMemo(() => summarise(list), [list]);
-  const best = useMemo(() => bestReachableBand(list), [list]);
+  const best = useMemo(() => bestReachableBand(list, rule), [list, rule]);
   const bandCode = target || best.code;
   const band = bandByCode(bandCode) || GRADE_BANDS[GRADE_BANDS.length - 1];
-  const result = useMemo(() => requiredForBand(list, band.min), [list, band]);
+  const result = useMemo(() => requiredForBand(list, band.min, rule), [list, band, rule]);
   const sentence = describeRequirement(result, band.label);
   const hurdles = result.hurdles;
 
@@ -3059,7 +3129,9 @@ function CourseGrades({ course, list, target, onTarget, patchItem, removeItem })
         </div>
         <p className="text-sm font-medium u-accent-deeptext">{sentence}</p>
         <p className="mt-1 text-xs text-stone-500">
-          Final marks are rounded to the nearest whole number, so {band.min - 0.5}% is enough for {band.label}.
+          {rule === "truncate"
+            ? `Final marks are rounded down, so you need a full ${band.min}% for ${band.label}.`
+            : `Final marks are rounded to the nearest whole number, so ${band.min - 0.5}% is enough for ${band.label}.`}
         </p>
         {hurdles.failed.length > 0 && (
           <p className="mt-1.5 text-xs text-stone-600">
@@ -3080,7 +3152,7 @@ function CourseGrades({ course, list, target, onTarget, patchItem, removeItem })
 /*  Workload forecast — crunch weeks, derived from existing dates      */
 /* ------------------------------------------------------------------ */
 
-function WorkloadForecast({ assignments, assessments }) {
+function WorkloadForecast({ assignments, assessments, calendar }) {
   const weeks = useMemo(
     () => forecastWorkload({ assignments, assessments, today: localDay() }),
     [assignments, assessments]
@@ -3094,7 +3166,7 @@ function WorkloadForecast({ assignments, assessments }) {
         {weeks.map((w) => (
           <div key={w.weekStart} className={`rounded-xl border px-3 py-2 ${w.crunch ? "border-stone-300 bg-stone-50" : "border-stone-100"}`}>
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-sm font-medium text-stone-800">Week of {formatAU(w.weekStart)}</span>
+              <span className="text-sm font-medium text-stone-800">{weekLabel(w.weekStart, calendar, formatAU)}</span>
               <span className="text-xs text-stone-500">
                 {w.items.length} due{w.totalWeight > 0 && ` · ${w.totalWeight}% of your grade`}
               </span>
@@ -3482,6 +3554,19 @@ export default function PlannerApp() {
       return { ...s, todos };
     });
 
+  const patchSettings = (patch) =>
+    updateSem((s) => {
+      const existing = (s.settings || []).find((x) => x && !x.deletedAt);
+      const stamp = nowISO();
+      if (existing) {
+        return {
+          ...s,
+          settings: s.settings.map((x) => (x.id === existing.id ? { ...x, ...patch, updatedAt: stamp } : x)),
+        };
+      }
+      return { ...s, settings: [...(s.settings || []), { id: uid(), ...patch, updatedAt: stamp }] };
+    });
+
   const reset = () => {
     setData({ ...DEFAULT, semesters: { "Semester 1": makeSemester(), "Semester 2": makeSemester() } });
     store.del(STORAGE_KEY);
@@ -3519,6 +3604,11 @@ export default function PlannerApp() {
     for (const key of COLLECTIONS) out[key] = live(rawSem[key]);
     return out;
   }, [rawSem]);
+
+  /* The semester's settings row. One item, created on first edit, so an
+     untouched semester carries nothing and every week label falls back
+     to a date rather than a guessed number. */
+  const settings = useMemo(() => (sem.settings || [])[0] || {}, [sem.settings]);
 
   const theme = THEMES[data.theme] || THEMES.teal;
   const focused = focusedCourse && sem.courses.some((c) => c.name === focusedCourse) ? focusedCourse : null;
@@ -3647,6 +3737,9 @@ export default function PlannerApp() {
             <Section icon={BookOpen} title="Courses" subtitle="Your units this semester">
               <Courses courses={sem.courses} addItem={addItem} removeItem={removeItem} focused={focused} onToggleFocus={toggleFocus} />
             </Section>
+            <Section icon={CalendarClock} title="Semester setup" subtitle="Teaching weeks and how your marks are rounded">
+              <SemesterSetup settings={settings} patchSettings={patchSettings} />
+            </Section>
             <Section icon={Target} title="Grades" subtitle="What you've got, and what you still need">
               <Grades
                 assessments={sem.assessments}
@@ -3655,6 +3748,7 @@ export default function PlannerApp() {
                 patchItem={patchItem}
                 removeItem={removeItem}
                 focused={focused}
+                rule={settings.rounding || DEFAULT_ROUNDING}
               />
             </Section>
           </>
@@ -3669,7 +3763,7 @@ export default function PlannerApp() {
         {tab === "planner" && (
           <>
             <Section icon={CalendarClock} title="What's coming" subtitle="Crunch weeks, from your due dates">
-              <WorkloadForecast assignments={sem.assignments} assessments={sem.assessments} />
+              <WorkloadForecast assignments={sem.assignments} assessments={sem.assessments} calendar={settings} />
             </Section>
             <Section icon={ClipboardList} title="Weekly reading planner" subtitle="Add as many weeks per course as you need">
               <Textbook textbook={sem.textbook} courses={sem.courses} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} />

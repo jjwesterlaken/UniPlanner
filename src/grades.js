@@ -34,20 +34,37 @@ export const GRADE_BANDS = [
 
 export const FAIL_BAND = { code: "F", label: "Fail", min: 0 };
 
-/** The final mark as the university would record it: nearest whole number, .5 up. */
-export const roundFinalMark = (mark) => Math.round(mark);
+/* How the university turns a raw weighted mark into the recorded one.
+   Most round half-up; some truncate. The two are not interchangeable and
+   the error is asymmetric — see targetFor. */
+export const ROUNDING_RULES = [
+  { id: "half-up", label: "Rounded to the nearest whole number", hint: "84.5 becomes 85" },
+  { id: "truncate", label: "Rounded down", hint: "84.9 stays 84" },
+];
+export const DEFAULT_ROUNDING = "half-up";
+
+/** The final mark as the university would record it. */
+export const roundFinalMark = (mark, rule = DEFAULT_ROUNDING) =>
+  rule === "truncate" ? Math.floor(mark) : Math.round(mark);
 
 /**
  * The unrounded total a student must reach for a band.
  *
- * Half a mark below the band, because the final mark rounds up into it.
- * This is the whole reason the calculator isn't just `band - current`.
+ * Under half-up rounding that is half a mark BELOW the band, because the
+ * mark rounds up into it. Under truncation it is the band itself.
+ *
+ * The two failure directions are not equal, which is why this is a
+ * setting rather than an assumption. Overstating costs a student some
+ * unnecessary work. Understating means they hit exactly the number this
+ * app told them to hit and miss the band by up to 1.7 marks — and they
+ * would be right to blame the app. So the default is half-up, the
+ * assumption is shown next to the number, and truncation is opt-in.
  */
-export const targetFor = (bandMin) => bandMin - 0.5;
+export const targetFor = (bandMin, rule = DEFAULT_ROUNDING) => (rule === "truncate" ? bandMin : bandMin - 0.5);
 
 /** The band a final mark falls in, after rounding. */
-export function bandFor(mark) {
-  const rounded = roundFinalMark(mark);
+export function bandFor(mark, rule = DEFAULT_ROUNDING) {
+  const rounded = roundFinalMark(mark, rule);
   return GRADE_BANDS.find((b) => rounded >= b.min) || FAIL_BAND;
 }
 
@@ -165,10 +182,10 @@ export function hurdleStatus(assessments) {
  * Returns a status rather than a bare number so the caller never has to
  * decide whether 143% or -20% is meaningful.
  */
-export function requiredForBand(assessments, bandMin) {
+export function requiredForBand(assessments, bandMin, rule = DEFAULT_ROUNDING) {
   const s = summarise(assessments);
   const hurdles = hurdleStatus(assessments);
-  const target = targetFor(bandMin);
+  const target = targetFor(bandMin, rule);
 
   const remaining = (assessments || []).filter((a) => a && !a.deletedAt && weightOf(a) > 0 && !isMarked(a));
   const single = remaining.length === 1 ? remaining[0] : null;
@@ -176,6 +193,7 @@ export function requiredForBand(assessments, bandMin) {
   const base = {
     bandMin,
     target,
+    rule,
     ...s,
     hurdles,
     single: single ? { id: single.id, title: single.title || "Untitled", w: weightOf(single) } : null,
@@ -189,7 +207,7 @@ export function requiredForBand(assessments, bandMin) {
       status: "settled",
       required: null,
       finalMark: s.earned,
-      achieved: roundFinalMark(s.earned) >= bandMin,
+      achieved: roundFinalMark(s.earned, rule) >= bandMin,
     };
   }
 
@@ -199,7 +217,7 @@ export function requiredForBand(assessments, bandMin) {
     return { ...base, status: "achieved", required: 0 };
   }
   if (requiredAverage > 100) {
-    return { ...base, status: "impossible", required: round4(requiredAverage), bestBand: bandFor(s.ceiling) };
+    return { ...base, status: "impossible", required: round4(requiredAverage), bestBand: bandFor(s.ceiling, rule) };
   }
 
   /* A pending hurdle on the one remaining assessment can demand more
@@ -219,9 +237,9 @@ export function requiredForBand(assessments, bandMin) {
 }
 
 /** The highest band still reachable, for "aim for this" defaults. */
-export function bestReachableBand(assessments) {
+export function bestReachableBand(assessments, rule = DEFAULT_ROUNDING) {
   const s = summarise(assessments);
-  return bandFor(s.ceiling);
+  return bandFor(s.ceiling, rule);
 }
 
 /* ---------- wording ---------- */

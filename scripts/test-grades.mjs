@@ -26,6 +26,8 @@ import {
   bestReachableBand,
   displayMark,
   describeRequirement,
+  ROUNDING_RULES,
+  DEFAULT_ROUNDING,
 } from "../src/grades.js";
 
 import {
@@ -38,6 +40,9 @@ import {
   examCountdowns,
   buildStudyPlan,
   topicsForCourse,
+  teachingWeek,
+  weekLabel,
+  inBreak,
   BREAKDOWN_TEMPLATES,
   CRUNCH_ITEM_COUNT,
 } from "../src/workload.js";
@@ -106,6 +111,90 @@ async function run() {
       assert.equal(bandFor(band.min - 0.5).code, band.code, `${band.min - 0.5} rounds up into ${band.code}`);
       assert.notEqual(bandFor(band.min - 0.51).code, band.code, `${band.min - 0.51} should fall short`);
     }
+  });
+
+  /* ---------- the rounding rule is a setting, not an assumption ---------- */
+
+  await test("the default rounding rule is half-up", () => {
+    assert.equal(DEFAULT_ROUNDING, "half-up");
+    assert.ok(ROUNDING_RULES.some((r) => r.id === "half-up"));
+    assert.ok(ROUNDING_RULES.some((r) => r.id === "truncate"));
+  });
+
+  await test("switching to truncation changes what a student needs", () => {
+    /* The asymmetry that makes this a setting: understating means a
+       student hits exactly the number shown and misses the band. */
+    const marks = [A({ w: 70, mark: 80 }), A({ w: 30 })];
+    const halfUp = requiredForBand(marks, HD, "half-up");
+    const truncated = requiredForBand(marks, HD, "truncate");
+    assert.equal(halfUp.required, 95);
+    assert.ok(truncated.required > halfUp.required, "truncation always demands at least as much");
+    assert.equal(truncated.target, 85);
+    assert.equal(halfUp.target, 84.5);
+  });
+
+  await test("the band boundary moves with the rule", () => {
+    assert.equal(bandFor(84.5, "half-up").code, "HD");
+    assert.equal(bandFor(84.5, "truncate").code, "D", "truncation keeps 84.5 as 84");
+    assert.equal(bandFor(84.9, "truncate").code, "D");
+    assert.equal(bandFor(85, "truncate").code, "HD");
+    assert.equal(roundFinalMark(84.9, "truncate"), 84);
+    assert.equal(roundFinalMark(84.9, "half-up"), 85);
+  });
+
+  await test("an unknown or missing rule falls back to the default rather than misreporting", () => {
+    const marks = [A({ w: 70, mark: 80 }), A({ w: 30 })];
+    assert.equal(requiredForBand(marks, HD).required, requiredForBand(marks, HD, "half-up").required);
+    assert.equal(requiredForBand(marks, HD, "nonsense").required, requiredForBand(marks, HD, "half-up").required);
+  });
+
+  await test("a settled course is judged under the chosen rule too", () => {
+    const marks = [A({ w: 100, mark: 84.6 })];
+    assert.equal(requiredForBand(marks, HD, "half-up").achieved, true);
+    assert.equal(requiredForBand(marks, HD, "truncate").achieved, false);
+  });
+
+  /* ---------- teaching weeks ---------- */
+
+  const CAL = { start: "2026-07-27", breaks: [{ from: "2026-09-21", to: "2026-09-27" }] };
+
+  await test("teaching weeks count from the semester start", () => {
+    assert.equal(teachingWeek("2026-07-27", CAL), 1);
+    assert.equal(teachingWeek("2026-08-02", CAL), 1, "the Sunday of week 1 is still week 1");
+    assert.equal(teachingWeek("2026-08-03", CAL), 2);
+    assert.equal(teachingWeek("2026-09-14", CAL), 8);
+  });
+
+  await test("the mid-semester break is skipped, not counted", () => {
+    // Counting straight through puts everything after it a week late,
+    // which is worse than a date because it looks authoritative.
+    assert.equal(teachingWeek("2026-09-28", CAL), 9);
+    assert.equal(teachingWeek("2026-09-28", { start: "2026-07-27" }), 10, "without the break it would be 10");
+    assert.equal(teachingWeek("2026-10-05", CAL), 10);
+  });
+
+  await test("a date inside the break has no teaching week", () => {
+    assert.equal(inBreak("2026-09-23", CAL.breaks), true);
+    assert.equal(teachingWeek("2026-09-23", CAL), null);
+    assert.equal(weekLabel("2026-09-23", CAL), "Mid-semester break");
+  });
+
+  await test("no calendar means dates, never a guessed week number", () => {
+    for (const cal of [null, undefined, {}, { breaks: [] }, { start: "" }]) {
+      assert.equal(teachingWeek("2026-09-14", cal), null);
+      assert.match(weekLabel("2026-09-14", cal), /^Week of /);
+    }
+  });
+
+  await test("a date before the semester starts has no teaching week", () => {
+    assert.equal(teachingWeek("2026-07-20", CAL), null);
+    assert.match(weekLabel("2026-07-20", CAL), /^Week of /);
+  });
+
+  await test("teaching weeks survive a DST change", () => {
+    // AU DST starts 4 Oct 2026, inside the semester.
+    assert.equal(teachingWeek("2026-10-05", CAL), 10);
+    assert.equal(teachingWeek("2026-10-12", CAL), 11);
   });
 
   /* ---------- marked, unmarked and zero ---------- */
@@ -589,6 +678,13 @@ async function run() {
     assert.ok(countable, "could not find the COUNTABLE list");
     assert.ok(!/assessments/.test(countable[0]), "assessments must not be excluded from the item count");
     assert.match(countable[0], /studyStats/, "studyStats should still be excluded");
+  });
+
+  await test("the settings row is bookkeeping, not content, in the backup count", () => {
+    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    const countable = src.match(/const COUNTABLE = COLLECTIONS\.filter\([^;]*\);/)[0];
+    assert.match(countable, /settings/, "a semester's own config is not one of the user's items");
+    assert.ok(COLLECTIONS.includes("settings"), "but it still has to sync");
   });
 
   await test("a new semester starts with an empty assessments list", () => {
