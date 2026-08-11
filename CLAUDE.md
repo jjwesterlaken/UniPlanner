@@ -303,6 +303,27 @@ CI, which rules out things that look fine locally:
 - `desktop/package.json` must keep its `repository` field — electron-builder
   requires it.
 
+**A failed Netlify deploy is not always your diff.** Netlify can fail at
+the *configuration* stage, before the build script runs at all, with its
+own extensions API returning a 502:
+
+```
+Configuration error
+Failed retrieving extensions for site f95d2107-…: Unexpected status code
+502 from fetching extensions.
+Build failed due to a user error: Build script returned non-zero exit code: 2
+```
+
+"User error" is Netlify misclassifying its own outage. The tells are a
+deploy that fails in **under ten seconds** and a log that never reaches
+the build script — no `npm install`, no build output. It is transient and
+unrelated to the code. Retry it, or ignore it on a preview; a failed
+preview affects nothing, and a failed production deploy leaves the last
+successful build serving rather than breaking the live site. **Don't go
+hunting for a break in the code.** The check that actually gates a merge
+is `npm test`; the three `… - uniplannergdog` checks are Netlify's own
+and read `neutral` when a deploy is fine, not `success`.
+
 ## Testing
 
 `npm test` builds the web bundle, then runs the app tests, the demo-mode
