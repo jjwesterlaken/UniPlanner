@@ -111,7 +111,7 @@ if (studyTab) {
   // Batch 2 lands on three tabs; each renders from an empty semester,
   // which is the shape that has crashed demo mode before.
   for (const [tabName, phrases] of [
-    ["Courses", ["Grades", "Add assessment"]],
+    ["Courses", ["Grades", "Add assessment", "Semester setup"]],
     ["Planner", ["What's coming", "Assignments"]],
     ["Study", ["Exams"]],
     ["To-do", ["Nothing on the list yet"]],

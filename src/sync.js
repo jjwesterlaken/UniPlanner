@@ -60,6 +60,12 @@ export const COLLECTIONS = [
   // Assessment weights and marks (see src/grades.js). User content, so
   // unlike studyStats these DO count in the backup panel's item total.
   "assessments",
+  // One row per semester holding the teaching calendar and the grade
+  // rounding rule. A collection rather than a key on the semester,
+  // because mergeSemester rebuilds semesters from this whitelist and
+  // would drop a bare key -- and bookkeeping, so like studyStats it is
+  // excluded from the backup panel's item count.
+  "settings",
   // Study scheduling stats (see src/srs.js). Listed here because
   // mergeSemester rebuilds each semester from this whitelist alone --
   // a collection missing from it is silently dropped on every sync,

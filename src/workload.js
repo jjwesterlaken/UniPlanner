@@ -35,6 +35,67 @@ export function weekStart(day) {
 /** Items due in the same week as `day`, inclusive of both ends. */
 export const sameWeek = (a, b) => weekStart(a) === weekStart(b);
 
+/* ---------- teaching weeks ----------
+
+   Students think in teaching weeks -- timetables, lecture recordings and
+   assessment schedules all speak that language, so "week 8" beats "the
+   week of 8 Sep". But the app has no existing date-to-week mapping: the
+   `week` fields on weekly readings and study cards are numbers the user
+   types, with no date attached, so they can't be used to place a
+   deadline in a week.
+
+   That mapping needs a semester start date, which is optional. Unset,
+   everything falls back to date labels -- an absent calendar must never
+   produce a confident wrong week number.
+
+   THE MID-SEMESTER BREAK is why this isn't just division. Most
+   Australian universities have a non-teaching week, and counting
+   straight through it puts every deadline after it one week late, which
+   is worse than showing dates because it looks authoritative. Breaks are
+   stored as date ranges and skipped.
+   ------------------------------------------------------------------ */
+
+/** True when `day` falls inside one of the non-teaching ranges. */
+export function inBreak(day, breaks = []) {
+  return (breaks || []).some((b) => b && b.from && b.to && day >= b.from && day <= b.to);
+}
+
+/**
+ * The teaching week a date falls in, or null when it can't be known.
+ *
+ * Returns null for: no calendar, no start date, a date before the
+ * semester starts, or a date inside a break. Null means "say the date
+ * instead" -- never a guess.
+ */
+export function teachingWeek(day, calendar) {
+  const start = calendar && calendar.start;
+  if (!start || !day || day < start) return null;
+  if (inBreak(day, calendar.breaks)) return null;
+
+  const from = weekStart(start);
+  const to = weekStart(day);
+  const elapsed = Math.floor(daysBetween(from, to) / 7);
+
+  // Whole break weeks that finished before this date don't count as
+  // teaching weeks. Counted by their Monday so a break spanning a
+  // weekend is still one week.
+  let skipped = 0;
+  for (const b of calendar.breaks || []) {
+    if (!b || !b.from) continue;
+    const bw = weekStart(b.from);
+    if (bw >= from && bw < to) skipped += 1;
+  }
+  return elapsed - skipped + 1;
+}
+
+/** "Week 8" when the calendar allows it, otherwise the date. */
+export function weekLabel(day, calendar, formatDate) {
+  const n = teachingWeek(day, calendar);
+  if (n !== null && n >= 1) return `Week ${n}`;
+  if (calendar && calendar.start && inBreak(day, calendar.breaks)) return "Mid-semester break";
+  return `Week of ${formatDate ? formatDate(day) : day}`;
+}
+
 /* ---------- workload forecast ---------- */
 
 export const CRUNCH_ITEM_COUNT = 3; // three things in one week is the point of the feature
