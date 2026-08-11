@@ -78,6 +78,35 @@ blob after a restore and thinks the 9.8KB ceiling has been breached.
 Treat `mergeData` as fragile. It is the most-tested function here and the
 one most able to lose a user's data silently.
 
+## Two notions of "week", deliberately not reconciled
+
+The app has two independent ideas of what week something is in, and they
+can disagree with nothing to warn you. This is known and intended.
+
+**User-typed labels.** Weekly readings (`textbook`) and study cards
+(`notes`) each carry a `week` field the user types in — a plain number
+with no date attached. Nothing anchors them to the calendar, so a reading
+filed under week 3 and a card under week 4 can describe the same lecture,
+and the app has never noticed.
+
+**Calendar-derived numbers.** The workload forecast labels deadlines by
+teaching week, computed from `settings.start` and any break ranges
+(`teachingWeek` in `workload.js`).
+
+They are not connected, and **the calendar must not be used to correct
+the typed ones.** Those numbers are the user's own record of how their
+unit is organised; a semester start date entered later — or entered
+wrongly — would silently rewrite them. Deriving a label for a date the
+app already knows is safe. Overwriting data someone typed is not.
+
+If the two ever need to agree, the honest fix is showing both and letting
+the user resolve it, not picking a winner.
+
+The same reasoning is why the calendar is optional: with no start date,
+labels fall back to dates rather than a guessed number, and a break range
+is subtracted rather than counted through, because "Week 10" that is
+really week 9 is worse than a plain date — it looks authoritative.
+
 ## The service-role client bypasses RLS — you are the ownership check
 
 **Any query made with the service-role client must explicitly scope to the
@@ -128,6 +157,21 @@ mode. A null-dereference has shipped in it before, precisely because it's
 the path nobody runs while developing. `scripts/test-app-smoke.mjs` mounts
 the real app with `isConfigured === false` and fails on any
 `console.error`; keep it passing.
+
+**It exists because unit tests and a green build can both miss a crash
+that makes every render throw.** It has now caught two the rest of the
+suite could not:
+
+- a null-dereference in the stats panel reading an empty semester
+- a temporal dead zone — a `useMemo` placed above the `const` it read,
+  so the app threw on every render while the pure functions it called
+  were all perfectly fine, and `npm run build:web` was perfectly happy
+
+Both are the same shape: correct logic, wrong wiring. Nothing that tests
+functions in isolation can see it, because the fault is in how the
+component is assembled. If you add a screen, add it to the smoke test's
+tab walk — the whole value is that it renders the real thing from an
+empty semester.
 
 ## Build scripts
 

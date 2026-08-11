@@ -28,6 +28,7 @@ import {
   describeRequirement,
   ROUNDING_RULES,
   DEFAULT_ROUNDING,
+  inheritedRounding,
 } from "../src/grades.js";
 
 import {
@@ -113,6 +114,66 @@ async function run() {
     }
   });
 
+  await test("a part-marked course: every step of the arithmetic checked by hand", () => {
+    /* Worked entirely on paper first, so this test is evidence rather
+       than the calculator agreeing with itself.
+
+       Course:  Essay   weight 70, marked 80%
+                Final   weight 30, not yet marked
+
+       Banked marks   = 70 x 0.80          = 56.0 points of the final grade
+       Remaining      = 100 - 70           = 30 points still available
+       Average so far = 56 / 70 x 100      = 80%
+       Ceiling        = 56 + 30            = 86  (best possible final mark)
+
+       For a High Distinction (85):
+         half-up   the recorded mark rounds .5 up, so 84.5 suffices
+                   needed = (84.5 - 56) / 30 x 100 = 95%
+         truncate  the recorded mark is floored, so a full 85 is needed
+                   needed = (85   - 56) / 30 x 100 = 96.666...%
+
+       The 1.6667 gap between the two is 0.5 / 30 x 100 -- it depends only
+       on the remaining weight, NOT on what is banked, which is how a
+       worked example with an impossible banked figure once produced the
+       same gap from the wrong numbers. */
+    const course = [A({ w: 70, mark: 80, title: "Essay" }), A({ w: 30, title: "Final" })];
+
+    const s = summarise(course);
+    assert.equal(s.earned, 56, "banked marks");
+    assert.equal(s.remainingWeight, 30, "weight still available");
+    assert.equal(s.average, 80, "average across what is marked");
+    assert.equal(s.ceiling, 86, "best possible final mark");
+    assert.ok(s.earned <= s.markedWeight, "you cannot bank more than the weight that has been marked");
+
+    const halfUp = requiredForBand(course, HD, "half-up");
+    assert.equal(halfUp.target, 84.5);
+    assert.equal(halfUp.required, 95);
+
+    const truncate = requiredForBand(course, HD, "truncate");
+    assert.equal(truncate.target, 85);
+    assert.equal(Math.round(truncate.required * 10000) / 10000, 96.6667);
+
+    assert.equal(Math.round((truncate.required - halfUp.required) * 10000) / 10000, 1.6667);
+
+    // And the sentence a student actually reads, with one assessment left.
+    assert.equal(
+      describeRequirement(halfUp, "High Distinction"),
+      "You need 95% on Final for a High Distinction."
+    );
+  });
+
+  await test("banked marks can never exceed the weight that has been marked", () => {
+    // The invariant the bad worked example violated. Checked across a
+    // spread of shapes rather than one lucky case.
+    for (const mark of [0, 1, 49.5, 80, 99.9, 100]) {
+      for (const w of [1, 25, 70, 99, 100]) {
+        const s = summarise([A({ w, mark }), A({ w: Math.max(1, 100 - w) })]);
+        assert.ok(s.earned <= s.markedWeight + 1e-9, `earned ${s.earned} exceeds marked weight ${s.markedWeight}`);
+        assert.ok(s.earned >= 0);
+      }
+    }
+  });
+
   /* ---------- the rounding rule is a setting, not an assumption ---------- */
 
   await test("the default rounding rule is half-up", () => {
@@ -152,6 +213,30 @@ async function run() {
     const marks = [A({ w: 100, mark: 84.6 })];
     assert.equal(requiredForBand(marks, HD, "half-up").achieved, true);
     assert.equal(requiredForBand(marks, HD, "truncate").achieved, false);
+  });
+
+  await test("a new semester inherits the rounding rule rather than asking again", () => {
+    const older = { id: "s1", rounding: "truncate", start: "2026-02-23", updatedAt: "2026-03-01T00:00:00.000Z" };
+    assert.equal(inheritedRounding({}, [older]), "truncate");
+    assert.equal(inheritedRounding(undefined, [older]), "truncate");
+    // An explicit choice always wins over an inherited one.
+    assert.equal(inheritedRounding({ rounding: "half-up" }, [older]), "half-up");
+    // Most recently updated wins when semesters disagree.
+    const newer = { id: "s2", rounding: "half-up", updatedAt: "2026-07-01T00:00:00.000Z" };
+    assert.equal(inheritedRounding({}, [older, newer]), "half-up");
+    // Nothing to inherit from falls back to the default, not undefined.
+    assert.equal(inheritedRounding({}, []), DEFAULT_ROUNDING);
+    assert.equal(inheritedRounding({}, [{ id: "x", deletedAt: "y", rounding: "truncate" }]), DEFAULT_ROUNDING);
+  });
+
+  await test("the calendar is never inherited, only the rounding rule", () => {
+    /* Copying a start date forward would date every deadline in the new
+       semester wrongly -- the exact failure the optional calendar avoids. */
+    const src = fs.readFileSync(path.join(rootDir, "src/grades.js"), "utf8");
+    const fn = src.match(/export function inheritedRounding[\s\S]*?\n}/)[0];
+    for (const field of ["start", "breaks"]) {
+      assert.ok(!new RegExp(`\\b${field}\\b`).test(fn), `${field} must not be carried across semesters`);
+    }
   });
 
   /* ---------- teaching weeks ---------- */

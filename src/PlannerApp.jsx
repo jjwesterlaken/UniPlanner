@@ -41,6 +41,7 @@ import {
   describeRequirement,
   ROUNDING_RULES,
   DEFAULT_ROUNDING,
+  inheritedRounding,
 } from "./grades.js";
 import {
   forecastWorkload,
@@ -2886,10 +2887,11 @@ function BreakdownPanel({ assignment, todos, onBreakdown, patchItem }) {
 /*  Semester setup — the teaching calendar and the rounding rule       */
 /* ------------------------------------------------------------------ */
 
-function SemesterSetup({ settings, patchSettings }) {
+function SemesterSetup({ settings, rounding, patchSettings }) {
   const breaks = settings.breaks || [];
   const first = breaks[0] || {};
-  const rule = settings.rounding || DEFAULT_ROUNDING;
+  const rule = rounding || DEFAULT_ROUNDING;
+  const inherited = !settings.rounding && rule !== DEFAULT_ROUNDING;
 
   const setBreak = (patch) => {
     const next = { ...first, ...patch };
@@ -2941,6 +2943,7 @@ function SemesterSetup({ settings, patchSettings }) {
         <p className="mt-1.5 text-xs text-stone-400">
           This changes what you need. Check your unit outline if you're unsure — the default is the
           common case, and getting it wrong understates what you need by up to 1.7 marks.
+          {inherited && " Carried over from your other semester."}
         </p>
       </div>
     </Card>
@@ -3610,6 +3613,19 @@ export default function PlannerApp() {
      to a date rather than a guessed number. */
   const settings = useMemo(() => (sem.settings || [])[0] || {}, [sem.settings]);
 
+  /* The rounding rule carries across semesters; the calendar does not.
+     Someone shouldn't re-pick their university's convention every
+     semester, but copying start dates forward would date every deadline
+     in the new semester wrongly. */
+  const rounding = useMemo(() => {
+    const others = [];
+    for (const [name, other] of Object.entries(data.semesters || {})) {
+      if (name === data.semester) continue;
+      for (const row of other.settings || []) others.push(row);
+    }
+    return inheritedRounding(settings, others);
+  }, [settings, data.semesters, data.semester]);
+
   const theme = THEMES[data.theme] || THEMES.teal;
   const focused = focusedCourse && sem.courses.some((c) => c.name === focusedCourse) ? focusedCourse : null;
   const themeVars = {
@@ -3738,7 +3754,7 @@ export default function PlannerApp() {
               <Courses courses={sem.courses} addItem={addItem} removeItem={removeItem} focused={focused} onToggleFocus={toggleFocus} />
             </Section>
             <Section icon={CalendarClock} title="Semester setup" subtitle="Teaching weeks and how your marks are rounded">
-              <SemesterSetup settings={settings} patchSettings={patchSettings} />
+              <SemesterSetup settings={settings} rounding={rounding} patchSettings={patchSettings} />
             </Section>
             <Section icon={Target} title="Grades" subtitle="What you've got, and what you still need">
               <Grades
@@ -3748,7 +3764,7 @@ export default function PlannerApp() {
                 patchItem={patchItem}
                 removeItem={removeItem}
                 focused={focused}
-                rule={settings.rounding || DEFAULT_ROUNDING}
+                rule={rounding}
               />
             </Section>
           </>
