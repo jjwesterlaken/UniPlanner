@@ -294,3 +294,24 @@ const capitalise = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 function round4(n) {
   return Math.round(n * 10000) / 10000;
 }
+
+/**
+ * The rounding rule to use for a semester that hasn't set one.
+ *
+ * The rule is a property of the student's university, not of a semester,
+ * but it's stored per semester so each stays self-contained. Rather than
+ * making them re-enter it every semester, an unset one inherits from the
+ * most recently updated semester that has set it.
+ *
+ * Deliberately narrow: ONLY the rounding rule is inherited. Start dates
+ * and break ranges are genuinely per-semester, and copying them forward
+ * would produce confidently wrong week numbers in the new semester --
+ * exactly the failure the optional calendar exists to avoid.
+ */
+export function inheritedRounding(own, others = []) {
+  if (own && own.rounding) return own.rounding;
+  const withRule = (others || [])
+    .filter((s) => s && !s.deletedAt && s.rounding)
+    .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  return withRule.length > 0 ? withRule[0].rounding : DEFAULT_ROUNDING;
+}
