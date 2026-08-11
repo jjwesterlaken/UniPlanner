@@ -25,12 +25,15 @@ import { fileURLToPath } from "node:url";
 /* Apple shows this verbatim in the permission dialog, so it has to say
    what the mic is for AND where the audio goes. Kept consistent with the
    in-app consent wording (CONSENT_TEXT in src/aiNotesLogic.js): both
-   promise the audio isn't retained after transcription. If one changes,
-   change the other. */
+   promise the recording is deleted as soon as it has been transcribed.
+   That exact phrase is what a test greps for in both files, so if one
+   changes, change the other. Note it is a promise about the AUDIO only
+   — the transcript has its own, longer retention, and conflating them
+   here would make this dialog inaccurate. */
 export const MIC_USAGE_DESCRIPTION =
   "University Planner uses your microphone to record lectures so it can " +
-  "generate an AI summary and study cards. Audio is sent to a " +
-  "transcription service for processing and is not retained afterwards.";
+  "generate an AI summary and study cards. Your recording is sent to a " +
+  "transcription service and is deleted as soon as it has been transcribed.";
 
 export const IOS_PLIST_KEY = "NSMicrophoneUsageDescription";
 export const ANDROID_PERMISSION = "android.permission.RECORD_AUDIO";

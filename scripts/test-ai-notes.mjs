@@ -276,7 +276,16 @@ async function run() {
     });
     assert.equal(pageItem.kind, "text");
     assert.equal(pageItem.folderId, null);
-    assert.equal(pageItem.aiMeta.translations.en, result.original);
+    // Stored, not returned: terms are dropped because every one of them
+    // becomes a study card below, and keeping both was ~25% of the page.
+    assert.deepEqual(pageItem.aiMeta.translations.en, {
+      overview: "An overview.",
+      keyPoints: ["point one"],
+      assessable: ["this will be on the exam"],
+      openQuestions: ["what about plants?"],
+    });
+    assert.equal(pageItem.aiMeta.translations.en.terms, undefined);
+    assert.equal(pageItem.body, "", "the summary must not also be rendered into body");
     assert.equal(noteItems.length, 1);
     assert.deepEqual(noteItems[0], { id: "id1", course: "BIO101", week: "3", term: "Osmosis", content: "Movement of water across a membrane." });
   });
@@ -608,9 +617,13 @@ async function run() {
     // Two places tell the user what happens to their audio: the consent
     // gate and iOS's own microphone dialog. If they ever disagree, one of
     // them is misleading — this is the nag that stops that drifting.
-    const consentPromise = CONSENT_TEXT.bullets.find((b) => /not retained/i.test(b));
-    assert.ok(consentPromise, "consent wording no longer promises audio isn't retained — update MIC_USAGE_DESCRIPTION to match");
-    assert.match(MIC_USAGE_DESCRIPTION, /not retained/i);
+    const PROMISE = /deleted as soon as it has been transcribed/i;
+    const consentPromise = CONSENT_TEXT.bullets.find((b) => PROMISE.test(b));
+    assert.ok(consentPromise, "consent wording changed its audio promise — update MIC_USAGE_DESCRIPTION to match");
+    assert.match(MIC_USAGE_DESCRIPTION, PROMISE);
+    // The dialog is about audio only. The transcript is kept for 7 days
+    // (30 on failure), and implying otherwise here would be inaccurate.
+    assert.doesNotMatch(MIC_USAGE_DESCRIPTION, /transcript is (deleted|not kept)/i);
     assert.match(MIC_USAGE_DESCRIPTION, /record lectures/i, "Apple rejects a usage string that doesn't say what the mic is for");
   });
 

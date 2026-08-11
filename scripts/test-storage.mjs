@@ -22,7 +22,20 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { classifyStorageError, formatBytes, describeSaveFailure } from "../src/storageHealth.js";
-import { truncateTranscript, TRANSCRIPT_EXCERPT_CHARS, mapAiResultToItems } from "../src/aiNotesLogic.js";
+import {
+  truncateTranscript,
+  TRANSCRIPT_EXCERPT_CHARS,
+  mapAiResultToItems,
+  summaryForStorage,
+  capAiNote,
+  MAX_AI_NOTE_BYTES,
+  aiNotePreview,
+  setPendingRecovery,
+  clearPendingRecovery,
+  pendingRecovery,
+} from "../src/aiNotesLogic.js";
+import { mergeData } from "../src/sync.js";
+import { RESULT_RETENTION_DAYS, FAILED_RESULT_RETENTION_DAYS } from "../src/aiNotesRetention.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -242,6 +255,237 @@ async function run() {
     const serialised = JSON.stringify({ pageItem, noteItems });
     assert.ok(!serialised.includes(marker), "the transcript reached the synced blob on the success path");
     assert.ok(!serialised.includes("word word word"), "transcript text leaked into the saved items");
+  });
+
+
+  /* ---------- de-duplication ---------- */
+
+  const summaryOf = (n = 6) => ({
+    overview: "An overview of the lecture. ".repeat(4),
+    keyPoints: Array.from({ length: n }, (_, i) => `Key point ${i} ` + "x".repeat(80)),
+    terms: Array.from({ length: n }, (_, i) => ({ term: `Term ${i}`, content: "y".repeat(120) })),
+    assessable: Array.from({ length: 3 }, (_, i) => `Assessable ${i} ` + "z".repeat(60)),
+    openQuestions: ["Something unresolved."],
+  });
+
+  const mapped = (over = {}) =>
+    mapAiResultToItems({
+      result: { summaryFailed: false, transcript: bigTranscript, original: summaryOf(), translated: null, ...over },
+      course: "PSYC2001",
+      week: "7",
+      uid,
+      nowISO,
+      ...(over.__mapArgs || {}),
+    });
+
+  await test("terms are stored once, as study cards, not again inside aiMeta", () => {
+    const { pageItem, noteItems } = mapped();
+    assert.equal(noteItems.length, 6, "the study cards are the canonical copy and must still be there");
+    for (const lang of Object.keys(pageItem.aiMeta.translations)) {
+      assert.equal(pageItem.aiMeta.translations[lang].terms, undefined, `terms survived in aiMeta.${lang}`);
+    }
+  });
+
+  await test("the summary is stored once, in aiMeta, not rendered into body as well", () => {
+    const { pageItem } = mapped();
+    assert.equal(pageItem.body, "", "body still holds a second copy of the summary");
+    assert.ok(pageItem.aiMeta.translations.en.overview.length > 0);
+  });
+
+  await test("de-duplication roughly halves what a lecture note costs", () => {
+    const { pageItem, noteItems } = mapped();
+    const bytes = Buffer.byteLength(JSON.stringify({ pageItem, noteItems }));
+    // Measured at ~12.9KB before this change for a realistic lecture.
+    assert.ok(bytes < 7500, `a de-duplicated note was ${bytes} bytes`);
+  });
+
+  await test("summaryForStorage leaves everything except terms alone", () => {
+    const s = summaryOf(2);
+    const out = summaryForStorage(s);
+    assert.deepEqual(out.keyPoints, s.keyPoints);
+    assert.deepEqual(out.assessable, s.assessable);
+    assert.deepEqual(out.openQuestions, s.openQuestions);
+    assert.equal(out.overview, s.overview);
+    assert.equal(out.terms, undefined);
+  });
+
+  await test("a note saved before this change still previews from its body", () => {
+    assert.equal(aiNotePreview({ body: "An older note." }), "An older note.");
+    assert.equal(aiNotePreview({ body: "", aiMeta: { activeLanguage: "en", translations: { en: { overview: "New." } } } }), "New.");
+  });
+
+  /* ---------- the 20KB cap ---------- */
+
+  const bigSummary = () => ({
+    overview: "o".repeat(4000),
+    keyPoints: Array.from({ length: 40 }, () => "k".repeat(400)),
+    assessable: Array.from({ length: 20 }, () => "a".repeat(400)),
+    openQuestions: Array.from({ length: 20 }, () => "q".repeat(400)),
+  });
+  const page = (translations, activeLanguage = "en") => ({
+    id: "p1", title: "T", body: "", html: "", strokes: [], style: "lined", kind: "text", font: "sans",
+    folderId: null, aiMeta: { course: "C", week: "1", generatedAt: nowISO(), activeLanguage, translations },
+  });
+
+  await test("a note within the cap is returned untouched", () => {
+    const p = page({ en: { overview: "Short.", keyPoints: [], assessable: [], openQuestions: [] } });
+    const out = capAiNote({ pageItem: p, requestedLanguage: "en" });
+    assert.deepEqual(out.pageItem, p);
+    assert.equal(out.droppedLanguage, null);
+    assert.equal(out.trimmed, false);
+  });
+
+  await test("the cap keeps the language the student asked for and drops the other", () => {
+    // The whole point of the rule: a student who asked for Chinese is
+    // reading Chinese. Dropping it would leave them the copy they can't
+    // use, while never affecting a monolingual user at all.
+    const out = capAiNote({ pageItem: page({ en: bigSummary(), zh: bigSummary() }, "zh"), requestedLanguage: "zh" });
+    assert.ok(out.pageItem.aiMeta.translations.zh, "the requested language was dropped");
+    assert.equal(out.pageItem.aiMeta.translations.en, undefined, "the unrequested language survived");
+    assert.equal(out.droppedLanguage, "en");
+    assert.equal(out.pageItem.aiMeta.activeLanguage, "zh");
+  });
+
+  await test("with no translation requested, English is what survives", () => {
+    const out = capAiNote({ pageItem: page({ en: bigSummary(), zh: bigSummary() }, "en"), requestedLanguage: "en" });
+    assert.ok(out.pageItem.aiMeta.translations.en);
+    assert.equal(out.pageItem.aiMeta.translations.zh, undefined);
+    assert.equal(out.droppedLanguage, "zh");
+  });
+
+  await test("a single-language note still over the cap is trimmed from the least valuable end", () => {
+    const out = capAiNote({ pageItem: page({ en: bigSummary() }), requestedLanguage: "en" });
+    const kept = out.pageItem.aiMeta.translations.en;
+    assert.equal(out.trimmed, true);
+    assert.equal(kept.openQuestions.length, 0, "open questions should go before key points");
+    assert.ok(kept.keyPoints.length > 0, "key points were given up before open questions ran out");
+    assert.ok(Buffer.byteLength(JSON.stringify(out.pageItem)) <= MAX_AI_NOTE_BYTES);
+  });
+
+  await test("trimming never leaves a note without an overview", () => {
+    const monster = page({ en: { overview: "o".repeat(60000), keyPoints: [], assessable: [], openQuestions: [] } });
+    const out = capAiNote({ pageItem: monster, requestedLanguage: "en" });
+    assert.ok(out.pageItem.aiMeta.translations.en.overview.length >= 200);
+  });
+
+  await test("every capped note ends up under the cap", () => {
+    for (const langs of [{ en: bigSummary() }, { en: bigSummary(), zh: bigSummary() }]) {
+      const out = capAiNote({ pageItem: page(langs), requestedLanguage: "en" });
+      const bytes = Buffer.byteLength(JSON.stringify(out.pageItem));
+      assert.ok(bytes <= MAX_AI_NOTE_BYTES, `still ${bytes} bytes after capping`);
+    }
+  });
+
+  await test("a capped note records what it gave up, so the UI can say so", () => {
+    const { pageItem } = mapAiResultToItems({
+      result: { summaryFailed: false, transcript: "", original: bigSummary(), translated: bigSummary() },
+      course: "C", week: "1", language: "zh", uid, nowISO,
+    });
+    assert.ok(pageItem.aiMeta.capped, "nothing recorded that the note was capped");
+    assert.equal(pageItem.aiMeta.capped.droppedLanguage, "en");
+  });
+
+  await test("study cards stay in the original language even when a translation was asked for", () => {
+    // The Study tab has one deck per semester and no notion of language.
+    const { noteItems } = mapAiResultToItems({
+      result: {
+        summaryFailed: false, transcript: "",
+        original: { ...summaryOf(3), terms: [{ term: "Mitochondrion", content: "The powerhouse." }] },
+        translated: { ...summaryOf(3), terms: [{ term: "线粒体", content: "细胞的动力工厂。" }] },
+      },
+      course: "C", week: "1", language: "zh", uid, nowISO,
+    });
+    assert.equal(noteItems.length, 1);
+    assert.equal(noteItems[0].term, "Mitochondrion");
+  });
+
+  /* ---------- the recovery key ---------- */
+
+  await test("the parked key costs a few dozen bytes, not a transcript", () => {
+    const meta = setPendingRecovery({}, { key: "3f2504e0-4f89-11d3-9a0c-0305e82c3301", course: "PSYC2001", week: "7", startedAt: nowISO() });
+    const bytes = Buffer.byteLength(JSON.stringify(meta)) - 2;
+    assert.ok(bytes < 160, `the parked key was ${bytes} bytes`);
+    assert.equal(pendingRecovery(meta).key, "3f2504e0-4f89-11d3-9a0c-0305e82c3301");
+  });
+
+  await test("clearing the key propagates to the other device instead of being undone by it", () => {
+    // mergeData spreads local.meta then newer.meta, so a key simply
+    // deleted on one device would be reinstated by the other's copy.
+    // An explicit null is what makes the clear survive a merge.
+    const stale = { meta: { updatedAt: "2026-08-11T10:00:00.000Z", pendingAiRecovery: { key: "k" } }, semesters: {} };
+    const cleared = { meta: { ...clearPendingRecovery(stale.meta), updatedAt: "2026-08-11T11:00:00.000Z" }, semesters: {} };
+    // The device still holding the key merges in the one that cleared it.
+    // This is the direction that matters: meta is a spread of local then
+    // newer, so only an explicit null overwrites the stale key.
+    assert.equal(pendingRecovery(mergeData(stale, cleared).meta), null, "the cleared key came back from the stale device");
+    // And the reverse order must agree, or the two devices disagree forever.
+    assert.equal(pendingRecovery(mergeData(cleared, stale).meta), null, "clearing didn't survive a merge on the clearing device");
+  });
+
+  await test("a missing or malformed pending key reads as nothing to recover", () => {
+    assert.equal(pendingRecovery(undefined), null);
+    assert.equal(pendingRecovery({}), null);
+    assert.equal(pendingRecovery({ pendingAiRecovery: null }), null);
+    assert.equal(pendingRecovery({ pendingAiRecovery: { course: "C" } }), null);
+  });
+
+  await test("the key is parked before the upload, not after it", () => {
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    const body = src.slice(src.indexOf("const runUpload = async"), src.indexOf("useEffect(() => {\n    if (initialRecovery)"));
+    assert.ok(body.length > 0, "couldn't find runUpload");
+    const parkAt = body.indexOf("setPendingRecovery");
+    const uploadAt = body.indexOf("await uploadAudio");
+    assert.ok(parkAt > -1, "runUpload no longer parks the key at all");
+    assert.ok(uploadAt > -1, "couldn't find the upload inside runUpload");
+    assert.ok(parkAt < uploadAt, "the key is parked after the upload, so a crash during it loses the key");
+  });
+
+  await test("saving and discarding both clear the parked key", () => {
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    assert.equal(
+      [...src.matchAll(/clearPendingRecovery/g)].length >= 3,
+      true,
+      "save, discard and forget must all clear the key"
+    );
+  });
+
+  /* ---------- retention is a promise, so it has to match ---------- */
+
+  await test("the retention days the UI promises are the ones the server enforces", () => {
+    const config = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/config.ts"), "utf8");
+    const short = /REQUEST_RETENTION_DAYS = (\d+)/.exec(config);
+    const long = /FAILED_REQUEST_RETENTION_DAYS = (\d+)/.exec(config);
+    assert.ok(short && long, "couldn't read the server's retention constants");
+    assert.equal(Number(short[1]), RESULT_RETENTION_DAYS, "the UI promises a different retention than the server keeps");
+    assert.equal(Number(long[1]), FAILED_RESULT_RETENTION_DAYS, "the UI promises a different failed-row retention than the server keeps");
+  });
+
+  await test("the sweep keeps failed rows longer instead of deleting everything at 7 days", () => {
+    const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/index.ts"), "utf8");
+    assert.match(src, /FAILED_REQUEST_RETENTION_DAYS/, "the long sweep is gone");
+    assert.match(src, /\.eq\("summary_failed", false\)/, "the short sweep no longer spares failed rows");
+    assert.match(src, /summary_failed: summaryFailed/, "nothing records the failure on the row, so the sweep can't see it");
+  });
+
+  await test("the failure screen says the minutes were billed", () => {
+    // Charging for transcription and saying only "we couldn't generate a
+    // summary" is how a support ticket becomes a chargeback.
+    const copy = fs.readFileSync(path.join(rootDir, "src/aiNotesCopy.js"), "utf8");
+    assert.match(copy, /AI minutes/, "the billing sentence is gone");
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    assert.match(src, /AI_NOTES_COPY\.summaryFailed\.billing/, "the failure screen no longer renders it");
+  });
+
+  await test("no user-facing copy calls a dropped result regenerable", () => {
+    // The audio is deleted as soon as transcription succeeds and there is
+    // no text-only re-summarise endpoint, so it is recoverable, not
+    // regenerable. The two words promise different things.
+    const copy = fs.readFileSync(path.join(rootDir, "src/aiNotesCopy.js"), "utf8");
+    // Strip comments first -- this file explains at length WHY the word
+    // is banned, and that explanation must not trip its own guard.
+    const code = copy.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    assert.ok(!/regenerat/i.test(code), "user-facing copy claims something is regenerable");
+    assert.match(code, /recover/i, "the copy should say recoverable, which is the true claim");
   });
 
   /* ---------- the wiring these fixes depend on ---------- */
