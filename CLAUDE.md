@@ -307,13 +307,34 @@ Two independent mechanisms now stop that, on purpose:
 `scripts/test-service-worker.mjs` asserts both, plus that the build
 refuses a hardcoded name. Don't "simplify" either one into the other.
 
-**Only the hosted web build registers a worker.** Electron loads over
-`file://` (workers aren't allowed there at all), but Capacitor serves
-Android from `http://localhost`, which *is* a secure context — so a
-worker registers and caches the bundled assets, and an app-store update
-that replaced those files on disk would still be shadowed by the cache.
-`index.html` registers only on `https:` and a non-localhost host, and
-unregisters anything it finds otherwise.
+**Only the hosted web build registers a worker.** `index.html` registers
+only on `https:` with a non-localhost host, and unregisters anything it
+finds otherwise. That rule excludes all three non-web cases by
+construction, and it is worth being explicit about which:
+
+| Shell | Origin | Excluded because |
+|---|---|---|
+| Electron | `file://` | not `https:` — and workers aren't permitted on `file://` at all, so it never had one |
+| Capacitor iOS | `capacitor://localhost` | not `https:`, *and* the host is `localhost` — excluded twice over |
+| Capacitor Android | `http://localhost` | not `https:` — and this one **is** a secure context, so it really did register |
+
+Android was the live risk: a worker there caches the bundled assets, so
+an app-store update that replaced those files on disk would still be
+shadowed by the cache — an update that passed review and reached nobody.
+
+**On the checklist for the first real-hardware mobile test** (nothing has
+been compiled to a device yet, so no affected install exists): an Android
+install that already has a worker gets a *cached* `index.html`, so the
+unregister code in the page never runs on first load. It should still
+heal without help, because the browser checks `sw.js` for updates
+independently of anything the page does, installs the new worker, and its
+`activate` handler clears the old cache. Untested, and worth confirming
+on the device rather than assuming.
+
+Note also that a docs-only commit produces the *same* build id, since the
+hash covers `app.js` and `app.css` only. That is correct — nothing
+user-facing changed, so no new worker needs to install — but it means the
+build id on the Account tab won't move for every commit on `main`.
 
 The build id is shown in the app (Account tab). It is the only way to
 answer "which build is this user on", which is the first question after
