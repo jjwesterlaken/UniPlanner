@@ -312,8 +312,28 @@ async function run() {
 
   /* ---------- consent ---------- */
 
-  await test("consent v3 links the published policy and names where the server is", () => {
-    assert.equal(AI_CONSENT_VERSION, 3);
+  await test("consent covers text features, not only lecture recording", () => {
+    /* Batch 4 sends text the student already wrote to the same overseas
+       summariser. That is a different promise from "we send your
+       recording", and v3 would have become quietly untrue the moment any
+       of those features shipped. */
+    const all = CONSENT_TEXT.bullets.join(" ");
+    assert.ok(AI_CONSENT_VERSION >= 4, "the consent version wasn't bumped for the text features");
+    assert.match(all, /writing you have already done|text is sent overseas/i, "text features aren't covered");
+    assert.match(all, /study cards|explanation you type/i, "the consent doesn't say what kind of text");
+  });
+
+  await test("the policy covers text features too, or it becomes untrue when they ship", () => {
+    const text = prose("privacy.html");
+    assert.match(text, /text you have already written|your own writing/i, "the policy still describes audio only");
+    assert.match(text, /practice questions/i, "the policy doesn't name what the text is used for");
+    // The old wording promised nothing left the country unless you used
+    // AI LECTURE NOTES specifically. That is the clause that breaks.
+    assert.doesNotMatch(text, /none of this happens unless you use the AI notes feature/i);
+  });
+
+  await test("consent links the published policy and names where the server is", () => {
+    assert.ok(AI_CONSENT_VERSION >= 3);
     assert.equal(CONSENT_TEXT.privacyUrl, PRIVACY_URL);
     const all = CONSENT_TEXT.bullets.join(" ");
     assert.match(all, /Sydney/, "the consent text doesn't say where the server is");

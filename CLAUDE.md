@@ -577,6 +577,17 @@ consent text interpolates rather than repeating.
 Neither document is legal advice, and both should be reviewed by someone
 qualified before store submission.
 
+**Both were deliberately written ahead of the features they describe.**
+The policy and consent v4 cover AI features that work on text the student
+already wrote — practice questions, explain-it-back, summarising your own
+notes — before any of those shipped. Being slightly over-broad ahead of a
+feature costs nothing; being under-broad after it ships is the failure
+that matters, and it is the one that would have happened here. The old
+wording promised nothing left the country *"unless you use the AI notes
+feature"*, which the first text feature would have made untrue while the
+URL sat in two store listings. Write for what the system will do, and
+bump the consent version in the same pass.
+
 ### Known limitation: reference sheets store plain text
 
 A reference sheet entry's `body` is exactly what the student typed —
