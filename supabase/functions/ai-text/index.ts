@@ -35,7 +35,8 @@ import {
   PRACTICE_MAX_CARDS,
   WEAKSPOTS_MAX_TOPICS,
   TASK_UNITS,
-  MONTHLY_TEXT_UNITS_LIMIT,
+  TEXT_TIERS,
+  limitForTier,
 } from "./config.ts";
 
 const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra, "ai-text"));
@@ -106,7 +107,10 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       logFailure(stage, profileErr);
       return errorResponse(stage, "server_error", "Something went wrong. Please try again.", 500);
     }
-    if (!profile || profile.tier !== "ai") {
+    // One constant, deliberately: see TEXT_TIERS in config.ts. Which
+    // tiers get these features is a product decision, and nothing in the
+    // four screens branches on it, so changing it is one line here.
+    if (!profile || !TEXT_TIERS.includes(profile.tier)) {
       logStage(stage, { outcome: "not_entitled" });
       return errorResponse(stage, "no_access", "AI study help isn't enabled for your account yet.", 403);
     }
@@ -155,7 +159,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       task,
       unitsUsed,
       taskUnits: TASK_UNITS,
-      monthlyLimit: MONTHLY_TEXT_UNITS_LIMIT,
+      monthlyLimit: limitForTier(profile.tier),
     });
     if (!allowance.ok) {
       logStage(stage, { rejected: allowance.code });
@@ -191,8 +195,14 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          subsidy for whatever made the model produce unusable output,
          which is exactly the case worth noticing. */
       logFailure(stage, err, { task });
-      await bill(admin, { userId, month, unitsUsed, cost: allowance.cost, now });
-      return errorResponse(stage, "ai_failed", "The AI couldn't finish that. Please try again.", 502);
+      const charged = await bill(admin, { userId, month, unitsUsed, cost: allowance.cost, now });
+      if (!charged.ok) logFailure("billing", charged.error, { task, cost: allowance.cost, after: "parse_failure" });
+      /* A DIFFERENT code from the one above, because these are different
+         facts: that one cost the student nothing, this one cost them
+         allowance for a result they never saw. The client's wording says
+         so -- see AI_TEXT_FAILURES in src/aiTextCopy.js. Charging quietly
+         is how a support ticket becomes a chargeback. */
+      return errorResponse(stage, "ai_failed_charged", "The AI answered, but the answer came back unusable.", 502);
     }
 
     stage = "billing";
@@ -209,7 +219,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       task,
       result,
       // The app turns this into a sentence. It never receives a unit count.
-      allowanceUsed: allowanceFraction(unitsUsed + allowance.cost, MONTHLY_TEXT_UNITS_LIMIT),
+      allowanceUsed: allowanceFraction(unitsUsed + allowance.cost, limitForTier(profile.tier)),
     });
   } catch (err) {
     logFailure(stage, err);
