@@ -282,6 +282,43 @@ RLS, which costs nothing and calls no function. **A failed read degrades
 to "unknown", never "none left"**: a paywall caused by going into a
 tunnel is worse than a missing line.
 
+### Handwriting is a live storage problem, and compression probably solves it
+
+A stroke serialises to **~1,420 bytes** today, so a 200-stroke page is
+**~278 KB — a quarter of the entire 1 MB budget in one note.** That is
+not a consequence of the planned unified note; it is true right now, and
+anyone taking handwritten notes on an iPad is heading toward breaking
+their own sync with nothing warning them.
+
+The cause is visible in one line of `PlannerApp.jsx`: a point is
+`[((e.clientX - rect.left) / rect.width) * CANVAS_W, ...]` — an unrounded
+division, serialised at full float precision (`123.45678901234567`) for a
+coordinate on a 1000-unit canvas where nothing past the decimal point can
+be seen.
+
+`scripts/measure-ink.mjs` prices three transformations. On synthetic
+strokes, a 200-stroke page goes 278 KB → **20 KB, a 93% reduction**:
+
+| | page | note |
+|---|---|---|
+| now | 278 KB | |
+| rounded to whole canvas units | 79 KB | **−72%, and shape-independent** |
+| + drop near-collinear points | 28 KB | −90%, depends on real handwriting |
+| + delta-encode along the stroke | 20 KB | −93% |
+
+**The first step is the one to trust without a real sample.** Rounding
+removes float digits, which is pure waste regardless of how anyone
+writes; 72% is a floor, not an estimate. The other two depend on stroke
+shape and sampling rate, so they need a real export before anyone
+promises them.
+
+If that holds on real handwriting, ink does **not** need the `ai_notes`
+treatment — a table of its own, fetched on open — and the unified
+typing-and-ink note becomes a much smaller decision. Migration is
+correspondingly cheap: rounding is idempotent and lossless at display
+resolution, so it can run in `normalizeData` on load with no schema
+change, no server involvement, and no migration ordering to get wrong.
+
 **Still outstanding, and unchanged by this work:** the semester archive.
 Two fixed buckets that nothing ever clears is still the growth that
 matters most, and no amount of per-feature capping addresses it.
@@ -479,6 +516,36 @@ CI, which rules out things that look fine locally:
   execute it (`EINVAL`); `npx` is unreliable on build servers.
 - Don't "tidy" the deprecation warnings these scripts emit. That has
   broken the build twice.
+
+### Never tidy a warning. Always READ one.
+
+Those are two different instructions and the second was being skipped
+because of the first.
+
+`aiTextClient.js` built its endpoint URL from `import.meta.env` — a Vite
+idiom — inside an esbuild IIFE bundle, where `import.meta` resolves to
+**empty**. Every call in the four text features went to a relative path
+and 404'd. esbuild said so, on every build:
+
+```
+▲ [WARNING] "import.meta" is not available with the "iife" output format
+  and will be empty [empty-import-meta]
+```
+
+It shipped to production. Nobody was using those screens yet, so nothing
+surfaced it, and it was found only because a later build was run with the
+warning count in view.
+
+The rule the two halves make together: **a warning is not noise to be
+silenced, and it is not noise to be ignored either.** Read it, decide
+whether it describes a real defect, and then either fix the defect or
+leave the warning exactly where it is. What is never right is skipping
+the reading step — which is what "don't tidy warnings" quietly licensed.
+
+The tell for this class: a warning that names a *value being empty or
+missing* rather than a style preference. `empty-import-meta` is the
+build telling you a variable is empty at runtime, which is a bug report,
+not a lint.
 
 ## CI and packaging
 
