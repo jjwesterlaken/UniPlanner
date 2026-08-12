@@ -663,6 +663,17 @@ hardcoded list would have gone on passing when `ai_notes` arrived and the
 policy still described the planner as holding everything a student
 writes — the same drift the cache name and the host allowlist had.
 
+**A store on the user's device is the same class of change**, and the
+IndexedDB note cache was exactly that: somewhere whole lectures live that
+neither document covered. Guarded the same way, from the `uni-planner-*`
+naming convention every store already follows — each name found in `src/`
+or `public/` must be declared with a document phrase, or excused with a
+written reason it holds nothing of the student's. That guard has a known
+hole and says so: a store named off-convention slips past it, so a second
+check counts IndexedDB databases, since that is the only device store big
+enough to hold note text. A partial guard that names its hole is worth
+more than a thorough-looking one that hides it.
+
 The related trap in the wording: `ai_notes` and `ai_notes_requests` both
 hold a lecture summary, and their promises are opposite — one is the
 student's until they delete it, the other is ours for 7 or 30 days. A
