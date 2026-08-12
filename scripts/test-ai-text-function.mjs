@@ -210,11 +210,13 @@ async function main() {
 
   /* ---------- entitlement ---------- */
 
-  await test("a free-tier account is refused before the provider is called", async () => {
+  await test("an account with no profiles row is refused before the provider is called", async () => {
+    // The signup trigger should always have made one, so this is an
+    // anomaly rather than a tier -- and it must fail closed.
     const summarizer = okSummarizer(EXPLAIN_OK);
     const res = await run(
       { task: "explain", topic: "t", text: "hello" },
-      { supabaseAdmin: makeAdmin({ tier: "free" }), summarizer }
+      { supabaseAdmin: makeAdmin({ tier: null }), summarizer }
     );
     assert.equal(res.status, 403);
     assert.equal((await res.json()).code, "no_access");
@@ -230,7 +232,53 @@ async function main() {
     assert.equal((await res.json()).code, "no_access");
   });
 
-  await test("opening the gate to free accounts is one constant, not a change in four screens", async () => {
+  await test("a tier that is allowed in never inherits the paid allowance", async () => {
+    /* THE COMBINATION, not each constant alone. Adding "free" to
+       TEXT_TIERS without a smaller limit hands free accounts 150 units
+       -- generous-looking right up to the invoice -- and each constant
+       checked in isolation would pass throughout. */
+    const cfg = await import(pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
+    for (const tier of cfg.TEXT_TIERS) {
+      const limit = cfg.limitForTier(tier);
+      assert.ok(limit > 0, `${tier} is allowed in with no allowance at all`);
+      if (tier !== "ai") {
+        assert.ok(
+          limit < cfg.MONTHLY_TEXT_UNITS_LIMIT,
+          `"${tier}" is in TEXT_TIERS but limitForTier gives it ${limit}, the same as the paid tier. ` +
+            "The gate and the limit are two halves of one decision."
+        );
+      }
+    }
+    assert.equal(cfg.limitForTier("free"), 10, "the free allowance is a decided number, not a default");
+  });
+
+  await test("a free account gets the features, at the free allowance", async () => {
+    const admin = makeAdmin({ tier: "free", unitsUsed: 0 });
+    const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
+    assert.equal(res.status, 200);
+    // 1 of 10, not 1 of 150 — the fraction is what the app shows.
+    assert.equal((await res.json()).allowanceUsed, 1 / 10);
+  });
+
+  await test("a free account is stopped at the free limit, not the paid one", async () => {
+    const summarizer = okSummarizer(EXPLAIN_OK);
+    const res = await run(
+      { task: "explain", topic: "t", text: "hi" },
+      { supabaseAdmin: makeAdmin({ tier: "free", unitsUsed: 10 }), summarizer }
+    );
+    assert.equal((await res.json()).code, "usage_exceeded");
+    assert.equal(summarizer.calls, 0);
+  });
+
+  await test("a tier that is not in TEXT_TIERS is still refused", async () => {
+    const res = await run(
+      { task: "explain", topic: "t", text: "hi" },
+      { supabaseAdmin: makeAdmin({ tier: "suspended" }), summarizer: okSummarizer(EXPLAIN_OK) }
+    );
+    assert.equal((await res.json()).code, "no_access");
+  });
+
+  await test("the tier gate lives in one constant, not in the handler", async () => {
     /* Which tiers get these features is a product decision (see
        TEXT_TIERS). This asserts the decision has exactly one home: the
        handler must not carry a literal tier name of its own, or opening
@@ -238,18 +286,7 @@ async function main() {
     assert.ok(!/tier\s*!==\s*"/.test(src), "the handler hardcodes a tier instead of reading TEXT_TIERS");
     assert.match(src, /TEXT_TIERS\.includes\(profile\.tier\)/);
     const cfg = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-text/config.ts"), "utf8");
-    assert.match(cfg, /TEXT_TIERS = \["ai"\]/, "the gate today is ai-only; changing it is a decision, not a refactor");
-  });
-
-  await test("the allowance follows the tier, so a free tier would not inherit the paid one", async () => {
-    // The half that would be easy to forget when opening the gate: add
-    // "free" to TEXT_TIERS without this and free accounts get 150.
-    const { limitForTier, MONTHLY_TEXT_UNITS_LIMIT, FREE_TEXT_UNITS_LIMIT } = await import(
-      pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs"))
-    );
-    assert.equal(limitForTier("ai"), MONTHLY_TEXT_UNITS_LIMIT);
-    assert.equal(limitForTier("free"), FREE_TEXT_UNITS_LIMIT);
-    assert.ok(FREE_TEXT_UNITS_LIMIT < MONTHLY_TEXT_UNITS_LIMIT);
+    assert.match(cfg, /export const TEXT_TIERS = \[/, "the gate must stay a declared list");
   });
 
   /* ---------- THE ORDERING ---------- */
@@ -500,6 +537,82 @@ async function main() {
     );
     assert.deepEqual(Object.keys(out).sort(), ["assessable", "keyPoints", "openQuestions", "overview", "terms"]);
     assert.equal(out.terms.length, 1, "a term with no name must be dropped, not rendered blank");
+  });
+
+  await test("the client's mirror of the allowance arithmetic equals the server's", async () => {
+    /* The fifth instance of the restatement pattern taught the rule: a
+       mirror is allowed where it cannot be avoided, and the EQUALITY
+       becomes the guard. A comment would not have caught this. */
+    const server = await import(pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
+    const client = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    assert.deepEqual(client.TASK_UNITS, server.TASK_UNITS);
+    assert.deepEqual(client.TEXT_TIERS, server.TEXT_TIERS);
+    assert.equal(client.MONTHLY_TEXT_UNITS_LIMIT, server.MONTHLY_TEXT_UNITS_LIMIT);
+    assert.equal(client.FREE_TEXT_UNITS_LIMIT, server.FREE_TEXT_UNITS_LIMIT);
+    for (const tier of server.TEXT_TIERS) {
+      assert.equal(client.limitForTier(tier), server.limitForTier(tier), `limitForTier disagrees for "${tier}"`);
+    }
+  });
+
+  await test("a student learns an action is unaffordable before doing the work", async () => {
+    const { allowanceState, canAfford, isLastAction } = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
+
+    // A free account with 9 of 10 used can still explain (1) but not
+    // summarise (3). Knowing that BEFORE the text box is the point.
+    const nearlyOut = allowanceState({ tier: "free", unitsUsed: 9 });
+    assert.equal(canAfford(nearlyOut, "explain"), true);
+    assert.equal(canAfford(nearlyOut, "summarise"), false);
+    assert.equal(canAfford(nearlyOut, "practice"), false);
+
+    // "This is the last one" is specific, not a vague low-fuel light.
+    assert.equal(isLastAction(nearlyOut, "explain"), true);
+    assert.equal(isLastAction(allowanceState({ tier: "free", unitsUsed: 0 }), "explain"), false);
+
+    const spent = allowanceState({ tier: "free", unitsUsed: 10 });
+    assert.equal(spent.remaining, 0);
+    assert.equal(canAfford(spent, "explain"), false);
+    assert.equal(spent.isFree, true, "the upgrade wording depends on knowing which tier is out");
+  });
+
+  await test("a free account at its limit is told what the plan adds, not only what it can't do", async () => {
+    const { describeExhausted } = await import(pathToUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    const free = describeExhausted({ isFree: true });
+    assert.match(free.detail, /AI plan/i, "a free user out of allowance must learn what upgrading gives them");
+    assert.ok(
+      /lecture|record|more/i.test(free.detail),
+      "saying only 'you have run out' is the version that sells nothing and helps nobody"
+    );
+    const paid = describeExhausted({ isFree: false });
+    assert.ok(!/AI plan/i.test(paid.detail), "a paying student must not be sold the plan they already have");
+  });
+
+  await test("the pre-flight allowance read costs nothing and calls no endpoint", async () => {
+    /* If this ever became an endpoint call, every screen that mounts
+       would pay a cold start to ask a question the database already
+       answers under RLS. */
+    const client = fs.readFileSync(path.join(rootDir, "src/aiTextClient.js"), "utf8");
+    const fn = client.slice(client.indexOf("export async function fetchTextAllowance"), client.indexOf("export async function callAiText"));
+    assert.ok(!/functions\/v1/.test(fn), "the allowance read must not call an Edge Function");
+    assert.match(fn, /from\("profiles"\)/);
+    assert.match(fn, /from\("ai_usage"\)/);
+    // Scoped by hand even under RLS: the policies are the guarantee, the
+    // filters are what make the query return this student's row at all.
+    assert.equal((fn.match(/eq\("user_id", session\.user\.id\)/g) || []).length, 2);
+  });
+
+  await test("an unreadable allowance degrades to 'unknown', never to 'none left'", async () => {
+    const { fetchTextAllowance } = await import(pathToUrl(path.join(rootDir, "src/aiTextClient.js")));
+    const offline = {
+      from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }), maybeSingle: async () => ({ data: null }) }) }) }),
+    };
+    const state = await fetchTextAllowance({ user: { id: "u" } }, { supabaseClient: offline, isDemo: false });
+    assert.equal(state.unavailable, true);
+    assert.equal(state.remaining, undefined, "a failed read must not read as an exhausted allowance");
+  });
+
+  await test("demo mode reports the allowance as unavailable rather than crashing", async () => {
+    const { fetchTextAllowance } = await import(pathToUrl(path.join(rootDir, "src/aiTextClient.js")));
+    assert.deepEqual(await fetchTextAllowance(null, { supabaseClient: null, isDemo: true }), { unavailable: true });
   });
 
   /* ---------- source-level invariants ---------- */

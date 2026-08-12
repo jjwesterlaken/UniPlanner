@@ -103,5 +103,43 @@ export function describeAllowance(fraction) {
   return "You haven't used any of this month's AI study help yet.";
 }
 
-/** Shown before an action when the allowance is nearly gone. */
-export const ALMOST_OUT_WARNING = "This is one of the last few AI study actions you have left this month.";
+/* ---------- before the work, not after ----------
+
+   The paywall-after-the-work behaviour was inherited from AI notes
+   rather than chosen, and it is the wrong default. Someone who types out
+   a full explanation and only then discovers they are out has done the
+   work for nothing: annoying rather than persuasive, and a worse
+   advertisement for the paid tier than simply saying so up front. All of
+   this is shown BEFORE the input. */
+
+/** Shown next to an action that would take the last of the allowance. */
+export const LAST_ACTION_WARNING = "This would use the last of this month's AI study help.";
+
+/**
+ * What to say when there isn't enough left to do the thing.
+ *
+ * A free student is told what the plan ADDS. "You can't do that" sells
+ * nothing and helps nobody; the point of a small free allowance is that
+ * running out is the moment the upgrade makes sense, and that moment is
+ * wasted on a dead end. A paying student is told when it resets and
+ * nothing else -- selling someone the plan they already have is the
+ * fastest way to make an app feel like it isn't listening.
+ */
+export function describeExhausted(state) {
+  if (state && state.isFree) {
+    return {
+      title: "You've used this month's free AI study help.",
+      detail:
+        "The AI plan gives you a lot more of it, plus recording and writing up your lectures. Your free allowance comes back at the start of next month either way.",
+      action: "See what the AI plan includes",
+    };
+  }
+  return {
+    title: "You've used all of this month's AI study help.",
+    detail: "It comes back at the start of next month. Everything else in the planner keeps working as normal.",
+    action: null,
+  };
+}
+
+/** The allowance line shown above each feature, before anything is typed. */
+export const allowanceLine = (state) => describeAllowance(state ? state.fraction : 0);

@@ -108,31 +108,35 @@ export const MONTHLY_TEXT_UNITS_LIMIT = 150;
 
 /* ---------- who gets these features ----------
 
-   A PRODUCT DECISION, parked in one constant rather than inherited.
+   A PRODUCT DECISION, and it has been taken: both tiers.
 
-   Today: `["ai"]`, the same gate lecture notes use. `profiles.tier`
-   defaults to 'free' at signup and is flipped by hand in the dashboard,
-   so every account is free until someone changes it.
+   `profiles.tier` defaults to 'free' at signup and is flipped by hand in
+   the dashboard, so this is the gate almost every account meets.
 
-   The case for opening these up: practice questions and explain-it-back
-   are the two features most likely to make a free user want the paid
-   tier, and they are the cheapest things here -- 1 or 2 units against a
-   lecture's hundred-plus minutes. A small free text allowance is a
-   plausible way to sell the AI tier.
+   The reasoning, recorded because a later reader will wonder why the
+   cheapest features are the ungated ones: ten units is roughly five
+   practice sets or ten explanations, costs about a cent per free user,
+   and is enough to understand why the AI tier is worth paying for.
+   These are the best advertisement for the expensive feature, and
+   gating them entirely means nobody ever experiences the thing they
+   would be buying.
 
-   The case against: free users cost money and don't pay.
+   LECTURE RECORDING IS NOT AFFECTED. That stays ai-only, in
+   ai-notes/index.ts, which has its own tier check and its own reasons --
+   a recording costs real transcription minutes where these cost
+   fractions of a cent.
 
-   Not for this code to decide. Adding "free" to this array is the whole
-   change -- FREE_TEXT_UNITS_LIMIT below is the other half, and nothing
-   in the four screens branches on tier, so opening the gate does not
-   mean touching any of them. */
-export const TEXT_TIERS = ["ai"];
+   Nothing in the four screens branches on tier, so this array and the
+   limits below are the whole decision. */
+export const TEXT_TIERS = ["ai", "free"];
 
-/* What a free account would get if it were added to TEXT_TIERS. Unused
-   while the gate is ai-only; here so that opening it is one decision
-   about a number rather than a second design conversation. Sized as
-   roughly a fortnight of light use: enough to feel the feature, not
-   enough to replace the tier. */
+/* What a free account gets. Deliberately small: enough to feel the
+   feature, not enough to replace the tier.
+
+   THE TWO HALVES MUST MOVE TOGETHER. Adding a tier here without giving
+   it a smaller limit hands it the paid allowance, which is the mistake
+   that looks like generosity until the bill arrives -- so a test asserts
+   the COMBINATION, not each constant on its own. */
 export const FREE_TEXT_UNITS_LIMIT = 10;
 
 /** The monthly allowance for a tier. */
