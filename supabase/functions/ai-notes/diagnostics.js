@@ -101,12 +101,18 @@ export function describeError(err) {
  * the runtime tears down mid-request, and prefixed so it's greppable in
  * the Supabase log viewer.
  */
-export function failureLine(stage, err, extra = {}) {
+export function failureLine(stage, err, extra = {}, fn = "ai-notes") {
   const { name, message, stack } = describeError(err);
-  return `ai-notes FAILURE ${JSON.stringify({ stage, name, message, stack, ...extra })}`;
+  return `${fn} FAILURE ${JSON.stringify({ stage, name, message, stack, ...extra })}`;
 }
 
 /** Entry marker for a stage, so the logs show how far a request got. */
-export function stageLine(stage, extra = {}) {
-  return `ai-notes stage ${JSON.stringify({ stage, ...extra })}`;
+export function stageLine(stage, extra = {}, fn = "ai-notes") {
+  return `${fn} stage ${JSON.stringify({ stage, ...extra })}`;
 }
+
+/* The prefix is a parameter because a SECOND function now shares this
+   module, and a failure in ai-text logged as "ai-notes FAILURE" sends
+   whoever is reading the logs to the wrong file at the worst moment.
+   Defaulted rather than required so ai-notes' many call sites stay
+   unchanged -- the only caller that has to pass it is the new one. */

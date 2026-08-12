@@ -733,7 +733,7 @@ guesses — and guessing at someone's coursework is the wrong answer.
 
 ## A guard that restates its subject will drift
 
-Three separate times now, a check has been weaker than it looked, always
+Five separate times now, a check has been weaker than it looked, always
 the same way: it hardcoded the value it was supposed to be guarding.
 
 - The service worker's **cache name** was a hand-edited constant. It was
@@ -745,13 +745,33 @@ the same way: it hardcoded the value it was supposed to be guarding.
 - The documents' **URL drift test** compared hosts but not paths, so
   `legalLinks.js` could point at `/privacy` while the documents still
   cross-linked `/privacy.html` and nothing would notice.
+- The documents' **list of tables** was typed into the test. The
+  published documents enumerate where a student's data lives, so adding
+  `ai_notes` made them wrong — and the test went on passing, because it
+  was checking a list that hadn't changed either.
+- **`MONTHLY_MINUTES_LIMIT_HINT`** restated the Edge Function's
+  `MONTHLY_MINUTES_LIMIT` in the browser bundle, which genuinely cannot
+  import from `supabase/functions/`, with nothing comparing the two. The
+  comment said a drift would be "cosmetic". It would not have been for
+  `MINIMUM_BILLED_MINUTES_HINT`, added beside it: that is the number a
+  student watches their allowance move by, so a drift makes the figure on
+  screen disagree with the figure being charged.
 
-One is an anecdote. Three is a rule: **derive a guard from its source of
+One is an anecdote. Five is a rule: **derive a guard from its source of
 truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
-against the exported constants. The test for whether a guard is real is
-to break the thing it protects and watch it go red — restating a value
-gives you two copies to keep in step and a test that only checks one.
+against the exported constants, the table list is matched out of the
+migrations, and the mirrored constants are asserted equal to the ones
+they mirror.
+
+Where a restatement genuinely cannot be avoided — a browser bundle and a
+Deno function cannot share a module — the mirror is allowed and the
+*equality* becomes the guard. What is never allowed is a mirror with a
+comment instead of an assertion.
+
+The test for whether a guard is real is to break the thing it protects
+and watch it go red — restating a value gives you two copies to keep in
+step and a test that only checks one.
 
 ## Testing
 

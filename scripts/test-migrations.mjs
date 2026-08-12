@@ -565,6 +565,68 @@ async function run() {
     assert.equal(one(db, `select relrowsecurity::text from pg_class where relname = 'ai_notes';`), "true");
   });
 
+  /* ---------- 0006: the text allowance ---------- */
+
+  await test("0006 gives ai_usage a text allowance that reads as zero, never null", () => {
+    /* NOT NULL DEFAULT 0 is the whole point. A nullable column would
+       make `text_units_used + cost > limit` evaluate to NULL for every
+       row that predates the migration -- which is falsy, so the
+       allowance check would silently pass for everyone who had ever
+       used the audio features. */
+    const db = freshDb();
+    applyMigration(db, "0001_ai_notes.sql");
+    applyMigration(db, "0006_ai_text_usage.sql");
+    assert.equal(
+      one(db, `select is_nullable from information_schema.columns
+                where table_name = 'ai_usage' and column_name = 'text_units_used';`),
+      "NO",
+      "a nullable text_units_used makes every allowance comparison NULL, which reads as 'not over the limit'"
+    );
+    assert.match(
+      one(db, `select column_default from information_schema.columns
+                where table_name = 'ai_usage' and column_name = 'text_units_used';`) || "",
+      /0/
+    );
+  });
+
+  await test("a row that predates 0006 reads as no text allowance used", () => {
+    // The behaviour the constraint above exists for, checked directly
+    // rather than inferred from the schema.
+    const db = freshDb();
+    applyMigration(db, "0001_ai_notes.sql");
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});
+                     insert into public.ai_usage (user_id, month, minutes_used) values (${USER}, '2026-08', 42);`);
+    applyMigration(db, "0006_ai_text_usage.sql");
+    assert.equal(one(db, `select text_units_used from public.ai_usage where user_id = ${USER};`), "0");
+    assert.equal(one(db, `select minutes_used from public.ai_usage where user_id = ${USER};`), "42", "the audio allowance must survive");
+  });
+
+  await test("0006 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = freshDb();
+    applyMigration(db, "0001_ai_notes.sql");
+    applyMigration(db, "0006_ai_text_usage.sql");
+    applyMigration(db, "0006_ai_text_usage.sql");
+    assert.equal(
+      one(db, `select count(*)::text from information_schema.columns
+                where table_name = 'ai_usage' and column_name = 'text_units_used';`),
+      "1"
+    );
+  });
+
+  await test("a new COLUMN needs no deletion change, unlike a new table", () => {
+    // delete_my_account_data() clears ai_usage wholesale, so the text
+    // allowance goes with it. Asserted rather than assumed, because the
+    // distinction between "column" and "table" is exactly the kind of
+    // thing that gets remembered wrongly.
+    const db = freshDb();
+    for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) applyMigration(db, file);
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});
+                     insert into public.ai_usage (user_id, month, minutes_used, text_units_used)
+                       values (${USER}, '2026-08', 10, 7);`);
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
+    assert.equal(count(db, "public.ai_usage", `user_id = ${USER}`), 0);
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 
