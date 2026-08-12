@@ -25,6 +25,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, isConfigured } from "./config.js";
+import { PASSWORD_RESET_REDIRECT } from "./legalLinks.js";
 
 /* ---------- small helpers ---------- */
 
@@ -272,6 +273,28 @@ export const demoBackend = {
     return readJSON(DEMO_SESSION_KEY, null);
   },
 
+  /* Demo mode has no email and no server, so a reset is a no-op that
+     REPORTS ITSELF as one. Silently pretending to send an email would
+     leave someone waiting for a message that was never going to arrive.
+
+     These exist at all because the sign-in form now offers "Forgot
+     password?", and a backend missing the method would throw on the
+     path a brand-new user is most likely to take. */
+  async resetPassword() {
+    return { sent: false, reason: "demo" };
+  },
+
+  async updatePassword({ password }) {
+    if (!password || password.length < 6) throw new Error("Password must be at least 6 characters.");
+    const users = readJSON(DEMO_USERS_KEY, {});
+    const session = readJSON(DEMO_SESSION_KEY, null);
+    if (!session) throw new Error("You need to be signed in to change your password.");
+    if (users[session.user.email]) {
+      users[session.user.email] = { ...users[session.user.email], password };
+      writeJSON(DEMO_USERS_KEY, users);
+    }
+  },
+
   async pull({ session }) {
     if (!session) throw new Error("Not signed in.");
     const cloud = readJSON(DEMO_CLOUD_KEY, {});
@@ -294,15 +317,46 @@ export const demoBackend = {
    stores one row per user containing the whole planner.
 ------------------------------------------------ */
 
+/* Whether a login link could ever appear in this shell's URL.
+
+   The original reasoning for switching session detection OFF was
+   correct and is kept: the app is not served from a normal web address
+   in the desktop and phone builds, so there is never a link in the URL
+   to read. What was wrong was applying that to the HOSTED build too,
+   where the password-reset link is exactly such a URL -- so the token
+   was never processed and a reset could not complete.
+
+   Gated on the protocol rather than switched on globally, the same shape
+   as the service-worker rule in index.html, and it excludes exactly the
+   two shells where it could misbehave:
+
+     Electron        file://              never has a token, and stripping
+                                          the hash afterwards uses
+                                          history.replaceState, which is
+                                          not reliable on file://
+     Capacitor iOS   capacitor://localhost  non-standard scheme
+     Capacitor Android  http://localhost    standard scheme, so this is ON
+                                          -- harmless, since no token ever
+                                          appears there
+     Hosted web      https://...          what this is for
+
+   It changes nothing about ordinary sign-in: the option only acts when
+   the URL actually carries auth parameters. */
+const urlCanCarryASession = () => {
+  try {
+    return typeof window !== "undefined" && /^https?:$/.test(window.location.protocol);
+  } catch (e) {
+    return false;
+  }
+};
+
 let supabase = null;
 if (isConfigured) {
   supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      // The app isn't served from a normal web address in the desktop and
-      // phone builds, so there is never a login link in the URL to read.
-      detectSessionInUrl: false,
+      detectSessionInUrl: urlCanCarryASession(),
     },
   });
 }
@@ -380,8 +434,25 @@ export const supabaseBackend = {
     }
   },
 
+  /* `redirectTo` is passed EXPLICITLY rather than relying on the
+     project's Site URL. The Site URL pointed at the old host for an
+     unknown period and nothing surfaced it; naming the destination here
+     means the app and the email agree by construction, and a future host
+     change breaks the build rather than the reset flow.
+
+     It must also be on the Redirect URLs allowlist in Supabase Auth
+     settings, or Supabase falls back to the Site URL silently. */
   async resetPassword({ email }) {
-    const { error } = await supabase.auth.resetPasswordForEmail((email || "").trim());
+    const { error } = await supabase.auth.resetPasswordForEmail((email || "").trim(), {
+      redirectTo: PASSWORD_RESET_REDIRECT,
+    });
+    if (error) throw new Error(readable(error));
+    return { sent: true };
+  },
+
+  /** Set a new password for whoever the current session belongs to. */
+  async updatePassword({ password }) {
+    const { error } = await supabase.auth.updateUser({ password: password || "" });
     if (error) throw new Error(readable(error));
   },
 

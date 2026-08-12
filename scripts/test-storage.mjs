@@ -508,6 +508,68 @@ async function run() {
     assert.match(src, /summary_failed: summaryFailed/, "nothing records the failure on the row, so the sweep can't see it");
   });
 
+  /* ---------- password reset: the feature that had no ends ----------
+
+     Recorded because the diagnosis is the lesson. Reading the code found
+     two real faults -- detectSessionInUrl and a stale Site URL -- and
+     missed that `resetPassword` was never called and no screen existed
+     to set a new password. Both ends were absent; only the middle looked
+     plausible. Trying to use the feature would have found it in a
+     minute. */
+
+  await test("the sign-in form offers a way to start a reset", () => {
+    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    assert.match(src, /Forgot your password\?/, "the entry point is gone again");
+    assert.match(src, /onResetPassword\(\{ email \}\)/, "the link no longer calls the backend");
+  });
+
+  await test("there is a screen that actually sets a new password", () => {
+    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    assert.match(src, /function PasswordRecovery/, "the recovery screen is gone");
+    assert.match(src, /PASSWORD_RECOVERY/, "nothing listens for the recovery event");
+    assert.match(src, /backend\.updatePassword/, "the screen no longer saves anything");
+  });
+
+  await test("both backends implement reset and update, so demo mode cannot throw", () => {
+    /* demoBackend had NO resetPassword at all. Adding the link without
+       it would have thrown on the path a brand-new user is most likely
+       to take -- and demo mode is the mode nobody runs while developing. */
+    const src = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+    const demo = src.slice(src.indexOf("export const demoBackend"), src.indexOf("export const supabaseBackend"));
+    const real = src.slice(src.indexOf("export const supabaseBackend"));
+    for (const [name, body] of [["demoBackend", demo], ["supabaseBackend", real]]) {
+      assert.match(body, /async resetPassword/, `${name} has no resetPassword`);
+      assert.match(body, /async updatePassword/, `${name} has no updatePassword`);
+    }
+    assert.match(demo, /sent: false/, "demo mode must REPORT that no email was sent, not pretend one was");
+  });
+
+  await test("session detection is gated on the protocol, not switched on everywhere", () => {
+    /* The original reasoning was right: file:// and capacitor:// never
+       carry a login link, and stripping the hash afterwards is not
+       reliable on file://. What was wrong was applying it to the hosted
+       build too. */
+    const src = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+    assert.match(src, /detectSessionInUrl: urlCanCarryASession\(\)/, "it is back to a hardcoded boolean");
+    assert.match(src, /\^https\?:\$/, "the gate no longer tests the protocol");
+  });
+
+  await test("the reset email's destination is derived, not left to a dashboard field", () => {
+    /* The Site URL pointed at the old host for an unknown period and
+       nothing in the repo could have said so. Naming redirectTo here
+       means the app and the email agree by construction. */
+    const src = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+    assert.match(src, /redirectTo: PASSWORD_RESET_REDIRECT/);
+    const links = fs.readFileSync(path.join(rootDir, "src/legalLinks.js"), "utf8");
+    assert.match(links, /PASSWORD_RESET_REDIRECT = SITE_URL/, "it must derive from SITE_URL, not restate a host");
+  });
+
+  await test("the reset message does not reveal whether an account exists", () => {
+    // Otherwise the box becomes a way to enumerate the user list.
+    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    assert.match(src, /If there's an account for/);
+  });
+
   await test("the failure screen says the minutes were billed", () => {
     // Charging for transcription and saying only "we couldn't generate a
     // summary" is how a support ticket becomes a chargeback.

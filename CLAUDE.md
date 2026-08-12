@@ -617,7 +617,11 @@ record.
    change quietly does nothing, which is the failure that is hardest to
    notice. Verify by saving one AI note while signed in and checking a
    row appears in `ai_notes`.
-3. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+3. **Resend (or another real SMTP provider)** configured in Supabase
+   Auth → SMTP Settings. The built-in sender is rate-limited and lands in
+   spam, so password reset does not work for real users without it. See
+   the section above.
+4. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
    Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states
    are aspirational rather than enforced. 0004 raises a notice saying so
@@ -632,21 +636,88 @@ retention sweep, which the system does hourly anyway; the service role
 key there would be a full-database credential in a queue table. Don't
 "simplify" it back.
 
-### Known broken: password reset, end to end
+### Password reset: a feature with no ends
 
-Two independent faults, either of which alone would break it:
+Fixed, and the *diagnosis* is the part worth keeping.
 
-1. The Supabase project's **Site URL** points at the old host, so the
-   reset email links somewhere wrong.
-2. `sync.js` creates the client with `detectSessionInUrl: false`, so even
-   landing on the correct host, the app never processes the recovery
-   token in the URL.
+Two causes were recorded here from reading the code: `sync.js` created
+the client with `detectSessionInUrl: false`, and the Supabase Site URL
+pointed at the old host. Both were real. Both were the **third and fourth
+links in a chain whose first two did not exist**:
 
-A user who forgets their password therefore has no route back into their
-account, and nothing surfaces this until it happens to someone real.
-**Launch blocker, deliberately not fixed during the hosting migration.**
-When it is fixed it needs testing end to end with a real email — the code
-reads plausibly, which is exactly why it was never noticed.
+- `supabaseBackend.resetPassword` had been there all along and **nothing
+  called it.** There was no "Forgot password?" anywhere in the app, so a
+  user could not even request the email.
+- There was no `updateUser` call anywhere in `src/`, so even holding a
+  valid recovery session there was nothing to set a new password with.
+
+Anyone who had flipped the two recorded causes would have tested it, seen
+the app load, and found no way to proceed. **This was never a broken
+feature; it was an unbuilt one with a plausible-looking middle.** A
+diagnosis assembled from reading code found two faults and missed that
+the thing had no ends — trying to use it would have taken a minute.
+
+The four pieces now in place:
+
+1. A "Forgot password?" link on the sign-in form, which says the same
+   thing whether or not the address has an account — otherwise the box
+   enumerates the user list.
+2. `PasswordRecovery`, a blocking overlay shown on Supabase's
+   `PASSWORD_RECOVERY` event. Blocking rather than a panel on the Account
+   tab, because a recovery session is a strange state to leave someone
+   in: signed in, having not signed in, with one thing to do. Burying it
+   behind a tab is how someone clicks a reset link, sees their planner,
+   changes nothing, and reports that the link is broken.
+3. `updatePassword` on **both** backends. `demoBackend` had no
+   `resetPassword` either, so the link alone would have thrown on the
+   path a brand-new user is most likely to take.
+4. `detectSessionInUrl` gated on `location.protocol` being `http:` or
+   `https:`. **The original reasoning was correct and is kept** — the app
+   is not served from a normal web address in the desktop and phone
+   builds, and stripping the hash afterwards uses `history.replaceState`,
+   which is not reliable on `file://`. What was wrong was applying that
+   to the hosted build, where the reset link *is* such a URL. Same shape
+   as the service-worker rule in `index.html`. Capacitor Android
+   (`http://localhost`) is now included and it is a harmless no-op, since
+   no token ever appears there.
+
+`redirectTo` is passed explicitly, derived from `SITE_URL`, rather than
+relying on the project's Site URL setting — that setting was wrong for an
+unknown period and nothing in the repo could have said so. **It must also
+be on the Redirect URLs allowlist in Supabase Auth settings**, or
+Supabase ignores it and silently falls back to the Site URL, which is the
+failure that looks like the code is wrong when the configuration is.
+
+**None of this is verified until someone reads a real inbox.** That is
+how it stayed broken: it reads plausibly and no test can cover a flow
+that requires an email client.
+
+### Signup confirmation is NOT affected, and that is worth knowing
+
+The same Site URL and the same session-detection path are involved, so
+the assumption is that it broke too. It didn't. Supabase's confirmation
+link points at `/auth/v1/verify`, which confirms the address
+**server-side** and only then redirects to the app — so the account is
+confirmed before the browser reaches any of our code, whatever
+`detectSessionInUrl` is set to.
+
+The only loss was auto-sign-in: the user lands signed out and signs in
+with the password they just chose. Clunky, never blocking, and it
+improves for free now the protocol gate is in.
+
+### Email delivery is a launch requirement, not a nice-to-have
+
+**Supabase's built-in email sender is rate-limited to a handful of
+messages an hour and lands in spam routinely.** Password reset does not
+survive real users on it: a student who cannot sign in and whose reset
+email never arrives has no route back into their account and no way to
+tell whether the app or their inbox is at fault.
+
+Configure **Resend** (or another real SMTP provider) in Supabase Auth →
+SMTP Settings before launch. This is on the pending list below rather
+than in it as a footnote because the symptom — "the email never arrived"
+— is indistinguishable from a code bug to everyone except whoever checks
+the SMTP configuration.
 
 ## When Netlify was the host
 

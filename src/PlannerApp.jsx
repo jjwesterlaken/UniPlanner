@@ -2734,6 +2734,112 @@ function StudyGame({ notes, onRate, session, textAllowance }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Setting a new password after a reset link                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Shown when Supabase reports a PASSWORD_RECOVERY event.
+ *
+ * A blocking overlay rather than a panel on the Account tab, because a
+ * recovery session is a strange state to leave someone in: they are
+ * signed in, they did not sign in, and the only thing they came to do is
+ * set a password. Burying that behind a tab is how someone clicks a
+ * reset link, sees their planner, and never changes anything -- which is
+ * indistinguishable from the link not working.
+ */
+function PasswordRecovery({ onSet, onCancel }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  const mismatch = confirm.length > 0 && password !== confirm;
+  const tooShort = password.length > 0 && password.length < 8;
+
+  const submit = async () => {
+    if (password !== confirm) return setError("Those two don't match.");
+    setBusy(true);
+    setError("");
+    try {
+      await onSet(password);
+      setDone(true);
+    } catch (e) {
+      setError(e.message || "We couldn't change your password. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 p-4">
+      <Card className="w-full max-w-sm">
+        {done ? (
+          <>
+            <h2 className="font-serif text-lg font-semibold text-stone-800">Password changed</h2>
+            <p className="mt-1 text-sm text-stone-600">
+              You're signed in on this device. You'll need the new password next time you sign in anywhere else.
+            </p>
+            <button className={`${btnPrimary} mt-4 w-full`} onClick={onCancel}>
+              Back to my planner
+            </button>
+          </>
+        ) : (
+          <>
+            <h2 className="font-serif text-lg font-semibold text-stone-800">Set a new password</h2>
+            <p className="mt-1 text-sm text-stone-600">
+              You followed a reset link, so you can choose a new password now.
+            </p>
+            <div className="mt-3 space-y-2">
+              <div>
+                <label className={labelCls}>New password</label>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  className={inputCls}
+                  placeholder="At least 8 characters"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className={labelCls}>Type it again</label>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  className={inputCls}
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && !mismatch && !tooShort && submit()}
+                />
+              </div>
+            </div>
+            {tooShort && <p className="mt-2 text-xs text-stone-500">A bit longer — at least 8 characters.</p>}
+            {mismatch && <p className="mt-2 text-xs text-rose-600">Those two don't match.</p>}
+            {error && <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+            <div className="mt-4 flex gap-2">
+              <button
+                className={`${btnPrimary} flex-1`}
+                onClick={submit}
+                disabled={busy || password.length < 8 || mismatch}
+              >
+                {busy ? "Saving…" : "Save new password"}
+              </button>
+              {/* An escape hatch, because a recovery session that can't be
+                  dismissed is a trap for anyone who clicked the link by
+                  accident or changed their mind. */}
+              <button className={btnGhost} onClick={onCancel} disabled={busy}>
+                Not now
+              </button>
+            </div>
+          </>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Weak spots — derived entirely from scheduling state               */
 /* ------------------------------------------------------------------ */
 
@@ -3142,7 +3248,7 @@ function BackupPanel({ data, onRestore, session }) {
 /*  Account + sync                                                    */
 /* ------------------------------------------------------------------ */
 
-function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onSignUp, onSignOut, onSync, onDeleteAccount }) {
+function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onSignUp, onSignOut, onSync, onDeleteAccount, onResetPassword }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [typed, setTyped] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -3163,6 +3269,34 @@ function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onS
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  const [resetNote, setResetNote] = useState("");
+
+  /* Deliberately says the same thing whether or not the address has an
+     account. Confirming which emails are registered would turn this box
+     into a way to enumerate the user list, and the honest phrasing --
+     "if there's an account" -- costs nothing. */
+  const forgot = async () => {
+    if (!email.trim()) {
+      setError("Enter your email address first, then tap this again.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setResetNote("");
+    try {
+      const result = await onResetPassword({ email });
+      setResetNote(
+        result && result.sent === false
+          ? "There's no email server connected yet, so a reset link can't be sent from this build."
+          : `If there's an account for ${email.trim()}, a link to set a new password is on its way. It expires in an hour, and check your spam folder.`
+      );
+    } catch (e) {
+      setError(e.message || "We couldn't send that. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const submit = async () => {
     setBusy(true);
@@ -3324,10 +3458,24 @@ function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onS
       </div>
 
       {error && <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+      {resetNote && <p className="mt-3 rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-600">{resetNote}</p>}
 
       <button className={`${btnPrimary} mt-4 w-full`} onClick={submit} disabled={busy}>
         {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
       </button>
+
+      {/* The entry point that did not exist. `resetPassword` has been on
+          the backend all along with nothing calling it, so a user who
+          forgot their password had no route back into their account. */}
+      {mode === "signin" && (
+        <button
+          className="mt-3 w-full text-center text-xs text-stone-500 underline u-focus"
+          onClick={forgot}
+          disabled={busy}
+        >
+          Forgot your password?
+        </button>
+      )}
 
       {backend.isDemo && (
         <p className="mt-4 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -4072,6 +4220,40 @@ export default function PlannerApp() {
     await runSync(s);
   };
 
+  /* Supabase fires PASSWORD_RECOVERY once it has processed a recovery
+     token out of the URL -- which only happens because detectSessionInUrl
+     is now on for http(s) origins (see sync.js). Listening for the event
+     rather than parsing the hash ourselves means we never have to know
+     the token format, and it fires after the session is genuinely
+     established rather than merely present in the address bar. */
+  const [recovering, setRecovering] = useState(false);
+  useEffect(() => {
+    if (!supabase) return;
+    const { data } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setRecovering(true);
+        // The recovery session IS a session, so the app should reflect
+        // that rather than showing a signed-out shell behind the overlay.
+        if (s) setSession({ user: { id: s.user.id, email: s.user.email }, token: s.access_token });
+      }
+    });
+    return () => data && data.subscription && data.subscription.unsubscribe();
+  }, []);
+
+  const handleResetPassword = async ({ email }) => backend.resetPassword({ email });
+
+  const handleSetPassword = async (password) => {
+    await backend.updatePassword({ password });
+    /* Sync straight away: the recovery session is a real one, and a
+       student who has just proved they own the account should have their
+       planner rather than an empty app behind the confirmation. */
+    const s = await backend.getSession();
+    if (s) {
+      setSession(s);
+      await runSync(s);
+    }
+  };
+
   const handleSignOut = async () => {
     await backend.signOut();
     /* Lecture content cached for offline reading is this account's, and
@@ -4526,6 +4708,7 @@ export default function PlannerApp() {
         {/* A failed local save is invisible by nature, so it gets the most
             prominent spot in the app and stays until a save succeeds. */}
         {saveError && <SaveFailureBanner reason={saveError.reason} bytes={saveError.bytes} signedIn={!!session} />}
+        {recovering && <PasswordRecovery onSet={handleSetPassword} onCancel={() => setRecovering(false)} />}
 
         {focused && (
           <div className="mb-4 flex items-center justify-between gap-2 rounded-xl u-accent-soft u-accent-deeptext px-3 py-2 text-sm">
@@ -4679,6 +4862,7 @@ export default function PlannerApp() {
               syncing={syncing}
               syncError={syncError}
               lastSyncedAt={(data.meta && data.meta.lastSyncedAt) || null}
+              onResetPassword={handleResetPassword}
               onSignIn={handleSignIn}
               onSignUp={handleSignUp}
               onSignOut={handleSignOut}
