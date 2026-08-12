@@ -272,6 +272,91 @@ for (const [tabName, phrases] of [
   }
 }
 
+/* Reading a note, then choosing to edit it.
+
+   Walked rather than asserted from source because this is precisely the
+   wiring the smoke test exists for: the first attempt at it declared
+   `viewId` BELOW the `showList` that reads it, so every render of the
+   Notes tab threw while build:web was perfectly happy and every unit
+   test passed. Third instance of that exact shape. */
+{
+  const notes = findButton("Notes");
+  if (notes) {
+    notes.click();
+    await new Promise((r) => setTimeout(r, 150));
+
+    /* The seeded AI note opens in its own read-only viewer, so a typed
+       note is needed to exercise the new path. Make one.
+
+       The chooser may already be open from the section above, so this
+       tolerates either state -- and CHECKS that it got started, rather
+       than skipping silently. An earlier version of this block did skip
+       silently and reported nothing at all, which is the way a test ends
+       up asserting nothing while looking thorough. */
+    const newNote = findButton("New note");
+    if (newNote) {
+      newNote.click();
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    {
+      const create = findButton("Create note");
+      check(!!create, "the note chooser is reachable, so the read-only walk can run at all");
+      if (create) {
+        create.click();
+        await new Promise((r) => setTimeout(r, 150));
+        const save = findButton("Save note");
+        check(!!save, "a new note offers Save note, and a way to abandon it");
+        if (save) {
+          save.click();
+          await new Promise((r) => setTimeout(r, 200));
+
+          // Tapping it should now READ, not edit.
+          /* The LAST such row: the seeded AI note is also in this list and
+             is first, and it routes to its own viewer -- which would have
+             made this walk silently exercise the wrong screen. */
+          const rows = [...doc.querySelectorAll("button")].filter(
+            (b) => (b.getAttribute("aria-label") || "") === "Edit note"
+          );
+          const row = rows[rows.length - 1];
+          check(rows.length >= 2, "both the seeded AI note and the new typed note are in the list");
+          if (row) {
+            row.click();
+            await new Promise((r) => setTimeout(r, 200));
+            const text = doc.body.textContent || "";
+            check(!text.includes("Save note"), "tapping a note opens it read-only, not straight into the editor");
+            const edit = findButton("Edit");
+            check(!!edit, "the read-only view offers Edit");
+            check(
+              !!doc.querySelector('[aria-label="Back to notes"]'),
+              "the read-only view offers a way back to the list"
+            );
+            check(
+              !!doc.querySelector('[aria-label="More options"]'),
+              "the ⋯ menu is present while reading, not only while editing"
+            );
+
+            if (edit) {
+              edit.click();
+              await new Promise((r) => setTimeout(r, 200));
+              const done = findButton("Done");
+              check(!!done, "editing an existing note commits with Done");
+              check(!findButton("Cancel"), "there is no discard path on an existing note");
+              if (done) {
+                done.click();
+                await new Promise((r) => setTimeout(r, 200));
+                check(
+                  !!findButton("Edit"),
+                  "Done returns to reading the note rather than dropping to the list"
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 // The build identifier: until this existed there was no way to answer
 // "which build is this user running", which is the first question after
 // any stale-cache bug. It reads "development" when unstamped, which is

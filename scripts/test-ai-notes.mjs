@@ -26,6 +26,8 @@ import {
   parseAiNotesError,
   PERMANENT_FAILURE_CODES,
   mapAiResultToItems,
+  folderForRecording,
+  recordingFolderName,
   DEFAULT_CARDS_SELECTED,
   recorderReducer,
   INITIAL_RECORDER_STATE,
@@ -562,6 +564,79 @@ async function run() {
        with the number being charged. */
     assert.equal(MINIMUM_BILLED_MINUTES_HINT, MINIMUM_BILLED_MINUTES);
     assert.equal(MONTHLY_MINUTES_LIMIT_HINT, MONTHLY_MINUTES_LIMIT);
+  });
+
+  /* ---------- recordings file themselves ---------- */
+
+  await test("a recording lands in a folder named for its course", () => {
+    const { folderId, newFolder } = folderForRecording({
+      folders: [],
+      course: "BIOL1010",
+      uid: () => "f1",
+      nowISO: () => "2026-08-12T00:00:00.000Z",
+    });
+    assert.equal(newFolder.name, "BIOL1010 recordings");
+    assert.equal(folderId, "f1");
+  });
+
+  await test("a SECOND recording for the same course reuses the folder", () => {
+    // The whole point. Creating one per recording would bury the notes
+    // list under forty near-identical folders.
+    const folders = [{ id: "existing", name: "BIOL1010 recordings", updatedAt: "x" }];
+    const out = folderForRecording({ folders, course: "BIOL1010", uid: () => "SHOULD_NOT_BE_USED", nowISO: () => "x" });
+    assert.equal(out.folderId, "existing");
+    assert.equal(out.newFolder, null, "a duplicate folder was created");
+  });
+
+  await test("a course typed with different spacing or case still matches", () => {
+    const folders = [{ id: "existing", name: "BIOL1010 recordings", updatedAt: "x" }];
+    for (const course of ["biol1010", " BIOL1010 ", "Biol1010"]) {
+      assert.equal(
+        folderForRecording({ folders, course, uid: () => "new", nowISO: () => "x" }).folderId,
+        "existing",
+        `"${course}" created a second folder`
+      );
+    }
+  });
+
+  await test("a lecture and a tutorial for one course share one folder", () => {
+    // One folder per course, not two. The week is already on the note.
+    const folders = [];
+    const first = folderForRecording({ folders, course: "LAWS2001", uid: () => "f1", nowISO: () => "x" });
+    folders.push(first.newFolder);
+    const second = folderForRecording({ folders, course: "LAWS2001", uid: () => "f2", nowISO: () => "x" });
+    assert.equal(second.folderId, first.folderId);
+  });
+
+  await test("a deleted folder is not reused, so a recording gets a fresh one", () => {
+    /* Recreating a folder the student deleted is accepted: remembering
+       the deletion would mean a tombstone consulted on every save, which
+       has to sync and can disagree between devices, to prevent something
+       a student fixes by dragging one note. */
+    const folders = [{ id: "gone", name: "BIOL1010 recordings", deletedAt: "2026-08-01T00:00:00.000Z" }];
+    const out = folderForRecording({ folders, course: "BIOL1010", uid: () => "fresh", nowISO: () => "x" });
+    assert.equal(out.folderId, "fresh");
+    assert.equal(out.newFolder.name, "BIOL1010 recordings");
+  });
+
+  await test("no course means NO folder, rather than a catch-all or an invented name", () => {
+    /* A general "Recordings" folder groups nothing -- every uncoursed
+       recording in one pile is the notes list again -- and beside
+       "BIOL1010 recordings" it reads as a bug. Inventing a course name
+       would be worse: a course in their planner they never typed. */
+    for (const course of ["", "   ", null, undefined]) {
+      const out = folderForRecording({ folders: [], course, uid: () => "f", nowISO: () => "x" });
+      assert.equal(out.folderId, null, `"${course}" produced a folder`);
+      assert.equal(out.newFolder, null);
+    }
+  });
+
+  await test("a folder costs a negligible number of bytes", () => {
+    const { newFolder } = folderForRecording({ folders: [], course: "BIOL1010", uid: () => "abc12345", nowISO: () => "2026-08-12T00:00:00.000Z" });
+    const bytes = JSON.stringify(newFolder).length;
+    assert.ok(bytes < 150, `a folder is ${bytes} bytes`);
+    // Eight courses a semester, two semesters: still under 2.5KB.
+    assert.ok(bytes * 8 * 2 < 2500);
   });
 
   await test("selectTranscriber actually switches which adapter gets called", () => {

@@ -1638,43 +1638,6 @@ function DrawingCanvas({ draft, setDraft }) {
 
   /* ---- drawing ---- */
 
-  const drawStroke = (ctx, stroke) => {
-    const pts = stroke.points;
-    if (!pts || pts.length === 0) return;
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    if (stroke.erase) {
-      ctx.globalCompositeOperation = "destination-out";
-      ctx.strokeStyle = "rgba(0,0,0,1)";
-    } else {
-      ctx.strokeStyle = stroke.color;
-    }
-
-    if (pts.length === 1) {
-      ctx.beginPath();
-      ctx.arc(pts[0][0], pts[0][1], (stroke.width * (pts[0][2] || 0.5) * 2) / 2, 0, Math.PI * 2);
-      ctx.fillStyle = stroke.erase ? "rgba(0,0,0,1)" : stroke.color;
-      ctx.fill();
-      ctx.restore();
-      return;
-    }
-
-    // Each little segment is drawn at its own width, which is how pressure
-    // from a stylus turns into thick and thin lines.
-    for (let i = 1; i < pts.length; i++) {
-      const [x1, y1, p1] = pts[i - 1];
-      const [x2, y2, p2] = pts[i];
-      const pressure = ((p1 || 0.5) + (p2 || 0.5)) / 2;
-      ctx.lineWidth = Math.max(0.5, stroke.width * (0.4 + pressure * 1.6));
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-    }
-    ctx.restore();
-  };
-
   const redraw = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1918,7 +1881,7 @@ function DrawingCanvas({ draft, setDraft }) {
 
 /* ---- The editor, which shows whichever kind the note is ---- */
 
-function NoteEditor({ draft, setDraft, onSave, onCancel }) {
+function NoteEditor({ draft, setDraft, onSave, onCancel, saveLabel = "Save note" }) {
   const isDrawing = draft.kind === "drawing";
   return (
     <div className="space-y-3">
@@ -1941,11 +1904,13 @@ function NoteEditor({ draft, setDraft, onSave, onCancel }) {
         <RichTextEditor draft={draft} setDraft={setDraft} />
       )}
       <div className="flex justify-end gap-2">
-        <button className={btnGhost} onClick={onCancel}>
-          <X size={15} /> Cancel
-        </button>
+        {onCancel && (
+          <button className={btnGhost} onClick={onCancel}>
+            <X size={15} /> Cancel
+          </button>
+        )}
         <button className={btnPrimary} onClick={onSave}>
-          <Check size={15} /> Save note
+          <Check size={15} /> {saveLabel}
         </button>
       </div>
     </div>
@@ -1955,8 +1920,105 @@ function NoteEditor({ draft, setDraft, onSave, onCancel }) {
 /** The list's preview, whichever of the three shapes a note is in. */
 const notePreview = (p) => (isRemote(p) ? previewFor(p) : aiNotePreview(p));
 
-function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
+/* Hoisted out of the drawing editor so the READ-ONLY view can render the
+   same strokes. Two copies of stroke rendering is how a note comes to
+   look different depending on which screen you opened it from. */
+const drawStroke = (ctx, stroke) => {
+  const pts = stroke.points;
+  if (!pts || pts.length === 0) return;
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  if (stroke.erase) {
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.strokeStyle = "rgba(0,0,0,1)";
+  } else {
+    ctx.strokeStyle = stroke.color;
+  }
+
+  if (pts.length === 1) {
+    ctx.beginPath();
+    ctx.arc(pts[0][0], pts[0][1], (stroke.width * (pts[0][2] || 0.5) * 2) / 2, 0, Math.PI * 2);
+    ctx.fillStyle = stroke.erase ? "rgba(0,0,0,1)" : stroke.color;
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  // Each little segment is drawn at its own width, which is how pressure
+  // from a stylus turns into thick and thin lines.
+  for (let i = 1; i < pts.length; i++) {
+    const [x1, y1, p1] = pts[i - 1];
+    const [x2, y2, p2] = pts[i];
+    const pressure = ((p1 || 0.5) + (p2 || 0.5)) / 2;
+    ctx.lineWidth = Math.max(0.5, stroke.width * (0.4 + pressure * 1.6));
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+  ctx.restore();
+};
+
+
+/** Someone's handwriting, rendered but not editable. */
+function StrokeCanvas({ strokes = [], style }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const ratio = Math.min(window.devicePixelRatio || 1, 3);
+    canvas.width = CANVAS_W * ratio;
+    canvas.height = CANVAS_H * ratio;
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    for (const st of strokes) drawStroke(ctx, st);
+  }, [strokes]);
+  return (
+    <canvas
+      ref={ref}
+      className={`w-full rounded-lg border border-stone-200 ${style === "lined" ? "lined-paper" : "bg-white"}`}
+      style={{ aspectRatio: `${CANVAS_W} / ${CANVAS_H}`, touchAction: "none" }}
+    />
+  );
+}
+
+/* Extracted from NoteRow so the read-only view can carry the same menu.
+   The brief asks for it in both modes, and two copies of a folder picker
+   is how they drift apart. */
+function NoteMenu({ page, folders, onMove }) {
   const [menu, setMenu] = useState(false);
+  return (
+    <>
+      <button className={iconBtn} onClick={() => setMenu((m) => !m)} aria-label="More options">
+        <MoreVertical size={15} />
+      </button>
+      {menu && (
+        <div className="absolute right-0 top-9 z-20 w-52 rounded-xl border border-stone-200 bg-white p-2 shadow-lg">
+          <p className="px-2 pb-1 pt-0.5 text-xs font-medium text-stone-500">Move to folder</p>
+          {folders.length === 0 && <p className="px-2 py-1 text-xs text-stone-400">No folders yet. Create one in the Folders tab.</p>}
+          <div className="max-h-48 overflow-y-auto">
+            {folders.map((fo) => (
+              <button key={fo.id} onClick={() => { onMove(page.id, fo.id); setMenu(false); }} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-stone-700 hover:bg-stone-100">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: folderColor(fo.color).hex }} />
+                {fo.name}
+                {page.folderId === fo.id && <Check size={13} className="ml-auto text-stone-400" />}
+              </button>
+            ))}
+          </div>
+          {page.folderId && (
+            <button onClick={() => { onMove(page.id, null); setMenu(false); }} className="mt-1 flex w-full items-center gap-2 rounded-md border-t border-stone-100 px-2 py-1.5 text-left text-sm text-stone-500 hover:bg-stone-100">
+              <X size={13} /> Remove from folder
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
   const f = folders.find((x) => x.id === p.folderId);
   return (
     <li className="rounded-xl border border-stone-200 p-3.5">
@@ -1981,29 +2043,7 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
           <button className={iconBtn} onClick={() => onDelete(p.id)} aria-label="Delete note">
             <Trash2 size={15} />
           </button>
-          <button className={iconBtn} onClick={() => setMenu((m) => !m)} aria-label="More options">
-            <MoreVertical size={15} />
-          </button>
-          {menu && (
-            <div className="absolute right-0 top-9 z-20 w-52 rounded-xl border border-stone-200 bg-white p-2 shadow-lg">
-              <p className="px-2 pb-1 pt-0.5 text-xs font-medium text-stone-500">Move to folder</p>
-              {folders.length === 0 && <p className="px-2 py-1 text-xs text-stone-400">No folders yet. Create one in the Folders tab.</p>}
-              <div className="max-h-48 overflow-y-auto">
-                {folders.map((fo) => (
-                  <button key={fo.id} onClick={() => { onMove(p.id, fo.id); setMenu(false); }} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-stone-700 hover:bg-stone-100">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: folderColor(fo.color).hex }} />
-                    {fo.name}
-                    {p.folderId === fo.id && <Check size={13} className="ml-auto text-stone-400" />}
-                  </button>
-                ))}
-              </div>
-              {p.folderId && (
-                <button onClick={() => { onMove(p.id, null); setMenu(false); }} className="mt-1 flex w-full items-center gap-2 rounded-md border-t border-stone-100 px-2 py-1.5 text-left text-sm text-stone-500 hover:bg-stone-100">
-                  <X size={13} /> Remove from folder
-                </button>
-              )}
-            </div>
-          )}
+          <NoteMenu page={p} folders={folders} onMove={onMove} />
         </div>
       </div>
       {isReferenceSheet(p) ? (
@@ -2115,6 +2155,56 @@ function ReferenceSheetEditor({ draft, setDraft }) {
 /* Read-only view, opened from the notes list. Plain text on purpose --
    there is no maths rendering, so a formula is whatever the student
    typed. See CLAUDE.md. */
+/**
+ * A note, read rather than edited.
+ *
+ * Tapping a note used to open the editor directly, which is wrong once a
+ * stylus is involved: a palm resting on an editable page writes into it.
+ * Reading is the common case and should be the safe one.
+ *
+ * This is not a fourth pattern -- reference sheets and AI lecture notes
+ * already open read-only. It brings text and handwritten notes into line
+ * with them, so all four behave the same way.
+ */
+function NoteView({ page, folders, onEdit, onClose, onMove, onDelete }) {
+  if (!page) return null;
+  const isDrawing = page.kind === "drawing";
+  return (
+    <Card className="mt-3">
+      <div className="flex items-start justify-between gap-2">
+        <button className={iconBtn} onClick={onClose} aria-label="Back to notes">
+          <ChevronLeft size={18} />
+        </button>
+        <h3 className="min-w-0 flex-1 truncate font-serif text-base font-semibold text-stone-800">
+          {page.title || "Untitled note"}
+        </h3>
+        <div className="flex flex-shrink-0 gap-0.5">
+          <button className={btnGhost} onClick={onEdit}>
+            <Pencil size={15} /> Edit
+          </button>
+          {/* The ⋯ menu stays in BOTH modes -- move and delete are things
+              you want while reading, not only while editing. */}
+          <NoteMenu page={page} folders={folders} onMove={onMove} onDelete={onDelete} />
+        </div>
+      </div>
+
+      {isDrawing ? (
+        <div className="mt-3">
+          <StrokeCanvas strokes={page.strokes || []} readOnly style={page.style} />
+        </div>
+      ) : (
+        <div
+          className={`mt-3 whitespace-pre-wrap text-sm text-stone-700 ${page.style === "lined" ? "lined-paper px-1" : ""} ${
+            page.font === "serif" ? "font-serif" : page.font === "mono" ? "font-mono" : ""
+          }`}
+        >
+          {page.body || htmlToText(page.html) || <span className="text-stone-400">This note is empty.</span>}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function ReferenceSheetView({ page, onEdit, onClose }) {
   const entries = ((page && page.entries) || []).filter((e) => e && !e.deletedAt);
   if (!page) return null;
@@ -2150,7 +2240,12 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
   const [choosing, setChoosing] = useState(false);
   const [aiViewId, setAiViewId] = useState(null);
   const isNew = draft && !draft.id;
-  const showList = !draft && !choosing;
+  /* Reading is the default; editing is a deliberate act. A palm resting
+     on an editable page writes into it, which is the failure this
+     prevents -- and it brings text and handwritten notes into line with
+     reference sheets and AI notes, which already open read-only. */
+  const [viewId, setViewId] = useState(null);
+  const showList = !draft && !choosing && !viewId;
 
   const [sheetViewId, setSheetViewId] = useState(null);
   const room = canAddSheet(pages);
@@ -2205,7 +2300,19 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
       )}
       {draft && !isReferenceSheet(draft) && (
         <>
-          <NoteEditor draft={draft} setDraft={setDraft} onSave={save} onCancel={() => setDraft(null)} />
+          {/* `fromView` means this note was opened for reading and the
+              student chose Edit. Done commits and returns to reading;
+              there is deliberately no Cancel, because a discard path is
+              the "are you sure?" class of bug Grace asked us to avoid on
+              the most-used screen. A NEW note still has Cancel, where
+              discarding is a meaningful thing to want. */}
+          <NoteEditor
+            draft={draft}
+            setDraft={setDraft}
+            onSave={save}
+            onCancel={isNew ? () => setDraft(null) : null}
+            saveLabel={isNew ? "Save note" : "Done"}
+          />
           {/* Only on a note that already HAS something in it, and only
               once saved -- summarising an empty draft would spend
               allowance on nothing. SummariseNote returns null when the
@@ -2224,9 +2331,19 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
       {showList && pages.length > 0 && (
         <ul className="mt-3 space-y-2">
           {pages.map((p) => (
-            <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => (n.aiMeta ? setAiViewId(n.id) : isReferenceSheet(n) ? setSheetViewId(n.id) : setDraft({ ...n }))} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
+            <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => (n.aiMeta ? setAiViewId(n.id) : isReferenceSheet(n) ? setSheetViewId(n.id) : setViewId(n.id))} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
           ))}
         </ul>
+      )}
+      {viewId && !draft && (
+        <NoteView
+          page={pages.find((p) => p.id === viewId)}
+          folders={folders}
+          onEdit={() => setDraft({ ...pages.find((p) => p.id === viewId) })}
+          onClose={() => setViewId(null)}
+          onMove={(id, folderId) => patchItem("pages", id, { folderId })}
+          onDelete={(id) => { removeItem("pages", id); setViewId(null); }}
+        />
       )}
       {sheetViewId && (
         <ReferenceSheetView
@@ -4850,7 +4967,7 @@ export default function PlannerApp() {
           // They're bigger than manual notes — if sync ever gets noticeably
           // slower, splitting AI notes into their own table/row is the fix.
           <Section icon={Mic} title="AI lecture notes" subtitle="Record a lecture and get an AI-generated summary and study cards">
-            <AiNotesPanel session={session} backend={backend} courses={sem.courses} data={data} setData={setData} addItem={addItem} />
+            <AiNotesPanel session={session} backend={backend} courses={sem.courses} folders={sem.folders} data={data} setData={setData} addItem={addItem} />
           </Section>
         )}
 

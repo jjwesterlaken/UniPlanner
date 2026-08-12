@@ -537,6 +537,55 @@ export function mapAiResultToItems({ result, course, week, language, uid, nowISO
   };
 }
 
+/* ---------- recordings file themselves ----------
+
+   A recorded note lands in a folder named for its course, so a student
+   with six subjects doesn't get one flat list of forty lectures.
+
+   ONE FOLDER PER COURSE, not one per lecture and not one each for
+   lectures and tutorials. Splitting those is more structure than most
+   students want, and the week is already on the note.
+
+   FIND OR CREATE, never duplicate: matched case-insensitively on the
+   trimmed name, because "BIOL1010" and "biol1010 " are the same course
+   to everyone except a string comparison.
+
+   Recreating a folder the student deleted is accepted rather than
+   guarded against. The alternative is remembering that they deleted it
+   -- a tombstone consulted on every save, which is state that has to
+   sync and can disagree between devices, to prevent something a student
+   fixes by dragging one note. Deleting a folder in this app doesn't
+   delete its notes either, so the folder is a view, not a container. */
+
+/** `null` course means no folder at all — see folderForRecording. */
+export const recordingFolderName = (course) => `${String(course || "").trim()} recordings`;
+
+/**
+ * The folder a new recording belongs in, creating one if needed.
+ *
+ * NO COURSE MEANS NO FOLDER, deliberately. A catch-all "Recordings"
+ * folder would add a permanent entry to the sidebar that groups nothing
+ * -- every uncoursed recording in one pile is exactly the notes list
+ * again -- and sitting beside "BIOL1010 recordings" it reads as a bug
+ * rather than a category. The note still saves, still appears in the
+ * list, and the student can file it themselves with the move control
+ * that already exists. Inventing a placeholder course name would be
+ * worse: it would put a course in their planner that they never typed.
+ */
+export function folderForRecording({ folders = [], course, uid, nowISO }) {
+  const name = String(course || "").trim();
+  if (!name) return { folderId: null, newFolder: null };
+
+  const wanted = recordingFolderName(name).toLowerCase();
+  const existing = (folders || []).find(
+    (f) => f && !f.deletedAt && String(f.name || "").trim().toLowerCase() === wanted
+  );
+  if (existing) return { folderId: existing.id, newFolder: null };
+
+  const folder = { id: uid(), name: recordingFolderName(name), color: "stone", updatedAt: nowISO() };
+  return { folderId: folder.id, newFolder: folder };
+}
+
 /** A short preview for the notes list, now that AI notes carry no body. */
 export function aiNotePreview(page, limit = 200) {
   if (!page) return "";
