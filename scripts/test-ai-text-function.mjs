@@ -615,6 +615,24 @@ async function main() {
     assert.deepEqual(await fetchTextAllowance(null, { supabaseClient: null, isDemo: true }), { unavailable: true });
   });
 
+  await test("a summarised note goes down the ai_notes path, not a second one", async () => {
+    /* The point of matching ai-notes' output shape: the stub/row/cache/
+       reconciliation machinery is reused rather than reimplemented for a
+       second kind of AI note with rules of its own. */
+    const app = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    const fn = app.slice(app.indexOf("const summariseNote = async"), app.indexOf("/* Study bookkeeping."));
+    assert.match(fn, /mapAiResultToItems/, "it must produce the same items a lecture note does");
+    assert.match(fn, /migrateNote/, "the row must be written before the blob keeps a stub");
+    assert.ok(
+      fn.indexOf("migrateNote") < fn.indexOf('addItem("pages"'),
+      "remote first, then the blob -- the same ordering rule the storage move established"
+    );
+    assert.ok(
+      !/patchItem\(|removeItem\(/.test(fn),
+      "summarising must be ADDITIVE: a student who dislikes the result still has what they wrote"
+    );
+  });
+
   /* ---------- source-level invariants ---------- */
 
   await test("no query in this function touches a table other than profiles and ai_usage", async () => {

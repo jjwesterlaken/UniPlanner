@@ -113,7 +113,7 @@ import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
 import { PracticePanel, WeakSpotsExplain, ExplainItBack, SummariseNote, useTextAllowance } from "./aiText.jsx";
 import { buildAttempt, pruneAttempts, weakTopics } from "./practice.js";
 import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
-import { aiNotePreview } from "./aiNotesLogic.js";
+import { aiNotePreview, mapAiResultToItems } from "./aiNotesLogic.js";
 import {
   isAiNote,
   isRemote,
@@ -2145,7 +2145,7 @@ function ReferenceSheetView({ page, onEdit, onClose }) {
 
 /* ---- Notes tab: a flat list of all notes (folders live in their own tab) ---- */
 
-function Notes({ pages, folders, addItem, patchItem, removeItem }) {
+function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAllowance, onSummariseNote }) {
   const [draft, setDraft] = useState(null);
   const [choosing, setChoosing] = useState(false);
   const [aiViewId, setAiViewId] = useState(null);
@@ -2204,7 +2204,21 @@ function Notes({ pages, folders, addItem, patchItem, removeItem }) {
         </div>
       )}
       {draft && !isReferenceSheet(draft) && (
-        <NoteEditor draft={draft} setDraft={setDraft} onSave={save} onCancel={() => setDraft(null)} />
+        <>
+          <NoteEditor draft={draft} setDraft={setDraft} onSave={save} onCancel={() => setDraft(null)} />
+          {/* Only on a note that already HAS something in it, and only
+              once saved -- summarising an empty draft would spend
+              allowance on nothing. SummariseNote returns null when the
+              body is blank, so a new note shows no control at all. */}
+          {session && !isNew && (
+            <SummariseNote
+              session={session}
+              page={draft}
+              allowanceApi={textAllowance}
+              onSummarised={(result) => onSummariseNote(draft, result)}
+            />
+          )}
+        </>
       )}
       {showList && pages.length === 0 && <Empty>No notes yet. Tap "New note" to add one.</Empty>}
       {showList && pages.length > 0 && (
@@ -2507,7 +2521,7 @@ const RATING_BUTTONS = [
   { key: "easy", label: "Easy", hint: "Instant", cls: "border-stone-200 text-stone-700 hover:bg-stone-50" },
 ];
 
-function StudyGame({ notes, onRate }) {
+function StudyGame({ notes, onRate, session, textAllowance }) {
   const [mode, setMode] = useState(""); // "" | "review" | "practice"
   const [queue, setQueue] = useState([]);
   const [current, setCurrent] = useState(null);
@@ -2683,6 +2697,15 @@ function StudyGame({ notes, onRate }) {
         {revealed && (
           <div className="mt-4 border-t border-stone-200 pt-4">
             <p className="whitespace-pre-wrap text-left text-sm text-stone-700">{cardBack(current)}</p>
+            {/* COLLAPSED by default, and only after the answer is shown.
+                This is the screen students use daily, so the review flow
+                is byte-for-byte unchanged for anyone who never opens it:
+                one extra button, below the answer, above the rating. */}
+            {session && textAllowance && (
+              <div className="text-left">
+                <ExplainItBack session={session} card={current} allowanceApi={textAllowance} />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -4201,6 +4224,38 @@ export default function PlannerApp() {
       ),
     }));
 
+  /* A note the student wrote, summarised into the SAME shape a recorded
+     lecture produces -- so it goes down the whole existing storage path
+     (row first, then the stub; cache; reconciliation) rather than
+     becoming a second kind of AI note with rules of its own.
+
+     The original note is untouched. Summarising is additive: a student
+     who dislikes the result deletes the new note and still has what they
+     wrote, which is the only safe shape for something that reinterprets
+     someone's coursework. */
+  const summariseNote = async (sourcePage, result) => {
+    const { pageItem, noteItems } = mapAiResultToItems({
+      result: { summaryFailed: false, original: result, translated: null },
+      course: (sourcePage && sourcePage.title) || "",
+      week: "",
+      language: null,
+      uid,
+      nowISO,
+    });
+    pageItem.title = `Summary of ${(sourcePage && sourcePage.title) || "a note"}`;
+
+    let toStore = pageItem;
+    if (supabase && session && session.user) {
+      const { ok, stub } = await migrateNote({ supabaseClient: supabase, userId: session.user.id, page: pageItem });
+      if (ok) {
+        toStore = stub;
+        await noteCache.put(pageItem.id, buildContent(pageItem));
+      }
+    }
+    addItem("pages", toStore);
+    noteItems.forEach((n) => addItem("notes", n));
+  };
+
   /* Study bookkeeping.
 
      Both of these read the CURRENT collection inside the updater and
@@ -4542,7 +4597,7 @@ export default function PlannerApp() {
 
         {tab === "notes" && (
           <Section icon={StickyNote} title="Notes" subtitle="Titled notes on lined or blank pages">
-            <Notes pages={sem.pages} folders={sem.folders} addItem={addItem} patchItem={patchItem} removeItem={removeItem} />
+            <Notes pages={sem.pages} folders={sem.folders} addItem={addItem} patchItem={patchItem} removeItem={removeItem} session={session} textAllowance={textAllowance} onSummariseNote={summariseNote} />
           </Section>
         )}
 
@@ -4569,7 +4624,7 @@ export default function PlannerApp() {
             <Section icon={Brain} title="Study cards" subtitle="Review what's due, or drill a course">
               {/* Same reason: a half-finished session must not survive a
                   semester switch and rate cards that are no longer here. */}
-              <StudyGame key={data.semester} notes={sem.notes} onRate={rateCard} />
+              <StudyGame key={data.semester} notes={sem.notes} onRate={rateCard} session={session} textAllowance={textAllowance} />
             </Section>
             <Section icon={TrendingDown} title="Weak spots" subtitle="The cards you keep missing">
               <WeakSpots notes={sem.notes} />
