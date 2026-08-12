@@ -105,3 +105,36 @@ export const TASK_UNITS: Record<Task, number> = {
 };
 
 export const MONTHLY_TEXT_UNITS_LIMIT = 150;
+
+/* ---------- who gets these features ----------
+
+   A PRODUCT DECISION, parked in one constant rather than inherited.
+
+   Today: `["ai"]`, the same gate lecture notes use. `profiles.tier`
+   defaults to 'free' at signup and is flipped by hand in the dashboard,
+   so every account is free until someone changes it.
+
+   The case for opening these up: practice questions and explain-it-back
+   are the two features most likely to make a free user want the paid
+   tier, and they are the cheapest things here -- 1 or 2 units against a
+   lecture's hundred-plus minutes. A small free text allowance is a
+   plausible way to sell the AI tier.
+
+   The case against: free users cost money and don't pay.
+
+   Not for this code to decide. Adding "free" to this array is the whole
+   change -- FREE_TEXT_UNITS_LIMIT below is the other half, and nothing
+   in the four screens branches on tier, so opening the gate does not
+   mean touching any of them. */
+export const TEXT_TIERS = ["ai"];
+
+/* What a free account would get if it were added to TEXT_TIERS. Unused
+   while the gate is ai-only; here so that opening it is one decision
+   about a number rather than a second design conversation. Sized as
+   roughly a fortnight of light use: enough to feel the feature, not
+   enough to replace the tier. */
+export const FREE_TEXT_UNITS_LIMIT = 10;
+
+/** The monthly allowance for a tier. */
+export const limitForTier = (tier: string) =>
+  tier === "ai" ? MONTHLY_TEXT_UNITS_LIMIT : FREE_TEXT_UNITS_LIMIT;

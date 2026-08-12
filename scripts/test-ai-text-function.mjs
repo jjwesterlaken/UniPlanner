@@ -66,6 +66,15 @@ const bundle = await build({
     },
   ],
 });
+const cfgBundle = await build({
+  entryPoints: [path.join(rootDir, "supabase/functions/ai-text/config.ts")],
+  bundle: true,
+  format: "esm",
+  platform: "neutral",
+  write: false,
+});
+fs.writeFileSync(path.join(tmpDir, "cfg.mjs"), cfgBundle.outputFiles[0].text);
+
 const fnPath = path.join(tmpDir, "fn.mjs");
 fs.writeFileSync(fnPath, bundle.outputFiles[0].text);
 
@@ -142,6 +151,8 @@ const run = (body, deps = {}) =>
 
 const EXPLAIN_OK = { correct: ["osmosis is passive"], missing: ["tonicity"], wrong: [], verdict: "Good start." };
 
+const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-text/index.ts"), "utf8");
+
 async function main() {
   /* ---------- validation ---------- */
 
@@ -217,6 +228,28 @@ async function main() {
     // row we still refuse, but as no_access rather than pretending the
     // database is fine.
     assert.equal((await res.json()).code, "no_access");
+  });
+
+  await test("opening the gate to free accounts is one constant, not a change in four screens", async () => {
+    /* Which tiers get these features is a product decision (see
+       TEXT_TIERS). This asserts the decision has exactly one home: the
+       handler must not carry a literal tier name of its own, or opening
+       the gate becomes an archaeology exercise. */
+    assert.ok(!/tier\s*!==\s*"/.test(src), "the handler hardcodes a tier instead of reading TEXT_TIERS");
+    assert.match(src, /TEXT_TIERS\.includes\(profile\.tier\)/);
+    const cfg = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-text/config.ts"), "utf8");
+    assert.match(cfg, /TEXT_TIERS = \["ai"\]/, "the gate today is ai-only; changing it is a decision, not a refactor");
+  });
+
+  await test("the allowance follows the tier, so a free tier would not inherit the paid one", async () => {
+    // The half that would be easy to forget when opening the gate: add
+    // "free" to TEXT_TIERS without this and free accounts get 150.
+    const { limitForTier, MONTHLY_TEXT_UNITS_LIMIT, FREE_TEXT_UNITS_LIMIT } = await import(
+      pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs"))
+    );
+    assert.equal(limitForTier("ai"), MONTHLY_TEXT_UNITS_LIMIT);
+    assert.equal(limitForTier("free"), FREE_TEXT_UNITS_LIMIT);
+    assert.ok(FREE_TEXT_UNITS_LIMIT < MONTHLY_TEXT_UNITS_LIMIT);
   });
 
   /* ---------- THE ORDERING ---------- */
@@ -333,6 +366,72 @@ async function main() {
     assert.equal(admin.seen.filter((s) => s.op === "upsert").length, 1, "spent tokens went unbilled");
   });
 
+  await test("a charged failure and a free failure are DIFFERENT codes", async () => {
+    /* The student needs to be told which happened, and one message for
+       both would either understate a charge or invent one. */
+    const free = await run(
+      { task: "explain", topic: "t", text: "hi" },
+      {
+        supabaseAdmin: makeAdmin(),
+        summarizer: {
+          complete: async () => {
+            throw new Error("upstream 500");
+          },
+        },
+      }
+    );
+    const charged = await run(
+      { task: "explain", topic: "t", text: "hi" },
+      { supabaseAdmin: makeAdmin(), summarizer: { complete: async () => "not json" } }
+    );
+    assert.equal((await free.json()).code, "ai_failed");
+    assert.equal((await charged.json()).code, "ai_failed_charged");
+  });
+
+  await test("both post-provider failure codes have wording, and the charged one says so", async () => {
+    /* Pinned the same way the AI notes billing sentence is: charging and
+       saying only "that didn't work" is how a support ticket becomes a
+       chargeback. */
+    const { AI_TEXT_FAILURES } = await import(pathToUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    const charged = `${AI_TEXT_FAILURES.ai_failed_charged.title} ${AI_TEXT_FAILURES.ai_failed_charged.detail}`;
+    assert.match(charged, /charged/i, "the charged failure no longer says it was charged");
+    assert.match(charged, /AI study help/, "it must name what was used, in the words the student sees elsewhere");
+
+    const free = `${AI_TEXT_FAILURES.ai_failed.title} ${AI_TEXT_FAILURES.ai_failed.detail}`;
+    assert.match(free, /hasn't used any/i, "a student told something failed assumes it cost them unless told otherwise");
+
+    // Every code the endpoint can return has wording. A missing one
+    // renders the server_error fallback, which would be a lie on a 403.
+    const codes = [...src.matchAll(/errorResponse\([^,]+,\s*"([a-z_]+)"/g)].map((m) => m[1]);
+    assert.ok(codes.length >= 5, `expected several codes, found ${codes.length}`);
+    for (const code of new Set(codes)) {
+      assert.ok(AI_TEXT_FAILURES[code], `the endpoint can return "${code}" and no wording is defined for it`);
+    }
+  });
+
+  await test("a failed bill is logged at error level on BOTH billing paths", async () => {
+    /* A revenue hole bounded only by how often that write fails, and
+       nothing else surfaces it. The parse-failure path used to call
+       bill() and discard the result entirely. */
+    const errors = [];
+    const realError = console.error;
+    console.error = (...a) => errors.push(a.join(" "));
+    try {
+      await run(
+        { task: "explain", topic: "t", text: "hi" },
+        { supabaseAdmin: makeAdmin({ billError: { message: "write failed" } }), summarizer: okSummarizer(EXPLAIN_OK) }
+      );
+      await run(
+        { task: "explain", topic: "t", text: "hi" },
+        { supabaseAdmin: makeAdmin({ billError: { message: "write failed" } }), summarizer: { complete: async () => "not json" } }
+      );
+    } finally {
+      console.error = realError;
+    }
+    const billingFailures = errors.filter((e) => e.includes("FAILURE") && e.includes('"stage":"billing"'));
+    assert.equal(billingFailures.length, 2, `expected a logged billing failure on each path, got ${billingFailures.length}`);
+  });
+
   await test("a failed bill does not fail a request whose work succeeded", async () => {
     const admin = makeAdmin({ billError: { message: "write failed" } });
     const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
@@ -404,8 +503,6 @@ async function main() {
   });
 
   /* ---------- source-level invariants ---------- */
-
-  const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-text/index.ts"), "utf8");
 
   await test("no query in this function touches a table other than profiles and ai_usage", async () => {
     /* The endpoint's whole security posture is that it never looks
