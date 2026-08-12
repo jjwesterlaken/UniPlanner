@@ -564,6 +564,20 @@ consent text interpolates rather than repeating.
 Neither document is legal advice, and both should be reviewed by someone
 qualified before store submission.
 
+### Known limitation: reference sheets store plain text
+
+A reference sheet entry's `body` is exactly what the student typed —
+there is no LaTeX, no MathML and no maths rendering of any kind, so a
+formula is written with Unicode symbols (`x = (-b ± √(b²-4ac)) / 2a`) and
+displayed in a monospace font.
+
+That is a deliberate scope decision, not an oversight. It matters for
+anyone adding KaTeX or MathJax later: **the stored `body` was never a
+markup format**, so existing sheets cannot be reinterpreted as one. A
+sheet containing `$x^2$` today means those literal characters. Rendering
+would need either a new field, a per-entry flag, or a migration that
+guesses — and guessing at someone's coursework is the wrong answer.
+
 ## A guard that restates its subject will drift
 
 Three separate times now, a check has been weaker than it looked, always

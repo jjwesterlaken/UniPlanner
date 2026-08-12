@@ -140,6 +140,45 @@ if (studyTab) {
   }
 }
 
+// Batch 3 lands on three screens. Each has to render from an EMPTY
+// semester -- the shape that has crashed demo mode twice before.
+for (const [tabName, phrases] of [
+  // The reading planner lives inside the Planner tab rather than having
+  // one of its own, which is why it is asserted here by its heading.
+  ["Planner", ["Weekly reading planner", "No reading planned yet", "Assignments"]],
+  ["Notes", ["New note"]],
+]) {
+  const tabButton = findButton(tabName);
+  check(!!tabButton, `the ${tabName} tab is reachable`);
+  if (tabButton) {
+    tabButton.click();
+    await new Promise((r) => setTimeout(r, 150));
+    const text = doc.body.textContent || "";
+    for (const phrase of phrases) {
+      check(text.includes(phrase), `${tabName} renders "${phrase}" from an empty semester`);
+    }
+  }
+}
+
+// The reference sheet option, and its editor, from empty.
+{
+  const notes = findButton("Notes");
+  if (notes) {
+    notes.click();
+    await new Promise((r) => setTimeout(r, 150));
+    const newNote = findButton("New note");
+    check(!!newNote, "the Notes tab offers a new note");
+    if (newNote) {
+      newNote.click();
+      await new Promise((r) => setTimeout(r, 150));
+      const text = doc.body.textContent || "";
+      check(text.includes("Reference sheet"), "the note type chooser offers a reference sheet");
+      const create = findButton("Create note");
+      check(!!create, "the chooser offers Create note");
+    }
+  }
+}
+
 // The build identifier: until this existed there was no way to answer
 // "which build is this user running", which is the first question after
 // any stale-cache bug. It reads "development" when unstamped, which is

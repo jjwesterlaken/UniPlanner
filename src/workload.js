@@ -230,7 +230,7 @@ export function buildBreakdown({ assignment, templateId = "essay", today = local
   const start = due < today ? due : today;
   const span = Math.max(0, daysBetween(start, due));
 
-  return template.steps.map((step, index) => ({
+  const slots = template.steps.map((step, index) => ({
     slot: index,
     gen: template.id,
     parentId: assignment.id,
@@ -238,6 +238,30 @@ export function buildBreakdown({ assignment, templateId = "essay", today = local
     text: `${assignment.title || "Assignment"}: ${step.text}`,
     due: addDays(start, Math.round(span * step.at)),
   }));
+
+  /* One extra slot when the assignment has a rubric, dated the day
+     before submission. Checking your work against the marking criteria
+     is the highest-value thing a student can do in the last day, and
+     this is the moment they are most likely to skip it.
+
+     Deliberately no cross-collection lookup: the rubric lives on the
+     assignment this function already has, which is why it lands here for
+     free rather than needing the assignments list threaded through. */
+  const criteria = (assignment.rubric || []).filter((c) => c && !c.deletedAt);
+  if (criteria.length > 0) {
+    slots.push({
+      slot: slots.length,
+      gen: template.id,
+      parentId: assignment.id,
+      course: assignment.course || "",
+      text: `${assignment.title || "Assignment"}: check against the rubric`,
+      // The day before, unless there is no room -- then the due date
+      // itself, rather than a date in the past.
+      due: span >= 1 ? addDays(due, -1) : due,
+    });
+  }
+
+  return slots;
 }
 
 /**

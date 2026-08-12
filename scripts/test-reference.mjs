@@ -40,6 +40,7 @@ import {
 } from "../src/reference.js";
 
 import { mergeData, COLLECTIONS } from "../src/sync.js";
+import { buildBreakdown } from "../src/workload.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -344,6 +345,48 @@ async function run() {
     const t = merged.semesters["Semester 1"].textbook[0];
     assert.equal(isRead(t), true);
     assert.equal(t.readAt, "2026-08-12");
+  });
+
+  /* ---------- the Planner breakdown integration ---------- */
+
+  await test("an assignment with a rubric gains a 'check against the rubric' step", () => {
+    const base = { id: "a1", title: "Essay 1", course: "ENG1000", due: "2026-09-01" };
+    const without = buildBreakdown({ assignment: base, today: "2026-08-01" });
+    const with_ = buildBreakdown({
+      assignment: { ...base, rubric: [{ id: "c1", label: "Argument" }] },
+      today: "2026-08-01",
+    });
+    assert.equal(with_.length, without.length + 1, "the rubric step wasn't added");
+    assert.match(with_[with_.length - 1].text, /check against the rubric/i);
+  });
+
+  await test("the rubric step lands the day before submission, not after it", () => {
+    const out = buildBreakdown({
+      assignment: { id: "a1", title: "Essay", due: "2026-09-01", rubric: [{ id: "c1", label: "x" }] },
+      today: "2026-08-01",
+    });
+    const last = out[out.length - 1];
+    assert.equal(last.due, "2026-08-31");
+    assert.ok(last.due < "2026-09-01");
+  });
+
+  await test("a rubric on an assignment due today doesn't produce a step dated yesterday", () => {
+    // No room for "the day before" -- the due date itself beats a date
+    // in the past, which would show as overdue the moment it appears.
+    const out = buildBreakdown({
+      assignment: { id: "a1", title: "Essay", due: "2026-08-01", rubric: [{ id: "c1", label: "x" }] },
+      today: "2026-08-01",
+    });
+    assert.equal(out[out.length - 1].due, "2026-08-01");
+  });
+
+  await test("an empty or tombstoned rubric adds no step", () => {
+    const base = { id: "a1", title: "Essay", due: "2026-09-01" };
+    assert.equal(buildBreakdown({ assignment: { ...base, rubric: [] }, today: "2026-08-01" }).length, 4);
+    assert.equal(
+      buildBreakdown({ assignment: { ...base, rubric: [{ id: "c", deletedAt: "2026-01-01" }] }, today: "2026-08-01" }).length,
+      4
+    );
   });
 
   await test("npm test still runs the Batch 3 tests", () => {

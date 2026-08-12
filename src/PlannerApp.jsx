@@ -111,6 +111,31 @@ import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
 import { classifyStorageError, describeSaveFailure } from "./storageHealth.js";
 import { aiNotePreview } from "./aiNotesLogic.js";
 import { deleteAccount, confirmationMatches, DELETE_CONFIRMATION_PHRASE } from "./accountDeletion.js";
+import {
+  nextReadState,
+  readingProgress,
+  isRead,
+  isStarted,
+  rubricProgress,
+  hasRubric,
+  validateRubric,
+  splitPastedRubric,
+  emptyCriterion,
+  checkLength,
+  canAddRubric,
+  RUBRIC_LABEL_MAX,
+  RUBRIC_NOTE_MAX,
+  RUBRIC_CRITERIA_MAX,
+  isReferenceSheet,
+  sheetSummary,
+  validateSheet,
+  canAddSheet,
+  emptyEntry,
+  FORMULA_KIND,
+  ENTRY_LABEL_MAX,
+  ENTRY_BODY_MAX,
+  SHEET_ENTRIES_MAX,
+} from "./reference.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL } from "./legalLinks.js";
 
 /* ------------------------------------------------------------------ */
@@ -529,6 +554,30 @@ function Todos({ todos, addItem, patchItem, removeItem, assignments = [] }) {
 /*  Textbook planner                                                  */
 /* ------------------------------------------------------------------ */
 
+/* Three states, cycled by one tap: untouched -> started -> done.
+
+   Drawn with CSS rather than three icons so the states differ by shape
+   as well as colour -- an empty ring, a half ring, a filled tick -- and
+   stay legible to someone who can't tell the accent colour from grey. */
+function ReadTick({ state, onCycle, label }) {
+  const done = state === "done";
+  const part = state === "part";
+  return (
+    <button
+      onClick={onCycle}
+      aria-label={label}
+      aria-pressed={done}
+      title={done ? "Read" : part ? "Started" : "Not started"}
+      className={`mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 u-focus transition-colors ${
+        done ? "u-accent-bg border-transparent text-white" : part ? "u-accent-border" : "border-stone-300 hover:border-stone-400"
+      }`}
+    >
+      {done && <Check size={13} strokeWidth={3} />}
+      {part && <span className="h-2 w-2 rounded-full u-accent-bg" />}
+    </button>
+  );
+}
+
 function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused }) {
   const [form, setForm] = useState({ course: "", week: "", pages: "", notes: "" });
   const [editingId, setEditingId] = useState(null);
@@ -600,6 +649,12 @@ function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused }
                 <span className="text-xs text-stone-400">
                   {entries.length} week{entries.length === 1 ? "" : "s"}
                 </span>
+                {(() => {
+                  const p = readingProgress(entries);
+                  return p.done > 0 ? (
+                    <span className="text-xs font-medium u-accent-text">{p.done} of {p.total} done</span>
+                  ) : null;
+                })()}
               </div>
               <ul className="space-y-2">
                 {entries.map((e) =>
@@ -634,9 +689,20 @@ function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused }
                     </li>
                   ) : (
                     <li key={e.id} className={`flex items-start gap-3 rounded-xl border border-stone-200 p-3 ${focused && e.course === focused ? "u-highlight" : ""}`}>
+                      <ReadTick
+                        state={e.read || ""}
+                        label={`Mark ${e.pages || `week ${e.week || "?"}`} as read`}
+                        onCycle={() => {
+                          const next = nextReadState(e.read);
+                          // readAt is only meaningful once something is
+                          // finished, and is cleared when it is un-ticked
+                          // rather than left pointing at a stale date.
+                          patchItem("textbook", e.id, next === "done" ? { read: next, readAt: localDay() } : { read: next || null, readAt: null });
+                        }}
+                      />
                       <span className="mt-0.5 flex-shrink-0 rounded-md bg-stone-100 px-2 py-0.5 text-xs font-semibold text-stone-600">{e.week ? `Wk ${e.week}` : "—"}</span>
                       <div className="min-w-0 flex-1">
-                        {e.pages ? <p className="text-sm font-medium text-stone-800">{e.pages}</p> : <p className="text-sm text-stone-400">No pages set</p>}
+                        {e.pages ? <p className={`text-sm font-medium ${isRead(e) ? "text-stone-400 line-through" : "text-stone-800"}`}>{e.pages}</p> : <p className="text-sm text-stone-400">No pages set</p>}
                         {e.notes && <p className="mt-0.5 whitespace-pre-wrap text-sm text-stone-500">{e.notes}</p>}
                       </div>
                       <div className="flex flex-shrink-0 gap-0.5">
@@ -685,6 +751,161 @@ function AssignmentFields({ state, set, courses }) {
       <div className="col-span-2">
         <label className={labelCls}>Extra notes</label>
         <textarea className={inputCls} rows={2} spellCheck placeholder="Anything else..." value={state.notes || ""} onChange={(e) => set((x) => ({ ...x, notes: e.target.value }))} />
+      </div>
+    </div>
+  );
+}
+
+/* The rubric checklist.
+
+   Deliberately NOT using maxLength on any field. In most browsers that
+   silently cuts a paste, so a student pasting criteria out of a unit
+   outline would lose the end and never be told. Instead the text is
+   accepted whole, the counter turns red, and Save is blocked with the
+   overage named. See src/reference.js. */
+function CriterionRow({ c, onChange, onRemove }) {
+  const label = checkLength(c.label, RUBRIC_LABEL_MAX, "This");
+  const note = checkLength(c.note, RUBRIC_NOTE_MAX, "This note");
+  return (
+    <li className="rounded-lg border border-stone-200 p-2.5">
+      <div className="flex items-start gap-2">
+        <button
+          onClick={() => onChange({ ...c, done: !c.done })}
+          aria-label={c.done ? "Mark as not done" : "Mark as done"}
+          aria-pressed={!!c.done}
+          className={`mt-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded border-2 u-focus ${
+            c.done ? "u-accent-bg border-transparent text-white" : "border-stone-300 hover:border-stone-400"
+          }`}
+        >
+          {c.done && <Check size={12} strokeWidth={3} />}
+        </button>
+        <div className="min-w-0 flex-1">
+          <textarea
+            rows={2}
+            className={inputCls}
+            spellCheck
+            placeholder="What the marker is looking for"
+            value={c.label || ""}
+            onChange={(e) => onChange({ ...c, label: e.target.value })}
+          />
+          <div className="mt-1 flex items-center justify-between gap-2">
+            <input
+              className={`${inputCls} text-xs`}
+              spellCheck
+              placeholder="Your note (optional)"
+              value={c.note || ""}
+              onChange={(e) => onChange({ ...c, note: e.target.value })}
+            />
+            <button className={iconBtn} onClick={onRemove} aria-label="Remove criterion">
+              <Trash2 size={14} />
+            </button>
+          </div>
+          {(!label.ok || !note.ok) && (
+            <p className="mt-1 text-xs font-medium text-rose-600">{!label.ok ? label.message : note.message}</p>
+          )}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function RubricPanel({ assignment, assignments, patchItem }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(null);
+  const [pasting, setPasting] = useState(false);
+  const [pasted, setPasted] = useState("");
+  const [pasteError, setPasteError] = useState("");
+
+  const live = (draft || assignment.rubric || []).filter((c) => c && !c.deletedAt);
+  const progress = rubricProgress(assignment.rubric);
+  const check = validateRubric(live);
+  const room = canAddRubric(assignments.filter((x) => x.id !== assignment.id));
+
+  const start = () => {
+    setDraft(assignment.rubric && assignment.rubric.length ? [...assignment.rubric] : [emptyCriterion(uid)]);
+    setOpen(true);
+  };
+  const save = () => {
+    patchItem("assignments", assignment.id, { rubric: live });
+    setDraft(null);
+    setOpen(false);
+  };
+  const applyPaste = () => {
+    const r = splitPastedRubric(pasted, uid);
+    if (!r.ok) return setPasteError(r.message);
+    setDraft([...(draft || []).filter((c) => (c.label || "").trim()), ...r.criteria]);
+    setPasted("");
+    setPasteError("");
+    setPasting(false);
+  };
+
+  if (!open) {
+    return (
+      <button
+        className="mt-2 text-xs font-medium text-stone-500 hover:u-accent-text"
+        onClick={start}
+        disabled={!hasRubric(assignment) && !room.ok}
+        title={!hasRubric(assignment) && !room.ok ? room.message : undefined}
+      >
+        {hasRubric(assignment) ? `Rubric · ${progress.done} of ${progress.total}` : "Add rubric"}
+      </button>
+    );
+  }
+
+  return (
+    <div className={`${editBox} mt-2`}>
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium text-stone-700">Rubric</p>
+        <p className="text-xs text-stone-400">{live.length} of {RUBRIC_CRITERIA_MAX}</p>
+      </div>
+
+      {live.length > 0 && (
+        <ul className="mt-2 space-y-2">
+          {live.map((c) => (
+            <CriterionRow
+              key={c.id}
+              c={c}
+              onChange={(next) => setDraft(live.map((x) => (x.id === c.id ? next : x)))}
+              onRemove={() => setDraft(live.filter((x) => x.id !== c.id))}
+            />
+          ))}
+        </ul>
+      )}
+
+      {pasting ? (
+        <div className="mt-2">
+          <label className={labelCls}>Paste your rubric, one criterion per line</label>
+          <textarea rows={5} className={inputCls} value={pasted} onChange={(e) => setPasted(e.target.value)} />
+          {pasteError && <p className="mt-1 text-xs font-medium text-rose-600">{pasteError}</p>}
+          <div className="mt-2 flex justify-end gap-2">
+            <button className={btnGhost} onClick={() => { setPasting(false); setPasteError(""); }}>Cancel</button>
+            <button className={btnPrimary} onClick={applyPaste}>Split into criteria</button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button className={btnGhost} onClick={() => setDraft([...live, emptyCriterion(uid)])} disabled={live.length >= RUBRIC_CRITERIA_MAX}>
+            <Plus size={14} /> Add criterion
+          </button>
+          <button className={btnGhost} onClick={() => setPasting(true)}>Paste a rubric</button>
+        </div>
+      )}
+
+      {!check.ok && (
+        <ul className="mt-2 space-y-0.5">
+          {check.problems.map((p, i) => (
+            <li key={i} className="text-xs font-medium text-rose-600">{p}</li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex justify-end gap-2">
+        <button className={btnGhost} onClick={() => { setDraft(null); setOpen(false); }}>
+          <X size={15} /> Cancel
+        </button>
+        <button className={btnPrimary} onClick={save} disabled={!check.ok}>
+          <Check size={15} /> Save rubric
+        </button>
       </div>
     </div>
   );
@@ -765,6 +986,7 @@ function Assignments({ assignments, courses, addItem, patchItem, removeItem, foc
                 </div>
                 {a.requirements && <p className="mt-2 whitespace-pre-wrap text-sm text-stone-600">{a.requirements}</p>}
                 {a.notes && <p className="mt-1.5 whitespace-pre-wrap text-sm text-stone-400">{a.notes}</p>}
+                <RubricPanel assignment={a} assignments={assignments} patchItem={patchItem} />
                 {onBreakdown && (
                   <BreakdownPanel assignment={a} todos={todos} onBreakdown={onBreakdown} patchItem={patchItem} />
                 )}
@@ -1068,7 +1290,7 @@ function htmlToText(html) {
 
 /* ---- Choosing what kind of note to make ---- */
 
-function PageTypeChooser({ onCreate, onCancel }) {
+function PageTypeChooser({ onCreate, onCancel, sheetsFull = false }) {
   const [style, setStyle] = useState("lined");
   const [kind, setKind] = useState("text");
 
@@ -1125,6 +1347,17 @@ function PageTypeChooser({ onCreate, onCancel }) {
           label="Handwritten"
           hint="Draw with a stylus or finger"
         />
+        {!sheetsFull && <Option
+          active={kind === FORMULA_KIND}
+          onClick={() => setKind(FORMULA_KIND)}
+          preview={
+            <div className="mb-2 flex h-16 items-center justify-center rounded-md border border-stone-200 bg-white text-stone-400">
+              <ListTodo size={22} />
+            </div>
+          }
+          label="Reference sheet"
+          hint="Formulas and definitions to look up"
+        />}
       </div>
 
       <div className="mt-4 flex justify-end gap-2">
@@ -1713,7 +1946,7 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
           <h3 className="font-medium text-stone-800">{p.title || <span className="text-stone-400">Untitled note</span>}</h3>
           <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-stone-400">
             <span className="capitalize">
-              {p.kind === "drawing" ? "Handwritten" : "Typed"} · {p.style} page
+              {isReferenceSheet(p) ? "Reference sheet" : `${p.kind === "drawing" ? "Handwritten" : "Typed"} · ${p.style} page`}
             </span>
             {f && (
               <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5" style={{ backgroundColor: folderColor(f.color).soft, color: folderColor(f.color).text }}>
@@ -1754,7 +1987,11 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
           )}
         </div>
       </div>
-      {p.kind === "drawing" ? (
+      {isReferenceSheet(p) ? (
+        <p className="mt-1.5 flex items-center gap-1.5 text-sm text-stone-500">
+          <ListTodo size={14} /> {sheetSummary(p)}
+        </p>
+      ) : p.kind === "drawing" ? (
         (p.strokes || []).length > 0 && (
           <p className="mt-1.5 flex items-center gap-1.5 text-sm text-stone-500">
             <PenLine size={14} /> {p.strokes.length} stroke{p.strokes.length === 1 ? "" : "s"}
@@ -1773,6 +2010,119 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
   );
 }
 
+/* ---- Reference sheet editor ----
+
+   A page with kind "formula" and an `entries` array. Same enforcement
+   rule as rubrics: no maxLength anywhere, the overage is named, and
+   Save is blocked rather than the text being cut. */
+
+function ReferenceSheetEditor({ draft, setDraft }) {
+  const entries = (draft.entries || []).filter((e) => e && !e.deletedAt);
+  const check = validateSheet(entries);
+  const set = (next) => setDraft({ ...draft, entries: next });
+
+  return (
+    <div>
+      <label className={labelCls}>Title</label>
+      <input
+        className={inputCls}
+        spellCheck
+        placeholder="e.g. MATH2001 exam sheet"
+        value={draft.title || ""}
+        onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+      />
+
+      <div className="mt-3 flex items-center justify-between">
+        <p className={labelCls}>Entries</p>
+        <p className="text-xs text-stone-400">{entries.length} of {SHEET_ENTRIES_MAX}</p>
+      </div>
+
+      {entries.length === 0 && <Empty>Nothing on this sheet yet. Add your first formula or definition.</Empty>}
+
+      <ul className="space-y-2">
+        {entries.map((e) => {
+          const label = checkLength(e.label, ENTRY_LABEL_MAX, "This name");
+          const body = checkLength(e.body, ENTRY_BODY_MAX, "This entry");
+          return (
+            <li key={e.id} className="rounded-lg border border-stone-200 p-2.5">
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <input
+                    className={inputCls}
+                    spellCheck
+                    placeholder="What it's called"
+                    value={e.label || ""}
+                    onChange={(ev) => set(entries.map((x) => (x.id === e.id ? { ...x, label: ev.target.value } : x)))}
+                  />
+                  <textarea
+                    rows={2}
+                    className={`${inputCls} mt-1 font-mono text-sm`}
+                    spellCheck={false}
+                    placeholder="The formula or definition"
+                    value={e.body || ""}
+                    onChange={(ev) => set(entries.map((x) => (x.id === e.id ? { ...x, body: ev.target.value } : x)))}
+                  />
+                  {(!label.ok || !body.ok) && (
+                    <p className="mt-1 text-xs font-medium text-rose-600">{!label.ok ? label.message : body.message}</p>
+                  )}
+                </div>
+                <button className={iconBtn} onClick={() => set(entries.filter((x) => x.id !== e.id))} aria-label="Remove entry">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="mt-2">
+        <button className={btnGhost} onClick={() => set([...entries, emptyEntry(uid)])} disabled={entries.length >= SHEET_ENTRIES_MAX}>
+          <Plus size={14} /> Add entry
+        </button>
+      </div>
+
+      {!check.ok && (
+        <ul className="mt-2 space-y-0.5">
+          {check.problems.map((p, i) => (
+            <li key={i} className="text-xs font-medium text-rose-600">{p}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/* Read-only view, opened from the notes list. Plain text on purpose --
+   there is no maths rendering, so a formula is whatever the student
+   typed. See CLAUDE.md. */
+function ReferenceSheetView({ page, onEdit, onClose }) {
+  const entries = ((page && page.entries) || []).filter((e) => e && !e.deletedAt);
+  if (!page) return null;
+  return (
+    <Card className="mt-3">
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="font-serif text-base font-semibold text-stone-800">{page.title || "Reference sheet"}</h3>
+        <div className="flex gap-0.5">
+          <button className={iconBtn} onClick={onEdit} aria-label="Edit sheet"><Pencil size={15} /></button>
+          <button className={iconBtn} onClick={onClose} aria-label="Close"><X size={16} /></button>
+        </div>
+      </div>
+      {entries.length === 0 ? (
+        <Empty>No entries yet.</Empty>
+      ) : (
+        <dl className="mt-3 space-y-2.5">
+          {entries.map((e) => (
+            <div key={e.id} className="rounded-lg bg-stone-50 p-2.5">
+              <dt className="text-sm font-medium text-stone-800">{e.label || "Untitled"}</dt>
+              <dd className="mt-0.5 whitespace-pre-wrap font-mono text-sm text-stone-600">{e.body}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </Card>
+  );
+}
+
 /* ---- Notes tab: a flat list of all notes (folders live in their own tab) ---- */
 
 function Notes({ pages, folders, addItem, patchItem, removeItem }) {
@@ -1782,8 +2132,11 @@ function Notes({ pages, folders, addItem, patchItem, removeItem }) {
   const isNew = draft && !draft.id;
   const showList = !draft && !choosing;
 
+  const [sheetViewId, setSheetViewId] = useState(null);
+  const room = canAddSheet(pages);
+
   const startNew = ({ style, kind }) => {
-    setDraft({ title: "", body: "", html: "", strokes: [], style, kind, font: "sans", folderId: null });
+    setDraft({ title: "", body: "", html: "", strokes: [], entries: [], style, kind, font: "sans", folderId: null });
     setChoosing(false);
   };
   const save = () => {
@@ -1795,11 +2148,15 @@ function Notes({ pages, folders, addItem, patchItem, removeItem }) {
       style: draft.style,
       kind: draft.kind || "text",
       font: draft.font || "sans",
+      // Only reference sheets carry entries; every other page keeps the
+      // key absent rather than an empty array it never reads.
+      ...(isReferenceSheet(draft) ? { entries: draft.entries || [] } : {}),
     };
     if (isNew) addItem("pages", { id: uid(), ...fields, folderId: draft.folderId || null });
     else patchItem("pages", draft.id, fields);
     setDraft(null);
   };
+  const sheetOk = !isReferenceSheet(draft) || validateSheet((draft && draft.entries) || []).ok;
 
   return (
     <Card>
@@ -1811,15 +2168,38 @@ function Notes({ pages, folders, addItem, patchItem, removeItem }) {
           </button>
         </div>
       )}
-      {choosing && <PageTypeChooser onCreate={startNew} onCancel={() => setChoosing(false)} />}
-      {draft && <NoteEditor draft={draft} setDraft={setDraft} onSave={save} onCancel={() => setDraft(null)} />}
+      {choosing && (
+        <>
+          {!room.ok && <p className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{room.message}</p>}
+          <PageTypeChooser onCreate={startNew} onCancel={() => setChoosing(false)} sheetsFull={!room.ok} />
+        </>
+      )}
+      {draft && isReferenceSheet(draft) && (
+        <div>
+          <ReferenceSheetEditor draft={draft} setDraft={setDraft} />
+          <div className="mt-3 flex justify-end gap-2">
+            <button className={btnGhost} onClick={() => setDraft(null)}><X size={15} /> Cancel</button>
+            <button className={btnPrimary} onClick={save} disabled={!sheetOk}><Check size={15} /> Save sheet</button>
+          </div>
+        </div>
+      )}
+      {draft && !isReferenceSheet(draft) && (
+        <NoteEditor draft={draft} setDraft={setDraft} onSave={save} onCancel={() => setDraft(null)} />
+      )}
       {showList && pages.length === 0 && <Empty>No notes yet. Tap "New note" to add one.</Empty>}
       {showList && pages.length > 0 && (
         <ul className="mt-3 space-y-2">
           {pages.map((p) => (
-            <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => (n.aiMeta ? setAiViewId(n.id) : setDraft({ ...n }))} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
+            <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => (n.aiMeta ? setAiViewId(n.id) : isReferenceSheet(n) ? setSheetViewId(n.id) : setDraft({ ...n }))} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
           ))}
         </ul>
+      )}
+      {sheetViewId && (
+        <ReferenceSheetView
+          page={pages.find((p) => p.id === sheetViewId)}
+          onEdit={() => { setDraft({ ...pages.find((p) => p.id === sheetViewId) }); setSheetViewId(null); }}
+          onClose={() => setSheetViewId(null)}
+        />
       )}
       {aiViewId && (
         <AiLectureNoteView page={pages.find((p) => p.id === aiViewId)} patchItem={patchItem} onClose={() => setAiViewId(null)} />
