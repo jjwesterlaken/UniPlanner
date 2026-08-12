@@ -246,6 +246,42 @@ backwards. `scripts/measure-ai-notes.mjs` is the instrument; re-derive
 the constants when it has been run against a real export, and the caps
 stay conservative until then.
 
+### The text AI features have a different threat model
+
+`ai-text` (Batch 4) runs four tasks — practice questions, explain-it-back,
+weak-spot reasoning, and summarising a note the student wrote — and the
+thing to understand before changing it is that **it reads no user content
+from the database.** The client sends the text; the server touches
+`profiles` and `ai_usage` and nothing else, only ever the caller's own
+row. There is therefore no "exists but isn't yours" to answer differently
+from "malformed" — the class of bug `ai-notes` shipped is absent rather
+than handled. Two source-level invariants hold that: no `.from(...)` may
+name another table, and every `ai_usage` statement must be scoped.
+
+**One ordering is load-bearing.** The allowance READ precedes the
+provider CALL, which is what makes migration 0006 fail free: a missing
+`text_units_used` column fails the read, before anything is spent. The
+reverse spends money and then errors, so the student pays for work they
+are told failed. A traced fake asserts the sequence.
+
+**Billing follows what was really spent.** A failed call bills nothing;
+output that can't be parsed IS billed, because those tokens were
+generated and charged — and the student is told so, under a different
+code from the free failure. Charging quietly is how a support ticket
+becomes a chargeback, which is the same rule the AI-notes failure screen
+already follows.
+
+**Two allowances, not one.** Minutes for audio, weighted units for text,
+because they answer two questions a student asks separately. Students
+never see the word "units": the endpoint returns a *fraction* and
+`aiTextCopy.js` turns it into words, so the rule is a property of the
+boundary rather than a convention across four screens. The client mirrors
+the arithmetic in `aiTextLimits.js` so a feature can say what it will
+cost before the work — reading `profiles` and `ai_usage` directly under
+RLS, which costs nothing and calls no function. **A failed read degrades
+to "unknown", never "none left"**: a paywall caused by going into a
+tunnel is worse than a missing line.
+
 **Still outstanding, and unchanged by this work:** the semester archive.
 Two fixed buckets that nothing ever clears is still the growth that
 matters most, and no amount of per-feature capping addresses it.
@@ -780,6 +816,11 @@ smoke test, and the migration tests. All of it is plain Node and `assert`,
 no framework, matching the style of the build scripts.
 
 - `scripts/test-ai-notes.mjs` — AI notes, the scheduler, stats, merge behaviour
+- `scripts/test-ai-text-function.mjs` — the text endpoint: the allowance
+  read that must precede the provider call, the two source-level
+  invariants, and that every returnable code has wording
+- `scripts/test-practice.mjs` — practice attempts store state, not the
+  questions, and prune their own tombstones
 - `scripts/test-ai-store.mjs` — the storage move: both ordering rules, the
   three fetch outcomes, tombstones-only reconciliation, and the cache's
   bounds. The two tests worth knowing by name are the restore-an-old-
