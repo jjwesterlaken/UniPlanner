@@ -366,6 +366,110 @@ async function run() {
     }
   });
 
+  /* ---------- the same question, on the device ----------
+
+     A store on the user's device is the same class of change as a new
+     table: somewhere their content lives that the documents have to
+     account for. The IndexedDB note cache was exactly this and neither
+     document covered it.
+
+     Derived the same way, from the naming convention every store here
+     already follows: `uni-planner-*`. Each name found in src/ or public/
+     must be declared below with what it holds, and either a document
+     phrase that covers it or an explicit reason it needs none.
+
+     BE HONEST ABOUT THE HOLE: this catches a store named to the
+     convention. Someone who invents `myNotesDB` slips past it, and the
+     IndexedDB check below is the only backstop — it counts databases,
+     not names. That is a partial guard, and a partial guard that says so
+     is worth more than a thorough-looking one that doesn't. */
+
+  const clientSources = () =>
+    ["src", "public"].flatMap((dir) =>
+      fs
+        .readdirSync(path.join(rootDir, dir))
+        .filter((f) => /\.(js|jsx)$/.test(f))
+        .map((f) => ({ file: `${dir}/${f}`, text: fs.readFileSync(path.join(rootDir, dir, f), "utf8") }))
+    );
+
+  const storeNames = () => {
+    const found = new Set();
+    for (const { text } of clientSources()) {
+      /* Comments are stripped first. sw.js quotes the OLD hardcoded cache
+         name in its warning comment, and a guard that counted that would
+         be reporting history as a live store. */
+      const code = text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+      for (const m of code.matchAll(/"(uni-planner-[^"]*)"/g)) found.add(m[1]);
+    }
+    return [...found].sort();
+  };
+
+  /* `documented` is a phrase that must appear in the named document.
+     `noUserContent` is the other legitimate answer, and it has to give a
+     reason — "it holds nothing of theirs" is a decision, silence isn't. */
+  const CLIENT_STORES = {
+    "uni-planner-v1": { documented: { privacy: /A copy of your planner/i, deletion: /copy of your planner stored on the device/i } },
+    "uni-planner-notes": {
+      documented: {
+        privacy: /Lecture notes you have opened, kept for offline reading/i,
+        deletion: /Lecture notes stored on that device for offline reading/i,
+      },
+    },
+    "uni-planner-demo-users": { noUserContent: "demo sign-in bookkeeping; the policy covers demo mode wholesale" },
+    "uni-planner-demo-session": { noUserContent: "demo sign-in bookkeeping; the policy covers demo mode wholesale" },
+    "uni-planner-demo-cloud": { documented: { privacy: /stores everything locally and syncs nothing/i, deletion: /local copy/i } },
+    "uni-planner-device-id": { noUserContent: "a random id distinguishing devices during merge; not derived from the device or the user" },
+    "uni-planner-__BUILD_ID__": { noUserContent: "the service worker's asset cache: the app's own files, none of the user's" },
+  };
+
+  await test("every store the app keeps on a device is accounted for", () => {
+    const privacy = prose("privacy.html");
+    const deletion = prose("delete-account.html");
+    for (const name of storeNames()) {
+      const entry = CLIENT_STORES[name];
+      assert.ok(
+        entry,
+        `"${name}" is a new store on the user's device and nothing is declared for it. ` +
+          "Both published documents describe what the app keeps on a device, so decide whether this " +
+          "holds any of the student's content and record the answer here."
+      );
+      if (entry.noUserContent) {
+        assert.ok(entry.noUserContent.length > 20, `"${name}" is excused without a reason`);
+        continue;
+      }
+      assert.match(privacy, entry.documented.privacy, `the privacy policy no longer describes "${name}"`);
+      assert.match(deletion, entry.documented.deletion, `the deletion page no longer describes "${name}"`);
+    }
+  });
+
+  await test("there is exactly one IndexedDB database, so an unconventionally named one still shows up", () => {
+    // The backstop for a store that doesn't follow the naming convention.
+    // IndexedDB is the only device store big enough to hold note text, so
+    // a second `open` is worth stopping on whatever it is called.
+    const opens = clientSources().flatMap(({ file, text }) =>
+      [...text.replace(/\/\*[\s\S]*?\*\//g, " ").matchAll(/\.open\s*\(\s*DB_NAME|indexedDB\.open\s*\(/g)].map(() => file)
+    );
+    assert.deepEqual(
+      opens,
+      ["src/noteCache.js"],
+      "a second IndexedDB database appeared. It is the only device store large enough to hold note " +
+        "text, so decide what the published documents say about it before adding one."
+    );
+  });
+
+  await test("neither document implies device content lives only in the planner copy", () => {
+    /* The specific wrong sentence, which both documents used to carry:
+       deleting erases "the copy of your planner on that device", full
+       stop, when there is now a second store holding whole lectures. */
+    const deletion = prose("delete-account.html");
+    assert.match(deletion, /and the copy of any lecture notes kept there so you can read them offline/i);
+    assert.match(
+      prose("privacy.html"),
+      /cleared when you sign out, and when you delete your account/i,
+      "the policy must say the note cache is cleared, since it is and that is the strong claim"
+    );
+  });
+
   await test("the saved lecture note reads as the student's, not as the 7/30-day copy", () => {
     /* These are two different records with two genuinely different
        promises, and conflating them is the specific way this section
