@@ -178,7 +178,14 @@ async function run() {
       assert.match(html, /^<!doctype html>/i, "not a complete document");
       assert.match(html, /<title>/, "no title");
       assert.doesNotMatch(html, /<script/i, "a legal page must render with no JavaScript at all");
-      assert.doesNotMatch(html, /https?:\/\/(?!uniplannerapp\.com|www\.oaic\.gov\.au)[a-z]/i, "an external resource would break offline and leak a request");
+      /* No external hosts: an off-site resource would break the page
+         offline and leak a request from a privacy policy of all things.
+         The allowed host is read from SITE_URL rather than hardcoded, so
+         moving the canonical domain can't quietly widen this. */
+      const allowed = new Set([new URL(SITE_URL).host, "www.oaic.gov.au"]);
+      const hosts = [...html.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]);
+      const external = [...new Set(hosts)].filter((h) => !allowed.has(h));
+      assert.deepEqual(external, [], `links to ${external.join(", ")} — an external resource leaks a request`);
     });
 
     await test(`${file} carries no unfilled placeholder`, () => {

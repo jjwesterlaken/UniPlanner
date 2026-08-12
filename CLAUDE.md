@@ -366,8 +366,8 @@ CI, which rules out things that look fine locally:
 
 ## Hosting, and why merging is not deploying
 
-**The web app is hosted on Cloudflare Pages**, serving `uniplannerapp.com`
-from the `main` branch.
+**The web app is hosted on Cloudflare Pages**, serving
+`www.uniplannerapp.com` from the `main` branch.
 
 | Setting | Value |
 |---|---|
@@ -383,11 +383,11 @@ name. Keep them in step.
 
 ### The app's origin is fixed, and it is not `/` forever
 
-**`https://www.uniplannerapp.com` is the app's permanent origin.** DNS
-stays at Squarespace: one CNAME, `www` → `uniplanner.pages.dev`, with the
-bare domain forwarding to `www`. MX records never move, so Google
-Workspace mail is never at risk — which is why the nameserver switch was
-cancelled rather than merely postponed.
+**`https://www.uniplannerapp.com` is the app's permanent origin**, live
+since 12 August 2026. DNS stays at Squarespace: one CNAME, `www` →
+`uniplanner.pages.dev`, with the bare domain forwarding to `www`. MX
+records never moved, so Google Workspace mail was never at risk — which
+is why the nameserver switch was cancelled rather than merely postponed.
 
 **The origin must not change after launch.** `localStorage` is scoped per
 origin, so every user's local planner — the copy that exists before they
@@ -434,7 +434,7 @@ GitHub said so.
 So after any merge that matters, verify rather than assume:
 
 ```
-curl -s https://uniplannerapp.com/sw.js | grep 'const CACHE'
+curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'
 ```
 
 That build id must match the one on the Account tab. If it doesn't, the
@@ -447,18 +447,13 @@ record.
 
 ### Pending, in order, once someone is at a desk
 
-1. **The nameserver switch at Squarespace.** Until it happens,
-   `uniplannerapp.com` still resolves to Netlify's A record and Cloudflare
-   only serves `uniplanner.pages.dev`. Half a nameserver change takes
-   Google Workspace mail down with it, so it is not a phone job. Verify
-   mail delivery before calling it done.
-2. **Supabase Auth URLs.** `Authentication → URL Configuration`: set
-   **Site URL** to `https://uniplannerapp.com` and add
-   `https://uniplannerapp.com/**` to **Redirect URLs**. Do *not* touch
+1. **Supabase Auth URLs.** `Authentication → URL Configuration`: set
+   **Site URL** to `https://www.uniplannerapp.com` and add
+   `https://www.uniplannerapp.com/**` to **Redirect URLs**. Do *not* touch
    `Project Settings → Data API → Project URL` — that is the API
    endpoint, it is committed in `src/config.js`, and changing it breaks
    the app outright. The two fields are easy to confuse.
-3. **Migration 0004, applied before the code that needs it.** It adds the
+2. **Migration 0004, applied before the code that needs it.** It adds the
    folder-scoped storage delete policy the in-app deletion depends on.
    Without it `removeOwnAudio` cannot delete anything, and the deletion
    page's "immediately" is false. **This was merged before the migration
@@ -466,7 +461,7 @@ record.
    make.** Migrations are applied by hand in the SQL editor; nothing in
    CI or the deploy applies them, so the ordering is a habit, not a
    mechanism.
-4. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+3. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
    Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states
    are aspirational rather than enforced. 0004 raises a notice saying so

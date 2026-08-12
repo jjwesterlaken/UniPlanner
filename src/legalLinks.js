@@ -16,7 +16,7 @@
    copy of a legal document can never be served from a cache.
    ================================================================== */
 
-export const SITE_URL = "https://uniplannerapp.com";
+export const SITE_URL = "https://www.uniplannerapp.com";
 
 export const PRIVACY_URL = `${SITE_URL}/privacy.html`;
 export const DELETE_ACCOUNT_URL = `${SITE_URL}/delete-account.html`;
