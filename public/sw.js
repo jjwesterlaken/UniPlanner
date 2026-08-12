@@ -30,6 +30,9 @@
 const CACHE = "uni-planner-__BUILD_ID__";
 
 /* Never served from a cache, and never replaced by the app shell.
+   Absolute on purpose: these are site-level documents whose URLs are in
+   two app-store listings, so they stay at the root even if the app
+   itself moves to a subpath.
    These are legal documents; a stale copy is worse than an error page,
    and rendering the planner in place of a privacy policy would be a
    plain misrepresentation. Matched by pathname so a query string or a
@@ -37,8 +40,16 @@ const CACHE = "uni-planner-__BUILD_ID__";
 const NETWORK_ONLY = ["/privacy.html", "/delete-account.html", "/privacy", "/delete-account"];
 
 /* The app shell: fetched fresh when the network allows, with the cache
-   as the offline fallback. */
-const SHELL = ["/", "/index.html", "/app.js", "/app.css"];
+   as the offline fallback.
+
+   Derived from where this worker is served rather than hardcoded to "/",
+   because the app is NOT guaranteed to own the site root forever. The
+   plan is for a marketing site to take "/" and the app to move to
+   "/app", on the same origin so localStorage survives (see CLAUDE.md).
+   Everything else here is already origin- and path-relative; this list
+   was the one place that assumed otherwise. */
+const BASE = new URL("./", self.location).pathname;
+const SHELL = [BASE, BASE + "index.html", BASE + "app.js", BASE + "app.css"];
 
 /* Genuinely immutable: fonts and icons whose bytes never change under a
    given name. Cache-first is right for these -- and a new build gets a

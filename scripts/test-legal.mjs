@@ -196,6 +196,22 @@ async function run() {
     assert.equal(DELETE_ACCOUNT_URL, `${SITE_URL}/delete-account.html`);
   });
 
+  await test("the documents link to the same host SITE_URL declares", () => {
+    /* The drift guard. The app, the consent text and the two documents
+       must all name one host: SITE_URL feeds the first two, and the HTML
+       is written by hand. When the canonical host changes, this fails
+       until every copy has moved -- which is the point, because a policy
+       whose own footer links somewhere that doesn't resolve is a
+       document making a claim the system doesn't honour. */
+    const host = new URL(SITE_URL).host;
+    for (const file of ["privacy.html", "delete-account.html"]) {
+      const links = [...page(file).matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]);
+      const foreign = links.filter((h) => h !== host && h !== "www.oaic.gov.au");
+      assert.deepEqual(foreign, [], `${file} links to ${foreign.join(", ")} but SITE_URL is ${host}`);
+      assert.ok(links.includes(host), `${file} never links to ${host}`);
+    }
+  });
+
   await test("both documents give the contact address", () => {
     for (const file of ["privacy.html", "delete-account.html"]) {
       assert.ok(page(file).includes(PRIVACY_EMAIL), `${file} has no privacy contact`);

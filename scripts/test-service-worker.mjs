@@ -162,6 +162,18 @@ async function run() {
     assert.equal(htmlId[1], swId, "the page and the worker disagree about which build this is");
   });
 
+  await test("the app shell is derived from the worker's own path, not hardcoded to the root", () => {
+    // The app is not guaranteed to own "/" forever: a marketing site is
+    // planned for the root with the app moving to /app, on the same
+    // origin so localStorage survives. This list was the one place that
+    // assumed otherwise.
+    const src = pub("sw.js");
+    const line = /const SHELL = \[([^\]]*)\]/.exec(src);
+    assert.ok(line, "couldn't find the SHELL list");
+    assert.doesNotMatch(line[1], /"\//, "the app shell is hardcoded to the site root");
+    assert.match(src, /new URL\("\.\/", self\.location\)/, "the shell paths aren't derived from the worker's own location");
+  });
+
   await test("npm test still runs the service worker tests", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     assert.match(pkg.scripts.test, /test-service-worker\.mjs/, "the update-delivery tests were dropped from `npm test`");

@@ -381,6 +381,43 @@ from the `main` branch.
 living only in a dashboard — the same reasoning as the generated cache
 name. Keep them in step.
 
+### The app's origin is fixed, and it is not `/` forever
+
+**`https://www.uniplannerapp.com` is the app's permanent origin.** DNS
+stays at Squarespace: one CNAME, `www` → `uniplanner.pages.dev`, with the
+bare domain forwarding to `www`. MX records never move, so Google
+Workspace mail is never at risk — which is why the nameserver switch was
+cancelled rather than merely postponed.
+
+**The origin must not change after launch.** `localStorage` is scoped per
+origin, so every user's local planner — the copy that exists before they
+make an account, and the offline copy afterwards — is keyed to the
+hostname that stored it. Serving the app from a different host later
+strands all of it, and it is exactly the data that is hardest to
+migrate: it lives on devices, not on a server we can run a script
+against. Today that would affect two people; after launch it is
+everybody, silently, with the symptom being "the app lost my notes".
+
+A marketing site is planned. It takes **`/` as a path change on the same
+origin**, with the app moving to **`/app`** — not a subdomain. Same
+origin means `localStorage` survives untouched.
+
+What that restructure will involve, so nobody reaches for `app.` out of
+habit:
+
+- `manifest.webmanifest` already uses relative `start_url` and `scope`,
+  so it follows the move for free.
+- Every asset reference in `index.html` is relative. Also free.
+- `public/sw.js` derives its shell list from `new URL("./",
+  self.location)` rather than hardcoding `/`, so the worker's scope
+  follows too. Its `NETWORK_ONLY` list stays absolute on purpose: the
+  legal documents are site-level, their URLs are in two store listings,
+  and they stay at the root even when the app doesn't.
+- `src/legalLinks.js` is the single source for the app and consent text;
+  the two HTML files are the only other place a URL is written. A test
+  in `scripts/test-legal.mjs` fails if `SITE_URL` and the documents ever
+  name different hosts.
+
 **Do not turn on "Single Page Application" handling.** It rewrites 404s
 to `index.html`, so a mistyped `/privacy` would render the planner
 instead of a legal document. Real files still win, so the policy pages
