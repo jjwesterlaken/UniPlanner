@@ -304,6 +304,23 @@ for (const [tabName, phrases] of [
       if (create) {
         create.click();
         await new Promise((r) => setTimeout(r, 150));
+
+        /* Type something first. An EMPTY new note is deliberately never
+           created -- that is what stops "New note, changed my mind"
+           leaving litter behind -- so a walk that saved a blank draft
+           would find nothing in the list and be right to. */
+        const titleInput = doc.querySelector('input[placeholder="Note title"]');
+        check(!!titleInput, "the editor offers a title field");
+        if (titleInput) {
+          const setter = Object.getOwnPropertyDescriptor(
+            dom.window.HTMLInputElement.prototype,
+            "value"
+          ).set;
+          setter.call(titleInput, "Osmosis notes");
+          titleInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
         const save = findButton("Save note");
         check(!!save, "a new note offers Save note, and a way to abandon it");
         if (save) {
@@ -311,44 +328,60 @@ for (const [tabName, phrases] of [
           await new Promise((r) => setTimeout(r, 200));
 
           // Tapping it should now READ, not edit.
-          /* The LAST such row: the seeded AI note is also in this list and
-             is first, and it routes to its own viewer -- which would have
-             made this walk silently exercise the wrong screen. */
-          const rows = [...doc.querySelectorAll("button")].filter(
-            (b) => (b.getAttribute("aria-label") || "") === "Edit note"
+          /* Saving a NEW note lands straight in its read-only view --
+             commit() sets viewId when it mints the id -- so there is no
+             trip back to the list to make. */
+          await new Promise((r) => setTimeout(r, 150));
+          const text = doc.body.textContent || "";
+          check(text.includes("Osmosis notes"), "the new note was created once it had content");
+          check(!findButton("Save note"), "saving a new note leaves the editor");
+
+          const edit = findButton("Edit");
+          check(!!edit, "the read-only view offers Edit");
+          check(
+            !!doc.querySelector('[aria-label="Back to notes"]'),
+            "the read-only view offers a way back to the list"
           );
-          const row = rows[rows.length - 1];
-          check(rows.length >= 2, "both the seeded AI note and the new typed note are in the list");
-          if (row) {
-            row.click();
-            await new Promise((r) => setTimeout(r, 200));
-            const text = doc.body.textContent || "";
-            check(!text.includes("Save note"), "tapping a note opens it read-only, not straight into the editor");
-            const edit = findButton("Edit");
-            check(!!edit, "the read-only view offers Edit");
+          check(
+            !!doc.querySelector('[aria-label="More options"]'),
+            "the ⋯ menu is present while reading, not only while editing"
+          );
+
+          if (edit) {
+            edit.click();
+            await new Promise((r) => setTimeout(r, 150));
+            const done = findButton("Done");
+            check(!!done, "editing an existing note commits with Done");
+            check(!findButton("Cancel"), "there is no discard path on an existing note");
             check(
-              !!doc.querySelector('[aria-label="Back to notes"]'),
-              "the read-only view offers a way back to the list"
-            );
-            check(
-              !!doc.querySelector('[aria-label="More options"]'),
-              "the ⋯ menu is present while reading, not only while editing"
+              !doc.querySelector('[aria-label="Back to notes"]'),
+              "the back arrow is absent while editing, so Done is the only exit"
             );
 
-            if (edit) {
-              edit.click();
+            /* THE CASE AUTOSAVE EXISTS FOR: type, then leave without
+               pressing anything. The debounce must have committed it. */
+            const titleAgain = doc.querySelector('input[placeholder="Note title"]');
+            if (titleAgain) {
+              const setter2 = Object.getOwnPropertyDescriptor(
+                dom.window.HTMLInputElement.prototype,
+                "value"
+              ).set;
+              setter2.call(titleAgain, "Osmosis notes, revised");
+              titleAgain.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+              // Longer than AUTOSAVE_MS, and nothing is clicked.
+              await new Promise((r) => setTimeout(r, 1600));
+              const saved = JSON.parse(dom.window.localStorage.getItem("uni-planner-v1") || "{}");
+              const pages = ((saved.semesters || {})["Semester 1"] || {}).pages || [];
+              check(
+                pages.some((pg) => pg.title === "Osmosis notes, revised"),
+                "content typed and then abandoned without pressing anything survives"
+              );
+            }
+
+            if (findButton("Done")) {
+              findButton("Done").click();
               await new Promise((r) => setTimeout(r, 200));
-              const done = findButton("Done");
-              check(!!done, "editing an existing note commits with Done");
-              check(!findButton("Cancel"), "there is no discard path on an existing note");
-              if (done) {
-                done.click();
-                await new Promise((r) => setTimeout(r, 200));
-                check(
-                  !!findButton("Edit"),
-                  "Done returns to reading the note rather than dropping to the list"
-                );
-              }
+              check(!!findButton("Edit"), "Done returns to reading the note rather than dropping to the list");
             }
           }
         }
