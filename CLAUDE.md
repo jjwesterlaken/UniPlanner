@@ -652,6 +652,35 @@ page; both stores require the policy URL.
 **Every claim in them is checked against the code by
 `scripts/test-legal.mjs`**, which is the point: a document is the one
 artifact where being quietly wrong costs the most and shows the least.
+
+**The documents enumerate where a student's data lives, so a new table
+makes them wrong.** That list is now read from the migrations rather than
+typed into the test: `create table public.X` is matched across
+`supabase/migrations/`, and every table found must have a declared phrase
+in each document. Adding a table fails the suite with "no document text
+is declared for it" until someone decides what the documents say. A
+hardcoded list would have gone on passing when `ai_notes` arrived and the
+policy still described the planner as holding everything a student
+writes — the same drift the cache name and the host allowlist had.
+
+The related trap in the wording: `ai_notes` and `ai_notes_requests` both
+hold a lecture summary, and their promises are opposite — one is the
+student's until they delete it, the other is ours for 7 or 30 days. A
+test asserts the *distinction*, not just that both are mentioned, because
+every phrase can be present while the section still reads as one thing.
+
+**Consent was not bumped for the storage move, deliberately.** Each v4
+bullet was checked against the change and none became untrue: the audio
+is still deleted on transcription, the server copy still lasts 7/30 days,
+saved notes are still the student's until deleted. Consent exists to
+obtain agreement about *what happens to the content* — where it goes, who
+sees it, how long it is kept — and none of that moved; the row sits in
+the same database, in the same region, under the same policies, deleted
+by the same account deletion. Re-prompting for a change a student cannot
+meaningfully accept or refuse is not free: it trains people to click
+through consent screens, which is paid back the next time a bump really
+matters. Bump for a change in what happens to the data, not for a change
+in which table holds it.
 The retention test is worth understanding before loosening it — asserting
 that "7 days" and "30 days" appear is not enough, because both already
 appear twice, so one could drift while the other kept the test green. It
