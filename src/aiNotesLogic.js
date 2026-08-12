@@ -145,6 +145,17 @@ export const RECORDER_AUDIO_BITS_PER_SECOND = 32000;
 // not a security one, since the server never trusts the client's copy.
 export const MONTHLY_MINUTES_LIMIT_HINT = 300;
 
+/* Mirrored from the Edge Function's MINIMUM_BILLED_MINUTES, for the same
+   reason TRANSLATION_LANGUAGES is mirrored: the browser bundle can't
+   import from supabase/functions/. A test asserts the two agree, which
+   the older MONTHLY_MINUTES_LIMIT_HINT above did not have until this was
+   added -- a restatement with nothing checking it.
+
+   Unlike that one, this constant is not cosmetic. It is what a student
+   sees their allowance move by, so a drift here makes the number on
+   screen disagree with the number being charged. */
+export const MINIMUM_BILLED_MINUTES_HINT = 3;
+
 const CANDIDATE_MIME_TYPES = [
   { mimeType: "audio/webm;codecs=opus", extension: "webm" },
   { mimeType: "audio/webm", extension: "webm" },

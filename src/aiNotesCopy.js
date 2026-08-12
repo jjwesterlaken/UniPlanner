@@ -27,6 +27,16 @@
 import { FAILED_RESULT_RETENTION_DAYS } from "./aiNotesRetention.js";
 
 export const AI_NOTES_COPY = {
+  /* Why a two-minute recording shows as three minutes used.
+
+     Disclosed rather than left to be discovered: a student who records a
+     short tutorial segment and watches the counter jump would otherwise
+     reasonably think the app was overcharging them. The honest reason is
+     short and worth giving -- writing the notes up costs the same
+     whatever the length, so the minutes aren't purely recording time. */
+  minimumBilling: (minutes) =>
+    `Recordings count in ${minutes}-minute blocks. Writing the notes up costs us about the same whether a recording is two minutes or twenty, so a very short one still uses ${minutes} minutes of your allowance.`,
+
   /* Shown on the review screen when transcription worked and
      summarising didn't. The user has already been charged at this
      point, so this screen says so. */

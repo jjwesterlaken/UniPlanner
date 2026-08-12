@@ -19,6 +19,51 @@ export const PROVIDER_API_KEY_ENV = {
 };
 
 export const MONTHLY_MINUTES_LIMIT = 300;
+
+/* ---------- the minimum a recording can cost ----------
+
+   THE HOLE THIS CLOSES: transcription is charged per minute, but
+   summarising is charged per REQUEST — the summariser's output is driven
+   by the note schema (overview, key points, 8-15 terms, assessable, open
+   questions), not by how long the recording was. A one-minute clip
+   produces very nearly the same summary cost as a fifty-minute lecture.
+   So "300 minutes" priced as 300 minutes of transcription is wrong by
+   roughly the number of recordings, not the number of minutes.
+
+   The arithmetic, at Groq whisper-large-v3-turbo (~$0.04/hour) and
+   gpt-4o-mini ($0.15/1M in, $0.60/1M out):
+
+     transcription        $0.04 / 60          = $0.000667 per minute
+     summarising, typical ~2,800 output tokens (a short note plus a
+                          translation) + ~1,000 input               ≈ $0.0018
+     summarising, ceiling  8,000 output tokens (SUMMARY_MAX_TOKENS)  ≈ $0.005
+
+   $0.0018 / $0.000667 = 2.7 minutes of transcription buys what one
+   typical summary costs. Rounded UP to 3, because rounding down would
+   under-cover the case that includes a translation -- which is the case
+   a student who needs one always hits.
+
+   What it does to the pathological month (300 one-minute recordings,
+   which the allowance permits today):
+
+                             transcription   summarising     total
+     before, 300 recordings     $0.20          $0.54         $0.74
+     after, 100 recordings      $0.067         $0.18         $0.247
+     a real timetable
+     (6 x 50-minute lectures)   $0.20          $0.024        $0.224
+
+   3.3x over the intended cost becomes 1.1x. Against the summariser's
+   ceiling rather than a typical response the residual is ~2.5x, and that
+   is left deliberately: covering it needs a 7.5-minute floor, which
+   would charge a student recording a ten-minute tutorial segment for
+   most of a lecture. The ceiling is also the case that FAILS rather than
+   returning notes (see openai.ts), so it is not a mode anyone can
+   usefully sit in.
+
+   Recalculate this if MONTHLY_MINUTES_LIMIT, SUMMARY_MAX_TOKENS or
+   either provider's price changes. scripts/test-ai-notes.mjs holds the
+   arithmetic so raising a limit can't quietly skip it. */
+export const MINIMUM_BILLED_MINUTES = 3;
 export const MAX_REQUEST_SECONDS = 3 * 3600;
 export const PROCESSING_STALE_MINUTES = 10;
 
