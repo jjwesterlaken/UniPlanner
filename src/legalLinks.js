@@ -27,5 +27,19 @@ export const SITE_URL = "https://www.uniplannerapp.com";
 export const PRIVACY_URL = `${SITE_URL}/privacy`;
 export const DELETE_ACCOUNT_URL = `${SITE_URL}/delete-account`;
 
+/* Where a password-reset email sends someone back to.
+
+   Derived from SITE_URL rather than left to the Supabase project's Site
+   URL setting, because that setting pointed at the old host for an
+   unknown period and nothing in the repo could have told us. Deriving it
+   means the app and the email cannot disagree, and a host change is one
+   edit here rather than a dashboard field somebody has to remember.
+
+   IT MUST ALSO BE ON THE REDIRECT URLS ALLOWLIST in Supabase Auth
+   settings. Supabase ignores an unlisted redirectTo and silently falls
+   back to the Site URL, which is the failure that looks like the code is
+   wrong when the configuration is. */
+export const PASSWORD_RESET_REDIRECT = SITE_URL;
+
 export const PRIVACY_EMAIL = "privacy@uniplannerapp.com";
 export const SUPPORT_EMAIL = "support@uniplannerapp.com";
