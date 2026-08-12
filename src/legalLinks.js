@@ -18,8 +18,14 @@
 
 export const SITE_URL = "https://www.uniplannerapp.com";
 
-export const PRIVACY_URL = `${SITE_URL}/privacy.html`;
-export const DELETE_ACCOUNT_URL = `${SITE_URL}/delete-account.html`;
+/* Extensionless, because that is what Cloudflare Pages actually serves:
+   the files are public/privacy.html and public/delete-account.html, but
+   Pages 301-redirects /privacy.html -> /privacy. Linking the .html form
+   works, via that redirect, but these are the canonical URLs and the
+   ones in both app-store listings, so the app links to the same strings
+   a reviewer will see. */
+export const PRIVACY_URL = `${SITE_URL}/privacy`;
+export const DELETE_ACCOUNT_URL = `${SITE_URL}/delete-account`;
 
 export const PRIVACY_EMAIL = "privacy@uniplannerapp.com";
 export const SUPPORT_EMAIL = "support@uniplannerapp.com";

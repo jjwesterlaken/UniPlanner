@@ -436,12 +436,11 @@ Pages, and re-enters the same network-only branch at the extensionless
 path — so a legal document is never served from a cache under either
 spelling.
 
-Note the asymmetry this leaves: `src/legalLinks.js` still points the app
-and the consent screen at the `.html` form, which costs one redirect hop
-per click. Harmless, but if it is ever changed to the extensionless form,
-change the two documents' cross-links in the same pass — the drift test
-in `scripts/test-legal.mjs` compares hosts, not paths, so it will not
-catch a half-done change.
+`src/legalLinks.js` exports the extensionless form, so the app, the
+consent screen and both documents all link to the same strings a store
+reviewer will see. The drift test in `scripts/test-legal.mjs` compares
+whole URLs against those exported constants, so a half-finished change
+to either half fails.
 
 **Do not turn on "Single Page Application" handling.** It rewrites 404s
 to `index.html`, so a mistyped `/privacy` would render the planner
@@ -472,13 +471,7 @@ record.
 
 ### Pending, in order, once someone is at a desk
 
-1. **Supabase Auth URLs.** `Authentication → URL Configuration`: set
-   **Site URL** to `https://www.uniplannerapp.com` and add
-   `https://www.uniplannerapp.com/**` to **Redirect URLs**. Do *not* touch
-   `Project Settings → Data API → Project URL` — that is the API
-   endpoint, it is committed in `src/config.js`, and changing it breaks
-   the app outright. The two fields are easy to confuse.
-2. **Migration 0004, applied before the code that needs it.** It adds the
+1. **Migration 0004, applied before the code that needs it.** It adds the
    folder-scoped storage delete policy the in-app deletion depends on.
    Without it `removeOwnAudio` cannot delete anything, and the deletion
    page's "immediately" is false. **This was merged before the migration
@@ -486,7 +479,7 @@ record.
    make.** Migrations are applied by hand in the SQL editor; nothing in
    CI or the deploy applies them, so the ordering is a habit, not a
    mechanism.
-3. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+2. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
    Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states
    are aspirational rather than enforced. 0004 raises a notice saying so
@@ -570,6 +563,28 @@ consent text interpolates rather than repeating.
 
 Neither document is legal advice, and both should be reviewed by someone
 qualified before store submission.
+
+## A guard that restates its subject will drift
+
+Three separate times now, a check has been weaker than it looked, always
+the same way: it hardcoded the value it was supposed to be guarding.
+
+- The service worker's **cache name** was a hand-edited constant. It was
+  meant to change every build; nothing made it, so it never did, and
+  deploys stopped reaching users with no error anywhere.
+- The documents' **external-host allowlist** named `uniplannerapp.com` as
+  a literal. Moving to `www` read as an off-site resource and failed a
+  test that was supposed to be about third-party requests.
+- The documents' **URL drift test** compared hosts but not paths, so
+  `legalLinks.js` could point at `/privacy` while the documents still
+  cross-linked `/privacy.html` and nothing would notice.
+
+One is an anecdote. Three is a rule: **derive a guard from its source of
+truth, don't restate it.** The cache name is hashed from the built bytes,
+the allowlist is read from `SITE_URL`, the drift test compares whole URLs
+against the exported constants. The test for whether a guard is real is
+to break the thing it protects and watch it go red — restating a value
+gives you two copies to keep in step and a test that only checks one.
 
 ## Testing
 

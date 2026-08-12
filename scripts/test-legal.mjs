@@ -196,27 +196,34 @@ async function run() {
     });
   }
 
-  await test("the two documents link to each other at their canonical URLs", () => {
-    assert.ok(page("privacy.html").includes(DELETE_ACCOUNT_URL), "the policy doesn't link to the deletion page");
-    assert.ok(page("delete-account.html").includes(PRIVACY_URL), "the deletion page doesn't link to the policy");
-    assert.equal(PRIVACY_URL, `${SITE_URL}/privacy.html`);
-    assert.equal(DELETE_ACCOUNT_URL, `${SITE_URL}/delete-account.html`);
+  await test("the canonical URLs are the extensionless form Pages actually serves", () => {
+    assert.equal(PRIVACY_URL, `${SITE_URL}/privacy`);
+    assert.equal(DELETE_ACCOUNT_URL, `${SITE_URL}/delete-account`);
   });
 
-  await test("the documents link to the same host SITE_URL declares", () => {
-    /* The drift guard. The app, the consent text and the two documents
-       must all name one host: SITE_URL feeds the first two, and the HTML
-       is written by hand. When the canonical host changes, this fails
-       until every copy has moved -- which is the point, because a policy
-       whose own footer links somewhere that doesn't resolve is a
-       document making a claim the system doesn't honour. */
-    const host = new URL(SITE_URL).host;
+  await test("the documents link to the exact URLs the app and the store listings use", () => {
+    /* Compares FULL URLs, not hosts.
+
+       The earlier version of this compared hosts only, which meant it
+       passed while the thing it guarded was half-broken: legalLinks.js
+       could point at /privacy while the documents still cross-linked
+       /privacy.html, and nothing would notice. That is the third guard on
+       this project to have been weaker than it looked — see the rule in
+       CLAUDE.md about deriving a guard from its source of truth rather
+       than restating it. */
+    const canonical = new Set([`${SITE_URL}/`, PRIVACY_URL, DELETE_ACCOUNT_URL]);
     for (const file of ["privacy.html", "delete-account.html"]) {
-      const links = [...page(file).matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]);
-      const foreign = links.filter((h) => h !== host && h !== "www.oaic.gov.au");
-      assert.deepEqual(foreign, [], `${file} links to ${foreign.join(", ")} but SITE_URL is ${host}`);
-      assert.ok(links.includes(host), `${file} never links to ${host}`);
+      const urls = [...new Set([...page(file).matchAll(/https?:\/\/[^"'\s<>]+/g)].map((m) => m[0]))]
+        .filter((u) => u.includes("uniplannerapp.com"));
+      for (const u of urls) {
+        assert.ok(
+          canonical.has(u),
+          `${file} links to ${u}, which is not one of the canonical URLs (${[...canonical].join(", ")})`
+        );
+      }
     }
+    assert.ok(page("privacy.html").includes(DELETE_ACCOUNT_URL), "the policy doesn't link to the deletion page");
+    assert.ok(page("delete-account.html").includes(PRIVACY_URL), "the deletion page doesn't link to the policy");
   });
 
   await test("both documents give the contact address", () => {
