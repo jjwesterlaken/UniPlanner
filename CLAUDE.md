@@ -136,39 +136,119 @@ wording on purpose — sync rescues the first and nothing rescues the
 second. Don't reintroduce a bare `catch {}` on a write path; three tests
 in `scripts/test-storage.mjs` exist to stop exactly that.
 
-### Pending decision: AI notes need their own row, before launch
+### AI notes live in their own row
 
-`aiNotesLogic.js` has always said that splitting AI notes out is the
-escape hatch "if sync ever gets noticeably slower". Measurement says it
-is now due, and this is recorded here so it can't slip past launch.
+`aiNotesLogic.js` always said that splitting AI notes out was the escape
+hatch "if sync ever gets noticeably slower". It has been taken. The
+history matters because each step removed a different kind of waste and
+only the last one actually solved the problem.
 
 One AI lecture note cost ~12.9 KB (18.1 KB with a translation) because
 the summary was stored **twice** — rendered into `page.body` and
 verbatim in `page.aiMeta.translations.en` — and the terms twice as well,
-once as `notes` items and once inside `aiMeta`. Both duplicates are now
-gone (`summaryForStorage`, and `body: ""` on AI pages), which takes a
+once as `notes` items and once inside `aiMeta`. Both duplicates are gone
+(`summaryForStorage`, and `body: ""` on AI pages), which took a
 realistic note to ~6 KB. Readers fall back to `body` so notes saved
-before the change still render.
+before that change still render.
 
-`MAX_AI_NOTE_BYTES` (20 KB) then bounds one runaway note, since
+`MAX_AI_NOTE_BYTES` (20 KB) bounds one runaway note, since
 `SUMMARY_MAX_TOKENS` bounds what the model returns and not what gets
 written. **The drop order is not "translation first."** A student who
 asked for a translation is reading the translation; the language they
 *requested* is kept and the other one goes. Dropping the translation
 would only ever hurt the user who most needed it.
 
-None of that makes sixty lectures fit. At ~6 KB a note it is still
-~360 KB a semester, and the cap is a guard, not a budget. Only moving
-this data out of the blob solves it.
+None of that made sixty lectures fit. At ~6 KB a note it was still
+~360 KB a semester, and a cap is a guard, not a budget.
 
-**The trigger is the two-hour lecture test.** Every number above is
-modelled from a feature that has never successfully transcribed a real
-lecture, and rebuilding storage around estimates is how you rebuild it
-twice. When that test runs, measure the actual stored size of one real
-lecture note and size the work against it. It must happen **before
-launch**: the cheapest moment to move this data is while no user has any,
-and afterwards it needs a migration for precisely the data that is
-hardest to migrate.
+**So the content moved.** `ai_notes` (migration 0005) holds it; the blob
+keeps a stub — title, course, week, the language being read, and a short
+preview *per language* — and `src/aiNotesStore.js` owns both halves.
+Study cards stayed in the blob deliberately: `srs` state changes on every
+review and reviews must work offline, so moving them would mean a remote
+write per review or a second sync problem.
+
+**Two ordering rules that point in opposite directions.** This is the
+part to read before changing anything in `aiNotesStore.js`:
+
+| | order | an interruption leaves | which is |
+|---|---|---|---|
+| migrating / saving | row **first**, then shrink the blob | the note in both places | resolved by the next run |
+| deleting | row **first**, then tombstone the stub | a stub pointing at nothing | self-healing |
+
+One invariant covers both: never leave content on the server the user
+believes is gone, and never remove content from the blob that isn't
+safely on the server. The reverse of either is silent: a tombstone-first
+delete leaves a whole lecture on the server with nothing pointing at it,
+which contradicts the privacy policy's "yours until you delete them".
+
+**Reconciliation works from tombstones, never from absence.** A row whose
+id merely doesn't appear in the blob is *counted*, never deleted. The
+two look equivalent and are not: restore a two-month-old backup in
+replace mode and the sync succeeds, so every guard passes, and every note
+created since that backup now has a row and no stub — absence-based
+reconciliation deletes all of them, permanently, while a test asserting
+"a live note isn't deleted" passes throughout, because from the restored
+blob's point of view those notes were never live. The cost of requiring
+positive evidence is a row orphaned by a crash between the insert and the
+stub write is never reclaimed. That is the better failure.
+`scripts/test-ai-store.mjs` has the restore case by name.
+
+**`fetchNote` has three outcomes and they must stay distinct.**
+`{content}`, `{missing:true}` — the query ran and there is definitively
+no row — and `{failed:true}` — we know nothing. Only `missing` may
+tombstone a stub. Offline, a 500, an expired token and a rate limit all
+look like "no data" to a caller that only checks for a row, and this
+code runs precisely when the network is misbehaving. The demo-mode smoke
+test covers the null-client branch specifically, because a signed-out
+user holding stubs would otherwise have every note tombstoned on open.
+
+The row has **three policies, not four**: select, insert, delete. It is
+never updated, because `activeLanguage` — the one thing a reader changes
+— lives in the blob stub where an ordinary per-item merge handles it and
+where it works offline. That leaves no client update path to get wrong.
+Grants are written out in 0005 rather than left to Supabase's default
+privileges, and they name the same three verbs, so `update` is refused
+twice over.
+
+0005 replaces `delete_my_account_data()` by copying 0002's body, which is
+a restatement and restatements drift. The guard is behavioural: a
+migration test enumerates every `public` table with a `user_id` column
+**from the database** and asserts the function empties all of them.
+
+**Offline reading is bought back by `src/noteCache.js`**, an IndexedDB
+cache outside the blob, so it costs nothing against the 1 MB budget.
+The design rule is that *a cache is allowed to fail*: every method
+resolves, none reject, and if IndexedDB is missing (Electron on
+`file://`), blocked (Safari private browsing) or full, the note simply
+isn't available offline — which is the state we'd be in with no cache.
+That is why there is no error surface and no retry logic there. Bounds
+are `MAX_CACHE_BYTES` (10 MB) and `MAX_CACHE_NOTES` (300), both derived
+from "two heavy semesters is 120 notes at 20 KB = 2.3 MB"; LRU alone is a
+slower leak, not a bound. It is purged on sign-out and on account
+deletion.
+
+**Study cards are now a choice, not an automatic consequence.** Every
+term used to become a card. A lecture yields 8–15, and a student
+attending 24 lectures was handed 240–360 cards nobody chose — the
+largest single collection in the planner, built without a decision. The
+save screen now ticks the first `DEFAULT_CARDS_SELECTED` (6) and lets
+the student change it. There is no cap: unticking everything makes zero
+cards, ticking everything makes fifteen. Note the edge that a test
+guards by name — **an all-false selection is a decision**, and reading it
+as "nothing supplied, use the default" silently overrules the user.
+
+**The budget constants in `reference.js` were left alone.** The move and
+the card default both reduce the blob, but `MEASURED_EXISTING_BYTES`
+(583 KB) is a *measured* figure and this change has not been measured on
+a real account — only modelled. Relaxing a guard on a model is exactly
+backwards. `scripts/measure-ai-notes.mjs` is the instrument; re-derive
+the constants when it has been run against a real export, and the caps
+stay conservative until then.
+
+**Still outstanding, and unchanged by this work:** the semester archive.
+Two fixed buckets that nothing ever clears is still the growth that
+matters most, and no amount of per-feature capping addresses it.
 
 ### Known gap: there is no way to retry a summary
 
@@ -492,7 +572,16 @@ record.
    make.** Migrations are applied by hand in the SQL editor; nothing in
    CI or the deploy applies them, so the ordering is a habit, not a
    mechanism.
-2. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+2. **Migration 0005, applied before this code reaches users.** It creates
+   `ai_notes` and its three policies. Until it is applied, every attempt
+   to move a note fails — which is the *safe* direction by design
+   (`migrateNote` returns the stub only on success, so the note stays
+   whole and readable in the blob and the next sync retries), so nothing
+   breaks and nothing is lost. But no note ever moves, so the whole
+   change quietly does nothing, which is the failure that is hardest to
+   notice. Verify by saving one AI note while signed in and checking a
+   row appears in `ai_notes`.
+3. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
    Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states
    are aspirational rather than enforced. 0004 raises a notice saying so
@@ -631,6 +720,10 @@ smoke test, and the migration tests. All of it is plain Node and `assert`,
 no framework, matching the style of the build scripts.
 
 - `scripts/test-ai-notes.mjs` — AI notes, the scheduler, stats, merge behaviour
+- `scripts/test-ai-store.mjs` — the storage move: both ordering rules, the
+  three fetch outcomes, tombstones-only reconciliation, and the cache's
+  bounds. The two tests worth knowing by name are the restore-an-old-
+  backup case and "an error reads as failed, NOT as missing"
 - `scripts/test-storage.mjs` — save failures are reported, transcripts
   aren't stored whole; both cover things that used to fail invisibly
 - `scripts/test-app-smoke.mjs` — the app mounts and renders in demo mode

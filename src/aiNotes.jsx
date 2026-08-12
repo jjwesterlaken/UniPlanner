@@ -32,10 +32,14 @@ import {
   setPendingRecovery,
   clearPendingRecovery,
   pendingRecovery,
+  defaultCardSelection,
+  DEFAULT_CARDS_SELECTED,
 } from "./aiNotesLogic.js";
+import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
+import { noteCache } from "./noteCache.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { fetchUsage, uploadAudio, callAiNotes } from "./aiNotesClient.js";
-import { nowISO } from "./sync.js";
+import { nowISO, supabase } from "./sync.js";
 import { inputCls, labelCls, btnPrimary, btnGhost, iconBtn, Card, CourseSelect, uid } from "./PlannerApp.jsx";
 
 /* ------------------------------------------------------------------ */
@@ -328,7 +332,7 @@ function downloadTranscript(text) {
   }
 }
 
-function ReviewAndSave({ result, onSave, onDiscard }) {
+function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCards }) {
   if (result.summaryFailed) {
     const full = result.transcript || "";
     const willTruncate = full.length > TRANSCRIPT_EXCERPT_CHARS;
@@ -372,6 +376,11 @@ function ReviewAndSave({ result, onSave, onDiscard }) {
   }
 
   const { overview, keyPoints, terms, assessable, openQuestions } = result.original;
+  const selection = selectedCards || defaultCardSelection(terms);
+  const chosen = selection.filter(Boolean).length;
+  const toggleOne = (i) => setSelectedCards(selection.map((v, j) => (j === i ? !v : v)));
+  const toggleAll = () => setSelectedCards(selection.map(() => chosen !== (terms || []).length));
+
   return (
     <div className="space-y-4">
       <div>
@@ -390,11 +399,32 @@ function ReviewAndSave({ result, onSave, onDiscard }) {
       )}
       {terms && terms.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-stone-700">Study cards ({terms.length})</h3>
-          <ul className="mt-1 space-y-1 text-sm text-stone-600">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-sm font-semibold text-stone-700">
+              Study cards ({chosen} of {terms.length})
+            </h3>
+            <button className="text-xs text-stone-500 underline" onClick={toggleAll}>
+              {chosen === terms.length ? "Clear all" : "Select all"}
+            </button>
+          </div>
+          <p className="mt-0.5 text-xs text-stone-500">
+            The first {DEFAULT_CARDS_SELECTED} are ticked. Untick anything you don't want to revise — only the ticked
+            ones become cards.
+          </p>
+          <ul className="mt-1.5 space-y-1 text-sm text-stone-600">
             {terms.map((t, i) => (
               <li key={i}>
-                <span className="font-medium">{t.term}</span> — {t.content}
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    className="mt-1 shrink-0"
+                    checked={!!selection[i]}
+                    onChange={() => toggleOne(i)}
+                  />
+                  <span>
+                    <span className="font-medium">{t.term}</span> — {t.content}
+                  </span>
+                </label>
               </li>
             ))}
           </ul>
@@ -446,6 +476,10 @@ function Recorder({ session, courses, addItem, setData, initialRecovery = null }
   const [course, setCourse] = useState("");
   const [week, setWeek] = useState("");
   const [translateTo, setTranslateTo] = useState("");
+  /* Which study cards the student wants. Null until a result arrives,
+     then the default selection, so the checkboxes have somewhere to
+     live and Save has something to read. */
+  const [selectedCards, setSelectedCards] = useState(null);
 
   const runUpload = async () => {
     dispatch({ type: "upload" });
@@ -503,7 +537,7 @@ function Recorder({ session, courses, addItem, setData, initialRecovery = null }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.status]);
 
-  const onSave = () => {
+  const onSave = async () => {
     dispatch({ type: "save" });
     try {
       const { pageItem, noteItems } = mapAiResultToItems({
@@ -513,8 +547,31 @@ function Recorder({ session, courses, addItem, setData, initialRecovery = null }
         language: translateTo || null,
         uid,
         nowISO,
+        selectedCards,
       });
-      addItem("pages", pageItem);
+
+      /* The content goes to its own row FIRST, and only a stub reaches
+         the blob. Same ordering rule as migrating an old note, for the
+         same reason: if the row write fails we keep the full note in the
+         blob, which is heavy but correct, rather than a stub pointing at
+         nothing. migrateNote returns the stub only on success, so the
+         fallback is simply the page we already have.
+
+         Signed out or in demo mode there is no row to write and the note
+         stays whole in the blob — that path is unchanged, and the
+         migration pass picks it up on the next sign-in. */
+      let toStore = pageItem;
+      if (supabase && session && session.user) {
+        const { ok, stub } = await migrateNote({ supabaseClient: supabase, userId: session.user.id, page: pageItem });
+        if (ok) {
+          toStore = stub;
+          // Readable offline from the moment it is saved, which is the
+          // state the student expects: they just watched it appear.
+          await noteCache.put(pageItem.id, buildContent(pageItem));
+        }
+      }
+
+      addItem("pages", toStore);
       noteItems.forEach((n) => addItem("notes", n));
       if (setData) setData((d) => ({ ...d, meta: clearPendingRecovery(d.meta) }));
       dispatch({ type: "saved" });
@@ -605,7 +662,13 @@ function Recorder({ session, courses, addItem, setData, initialRecovery = null }
           {state.errorMessage && (
             <p className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{state.errorMessage}</p>
           )}
-          <ReviewAndSave result={state.result} onSave={onSave} onDiscard={onDiscard} />
+          <ReviewAndSave
+            result={state.result}
+            onSave={onSave}
+            onDiscard={onDiscard}
+            selectedCards={selectedCards}
+            setSelectedCards={setSelectedCards}
+          />
         </>
       )}
 
@@ -737,10 +800,61 @@ function RecoveryGate({ session, courses, addItem, data, setData }) {
 /*  Viewer for a saved AI note (opened from Notes/Folders)             */
 /* ------------------------------------------------------------------ */
 
-export function AiLectureNoteView({ page, patchItem, onClose }) {
-  const translations = (page && page.aiMeta && page.aiMeta.translations) || {};
-  const langs = Object.keys(translations);
-  const [activeLang, setActiveLang] = useState((page && page.aiMeta && page.aiMeta.activeLanguage) || "en");
+export function AiLectureNoteView({ page, patchItem, onClose, onMissing }) {
+  const meta = (page && page.aiMeta) || {};
+  const remote = isRemote(page);
+
+  /* An old note still carries its content in the blob; a moved one has a
+     stub and fetches. The languages are known either way before anything
+     loads — from `translations` for the first, from the stub's previews
+     for the second — so the selector never flickers or disappears while
+     a fetch is in flight. */
+  const [fetched, setFetched] = useState(null);
+  const [status, setStatus] = useState(remote ? "loading" : "ready");
+  const [activeLang, setActiveLang] = useState(meta.activeLanguage || "en");
+  /* Bumped by "Try again". The fetch is an effect, so retrying needs a
+     dependency that changes -- calling the loader directly would leave
+     the cancelled-flag handling in two places. */
+  const [attempt, setAttempt] = useState(0);
+
+  const translations = remote ? (fetched && fetched.translations) || {} : meta.translations || {};
+  const langs = remote ? Object.keys(meta.previews || {}) : Object.keys(translations);
+
+  useEffect(() => {
+    if (!remote || !page) return;
+    let cancelled = false;
+    (async () => {
+      setStatus("loading");
+      const cached = await noteCache.get(page.id);
+      if (cancelled) return;
+      if (cached) {
+        setFetched(cached);
+        setStatus("ready");
+        return;
+      }
+      const res = await fetchNote({ supabaseClient: supabase, id: page.id });
+      if (cancelled) return;
+      if (res.content) {
+        setFetched(res.content);
+        setStatus("ready");
+        noteCache.put(page.id, res.content);
+      } else if (res.missing) {
+        /* DEFINITIVELY not there: the query ran and returned no row. That
+           is the self-healing half of an interrupted delete, and the only
+           outcome allowed to remove anything. */
+        setStatus("missing");
+        if (onMissing) onMissing(page.id);
+      } else {
+        /* Anything else — offline, a 500, an expired token, a rate limit.
+           We know nothing, so we change nothing and say so. */
+        setStatus("failed");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remote, page && page.id, attempt]);
 
   if (!page) return null;
   const content = translations[activeLang] || translations.en;
@@ -748,6 +862,9 @@ export function AiLectureNoteView({ page, patchItem, onClose }) {
   const onLangChange = (code) => {
     setActiveLang(code);
     if (patchItem && page.aiMeta) {
+      /* Only activeLanguage moves. On a stub the rest of aiMeta is the
+         list's data and the row is immutable, so spreading the existing
+         meta is what keeps the two halves consistent. */
       patchItem("pages", page.id, { aiMeta: { ...page.aiMeta, activeLanguage: code } });
     }
   };
@@ -802,6 +919,37 @@ export function AiLectureNoteView({ page, patchItem, onClose }) {
             </div>
           )}
         </div>
+      ) : status === "loading" ? (
+        /* The preview is already in the blob, so there is something real
+           to read while the rest arrives rather than a spinner over
+           nothing. */
+        <div className="mt-3 space-y-2">
+          <p className="text-sm text-stone-500">{previewFor(page)}</p>
+          <p className="text-xs text-stone-400">Loading the full note…</p>
+        </div>
+      ) : status === "failed" ? (
+        <div className="mt-3 space-y-2">
+          <p className="text-sm text-stone-500">{previewFor(page)}</p>
+          <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <p className="font-medium">
+              <TriangleAlert size={14} className="mr-1 inline" />
+              Couldn't load this note
+            </p>
+            {/* Deliberately not "this note is gone". We do not know that,
+                and saying it would be both wrong and frightening. */}
+            <p className="mt-0.5 text-amber-800">
+              You may be offline. Notes you've opened before stay readable without a connection — this one hasn't been
+              opened on this device yet. It's still saved; try again when you're back online.
+            </p>
+          </div>
+          <button className={btnGhost} onClick={() => setAttempt((n) => n + 1)}>
+            <RefreshCw size={15} /> Try again
+          </button>
+        </div>
+      ) : status === "missing" ? (
+        <p className="mt-3 text-sm text-stone-500">
+          This note was deleted on another device, so it's been removed here too.
+        </p>
       ) : (
         <p className="mt-3 whitespace-pre-wrap text-sm text-stone-600">{page.body}</p>
       )}

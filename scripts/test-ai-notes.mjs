@@ -26,6 +26,7 @@ import {
   parseAiNotesError,
   PERMANENT_FAILURE_CODES,
   mapAiResultToItems,
+  DEFAULT_CARDS_SELECTED,
   recorderReducer,
   INITIAL_RECORDER_STATE,
   newIdempotencyKey,
@@ -288,6 +289,67 @@ async function run() {
     assert.equal(pageItem.body, "", "the summary must not also be rendered into body");
     assert.equal(noteItems.length, 1);
     assert.deepEqual(noteItems[0], { id: "id1", course: "BIO101", week: "3", term: "Osmosis", content: "Movement of water across a membrane." });
+  });
+
+  const manyTerms = (n) =>
+    Array.from({ length: n }, (_, i) => ({ term: `Term ${i + 1}`, content: `Meaning ${i + 1}` }));
+
+  const resultWith = (terms) => ({
+    summaryFailed: false,
+    original: { overview: "o", keyPoints: [], terms, assessable: [], openQuestions: [] },
+    translated: null,
+  });
+
+  const mapWith = (terms, selectedCards) => {
+    let n = 0;
+    return mapAiResultToItems({
+      result: resultWith(terms),
+      course: "BIO101",
+      week: "3",
+      language: null,
+      uid: () => `id${n++}`,
+      nowISO: () => "2024-01-01T00:00:00.000Z",
+      selectedCards,
+    });
+  };
+
+  await test("a lecture with fifteen terms makes six cards, not fifteen", () => {
+    // The blob's largest collection used to be built without anyone
+    // choosing: every term became a card, forever.
+    const { noteItems } = mapWith(manyTerms(15));
+    assert.equal(noteItems.length, DEFAULT_CARDS_SELECTED);
+    assert.deepEqual(noteItems.map((n) => n.term), ["Term 1", "Term 2", "Term 3", "Term 4", "Term 5", "Term 6"]);
+  });
+
+  await test("a lecture with fewer terms than the default makes a card of each", () => {
+    assert.equal(mapWith(manyTerms(3)).noteItems.length, 3);
+  });
+
+  await test("the student's selection is honoured, including one that keeps everything", () => {
+    const terms = manyTerms(15);
+    const all = terms.map(() => true);
+    assert.equal(mapWith(terms, all).noteItems.length, 15, "a student who wants every card must get every card");
+  });
+
+  await test("unticking everything makes no cards at all, rather than falling back to the default", () => {
+    // The dangerous shape: an empty selection is a decision, and reading
+    // it as "nothing chosen, use the default" would silently overrule it.
+    const terms = manyTerms(15);
+    assert.equal(mapWith(terms, terms.map(() => false)).noteItems.length, 0);
+  });
+
+  await test("a card is taken from the term it was ticked against, not by position", () => {
+    const terms = manyTerms(5);
+    const { noteItems } = mapWith(terms, [false, true, false, false, true]);
+    assert.deepEqual(noteItems.map((n) => n.term), ["Term 2", "Term 5"]);
+    assert.equal(noteItems[0].content, "Meaning 2");
+  });
+
+  await test("the note itself is unaffected by which cards were chosen", () => {
+    const terms = manyTerms(15);
+    const none = mapWith(terms, terms.map(() => false));
+    const all = mapWith(terms, terms.map(() => true));
+    assert.deepEqual(none.pageItem.aiMeta.translations, all.pageItem.aiMeta.translations);
   });
 
   await test("mapAiResultToItems falls back to a plain transcript note when summarizing failed", () => {

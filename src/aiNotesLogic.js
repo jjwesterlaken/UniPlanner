@@ -407,11 +407,39 @@ function formatBody({ overview, keyPoints, assessable, openQuestions }) {
   return parts.join("\n");
 }
 
+/* ---------- how many study cards one lecture makes ----------
+
+   Every term used to become a card, automatically. A lecture yields
+   8-15, cards are ~150 bytes each and live in the blob forever, and a
+   student attending 24 lectures a semester was silently handed 240-360
+   cards they never chose -- the largest single collection in the planner
+   (131KB per semester, measured) built entirely without a decision.
+
+   The cards are now a choice made at save time, with the first six
+   ticked. Six because it is a sitting's worth of review rather than a
+   backlog, and because a default that is *usually right* is what stops
+   this being one more screen to click through. Nothing is capped: a
+   student who wants all fifteen ticks all fifteen. What changed is that
+   somebody chose.
+
+   Deliberately not a hard limit. A cap on someone's own study material
+   would be the app deciding how much they are allowed to revise; the
+   default decides only what happens when they don't say. */
+export const DEFAULT_CARDS_SELECTED = 6;
+
+/** The first six ticked, the rest not. */
+export const defaultCardSelection = (terms = []) => (terms || []).map((_, i) => i < DEFAULT_CARDS_SELECTED);
+
 /**
  * Pure mapper from the Edge Function's structured result to the two
  * kinds of items the app already knows how to render, sync and study.
+ *
+ * `selectedCards` is a boolean per term. Omitted means the default
+ * selection, so a caller that doesn't care still gets sensible cards
+ * rather than none. An array of all-false is a DECISION -- the student
+ * unticked everything -- and must not be read as "nothing supplied".
  */
-export function mapAiResultToItems({ result, course, week, language, uid, nowISO }) {
+export function mapAiResultToItems({ result, course, week, language, uid, nowISO, selectedCards }) {
   const title = `${course || "Lecture"} — Week ${week || "?"} notes`;
 
   if (result.summaryFailed) {
@@ -437,6 +465,8 @@ export function mapAiResultToItems({ result, course, week, language, uid, nowISO
       noteItems: [],
     };
   }
+
+  const selection = Array.isArray(selectedCards) ? selectedCards : defaultCardSelection(result.original.terms);
 
   const translations = { en: summaryForStorage(result.original) };
   if (result.translated && language) translations[language] = summaryForStorage(result.translated);
@@ -484,13 +514,15 @@ export function mapAiResultToItems({ result, course, week, language, uid, nowISO
     // was requested: the Study tab has one card list per semester and no
     // notion of language, so mixing languages into it would produce a
     // deck the student can't filter.
-    noteItems: (result.original.terms || []).map((t) => ({
-      id: uid(),
-      course,
-      week,
-      term: t.term,
-      content: t.content,
-    })),
+    noteItems: (result.original.terms || [])
+      .filter((_, i) => (selection ? selection[i] : true))
+      .map((t) => ({
+        id: uid(),
+        course,
+        week,
+        term: t.term,
+        content: t.content,
+      })),
   };
 }
 

@@ -110,6 +110,17 @@ import {
 import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
 import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
 import { aiNotePreview } from "./aiNotesLogic.js";
+import {
+  isAiNote,
+  isRemote,
+  buildContent,
+  migrateNote,
+  pagesNeedingMigration,
+  deleteNote,
+  reconcile,
+  previewFor,
+} from "./aiNotesStore.js";
+import { noteCache } from "./noteCache.js";
 import { deleteAccount, confirmationMatches, DELETE_CONFIRMATION_PHRASE } from "./accountDeletion.js";
 import {
   nextReadState,
@@ -1936,6 +1947,9 @@ function NoteEditor({ draft, setDraft, onSave, onCancel }) {
   );
 }
 
+/** The list's preview, whichever of the three shapes a note is in. */
+const notePreview = (p) => (isRemote(p) ? previewFor(p) : aiNotePreview(p));
+
 function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
   const [menu, setMenu] = useState(false);
   const f = folders.find((x) => x.id === p.folderId);
@@ -1998,12 +2012,13 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
           </p>
         )
       ) : (
-        /* AI notes carry no body -- their text lives in aiMeta, stored
-           once rather than rendered into body as well. aiNotePreview
-           falls back to body so notes saved before that change still
-           preview correctly. */
-        (aiNotePreview(p) || htmlToText(p.html)) && (
-          <p className="mt-1.5 line-clamp-3 text-sm text-stone-600">{aiNotePreview(p) || htmlToText(p.html)}</p>
+        /* Three shapes to preview, in age order: a moved AI note reads
+           its stub's stored preview (in the language being read), an
+           older one still has the whole summary in aiMeta, and an
+           ordinary note has html. The list must never need the network --
+           it is the first thing on screen. */
+        (notePreview(p) || htmlToText(p.html)) && (
+          <p className="mt-1.5 line-clamp-3 text-sm text-stone-600">{notePreview(p) || htmlToText(p.html)}</p>
         )
       )}
     </li>
@@ -2202,7 +2217,14 @@ function Notes({ pages, folders, addItem, patchItem, removeItem }) {
         />
       )}
       {aiViewId && (
-        <AiLectureNoteView page={pages.find((p) => p.id === aiViewId)} patchItem={patchItem} onClose={() => setAiViewId(null)} />
+        <AiLectureNoteView
+          page={pages.find((p) => p.id === aiViewId)}
+          patchItem={patchItem}
+          onClose={() => setAiViewId(null)}
+          /* Only ever called for a row that is DEFINITIVELY absent -- the
+             other device deleted it and this one still has the stub. */
+          onMissing={(id) => removeItem("pages", id)}
+        />
       )}
     </Card>
   );
@@ -2336,7 +2358,14 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
         })}
       </ul>
       {aiViewId && (
-        <AiLectureNoteView page={pages.find((p) => p.id === aiViewId)} patchItem={patchItem} onClose={() => setAiViewId(null)} />
+        <AiLectureNoteView
+          page={pages.find((p) => p.id === aiViewId)}
+          patchItem={patchItem}
+          onClose={() => setAiViewId(null)}
+          /* Only ever called for a row that is DEFINITIVELY absent -- the
+             other device deleted it and this one still has the stub. */
+          onMissing={(id) => removeItem("pages", id)}
+        />
       )}
     </Card>
   );
@@ -3932,10 +3961,74 @@ export default function PlannerApp() {
       dataRef.current = stamped;
       await persist(stamped);
       await backend.push({ session: activeSession, data: stamped });
+
+      /* Both of these run only after the push has succeeded, and neither
+         is allowed to fail the sync — the planner is already saved and
+         pushed by this point, so a failure here is worth retrying next
+         time rather than showing as "couldn't sync". */
+      await migrateAiNotes(activeSession);
+      await reconcile({
+        supabaseClient: supabase,
+        userId: activeSession.user.id,
+        pages: allAiPages(dataRef.current),
+        syncSucceeded: true,
+        cache: noteCache,
+      }).catch(() => {});
     } catch (e) {
       setSyncError(e.message || "Couldn't sync. Please try again.");
     } finally {
       setSyncing(false);
+    }
+  };
+
+  /* Every AI note the planner knows about, tombstoned ones included —
+     reconciliation works from the tombstones, so filtering them out here
+     would leave it with nothing to act on. Flattened across semesters
+     because `ai_notes` has no notion of one. */
+  const allAiPages = (d) =>
+    Object.values((d || {}).semesters || {}).flatMap((s) => ((s || {}).pages || []).filter(isAiNote));
+
+  /* Move any note still carrying its content in the blob into its own
+     row. Runs on every sync because that is when we know we have a
+     session and a network, and because it must be safe to run again: an
+     interrupted pass leaves the note in both places, and the upsert makes
+     the retry a no-op.
+
+     One at a time, deliberately. This is background work on a device that
+     may be on a phone connection, and a burst of parallel writes is how
+     you make the sync the user IS waiting for feel slow. */
+  const migrateAiNotes = async (activeSession) => {
+    if (!supabase || !activeSession) return;
+    const d = dataRef.current || {};
+    const pending = [];
+    for (const [name, s] of Object.entries(d.semesters || {})) {
+      for (const p of pagesNeedingMigration((s || {}).pages)) pending.push({ semester: name, page: p });
+    }
+    if (pending.length === 0) return;
+
+    for (const { semester, page } of pending) {
+      const { ok, stub } = await migrateNote({
+        supabaseClient: supabase,
+        userId: activeSession.user.id,
+        page,
+      });
+      // A failure leaves the note whole in the blob and readable. Nothing
+      // to report and nothing to undo -- the next sync tries again.
+      if (!ok) continue;
+      await noteCache.put(page.id, buildContent(page));
+      setData((prev) => ({
+        ...prev,
+        semesters: {
+          ...prev.semesters,
+          [semester]: {
+            ...prev.semesters[semester],
+            pages: (prev.semesters[semester].pages || []).map((p) =>
+              p.id === page.id ? { ...stub, updatedAt: nowISO() } : p
+            ),
+          },
+        },
+        meta: { ...(prev.meta || {}), updatedAt: nowISO() },
+      }));
     }
   };
 
@@ -3953,6 +4046,13 @@ export default function PlannerApp() {
 
   const handleSignOut = async () => {
     await backend.signOut();
+    /* Lecture content cached for offline reading is this account's, and
+       a shared or family device is exactly where signing out is meant to
+       mean something. The planner blob in localStorage is deliberately
+       left alone -- that is the same "your planner works signed out"
+       copy a brand-new user has -- but the AI note contents are not part
+       of that promise and go. */
+    await noteCache.purgeAll();
     setSession(null);
     setSyncError("");
   };
@@ -3969,6 +4069,7 @@ export default function PlannerApp() {
     await deleteAccount({ supabaseClient: supabase, session });
     await backend.signOut();
     await store.del(STORAGE_KEY);
+    await noteCache.purgeAll();
     const empty = { ...DEFAULT, semesters: { "Semester 1": makeSemester(), "Semester 2": makeSemester() } };
     dataRef.current = empty;
     setData(empty);
@@ -4039,13 +4140,43 @@ export default function PlannerApp() {
     }));
   // Deleting marks the item instead of dropping it. Without this record of the
   // deletion, another device would sync the item straight back.
-  const removeItem = (key, id) =>
+  const tombstone = (key, id) =>
     updateSem((s) => ({
       ...s,
       [key]: s[key].map((it) =>
         it.id === id ? { ...it, deletedAt: nowISO(), updatedAt: nowISO() } : it
       ),
     }));
+
+  /* An AI note whose content lives in `ai_notes` needs the row deleted
+     too, and the ORDER is the point: the row goes first, and the
+     tombstone only follows if that succeeded.
+
+     Tombstoning first would be the ordinary shape and is wrong here. The
+     stub would vanish from every device while the row -- the transcript
+     and summary of a lecture -- stayed on the server, with nothing left
+     pointing at it to ever clean it up. The privacy policy says notes in
+     the planner are the student's until they delete them; a delete that
+     leaves the content behind makes that untrue.
+
+     Signed out, the row can't be reached, so the tombstone is taken
+     locally and reconciliation finishes the job after the next sync. */
+  const removeItem = (key, id) => {
+    /* Read through dataRef rather than the `sem` memo below: that memo is
+       declared later in this component, and a closure reaching backwards
+       up the file for a `const` is how the temporal-dead-zone crash in
+       CLAUDE.md happened. dataRef is also simply more current — a sync
+       can land between render and click. */
+    const d = dataRef.current || {};
+    const pages = ((d.semesters && d.semesters[d.semester]) || {}).pages || [];
+    const page = key === "pages" ? pages.find((p) => p.id === id) : null;
+    if (!page || !isRemote(page)) return tombstone(key, id);
+
+    deleteNote({ supabaseClient: session ? supabase : null, id, cache: noteCache }).then((res) => {
+      if (res.tombstone) return tombstone(key, id);
+      setSyncError("Couldn't delete that note from the server, so it hasn't been deleted here either. Try again.");
+    });
+  };
 
   /* Study bookkeeping.
 
