@@ -31,6 +31,8 @@ import {
   INITIAL_RECORDER_STATE,
   newIdempotencyKey,
   TRANSLATION_LANGUAGES,
+  MONTHLY_MINUTES_LIMIT_HINT,
+  MINIMUM_BILLED_MINUTES_HINT,
 } from "../src/aiNotesLogic.js";
 import { fetchUsage, callAiNotes } from "../src/aiNotesClient.js";
 import { mergeData, COLLECTIONS, purgeOldTombstones } from "../src/sync.js";
@@ -71,6 +73,7 @@ import {
   checkRequestGuards,
   selectTranscriber,
   minutesFromSeconds,
+  billedMinutes,
   isUuid,
   sanitizeCourse,
   normalizeTranslateTo,
@@ -79,6 +82,8 @@ import {
   TRANSLATION_CODES,
   MAX_COURSE_LENGTH,
   SUMMARY_MAX_TOKENS,
+  MONTHLY_MINUTES_LIMIT,
+  MINIMUM_BILLED_MINUTES,
 } from "../supabase/functions/ai-notes/config.ts";
 import { deepgramAdapter } from "../supabase/functions/ai-notes/deepgram.js";
 import { groqAdapter, isSizeError } from "../supabase/functions/ai-notes/groq.js";
@@ -467,6 +472,96 @@ async function run() {
     assert.equal(minutesFromSeconds(90), 1.5);
     assert.equal(minutesFromSeconds(0), 0);
     assert.equal(minutesFromSeconds(undefined), 0, "a missing/zero duration must bill zero, not throw or bill NaN");
+  });
+
+  /* ---------- what a recording costs, not how long it is ---------- */
+
+  await test("a short recording bills the minimum, because summarising is charged per request", () => {
+    assert.equal(billedMinutes(60, MINIMUM_BILLED_MINUTES), MINIMUM_BILLED_MINUTES);
+    assert.equal(billedMinutes(30, MINIMUM_BILLED_MINUTES), MINIMUM_BILLED_MINUTES);
+  });
+
+  await test("a recording longer than the minimum bills its real length", () => {
+    assert.equal(billedMinutes(50 * 60, MINIMUM_BILLED_MINUTES), 50);
+    // Exactly at the floor, neither branch rounds it anywhere.
+    assert.equal(billedMinutes(MINIMUM_BILLED_MINUTES * 60, MINIMUM_BILLED_MINUTES), MINIMUM_BILLED_MINUTES);
+  });
+
+  await test("a provider that reports no duration bills zero, NOT the minimum", () => {
+    /* That case means the provider's response changed shape. Inventing
+       three minutes for it would hide a fault the logs exist to surface,
+       and it is bounded by how often a provider breaks rather than by
+       anything a user chooses. */
+    assert.equal(billedMinutes(0, MINIMUM_BILLED_MINUTES), 0);
+    assert.equal(billedMinutes(undefined, MINIMUM_BILLED_MINUTES), 0);
+  });
+
+  await test("the allowance is projected with the same floor that billing charges", () => {
+    // 299 used, a one-minute recording. Without the floor in the guard
+    // this passes and then bills 3, so the number on screen was untrue.
+    const guard = checkRequestGuards({
+      estimatedDurationSeconds: 60,
+      receivedBytes: 1000,
+      minutesUsedThisMonth: MONTHLY_MINUTES_LIMIT - 1,
+      monthlyLimitMinutes: MONTHLY_MINUTES_LIMIT,
+      maxRequestSeconds: 3 * 3600,
+      maxBodyBytes: 46_000_000,
+      minimumBilledMinutes: MINIMUM_BILLED_MINUTES,
+    });
+    assert.equal(guard.ok, false);
+    assert.equal(guard.code, "usage_exceeded");
+  });
+
+  await test("a month of one-minute recordings costs about what a month of lectures costs", () => {
+    /* The hole this closes: transcription is per minute, summarising is
+       per REQUEST and its output is driven by the note schema rather
+       than the recording's length. Priced as pure transcription, the
+       allowance was wrong by the number of RECORDINGS.
+
+       Derived from the constants, so raising the allowance or the
+       summariser's ceiling re-runs the arithmetic instead of quietly
+       skipping it. Prices are the ones in config.ts's derivation. */
+    const TRANSCRIBE_PER_MINUTE = 0.04 / 60;
+    const SUMMARISE_PER_REQUEST = 0.0018; // typical: short note + a translation
+
+    const cost = (recordings, realMinutesEach) => {
+      const billedEach = Math.max(realMinutesEach, MINIMUM_BILLED_MINUTES);
+      const fit = Math.floor(MONTHLY_MINUTES_LIMIT / billedEach);
+      const n = Math.min(recordings, fit);
+      return n * realMinutesEach * TRANSCRIBE_PER_MINUTE + n * SUMMARISE_PER_REQUEST;
+    };
+
+    const pathological = cost(Infinity, 1); // as many one-minute clips as fit
+    const realistic = cost(Infinity, 50); // a timetable of lectures
+
+    assert.ok(
+      pathological <= realistic * 1.25,
+      `a month of one-minute recordings costs $${pathological.toFixed(3)} against $${realistic.toFixed(
+        3
+      )} for a full timetable. The minimum billed increment is meant to keep these within 25% of ` +
+        "each other — re-derive MINIMUM_BILLED_MINUTES, don't relax this number."
+    );
+
+    // And confirm the floor is what's doing it, rather than the assertion
+    // passing for some unrelated reason.
+    const withoutFloor = (() => {
+      const n = MONTHLY_MINUTES_LIMIT; // 300 one-minute recordings
+      return n * 1 * TRANSCRIBE_PER_MINUTE + n * SUMMARISE_PER_REQUEST;
+    })();
+    assert.ok(
+      withoutFloor > realistic * 2,
+      "without a minimum increment this test would have nothing to catch — check the premise still holds"
+    );
+  });
+
+  await test("the client's copy of the billing constants matches the server's", () => {
+    /* Both are restatements -- the browser bundle can't import from
+       supabase/functions/ -- so they need a guard rather than a comment.
+       The minimum matters most: it is what a student watches their
+       allowance move by, so a drift makes the number on screen disagree
+       with the number being charged. */
+    assert.equal(MINIMUM_BILLED_MINUTES_HINT, MINIMUM_BILLED_MINUTES);
+    assert.equal(MONTHLY_MINUTES_LIMIT_HINT, MONTHLY_MINUTES_LIMIT);
   });
 
   await test("selectTranscriber actually switches which adapter gets called", () => {

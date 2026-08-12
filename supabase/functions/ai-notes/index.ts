@@ -17,7 +17,7 @@ import { requiredEnvNames, missingEnv, envPresence, failureLine, stageLine } fro
 import {
   checkRequestGuards,
   selectTranscriber,
-  minutesFromSeconds,
+  billedMinutes,
   isUuid,
   sanitizeCourse,
   normalizeTranslateTo,
@@ -29,6 +29,7 @@ import {
   TRANSCRIPTION_PROVIDER,
   PROVIDER_API_KEY_ENV,
   MONTHLY_MINUTES_LIMIT,
+  MINIMUM_BILLED_MINUTES,
   MAX_REQUEST_SECONDS,
   MAX_BODY_BYTES,
   PROCESSING_STALE_MINUTES,
@@ -402,6 +403,7 @@ Deno.serve(async (req: Request) => {
       monthlyLimitMinutes: MONTHLY_MINUTES_LIMIT,
       maxRequestSeconds: MAX_REQUEST_SECONDS,
       maxBodyBytes: MAX_BODY_BYTES,
+      minimumBilledMinutes: MINIMUM_BILLED_MINUTES,
     });
     if (!guard.ok) {
       // Left in place deliberately (not deleted) — a permanent-not-transient
@@ -522,10 +524,12 @@ Deno.serve(async (req: Request) => {
     }
 
     // 12. Bill usage using the server-reported duration (whichever provider
-    // ran) — minutesFromSeconds is the one, directly-tested calculation
-    // between "how long was this recording" and what gets billed.
+    // ran) — billedMinutes is the one, directly-tested calculation between
+    // "how long was this recording" and what gets billed. They are not the
+    // same number: summarising is charged per request, so a recording costs
+    // at least MINIMUM_BILLED_MINUTES whatever its length.
     stage = "billing";
-    const minutesBilled = minutesFromSeconds(durationSeconds);
+    const minutesBilled = billedMinutes(durationSeconds, MINIMUM_BILLED_MINUTES);
     if (!(durationSeconds > 0)) {
       // Never silent: billing zero for work that was actually done is a
       // revenue hole, and it means the provider's response changed shape.

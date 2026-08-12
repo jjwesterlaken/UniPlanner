@@ -20,6 +20,7 @@ import {
   pickSupportedMimeType,
   RECORDER_AUDIO_BITS_PER_SECOND,
   MONTHLY_MINUTES_LIMIT_HINT,
+  MINIMUM_BILLED_MINUTES_HINT,
   describeRecorderError,
   parseAiNotesError,
   PERMANENT_FAILURE_CODES,
@@ -62,9 +63,14 @@ function UsageBadge({ session }) {
   if (!usage || usage.unavailable) return null;
   const near = usage.minutesUsed >= MONTHLY_MINUTES_LIMIT_HINT * 0.9;
   return (
-    <div className={`mb-3 flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs ${near ? "bg-amber-50 text-amber-800" : "bg-stone-100 text-stone-500"}`}>
-      {near && <TriangleAlert size={13} />}
-      {Math.round(usage.minutesUsed)} of {MONTHLY_MINUTES_LIMIT_HINT} AI minutes used this month
+    <div className={`mb-3 rounded-lg px-3 py-2 text-xs ${near ? "bg-amber-50 text-amber-800" : "bg-stone-100 text-stone-500"}`}>
+      <div className="flex items-center gap-1.5">
+        {near && <TriangleAlert size={13} />}
+        {Math.round(usage.minutesUsed)} of {MONTHLY_MINUTES_LIMIT_HINT} AI minutes used this month
+      </div>
+      {/* Disclosed here rather than discovered by watching the counter
+          jump after a two-minute recording. */}
+      <p className="mt-1 opacity-80">{AI_NOTES_COPY.minimumBilling(MINIMUM_BILLED_MINUTES_HINT)}</p>
     </div>
   );
 }

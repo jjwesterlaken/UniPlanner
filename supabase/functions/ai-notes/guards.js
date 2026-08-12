@@ -26,6 +26,7 @@ export function checkRequestGuards({
   monthlyLimitMinutes,
   maxRequestSeconds,
   maxBodyBytes,
+  minimumBilledMinutes = 0,
 }) {
   if (typeof receivedBytes === "number" && receivedBytes > maxBodyBytes) {
     return { ok: false, code: "recording_too_long", error: "Recordings are limited to about 3 hours." };
@@ -33,7 +34,12 @@ export function checkRequestGuards({
   if (typeof estimatedDurationSeconds === "number" && estimatedDurationSeconds > maxRequestSeconds) {
     return { ok: false, code: "recording_too_long", error: "Recordings are limited to about 3 hours." };
   }
-  const projectedMinutes = (minutesUsedThisMonth || 0) + (estimatedDurationSeconds || 0) / 60;
+  /* Projected with the SAME floor billing uses. Checking the raw length
+     here and charging the floor later would let a student at 299 minutes
+     start a recording the allowance can't actually pay for -- a small
+     overrun, but the kind that makes the number on screen untrue. */
+  const projectedMinutes =
+    (minutesUsedThisMonth || 0) + billedMinutes(estimatedDurationSeconds, minimumBilledMinutes);
   if (projectedMinutes > monthlyLimitMinutes) {
     return { ok: false, code: "usage_exceeded", error: "You've used all your AI minutes for this month." };
   }
@@ -60,6 +66,29 @@ export function selectTranscriber(providers, requestedProvider, defaultProvider)
  */
 export function minutesFromSeconds(durationSeconds) {
   return (durationSeconds || 0) / 60;
+}
+
+/**
+ * What a recording actually costs the allowance.
+ *
+ * `minutesFromSeconds` answers "how long was this"; this answers "how
+ * much of the month did it use", and they are deliberately different
+ * functions. Summarising is charged per request and its cost barely
+ * depends on length, so a one-minute recording that billed one minute
+ * would be sold at roughly an eighth of what it costs — see
+ * MINIMUM_BILLED_MINUTES in config.ts for the arithmetic.
+ *
+ * A zero or missing duration bills ZERO, not the floor. That case means
+ * the provider's response changed shape, and inventing three minutes for
+ * it would paper over a fault the logs are meant to surface. It is a
+ * revenue hole and it is the right one to leave open, because it is
+ * bounded by how often a provider breaks rather than by how often a user
+ * chooses something.
+ */
+export function billedMinutes(durationSeconds, minimumMinutes) {
+  const actual = minutesFromSeconds(durationSeconds);
+  if (!(actual > 0)) return 0;
+  return Math.max(actual, minimumMinutes || 0);
 }
 
 /* Idempotency keys go into `ai_notes_requests.idempotency_key`, which is
