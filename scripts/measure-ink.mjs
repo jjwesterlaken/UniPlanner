@@ -32,10 +32,33 @@ const kb = (n) => `${(n / 1024).toFixed(1)} KB`;
 
 /* ---------- the candidate encodings ---------- */
 
-/** Round coordinates to whole canvas units and pressure to 2dp. */
+/* GRID: how finely coordinates are kept.
+
+   NOT whole canvas units. The canvas backing store is sized
+   CANVAS_W * devicePixelRatio, capped at 3, so on a 3x display one
+   canvas unit is THREE physical pixels -- and the drawing code's own
+   comment promises strokes "stay sharp at any zoom". Quantising to whole
+   units would be visible on exactly the hardware this feature is for
+   (an iPad with a Pencil), and most visible on small handwriting.
+
+   A tenth of a unit is below one physical pixel at the maximum ratio
+   this app ever uses, so it cannot produce a visible step, and it still
+   removes essentially all of the float waste -- the cost against whole
+   units is one digit per coordinate. */
+const GRID = 10;
+const snap = (v) => Math.round(v * GRID) / GRID;
+
+/* Pressure only ever drives stroke width:
+     lineWidth = max(0.5, width * (0.4 + pressure * 1.6))
+   At a typical width of 3 the full pressure range spans 1.2px to 6px, so
+   100 levels move the line by 0.048px per step and 256 levels by 0.019px.
+   Both are far below one physical pixel. 2dp it is. */
+const PRESSURE_DP = 100;
+
+/** Round coordinates to the grid and pressure to 2dp. */
 const rounded = (stroke) => ({
   ...stroke,
-  points: stroke.points.map(([x, y, p]) => [Math.round(x), Math.round(y), Math.round((p ?? 0.5) * 100) / 100]),
+  points: stroke.points.map(([x, y, p]) => [snap(x), snap(y), Math.round((p ?? 0.5) * PRESSURE_DP) / PRESSURE_DP]),
 });
 
 /** Drop points that sit (nearly) on the line between their neighbours. */
@@ -72,16 +95,16 @@ function delta(stroke) {
   const d = [];
   let px = x0;
   let py = y0;
-  let pp = Math.round((p0 ?? 0.5) * 100);
+  let pp = Math.round((p0 ?? 0.5) * PRESSURE_DP);
   for (let i = 1; i < pts.length; i++) {
     const [x, y, p] = pts[i];
-    const pi = Math.round((p ?? 0.5) * 100);
-    d.push(x - px, y - py, pi - pp);
+    const pi = Math.round((p ?? 0.5) * PRESSURE_DP);
+    d.push(Math.round((x - px) * GRID), Math.round((y - py) * GRID), pi - pp);
     px = x;
     py = y;
     pp = pi;
   }
-  return { color: stroke.color, width: stroke.width, erase: stroke.erase, o: [x0, y0, pp], d };
+  return { color: stroke.color, width: stroke.width, erase: stroke.erase, o: [Math.round(x0 * GRID), Math.round(y0 * GRID), pp], d };
 }
 
 const encode = (s) => delta(simplified(rounded(s)));

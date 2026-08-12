@@ -639,6 +639,33 @@ async function run() {
     assert.ok(bytes * 8 * 2 < 2500);
   });
 
+  await test("two items with the same updatedAt merge stably, in both directions", () => {
+    /* The property the planned ink rounding depends on. Rewriting stroke
+       coordinates into a smaller representation is NOT an edit, so it
+       must not bump updatedAt -- and if it doesn't, two devices that each
+       round the same note on load must not then fight over it.
+
+       mergeList breaks a tie with `t2 > t1`, strictly greater, so equal
+       timestamps keep whichever side was already there. Asserted here
+       because nothing else does, and a change to `>=` would turn every
+       silent rewrite into a ping-pong between devices. */
+    const stamp = "2026-08-12T00:00:00.000Z";
+    const unrounded = { id: "p1", updatedAt: stamp, strokes: [{ points: [[1.23456789, 2.3456789, 0.5]] }] };
+    const rounded = { id: "p1", updatedAt: stamp, strokes: [{ points: [[1.2, 2.3, 0.5]] }] };
+
+    const local = { semester: "Semester 1", semesters: { "Semester 1": { pages: [rounded] } }, meta: {} };
+    const remote = { semester: "Semester 1", semesters: { "Semester 1": { pages: [unrounded] } }, meta: {} };
+
+    const merged = mergeData(local, remote).semesters["Semester 1"].pages;
+    assert.equal(merged.length, 1, "the same note must not become two");
+    assert.deepEqual(merged[0].strokes, rounded.strokes, "the local copy wins a tie, so a device keeps what it just rounded");
+
+    // And doing it again changes nothing -- no oscillation between syncs.
+    const again = mergeData({ ...local, semesters: { "Semester 1": { pages: merged } } }, remote)
+      .semesters["Semester 1"].pages;
+    assert.deepEqual(again[0].strokes, rounded.strokes, "a second sync flipped it back, so the two devices would ping-pong");
+  });
+
   await test("selectTranscriber actually switches which adapter gets called", () => {
     const providers = { deepgram: deepgramAdapter, groq: groqAdapter };
     assert.equal(selectTranscriber(providers, "groq", "deepgram").name, "groq");
