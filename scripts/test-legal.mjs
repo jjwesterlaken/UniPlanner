@@ -298,13 +298,96 @@ async function run() {
     assert.match(text, /logs/i);
   });
 
+  /* ---------- the documents against the schema ----------
+
+     Both published documents enumerate where a student's data lives, so
+     a table added without touching them makes them quietly wrong — which
+     is the failure a legal document shows least and costs most.
+
+     The list of tables is READ FROM THE MIGRATIONS rather than typed
+     here. Three times now a guard has been weaker than it looked because
+     it restated the thing it was guarding (see CLAUDE.md), and a
+     hardcoded list is exactly that: it would have gone on passing when
+     `ai_notes` was added and the policy still described the planner as
+     holding everything a student writes.
+
+     Table names are not user-facing words, so what each one must produce
+     in the documents is declared below. That declaration is the part a
+     human has to think about; the enumeration is what forces them to. */
+
+  const migrationSql = () =>
+    fs
+      .readdirSync(path.join(rootDir, "supabase/migrations"))
+      .filter((f) => f.endsWith(".sql"))
+      .map((f) => fs.readFileSync(path.join(rootDir, "supabase/migrations", f), "utf8"))
+      .join("\n");
+
+  /* Every table the migrations create in `public`. `planner_data` is
+     documented in SUPABASE-SETUP.md rather than created by a migration,
+     so it is named here for the same reason it is in the setup doc:
+     nothing in this repo creates it. */
+  const schemaTables = () => {
+    const found = new Set(["planner_data"]);
+    for (const m of migrationSql().matchAll(/create table if not exists public\.(\w+)/g)) found.add(m[1]);
+    for (const m of migrationSql().matchAll(/create table public\.(\w+)/g)) found.add(m[1]);
+    return [...found].sort();
+  };
+
+  /* What each table must be visible as, in words a student would use.
+     A table whose contents a student never sees would still need a line
+     here saying so — "nothing, and why" is a decision, silence isn't. */
+  const DOCUMENTED_AS = {
+    planner_data: { privacy: /your planner syncs so it follows you between devices/i, deletion: /Your planner/i },
+    profiles: { privacy: /plan level/i, deletion: /plan level and account record/i },
+    ai_usage: { privacy: /monthly AI allowance/i, deletion: /record of AI minutes used/i },
+    ai_notes_requests: {
+      privacy: /Our copy of the transcript and generated notes/i,
+      deletion: /temporary copy of any AI transcripts/i,
+    },
+    ai_notes: {
+      privacy: /full text of a\s+saved AI lecture note/i,
+      deletion: /saved AI lecture notes/i,
+    },
+  };
+
+  await test("every table in the schema is accounted for in both published documents", () => {
+    const privacy = prose("privacy.html");
+    const deletion = prose("delete-account.html");
+    for (const table of schemaTables()) {
+      const entry = DOCUMENTED_AS[table];
+      assert.ok(
+        entry,
+        `public.${table} exists in the schema but no document text is declared for it. ` +
+          "Both published documents enumerate where a student's data lives, so decide what they say " +
+          "about this table and add it here."
+      );
+      assert.match(privacy, entry.privacy, `the privacy policy no longer describes public.${table}`);
+      assert.match(deletion, entry.deletion, `the deletion page no longer lists public.${table}`);
+    }
+  });
+
+  await test("the saved lecture note reads as the student's, not as the 7/30-day copy", () => {
+    /* These are two different records with two genuinely different
+       promises, and conflating them is the specific way this section
+       could be misleading while every phrase in it is technically
+       present. */
+    const text = prose("privacy.html");
+    assert.match(text, /stays until you delete the note or delete your\s+account/i);
+    assert.match(text, /Deleting the note deletes both halves; deleting your account deletes all of it/i);
+  });
+
   await test("the deletion page's list matches what the code deletes", () => {
-    // Every row here must correspond to something actually removed by
+    // Every row must correspond to something actually removed by
     // delete_my_account_data(), the cascade, or the client-side audio step.
     const text = prose("delete-account.html");
-    const sql = fs.readFileSync(path.join(rootDir, "supabase/migrations/0002_account_deletion.sql"), "utf8");
-    for (const table of ["ai_notes_requests", "ai_usage", "profiles", "planner_data"]) {
-      assert.ok(sql.includes(table), `0002 no longer deletes ${table}, but the page still implies it`);
+    const sql = migrationSql();
+    for (const table of schemaTables()) {
+      if (table === "planner_data") continue; // deleted dynamically, guarded in test-migrations.mjs
+      assert.match(
+        sql,
+        new RegExp(`delete from public\\.${table} where user_id = uid`),
+        `nothing deletes public.${table}, but the deletion page promises it`
+      );
     }
     assert.match(text, /lecture audio still being processed/i, "the audio step isn't listed");
     assert.match(sql, /delete from auth\.users/, "the auth user is no longer deleted");
