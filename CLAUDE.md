@@ -308,9 +308,38 @@ strokes, a 200-stroke page goes 278 KB → **20 KB, a 93% reduction**:
 
 **The first step is the one to trust without a real sample.** Rounding
 removes float digits, which is pure waste regardless of how anyone
-writes; 72% is a floor, not an estimate. The other two depend on stroke
-shape and sampling rate, so they need a real export before anyone
+writes; the figure is a floor, not an estimate. The other two depend on
+stroke shape and sampling rate, so they need a real export before anyone
 promises them.
+
+**Round to a TENTH of a canvas unit, not to whole units.** The obvious
+choice is wrong: the canvas backing store is sized
+`CANVAS_W * devicePixelRatio` with the ratio capped at 3, so on a 3x
+display one canvas unit is **three physical pixels** — and the drawing
+code's own comment promises strokes "stay sharp at any zoom". Whole-unit
+quantisation would be visible on exactly the hardware the feature exists
+for, and worst on small handwriting. A tenth of a unit is below one
+physical pixel at the largest ratio the app ever uses, so it cannot
+produce a step. It costs one digit per coordinate: 66% instead of 72%
+for rounding alone, 92% instead of 93% for the whole chain. There is no
+zoom control and no image export today, but neither is what makes whole
+units unsafe — the device pixel ratio already does.
+
+**Pressure quantises safely, and it is worth saying why rather than
+assuming.** It feeds exactly one thing:
+`lineWidth = max(0.5, width * (0.4 + pressure * 1.6))`. At a typical
+width of 3 the whole pressure range spans 1.2px to 6px, so 100 levels
+move the line by 0.048px per step. Two decimal places is invisible; a
+single byte would be too.
+
+**The migration must NOT bump `updatedAt`.** A lossless representation
+change is not an edit, and if it looked like one, two devices each
+loading the app would rewrite the same notes and fight through
+last-write-wins forever. `mergeList` breaks a tie with `t2 > t1`, strictly
+greater, so equal timestamps keep the existing item and the merge is
+stable — which is what makes a silent rewrite safe. There is a test for
+that stability, because the migration depends on it and nothing else
+asserts it.
 
 If that holds on real handwriting, ink does **not** need the `ai_notes`
 treatment — a table of its own, fetched on open — and the unified
