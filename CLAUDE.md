@@ -418,6 +418,31 @@ habit:
   in `scripts/test-legal.mjs` fails if `SITE_URL` and the documents ever
   name different hosts.
 
+**Cloudflare Pages serves the legal documents extensionless.** The files
+are `public/privacy.html` and `public/delete-account.html`, but Pages
+301-redirects `/privacy.html` → `/privacy`, so the canonical public URLs
+— and the ones in both app-store listings — are:
+
+```
+https://www.uniplannerapp.com/privacy
+https://www.uniplannerapp.com/delete-account
+```
+
+Both forms resolve, so nothing breaks either way, and the service
+worker's `NETWORK_ONLY` list covers all four spellings deliberately: the
+redirect was unknown when it was written, and listing both was cheaper
+than guessing. A navigation to the `.html` form is fetched, redirected by
+Pages, and re-enters the same network-only branch at the extensionless
+path — so a legal document is never served from a cache under either
+spelling.
+
+Note the asymmetry this leaves: `src/legalLinks.js` still points the app
+and the consent screen at the `.html` form, which costs one redirect hop
+per click. Harmless, but if it is ever changed to the extensionless form,
+change the two documents' cross-links in the same pass — the drift test
+in `scripts/test-legal.mjs` compares hosts, not paths, so it will not
+catch a half-done change.
+
 **Do not turn on "Single Page Application" handling.** It rewrites 404s
 to `index.html`, so a mistyped `/privacy` would render the planner
 instead of a legal document. Real files still win, so the policy pages
