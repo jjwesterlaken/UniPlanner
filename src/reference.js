@@ -32,16 +32,40 @@ export const ENTRY_BODY_MAX = 300;
 export const SHEET_ENTRIES_MAX = 30;
 export const SHEETS_PER_SEMESTER_MAX = 6;
 
-/* What Batch 3 is allowed to add to the blob, across BOTH semesters, in
-   the worst case where every cap is filled.
+/* ---------- the budget arithmetic, written out ----------
 
-   Not the whole budget: the 1MB working budget also has to hold study
-   cards and notebook pages, which are uncapped, and the planner has no
-   semester lifecycle — a student in second year reuses the same two
-   buckets with first year's content still in them (see CLAUDE.md). That
-   growth is a real threat to the total and is the semester-archive
-   work, not this. What this constant does is stop Batch 3 being the
-   thing that breaks it. */
+   These constants exist so the allowance below is derived rather than
+   asserted. A number someone picked and a number someone computed look
+   identical in a diff; only one of them fails when the inputs change. */
+
+/* The working budget (CLAUDE.md). Bounded by localStorage, not by
+   Postgres or anything on the Supabase side. */
+export const BLOB_BUDGET_BYTES = 1024 * 1024;
+
+/* Measured, not estimated: a realistic populated two-semester account
+   before Batch 3. */
+export const MEASURED_EXISTING_BYTES = 583 * 1024;
+
+/* The planner has no semester lifecycle — nothing archives, prunes or
+   clears — so a student in second year fills the same two buckets again
+   with first year's content still in them.
+
+   This is the honest, uncomfortable part: at a reuse factor of 2 the
+   budget is ALREADY breached before Batch 3 adds anything, which is why
+   the allowance below is a share of the year-one headroom rather than
+   all of it. The rest is left deliberately unspent as reuse margin.
+   Fixing the underlying growth is the semester-archive work, not this. */
+export const SEMESTER_REUSE_FACTOR = 2;
+
+/** Headroom in the first year, before reuse. */
+export const YEAR_ONE_HEADROOM_BYTES = BLOB_BUDGET_BYTES - MEASURED_EXISTING_BYTES;
+
+/** What reuse does to the total, ignoring Batch 3 entirely. */
+export const REUSE_PROJECTION_BYTES = MEASURED_EXISTING_BYTES * SEMESTER_REUSE_FACTOR;
+
+/* What Batch 3 may add across BOTH semesters with every cap filled.
+   Roughly four fifths of the year-one headroom, leaving the remainder
+   as reuse margin. */
 export const BATCH3_ALLOWANCE_BYTES = 350 * 1024;
 
 /* JSON overhead per item, measured rather than guessed: the braces,

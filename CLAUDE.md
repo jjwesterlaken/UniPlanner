@@ -110,7 +110,20 @@ not a performance nicety. Measured rather than estimated:
 - `JSON.stringify` runs on every debounced save. 1 MB is imperceptible;
   2 MB is ~45–75 ms per save on a mid-range phone.
 
-**The working budget is 1 MB**, with a user-visible warning above 1.5 MB.
+**The working budget is 1 MB**, with a user-visible warning above 1.5 MB
+(`SIZE_WARN_BYTES`, shown in the Backup panel). Measured again after
+Batch 3 landed: a realistic populated two-semester account is **672 KB**
+(66% of budget), and one with every Batch 3 cap filled is **962 KB**
+(94%). The caps hold.
+
+What they do not hold is the growth they never covered. Study cards,
+notebook pages and AI notes are uncapped, and with no semester lifecycle
+a second year lands in the same two buckets: **583 KB × 2 = 1166 KB,
+which breaches the budget on its own, before Batch 3 adds anything.**
+That is why the Backup panel now shows the size on every visit rather
+than only once it is a problem — a student whose planner is growing can
+see it coming — and why the real answer is the semester-archive work
+rather than another cap.
 Any feature that stores user-typed text should have caps whose *sum*
 still fits inside that, and the arithmetic belongs in a test so raising a
 cap can't quietly skip it.

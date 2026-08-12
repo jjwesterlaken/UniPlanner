@@ -21,6 +21,11 @@ import {
   SHEET_ENTRIES_MAX,
   SHEETS_PER_SEMESTER_MAX,
   BATCH3_ALLOWANCE_BYTES,
+  BLOB_BUDGET_BYTES,
+  MEASURED_EXISTING_BYTES,
+  SEMESTER_REUSE_FACTOR,
+  YEAR_ONE_HEADROOM_BYTES,
+  REUSE_PROJECTION_BYTES,
   worstCaseBytes,
   nextReadState,
   isRead,
@@ -78,10 +83,32 @@ async function run() {
     );
   });
 
-  await test("the allowance is a slice of the budget, not the whole of it", () => {
-    // Study cards and notebook pages are uncapped, and semesters are
-    // reused rather than archived, so Batch 3 must not spend the lot.
-    assert.ok(BATCH3_ALLOWANCE_BYTES < 1024 * 1024, "the allowance is the entire working budget");
+  await test("the allowance fits inside the year-one headroom and leaves reuse margin", () => {
+    // Derived rather than asserted: a number someone picked and a number
+    // someone computed look identical in a diff, and only one of them
+    // fails when the inputs change.
+    assert.equal(YEAR_ONE_HEADROOM_BYTES, BLOB_BUDGET_BYTES - MEASURED_EXISTING_BYTES);
+    assert.ok(
+      BATCH3_ALLOWANCE_BYTES < YEAR_ONE_HEADROOM_BYTES,
+      "Batch 3 would spend the entire first-year headroom, leaving nothing for reuse"
+    );
+    const margin = YEAR_ONE_HEADROOM_BYTES - BATCH3_ALLOWANCE_BYTES;
+    assert.ok(margin > 64 * 1024, `only ${(margin / 1024).toFixed(0)} KB of reuse margin is left`);
+  });
+
+  await test("semester reuse alone breaches the budget, which the caps cannot fix", () => {
+    /* Recorded as a test rather than a comment because it is the reason
+       the allowance is a share rather than the whole headroom -- and
+       because if someone ever adds a semester lifecycle, this is the
+       assertion that should start failing and prompt a re-think.
+
+       Nothing about Batch 3 causes this and nothing about Batch 3 can
+       fix it; the answer is the semester-archive work. */
+    assert.ok(
+      REUSE_PROJECTION_BYTES > BLOB_BUDGET_BYTES,
+      "reuse no longer breaches the budget — re-derive the allowance, it may now be too conservative"
+    );
+    assert.equal(REUSE_PROJECTION_BYTES, MEASURED_EXISTING_BYTES * SEMESTER_REUSE_FACTOR);
   });
 
   /* ---------- reading progress ---------- */

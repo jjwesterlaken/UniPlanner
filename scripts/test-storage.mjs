@@ -21,7 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { classifyStorageError, formatBytes, describeSaveFailure } from "../src/storageHealth.js";
+import { classifyStorageError, formatBytes, describeSaveFailure, describeSize, SIZE_WARN_BYTES, DEMO_SIZE_MULTIPLIER } from "../src/storageHealth.js";
 import {
   truncateTranscript,
   TRANSCRIPT_EXCERPT_CHARS,
@@ -127,6 +127,47 @@ async function run() {
     assert.equal(formatBytes(5_400_000), "5.1 MB");
     assert.equal(formatBytes(-1), "");
     assert.equal(formatBytes("nope"), "");
+  });
+
+  /* ---------- the size line, which covers what the caps don't ---------- */
+
+  await test("the size is always shown, not only once it is a problem", () => {
+    // Feature caps bound what those features add. Study cards, notebook
+    // pages and AI notes have no cap at all, and semesters are reused
+    // rather than archived -- so growth is real and otherwise invisible.
+    const small = describeSize({ bytes: 612 * 1024, signedIn: true });
+    assert.match(small.line, /612 KB/);
+    assert.equal(small.warn, false);
+    assert.equal(small.detail, "");
+  });
+
+  await test("past the threshold it warns, and the advice differs by whether sync would rescue them", () => {
+    const out = describeSize({ bytes: SIZE_WARN_BYTES + 1, signedIn: false });
+    const inn = describeSize({ bytes: SIZE_WARN_BYTES + 1, signedIn: true });
+    assert.equal(out.warn, true);
+    assert.equal(inn.warn, true);
+    assert.match(out.detail, /make an account|not backed up/i);
+    assert.match(inn.detail, /still syncing/i);
+    assert.doesNotMatch(inn.detail, /not backed up/i);
+  });
+
+  await test("demo mode warns at half the size, because it stores the blob twice", () => {
+    // uni-planner-v1 AND uni-planner-demo-cloud, against one quota.
+    const bytes = SIZE_WARN_BYTES / DEMO_SIZE_MULTIPLIER + 1;
+    assert.equal(describeSize({ bytes, signedIn: true, isDemo: false }).warn, false);
+    assert.equal(describeSize({ bytes, signedIn: true, isDemo: true }).warn, true);
+  });
+
+  await test("the warning threshold sits above the working budget but below the quota", () => {
+    assert.ok(SIZE_WARN_BYTES > 1024 * 1024, "warning at or below the 1 MB budget would nag during ordinary use");
+    assert.ok(SIZE_WARN_BYTES < 5 * 1024 * 1024, "warning at the browser quota is too late to act on");
+  });
+
+  await test("the backup panel actually renders the size, not just computes it", () => {
+    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    assert.match(src, /describeSize\(/, "the backup panel never calls describeSize");
+    assert.match(src, /size\.line/, "the size is computed but never shown");
+    assert.match(src, /JSON\.stringify\(data\)\.length/, "the size isn't measured from the same serialisation the save path uses");
   });
 
   /* ---------- the transcript that used to be stored whole ---------- */

@@ -108,7 +108,7 @@ import {
   Mic,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
-import { classifyStorageError, describeSaveFailure } from "./storageHealth.js";
+import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
 import { aiNotePreview } from "./aiNotesLogic.js";
 import { deleteAccount, confirmationMatches, DELETE_CONFIRMATION_PHRASE } from "./accountDeletion.js";
 import {
@@ -2917,7 +2917,7 @@ function Stat({ label, value }) {
 /*  Backup: save everything to a file, and restore from one           */
 /* ------------------------------------------------------------------ */
 
-function BackupPanel({ data, onRestore }) {
+function BackupPanel({ data, onRestore, session }) {
   const fileRef = useRef(null);
   const [status, setStatus] = useState("");
   const [pending, setPending] = useState(null); // parsed file waiting for a choice
@@ -2929,6 +2929,19 @@ function BackupPanel({ data, onRestore }) {
     }
     return items;
   }, [data]);
+
+  /* Measured, not estimated: this is the same JSON.stringify the save
+     path runs, so the number shown is the number that counts against the
+     browser's quota. Recomputed only when the data changes. */
+  const size = useMemo(
+    () =>
+      describeSize({
+        bytes: JSON.stringify(data).length,
+        signedIn: !!session,
+        isDemo: backend.isDemo,
+      }),
+    [data, session]
+  );
 
   const download = () => {
     try {
@@ -2983,10 +2996,22 @@ function BackupPanel({ data, onRestore }) {
         <div className="min-w-0 flex-1">
           <p className="font-medium text-stone-800">Backup</p>
           <p className="text-xs text-stone-500">
-            {counts} item{counts === 1 ? "" : "s"} across your semesters
+            {counts} item{counts === 1 ? "" : "s"} across your semesters · {size.line.replace("Your planner is ", "").replace(".", "")}
           </p>
         </div>
       </div>
+
+      {/* Always visible, warning or not. A size only shown once it is a
+          problem teaches nobody anything -- the point is that a student
+          whose planner is growing can see it coming. */}
+      {size.warn && (
+        <p role="status" className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <TriangleAlert size={14} className="mt-0.5 flex-shrink-0" />
+          <span>
+            <strong>{size.line}</strong> {size.detail}
+          </span>
+        </p>
+      )}
 
       {!pending && (
         <>
@@ -4414,7 +4439,7 @@ export default function PlannerApp() {
 
         {tab === "account" && (
           <Section icon={UserRound} title="Account" subtitle="Sync your planner across your devices">
-            <BackupPanel data={data} onRestore={restoreBackup} />
+            <BackupPanel data={data} onRestore={restoreBackup} session={session} />
             <AccountPanel
               session={session}
               syncing={syncing}

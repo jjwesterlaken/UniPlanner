@@ -107,3 +107,49 @@ export function describeSaveFailure({ reason, bytes, signedIn } = {}) {
           "Private browsing can do this. Anything you add now will be lost when you close this tab. Make an account to sync your work, or try a normal browser window.",
       };
 }
+
+/* ---------- how big the planner is, before it becomes a problem ----------
+
+   The size caps on individual features bound what THOSE features can
+   add. They do nothing about the collections that have no cap at all --
+   study cards, notebook pages, AI lecture notes -- or about the fact
+   that the planner has no semester lifecycle, so a student in second
+   year is filling the same two buckets again.
+
+   That growth is real and invisible. A number in the backup panel is
+   the cheapest possible answer: it costs one line, it is always true,
+   and it turns "the app stopped saving" into something a student could
+   have seen coming. */
+
+/* The working budget is 1 MB (see CLAUDE.md). The warning sits above it
+   rather than at it, so ordinary use never nags: 1.5 MB is comfortably
+   past the budget and still far below the ~5 MB browser quota, which
+   leaves room to act before anything actually fails. */
+export const SIZE_WARN_BYTES = 1.5 * 1024 * 1024;
+
+/* Demo mode writes the blob twice -- once as the planner and once as the
+   simulated cloud copy -- so the same content costs double against the
+   same quota. */
+export const DEMO_SIZE_MULTIPLIER = 2;
+
+/**
+ * What the backup panel says about the planner's size.
+ *
+ * Always returns a line, because a size that is only shown once it is a
+ * problem teaches nobody anything. `warn` is true only past the
+ * threshold, and the advice differs by whether sync would rescue them.
+ */
+export function describeSize({ bytes, signedIn, isDemo = false } = {}) {
+  const effective = isDemo ? bytes * DEMO_SIZE_MULTIPLIER : bytes;
+  const line = `Your planner is ${formatBytes(bytes)}.`;
+  if (effective < SIZE_WARN_BYTES) return { line, warn: false, detail: "" };
+
+  const shared = "Large planners save more slowly and can eventually stop saving on a device.";
+  return {
+    line,
+    warn: true,
+    detail: signedIn
+      ? `${shared} Your work is still syncing to your account. Removing old notes or study cards you no longer need will bring it down.`
+      : `${shared} Nothing is backed up anywhere else yet — make an account to sync it, or remove old notes and study cards you no longer need.`,
+  };
+}
