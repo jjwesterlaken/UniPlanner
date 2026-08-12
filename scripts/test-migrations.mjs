@@ -422,6 +422,149 @@ async function run() {
     );
   });
 
+  /* ---------- 0005: AI note content in its own row ----------
+
+     These are the first tests here that exercise RLS as a real client
+     does, with `set role authenticated`. Everything above runs as the
+     superuser, which bypasses policies entirely — fine for testing
+     SECURITY DEFINER functions, useless for testing a policy. This table
+     is the first one written BY the client under RLS, so the policies are
+     the security boundary rather than a second opinion. */
+
+  const asUser = (db, uid, sql) =>
+    psql(db, `set test.uid = ${uid}; set role authenticated; ${sql}`);
+
+  const seedNotes = (db) =>
+    psqlOrThrow(
+      db,
+      `insert into public.ai_notes (id, user_id, course, week, content) values
+         ('aaaaaaaa-0000-0000-0000-000000000001', ${USER},  'PHYS1001', '3', '{"translations":{"en":{"overview":"mine"}}}'),
+         ('bbbbbbbb-0000-0000-0000-000000000002', ${OTHER}, 'LAWS2002', '4', '{"translations":{"en":{"overview":"theirs"}}}');`
+    );
+
+  const withNotes = () => {
+    const db = freshDb();
+    applyMigration(db, "0001_ai_notes.sql");
+    applyMigration(db, "0002_account_deletion.sql");
+    applyMigration(db, "0005_ai_notes.sql");
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER}), (${OTHER});`);
+    return db;
+  };
+
+  await test("a student reads their own lecture notes and cannot see anyone else's", () => {
+    const db = withNotes();
+    seedNotes(db);
+    const mine = asUser(db, USER, `select course from public.ai_notes order by course;`);
+    assert.ok(mine.ok, mine.err);
+    assert.equal(mine.out, "PHYS1001", "select returned rows belonging to another user");
+  });
+
+  await test("a note cannot be inserted under someone else's user_id", () => {
+    const db = withNotes();
+    const r = asUser(
+      db,
+      USER,
+      `insert into public.ai_notes (id, user_id, content)
+         values ('cccccccc-0000-0000-0000-000000000003', ${OTHER}, '{}');`
+    );
+    assert.equal(r.ok, false, "the insert policy let one user write a row owned by another");
+    assert.match(r.err, /row-level security/i);
+  });
+
+  await test("one student's delete cannot reach another student's note", () => {
+    const db = withNotes();
+    seedNotes(db);
+    // RLS makes this a no-op rather than an error: the row simply isn't
+    // visible to delete. Asserting on the survivor is what makes the test
+    // real — a passing statement proves nothing here.
+    const r = asUser(db, USER, `delete from public.ai_notes where user_id = ${OTHER};`);
+    assert.ok(r.ok, r.err);
+    assert.equal(count(db, "public.ai_notes", `user_id = ${OTHER}`), 1, "another user's note was deleted");
+    assert.equal(count(db, "public.ai_notes", `user_id = ${USER}`), 1);
+  });
+
+  await test("a student can delete their own note", () => {
+    const db = withNotes();
+    seedNotes(db);
+    const r = asUser(db, USER, `delete from public.ai_notes where id = 'aaaaaaaa-0000-0000-0000-000000000001';`);
+    assert.ok(r.ok, r.err);
+    assert.equal(count(db, "public.ai_notes", `user_id = ${USER}`), 0, "the owner could not delete their own note");
+  });
+
+  await test("there is no update path at all, not even for the owner", () => {
+    // The row is immutable by design: activeLanguage — the one thing a
+    // reader changes — lives in the blob stub instead. Refused twice, by
+    // the missing grant and the missing policy, so removing one still
+    // leaves the other.
+    const db = withNotes();
+    seedNotes(db);
+    const r = asUser(db, USER, `update public.ai_notes set course = 'CHANGED' where user_id = ${USER};`);
+    assert.equal(r.ok, false, "an owner was able to update a row that has no update policy");
+    assert.equal(count(db, "public.ai_notes", `course = 'CHANGED'`), 0);
+  });
+
+  await test("account deletion takes the lecture notes with it", () => {
+    const db = withNotes();
+    seedNotes(db);
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
+    assert.equal(count(db, "public.ai_notes", `user_id = ${USER}`), 0, "the deleted account's notes are still there");
+    assert.equal(count(db, "public.ai_notes", `user_id = ${OTHER}`), 1, "deletion reached another user's notes");
+  });
+
+  await test("the cascade alone would also clear ai_notes", () => {
+    const db = withNotes();
+    seedNotes(db);
+    psqlOrThrow(db, `delete from auth.users where id = ${USER};`);
+    assert.equal(count(db, "public.ai_notes", `user_id = ${USER}`), 0, "ai_notes does not cascade from auth.users");
+  });
+
+  await test("deletion clears every table this repo owns, whichever one is added next", () => {
+    /* 0005 replaces delete_my_account_data() by copying 0002's body, so an
+       edit to 0002 could be silently reverted and a table could be added
+       without ever being deleted. Rather than compare the two files (a
+       restatement, which is what drifts), this enumerates the tables from
+       the database and asserts the applied function empties all of them. */
+    const db = freshDb();
+    for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
+      applyMigration(db, file);
+    }
+    seedTwoUsers(db);
+    seedNotes(db);
+
+    const owned = one(
+      db,
+      `select string_agg(table_name, ',' order by table_name)
+         from information_schema.columns
+        where table_schema = 'public' and column_name = 'user_id';`
+    )
+      .split(",")
+      .filter(Boolean);
+    assert.ok(owned.includes("ai_notes"), "the enumeration missed ai_notes, so it is guarding nothing");
+    assert.ok(owned.length >= 4, `expected several user-owned tables, found ${owned.join(", ")}`);
+
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
+    for (const table of owned) {
+      assert.equal(
+        count(db, `public.${table}`, `user_id = ${USER}`),
+        0,
+        `public.${table} has a user_id but delete_my_account_data() does not clear it`
+      );
+      assert.ok(count(db, `public.${table}`, `user_id = ${OTHER}`) > 0, `public.${table} lost another user's rows`);
+    }
+  });
+
+  await test("0005 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = withNotes();
+    applyMigration(db, "0005_ai_notes.sql");
+    seedNotes(db);
+    assert.equal(
+      one(db, `select count(*)::text from pg_policies where tablename = 'ai_notes';`),
+      "3",
+      "re-applying duplicated or dropped a policy"
+    );
+    assert.equal(one(db, `select relrowsecurity::text from pg_class where relname = 'ai_notes';`), "true");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 

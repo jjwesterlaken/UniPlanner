@@ -78,6 +78,50 @@ const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></
 const complaints = [];
 dom.window.console.error = (...a) => complaints.push(a.join(" "));
 
+/* Seeded BEFORE the bundle runs, because the app reads localStorage on
+   mount. One AI lecture note whose content has been moved to its own row.
+
+   That shape only exists for signed-in users -- but demo mode is exactly
+   where it is most dangerous, and it is genuinely reachable: sign in on
+   one device, let the notes migrate, sign out, and every stub is still in
+   the local planner with no client to fetch it. The viewer then calls
+   fetchNote with a null Supabase client and the cache with no IndexedDB
+   worth speaking of, which is two null-dereferences waiting to happen in
+   the mode that has shipped one twice.
+
+   The stub is written by hand rather than built with buildStub() so this
+   test breaks if the stored SHAPE changes, not merely if the builder
+   does. */
+const AI_STUB = {
+  id: "ai-note-smoke-1",
+  title: "PHYS1001 — Week 3 notes",
+  body: "",
+  html: "",
+  strokes: [],
+  style: "lined",
+  kind: "text",
+  font: "sans",
+  folderId: null,
+  updatedAt: "2026-08-01T00:00:00.000Z",
+  aiMeta: {
+    course: "PHYS1001",
+    week: "3",
+    generatedAt: "2026-08-01T00:00:00.000Z",
+    activeLanguage: "en",
+    remote: true,
+    previews: { en: "Newton's second law relates force, mass and acceleration." },
+  },
+};
+
+dom.window.localStorage.setItem(
+  "uni-planner-v1",
+  JSON.stringify({
+    semester: "Semester 1",
+    semesters: { "Semester 1": { pages: [AI_STUB] } },
+    meta: { updatedAt: "2026-08-01T00:00:00.000Z" },
+  })
+);
+
 let threw = null;
 try {
   dom.window.eval(bundle.outputFiles[0].text);
@@ -156,6 +200,41 @@ for (const [tabName, phrases] of [
     const text = doc.body.textContent || "";
     for (const phrase of phrases) {
       check(text.includes(phrase), `${tabName} renders "${phrase}" from an empty semester`);
+    }
+  }
+}
+
+/* An AI note whose content lives elsewhere, opened with no backend.
+
+   The list must be readable without a network -- it is the first thing on
+   screen -- so the preview comes from the stub. Opening it cannot reach
+   the row, and the whole point of separating "missing" from "failed" is
+   that this says so honestly instead of claiming the note is gone. */
+{
+  const notes = findButton("Notes");
+  if (notes) {
+    notes.click();
+    await new Promise((r) => setTimeout(r, 150));
+    const text = doc.body.textContent || "";
+    check(text.includes("PHYS1001 — Week 3 notes"), "a moved AI note still appears in the list");
+    check(
+      text.includes("Newton's second law relates force, mass and acceleration."),
+      "its preview reads from the stub, with no network involved"
+    );
+
+    const open = [...doc.querySelectorAll("button")].find((b) =>
+      (b.getAttribute("aria-label") || "").includes("PHYS1001")
+    );
+    const row = open || [...doc.querySelectorAll("li")].find((li) => (li.textContent || "").includes("PHYS1001"));
+    if (row) {
+      (open || row.querySelector("button") || row).click();
+      await new Promise((r) => setTimeout(r, 250));
+      const viewer = doc.body.textContent || "";
+      /* Positive evidence first. "It doesn't say the wrong thing" passes
+         just as well when the viewer never opened at all, which is how a
+         test ends up asserting nothing. */
+      check(viewer.includes("Couldn't load this note"), "an unreachable note says so, rather than rendering blank");
+      check(!viewer.includes("was deleted on another device"), "an unreachable note is never reported as deleted");
     }
   }
 }
