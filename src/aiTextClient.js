@@ -15,6 +15,7 @@
    ================================================================== */
 
 import { supabase, backend } from "./sync.js";
+import { SUPABASE_URL } from "./config.js";
 import { allowanceState } from "./aiTextLimits.js";
 
 const currentMonthKey = (d = new Date()) =>
@@ -52,7 +53,7 @@ export async function fetchTextAllowance(session, { supabaseClient = supabase, i
 
 /** Call the ai-text endpoint. Throws with `code` set, so copy can be looked up. */
 export async function callAiText({ token, task, payload = {}, fetchImpl = fetch }) {
-  const res = await fetchImpl(`${import.meta.env?.VITE_SUPABASE_URL || ""}/functions/v1/ai-text`, {
+  const res = await fetchImpl(`${SUPABASE_URL}/functions/v1/ai-text`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ task, ...payload }),

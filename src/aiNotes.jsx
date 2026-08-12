@@ -34,6 +34,7 @@ import {
   clearPendingRecovery,
   pendingRecovery,
   defaultCardSelection,
+  folderForRecording,
   DEFAULT_CARDS_SELECTED,
 } from "./aiNotesLogic.js";
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
@@ -477,7 +478,7 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
 /*  Recorder — course/week form + drives the whole flow                */
 /* ------------------------------------------------------------------ */
 
-function Recorder({ session, courses, addItem, setData, initialRecovery = null }) {
+function Recorder({ session, courses, folders = [], addItem, setData, initialRecovery = null }) {
   const { state, dispatch, elapsedSeconds, level, start, pause, resume, stop, discard } = useLectureRecorder();
   const [course, setCourse] = useState("");
   const [week, setWeek] = useState("");
@@ -575,6 +576,19 @@ function Recorder({ session, courses, addItem, setData, initialRecovery = null }
           // state the student expects: they just watched it appear.
           await noteCache.put(pageItem.id, buildContent(pageItem));
         }
+      }
+
+      /* The folder is a CONVENIENCE and must never block the note. It is
+         computed and created inside its own try, so a failure here leaves
+         the note filed nowhere -- visible in the list, exactly as before
+         this feature existed -- rather than losing a lecture someone just
+         recorded. */
+      try {
+        const { folderId, newFolder } = folderForRecording({ folders, course, uid, nowISO });
+        if (newFolder) addItem("folders", newFolder);
+        if (folderId) toStore = { ...toStore, folderId };
+      } catch (e) {
+        /* filed nowhere, saved anyway */
       }
 
       addItem("pages", toStore);
@@ -706,7 +720,7 @@ function Recorder({ session, courses, addItem, setData, initialRecovery = null }
 /*  Panel — consent + account gating, then the recorder                */
 /* ------------------------------------------------------------------ */
 
-export function AiNotesPanel({ session, backend, courses, data, setData, addItem }) {
+export function AiNotesPanel({ session, backend, courses, folders, data, setData, addItem }) {
   if (!session || backend.isDemo) {
     return (
       <Card>
@@ -794,6 +808,7 @@ function RecoveryGate({ session, courses, addItem, data, setData }) {
       <Recorder
         session={session}
         courses={courses}
+        folders={folders}
         addItem={addItem}
         setData={setData}
         initialRecovery={recovered}

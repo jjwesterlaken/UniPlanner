@@ -586,6 +586,16 @@ async function main() {
     assert.ok(!/AI plan/i.test(paid.detail), "a paying student must not be sold the plan they already have");
   });
 
+  await test("the endpoint URL is built from config, not a bundler-specific global", async () => {
+    /* `import.meta.env` is a Vite idiom. This project builds with esbuild
+       in IIFE format, where it resolves to EMPTY -- so the call would
+       have gone to a relative path and 404'd against the web host. The
+       build printed a warning; nothing failed. */
+    const client = fs.readFileSync(path.join(rootDir, "src/aiTextClient.js"), "utf8");
+    assert.ok(!/import\.meta/.test(client), "import.meta is empty in this build format");
+    assert.match(client, /\$\{SUPABASE_URL\}\/functions\/v1\/ai-text/);
+  });
+
   await test("the pre-flight allowance read costs nothing and calls no endpoint", async () => {
     /* If this ever became an endpoint call, every screen that mounts
        would pay a cold start to ask a question the database already
