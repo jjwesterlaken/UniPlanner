@@ -152,6 +152,20 @@ if (studyTab) {
     check(text.includes(phrase), `stats render from an empty semester: "${phrase}"`);
   }
 
+  /* Batch 4's two Study-tab screens, from an EMPTY semester and signed
+     OUT -- which is the state a brand-new user is in, and the state in
+     which the allowance is unreadable. The allowance line must simply be
+     absent rather than reading as "none left". */
+  check(text.includes("Practice questions"), "the practice panel renders from an empty semester");
+  check(
+    text.includes("Sign in to use the AI study features"),
+    "signed out, the practice panel says so rather than showing an unusable control"
+  );
+  check(
+    !text.includes("used all of this month"),
+    "an unreadable allowance must never render as an exhausted one — that is a paywall caused by being offline"
+  );
+
   // Batch 2 lands on three tabs; each renders from an empty semester,
   // which is the shape that has crashed demo mode before.
   for (const [tabName, phrases] of [

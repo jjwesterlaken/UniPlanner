@@ -48,7 +48,7 @@ import {
   CRUNCH_ITEM_COUNT,
 } from "../src/workload.js";
 
-import { mergeData, COLLECTIONS } from "../src/sync.js";
+import { mergeData, COLLECTIONS, COUNTABLE_COLLECTIONS } from "../src/sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -758,17 +758,15 @@ async function run() {
   await test("assessments count as the user's own items in the backup total", () => {
     // Unlike studyStats, the student typed these weights -- they are
     // content, not bookkeeping, so the backup panel must count them.
-    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
-    const countable = src.match(/const COUNTABLE = COLLECTIONS\.filter\(\(k\) => [^)]*\)/);
-    assert.ok(countable, "could not find the COUNTABLE list");
-    assert.ok(!/assessments/.test(countable[0]), "assessments must not be excluded from the item count");
-    assert.match(countable[0], /studyStats/, "studyStats should still be excluded");
+    // Asserted on the VALUE, not on a line of source: the previous form
+    // matched the text of one expression and broke the moment that
+    // expression was refactored, while the behaviour was unchanged.
+    assert.ok(COUNTABLE_COLLECTIONS.includes("assessments"), "assessments must be counted — the student typed those weights");
+    assert.ok(!COUNTABLE_COLLECTIONS.includes("studyStats"), "studyStats should still be excluded");
   });
 
   await test("the settings row is bookkeeping, not content, in the backup count", () => {
-    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
-    const countable = src.match(/const COUNTABLE = COLLECTIONS\.filter\([^;]*\);/)[0];
-    assert.match(countable, /settings/, "a semester's own config is not one of the user's items");
+    assert.ok(!COUNTABLE_COLLECTIONS.includes("settings"), "a semester's own config is not one of the user's items");
     assert.ok(COLLECTIONS.includes("settings"), "but it still has to sync");
   });
 

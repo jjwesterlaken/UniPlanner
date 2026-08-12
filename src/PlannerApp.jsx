@@ -6,6 +6,7 @@ import {
   getDeviceId,
   nowISO,
   COLLECTIONS,
+  COUNTABLE_COLLECTIONS,
   supabase,
 } from "./sync.js";
 import {
@@ -70,6 +71,7 @@ import {
   Flame,
   Timer,
   TrendingDown,
+  Sparkles,
   Target,
   AlarmClock,
   CalendarClock,
@@ -108,6 +110,8 @@ import {
   Mic,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
+import { PracticePanel, WeakSpotsExplain, ExplainItBack, SummariseNote, useTextAllowance } from "./aiText.jsx";
+import { buildAttempt, pruneAttempts, weakTopics } from "./practice.js";
 import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
 import { aiNotePreview } from "./aiNotesLogic.js";
 import {
@@ -219,7 +223,8 @@ const SEMESTER_NAMES = ["Semester 1", "Semester 2"];
 // Collections the user thinks of as "their stuff". studyStats syncs like
 // any other collection but is bookkeeping, not content -- counting its ~43
 // rows per semester would make "247 items" in the backup panel meaningless.
-const COUNTABLE = COLLECTIONS.filter((k) => k !== "studyStats" && k !== "settings");
+// Classified in sync.js, beside the list it classifies.
+const COUNTABLE = COUNTABLE_COLLECTIONS;
 
 // Each semester holds its own independent set of content.
 const makeSemester = () => ({
@@ -4178,6 +4183,24 @@ export default function PlannerApp() {
     });
   };
 
+  /* One allowance read per app mount, shared by all four text features.
+     A hook per feature would be four RLS reads on a screen that shows
+     two of them. */
+  const textAllowance = useTextAllowance(session);
+
+  /* Store the ATTEMPT, never the questions -- see practice.js. Pruned on
+     the way in, because this collection grows with use and
+     purgeOldTombstones only runs on sync: a signed-out student would
+     otherwise accumulate rows and their tombstones forever. */
+  const recordPracticeAttempt = ({ cardIds, correctIds }) =>
+    updateSem((sm) => ({
+      ...sm,
+      practiceAttempts: pruneAttempts(
+        [...(sm.practiceAttempts || []), { ...buildAttempt({ cardIds, correctIds, at: nowISO(), uid }), updatedAt: nowISO() }],
+        { now: nowISO() }
+      ),
+    }));
+
   /* Study bookkeeping.
 
      Both of these read the CURRENT collection inside the updater and
@@ -4550,6 +4573,31 @@ export default function PlannerApp() {
             </Section>
             <Section icon={TrendingDown} title="Weak spots" subtitle="The cards you keep missing">
               <WeakSpots notes={sem.notes} />
+              {/* Sits BELOW the existing panel and renders nothing when
+                  there is nothing to explain, so the screen a student
+                  already knows is unchanged until they have weak spots
+                  worth reasoning about. */}
+              {session && (
+                <WeakSpotsExplain
+                  session={session}
+                  topics={weakTopics({ attempts: sem.practiceAttempts, cards: sem.notes })}
+                  allowanceApi={textAllowance}
+                />
+              )}
+            </Section>
+            <Section icon={Sparkles} title="Practice questions" subtitle="Written from your own study cards">
+              {session ? (
+                <PracticePanel
+                  session={session}
+                  cards={sem.notes}
+                  allowanceApi={textAllowance}
+                  onRecordAttempt={recordPracticeAttempt}
+                />
+              ) : (
+                <Card>
+                  <Empty>Sign in to use the AI study features.</Empty>
+                </Card>
+              )}
             </Section>
             <Section icon={AlarmClock} title="Exams" subtitle="Countdown, and a plan for the time left">
               <ExamPlanner assessments={sem.assessments} notes={sem.notes} addItem={addItem} />

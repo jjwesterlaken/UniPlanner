@@ -71,7 +71,36 @@ export const COLLECTIONS = [
   // a collection missing from it is silently dropped on every sync,
   // while still working locally and in demo mode.
   "studyStats",
+  /* Practice attempts (see src/practice.js). BOOKKEEPING, so like
+     studyStats and settings it is excluded from the backup panel's item
+     count -- a student's "1,204 items" should mean their own notes and
+     assignments, not a log of how many questions they answered.
+
+     Listed here for the usual reason: mergeSemester rebuilds each
+     semester from this whitelist alone, so a collection missing from it
+     is dropped on every sync while working perfectly in demo mode and on
+     a single device.
+
+     It also prunes on its own schedule, which matters because
+     purgeOldTombstones only runs on sync and restore -- see
+     pruneAttempts, which clears its own tombstones rather than leaving
+     them to grow forever for a signed-out user. */
+  "practiceAttempts",
 ];
+
+/* Which of those are the app's own bookkeeping rather than the student's
+   work. The backup panel's item total is meant to answer "how much of my
+   work is in here", so a log of answered questions counted alongside
+   someone's assignments inflates it in the direction that reassures.
+
+   Lives here, next to the list it classifies, rather than in
+   PlannerApp.jsx: it is a fact about the collections, and keeping the
+   two together is what lets a test assert the classification instead of
+   pattern-matching a line of source. */
+export const BOOKKEEPING_COLLECTIONS = ["studyStats", "settings", "practiceAttempts"];
+
+/** The collections whose items are the student's own content. */
+export const COUNTABLE_COLLECTIONS = COLLECTIONS.filter((k) => !BOOKKEEPING_COLLECTIONS.includes(k));
 
 /* ---------- merging two copies of the data ----------
 
