@@ -15,22 +15,26 @@ requirement (below) is the longest lead item on the project.
 
 ## Before either platform
 
-Both start from the repo root.
+**THERE ARE TWO `package.json` FILES AND YOU MUST INSTALL BOTH.** The
+root one builds the web app; `mobile/` has its own for Capacitor and the
+CLI. A root `npm install` does not cover it, and skipping the second one
+fails at `cap add` with `capacitor: not found` or `Cannot find module
+@capacitor/cli` — which reads like a broken script rather than a missing
+install. This step was previously listed as an aside and got skipped;
+it is now the first thing on the page, and it is repeated inside each
+platform's numbered steps so following one section alone works.
 
 ```bash
+# from the repo root
 npm install
 npm run build          # builds the web app AND copies it into mobile/www
+
+cd mobile
+npm install            # SEPARATE, and required
 ```
 
 `npm run build` must end with `native copies ready`. If it errors, stop —
 the mobile projects would be built from a stale or missing copy.
-
-Then install the mobile toolchain, once:
-
-```bash
-cd mobile
-npm install
-```
 
 **What the folders mean.** `mobile/ios` and `mobile/android` do not exist
 in the repository and never will — they are generated per machine and
@@ -58,6 +62,7 @@ the SDK, the build tools and the device connection.
 
 ```bash
 cd mobile
+npm install            # if you have not already — see above, it is separate from the root install
 npm run add:android
 ```
 
@@ -123,6 +128,7 @@ the Play Console clock.**
 
 | What you see | What it means |
 |---|---|
+| `capacitor: not found`, or `Cannot find module @capacitor/cli` | `npm install` was not run **inside `mobile/`**. The root install does not cover it. |
 | `SDK location not found` | Android Studio has not finished its first-run wizard, or `ANDROID_HOME` is unset. Open Android Studio once and let it finish. |
 | Gradle sync fails on a download | Usually a proxy or a flaky network. Retry the sync before investigating. |
 | `Installation failed: INSTALL_FAILED_UPDATE_INCOMPATIBLE` | An older build with the same identifier is installed. Uninstall the app from the phone and run again. |
@@ -153,6 +159,7 @@ instead.
 
 ```bash
 cd mobile
+npm install            # if you have not already — see above, it is separate from the root install
 npm run add:ios
 ```
 
@@ -202,6 +209,7 @@ access with our wording, not Apple's generic text.
 
 | What you see | What it means |
 |---|---|
+| `capacitor: not found`, or `Cannot find module @capacitor/cli` | `npm install` was not run **inside `mobile/`**. The root install does not cover it. |
 | `No such module 'Capacitor'` | You opened `.xcodeproj` instead of `.xcworkspace`. |
 | `Signing for "App" requires a development team` | Step 3 above was skipped. |
 | `Command PhaseScriptExecution failed` | Usually CocoaPods. `cd mobile/ios/App && pod install`, then reopen the workspace. |
@@ -287,6 +295,22 @@ to doubt it.
     from the Account tab and send the file. It is needed to finish the
     ink-compression work, and synthetic strokes cannot answer the
     question.
+
+---
+
+## Hardening, not yet done
+
+**A dead WebView renderer white-screens forever.** When the Chromium
+renderer process is killed — which is what a JavaScript crash escalated
+to on the moto g05 — Android schedules a service restart, but the app
+shows a permanent white screen and only a force-quit recovers it. The
+crash that caused it is fixed, but the *response* to a future one is
+still "the app is bricked until relaunched".
+
+Capacitor exposes `onRenderProcessGone`. Handling it to reload the
+WebView would turn a permanent white screen into a flicker. Deliberately
+not done in the same change as the crash fix, so the fix can be verified
+on hardware without a second variable in it.
 
 ---
 

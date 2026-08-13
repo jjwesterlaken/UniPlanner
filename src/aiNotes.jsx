@@ -1044,7 +1044,14 @@ export function AiNotesPanel({ session, backend, courses, folders, data, setData
   }
 
   return (
-    <RecoveryGate session={session} courses={courses} addItem={addItem} data={data} setData={setData} />
+    <RecoveryGate
+      session={session}
+      courses={courses}
+      folders={folders}
+      addItem={addItem}
+      data={data}
+      setData={setData}
+    />
   );
 }
 
@@ -1058,7 +1065,19 @@ export function AiNotesPanel({ session, backend, courses, folders, data, setData
    violation, the scoped lookup finds the completed row and returns it.
    No new endpoint, no audio, and no minutes -- billing happens on the
    transcription path this request never reaches. */
-function RecoveryGate({ session, courses, addItem, data, setData }) {
+/* NOTE `folders` is threaded through here for no reason of its own: this
+   component does not use it, it only passes it to Recorder, which files
+   a saved recording into its per-course folder.
+
+   That is exactly why it went missing. The auto-folder feature threaded
+   folders from PlannerApp -> AiNotesPanel -> Recorder and skipped the
+   component in the middle that merely relays it, so Recorder's JSX read
+   a bare `folders` that nothing in scope defined. It crashed the whole
+   panel for every signed-in user, on every platform, and nothing caught
+   it: the demo-mode smoke walk returns early from AiNotesPanel without a
+   real account, so the panel had never been rendered by anything
+   automated. The walk now mounts it signed in and past consent. */
+function RecoveryGate({ session, courses, folders, addItem, data, setData }) {
   const pending = pendingRecovery(data.meta);
   const [recovered, setRecovered] = useState(null);
   const [busy, setBusy] = useState(false);

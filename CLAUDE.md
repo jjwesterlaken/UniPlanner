@@ -644,6 +644,32 @@ component is assembled. If you add a screen, add it to the smoke test's
 tab walk — the whole value is that it renders the real thing from an
 empty semester.
 
+**The fifth one got to real hardware, and the reason is worth more than
+the bug.** `folders` was threaded from `PlannerApp` → `AiNotesPanel` →
+`Recorder` for the auto-folder feature, and the component in the middle
+that merely *relays* it was skipped. `RecoveryGate` rendered
+`<Recorder folders={folders}>` with nothing in scope defining it, so the
+whole AI Notes panel threw `ReferenceError` on every render.
+
+It was not conditional on platform. It crashed for **every signed-in
+user everywhere** — it reached a phone first only because that was the
+next signed-in session anyone opened. What made it invisible is that
+`AiNotesPanel` returns early with "needs a real signed-in account" when
+`backend.isDemo`, and demo mode is the only mode the walk runs in. So
+the panel had never been rendered by anything automated at all.
+
+**A demo-mode walk cannot cover a screen that refuses to render without
+an account.** Those screens are mounted directly instead, with a fake
+session — `AiNotesPanel`, `AudioSourcePicker` and `SummariseReading` all
+have probes at the end of `test-app-smoke.mjs` for exactly this reason.
+Adding a signed-in-only screen means adding a probe; there is no third
+option that isn't "nothing renders it".
+
+The relay case is the one to watch for: a prop a component does not use
+and only passes on is the one nobody notices is missing, because the
+component that needs it has a default (`folders = []`) that never gets
+the chance to apply.
+
 ## How users actually receive an update
 
 **The service worker's cache name is generated from the built bytes.

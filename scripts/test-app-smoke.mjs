@@ -425,6 +425,7 @@ for (const [tabName, phrases] of [
     'import { createRoot } from "react-dom/client";\n' +
       'import { AudioSourcePicker } from "../src/aiNotes.jsx";\n' +
       'import { SummariseReading } from "../src/aiText.jsx";\n' +
+      'import { AiNotesPanel } from "../src/aiNotes.jsx";\n' +
       'import { describeCapabilities } from "../src/audioSources.js";\n' +
       "window.__probe = (env, source) => {\n" +
       '  const host = document.createElement("div");\n' +
@@ -432,6 +433,27 @@ for (const [tabName, phrases] of [
       "  createRoot(host).render(\n" +
       "    <AudioSourcePicker caps={describeCapabilities(env)} source={source}\n" +
       "      setSource={() => {}} deviceId={null} setDeviceId={() => {}} />\n" +
+      "  );\n" +
+      "  return host;\n" +
+      "};\n" +
+      /* AI Notes, SIGNED IN and past consent. The tab walk cannot reach
+         this: AiNotesPanel returns "needs a real signed-in account" in
+         demo mode, which is the only mode the walk runs in -- so the
+         whole panel, RecoveryGate and Recorder included, has never been
+         rendered by anything automated. That is how a bare `folders`
+         reached a real device.
+
+         `backend` is faked to the minimum the panel reads. Nothing here
+         touches the network: no session token is valid, so the usage
+         badge's fetch simply fails, which is the state a phone in a
+         lecture theatre is in anyway. */
+      "window.__probeAiNotes = (consented) => {\n" +
+      '  const host = document.createElement("div");\n' +
+      "  document.body.appendChild(host);\n" +
+      "  createRoot(host).render(\n" +
+      '    <AiNotesPanel session={{ token: "t", user: { id: "u" } }} backend={{ isDemo: false }}\n' +
+      "      courses={[]} folders={[]} addItem={() => {}} setData={() => {}}\n" +
+      "      data={{ meta: consented ? { aiConsent: { version: 99 } } : {} }} />\n" +
       "  );\n" +
       "  return host;\n" +
       "};\n" +
@@ -535,6 +557,33 @@ for (const [tabName, phrases] of [
     /* Nothing pasted yet, so nothing has been priced. The estimate must
        not appear (or read as zero) before there is anything to price. */
     check(!openText.includes("characters"), "no cost is quoted before anything is pasted");
+
+    /* THE AI NOTES PANEL, signed in and past consent.
+
+       Every wiring fault this repo has shipped has been caught only by
+       mounting the real thing, and this is the fifth of exactly this
+       shape: correct logic, wrong assembly. A bare `folders` in
+       RecoveryGate crashed the whole panel for every signed-in user on
+       every platform, and nothing automated could see it because the
+       walk runs in demo mode, where the panel returns early. */
+    const gate = dom.window.__probeAiNotes(false);
+    const panel = dom.window.__probeAiNotes(true);
+    await new Promise((r) => setTimeout(r, 250));
+
+    check(
+      (gate.textContent || "").includes("Before you use the AI features"),
+      "signed in without consent, the panel shows the consent gate",
+      (gate.textContent || "").slice(0, 200)
+    );
+    check(
+      (panel.textContent || "").includes("Start recording"),
+      "signed in and past consent, the recorder renders",
+      (panel.textContent || "").slice(0, 300)
+    );
+    check(
+      (panel.textContent || "").includes("Record from"),
+      "the audio source picker is reachable through the real panel, not only on its own"
+    );
 
     /* Consent is enforced at the point of use, and by showing the gate
        rather than by hiding the action -- a feature nobody can see is
