@@ -111,6 +111,19 @@ test("phones and tablets are microphone-only", () => {
   }
 });
 
+test("only the phone shells are flagged as degrading in the background", () => {
+  /* Android refuses mic capture to a backgrounded app without a
+     foreground service; a desktop browser keeps getUserMedia alive in a
+     background tab. Warning on desktop too would be noise, and noise is
+     how a real warning gets ignored. */
+  for (const ua of [UA.iosCapacitor, UA.androidCapacitor]) {
+    assert.equal(describeCapabilities(env(ua, { isCapacitor: true })).mobile, true);
+  }
+  for (const ua of [UA.chromeWindows, UA.chromeMac, UA.electron, UA.firefox]) {
+    assert.equal(describeCapabilities(env(ua)).mobile, false, `${ua.slice(0, 30)} flagged as mobile`);
+  }
+});
+
 test("iOS hides the device picker; Android keeps it", () => {
   assert.equal(describeCapabilities(env(UA.iosCapacitor, { isCapacitor: true })).devicePicker.available, false);
   assert.equal(describeCapabilities(env(UA.androidCapacitor, { isCapacitor: true })).devicePicker.available, true);

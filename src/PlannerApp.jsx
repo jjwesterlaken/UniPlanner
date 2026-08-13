@@ -109,7 +109,7 @@ import {
   TriangleAlert,
   Mic,
 } from "lucide-react";
-import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
+import { AiNotesPanel, AiLectureNoteView, useRecordingSession, RecordingIndicator } from "./aiNotes.jsx";
 import {
   PracticePanel,
   WeakSpotsExplain,
@@ -4933,6 +4933,26 @@ export default function PlannerApp() {
      to a date rather than a guessed number. */
   const settings = useMemo(() => (sem.settings || [])[0] || {}, [sem.settings]);
 
+  /* THE RECORDING LIVES HERE, above the tab switch.
+
+     The AI Notes tab renders as `{tab === "ai-notes" && ...}`, so
+     tapping another tab unmounts it -- which used to run cleanupStream()
+     without ever calling recorder.stop(), losing a two-hour lecture
+     silently on one stray tap. Called here, a tab change is just a
+     re-render of something else.
+
+     It also takes folders/addItem/setData, which is why the panel no
+     longer needs them: saving happens up here, so there is no longer a
+     chain of components relaying props they never use. That chain is
+     what produced the ReferenceError that white-screened Android. */
+  const recording = useRecordingSession({
+    session,
+    folders: sem.folders,
+    addItem,
+    setData,
+  });
+
+
   /* The rounding rule carries across semesters; the calendar does not.
      Someone shouldn't re-pick their university's convention every
      semester, but copying start dates forward would date every deadline
@@ -5220,7 +5240,7 @@ export default function PlannerApp() {
           // They're bigger than manual notes — if sync ever gets noticeably
           // slower, splitting AI notes into their own table/row is the fix.
           <Section icon={Mic} title="AI lecture notes" subtitle="Record a lecture and get an AI-generated summary and study cards">
-            <AiNotesPanel session={session} backend={backend} courses={sem.courses} folders={sem.folders} data={data} setData={setData} addItem={addItem} />
+            <AiNotesPanel session={session} backend={backend} courses={sem.courses} data={data} setData={setData} recording={recording} />
           </Section>
         )}
 
@@ -5242,6 +5262,11 @@ export default function PlannerApp() {
             <BuildLine />
           </Section>
         )}
+
+        {/* OUTSIDE the tab conditional, on purpose: it is the whole
+            point. A recording is visible, and stoppable, from wherever
+            the student happens to be. */}
+        <RecordingIndicator recording={recording} onOpen={() => setTab("ai-notes")} />
 
         <div className="mt-6 flex justify-center">
           {confirmReset ? (

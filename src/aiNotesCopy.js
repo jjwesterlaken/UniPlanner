@@ -127,6 +127,43 @@ export const AI_NOTES_COPY = {
     mixFailed: "This browser couldn't combine the two sources. Record from one of them instead.",
   },
 
+  /* ---------- the indicator, visible from every tab ----------
+
+     Short by necessity: it sits over the app on a phone, so every word
+     competes with the screen the student is actually using. Grace can
+     rework all of it here without touching the state machine that
+     decides when it appears. */
+  indicator: {
+    recording: "Recording your lecture",
+    paused: "Paused",
+    processing: "Writing up your notes…",
+    waitingToSave: "Your notes are ready to save",
+    stop: "Stop",
+
+    /* Said inside the panel, not on the indicator. The old behaviour
+       was to LOSE the recording on a tab change, so a student who has
+       used this before has every reason to believe leaving is unsafe.
+       Telling them it isn't costs one line. */
+    keepsRunning: "You can use the rest of the planner — recording carries on, and the timer stays on screen.",
+  },
+
+  /* The microphone went muted mid-recording. On Android that is what
+     backgrounding the app does: the track does not end, it mutes, and
+     everything downstream keeps happily recording silence that is still
+     billed by duration.
+
+     A warning rather than a stop, deliberately: a mute can be momentary
+     -- an incoming call, a permission toast -- and killing an hour of
+     lecture over three seconds of it is the worse failure. */
+  micMuted:
+    "Your microphone has gone quiet — something else may have taken it, or the app may have been in the background. The recording is still going, but this part may be silent.",
+
+  /* The app was backgrounded during a recording on a phone. Said when
+     they come back, because there is nothing useful to do about it at
+     the moment it happens. */
+  wentToBackground:
+    "UniPlanner was in the background for part of that. Phones stop apps recording when they aren't on screen, so some of it may be silent — keep the app open and the screen on while recording.",
+
   /* Offered when a recording was interrupted and the app still holds
      the key to the finished result on the server. */
   recovery: {
