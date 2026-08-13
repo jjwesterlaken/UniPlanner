@@ -194,6 +194,43 @@ positive evidence is a row orphaned by a crash between the insert and the
 stub write is never reclaimed. That is the better failure.
 `scripts/test-ai-store.mjs` has the restore case by name.
 
+### Never treat a failed request as evidence of absence
+
+**Absence is proven by a definitive not-found and by nothing else.** A
+dropped connection, a 500, an expired token and a rate limit all look
+like "no data" to a caller that only checks whether something came back
+— and this code runs precisely when the network is misbehaving.
+
+It has now happened twice, in the two places where guessing costs the
+most:
+
+- **`fetchNote`** (`aiNotesStore.js`) returns `{content}`,
+  `{missing:true}` and `{failed:true}`, and only `missing` may tombstone
+  a stub. That one was designed correctly from the start.
+- **`RecoveryGate.recover`** was not. It caught *every* error, told the
+  student their recording had expired, and called `forget()` — deleting
+  the idempotency key, which is the only handle on a summary they have
+  **already been billed for**, while the server holds it for another
+  seven days. A student tapping retry on a train lost a paid lecture and
+  was told it expired when it hadn't.
+
+`recoveryFailureKind` now names the two definitive codes
+(`recording_missing`, `bad_idempotency_key`) and reads everything else —
+including an error carrying no code at all — as `failed`, keeping the
+key. **Fail towards keeping.** A key whose result is really gone costs a
+card the student can dismiss; a discarded live one costs a lecture.
+
+Two details worth keeping. The definitive codes are checked against the
+Edge Function's source by a test, so a renamed code can't quietly stop
+being definitive. And the card renders on `pending`, so dropping the key
+used to unmount the card *in the same tick* as the explanation was set —
+the student tapped the button, everything vanished, and they were told
+nothing. A separate `gone` flag now outlives the key it explains.
+
+The next place this will appear is anything that reads a row and treats
+"no row" as "deleted". Ask what a 500 looks like to that code before
+writing the branch.
+
 **`fetchNote` has three outcomes and they must stay distinct.**
 `{content}`, `{missing:true}` — the query ran and there is definitively
 no row — and `{failed:true}` — we know nothing. Only `missing` may

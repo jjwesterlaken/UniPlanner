@@ -35,7 +35,10 @@ import {
   TRANSLATION_LANGUAGES,
   MONTHLY_MINUTES_LIMIT_HINT,
   MINIMUM_BILLED_MINUTES_HINT,
+  recoveryFailureKind,
+  RECOVERY_MISSING_CODES,
 } from "../src/aiNotesLogic.js";
+import { AI_NOTES_COPY } from "../src/aiNotesCopy.js";
 import { fetchUsage, callAiNotes } from "../src/aiNotesClient.js";
 import { mergeData, COLLECTIONS, purgeOldTombstones } from "../src/sync.js";
 import {
@@ -1673,6 +1676,78 @@ async function run() {
       /test-migrations\.mjs/,
       "the migration tests were dropped from `npm test` — CI's postgres run goes through this script"
     );
+  });
+
+  /* ---------- absence has to be proven ---------- */
+
+  await test("a definitive not-found reads as missing", () => {
+    // The function looked in the bucket and there is nothing there.
+    assert.equal(recoveryFailureKind({ code: "recording_missing", status: 404 }), "missing");
+    // A malformed stored key fails identically forever, so keeping it
+    // would leave a card that can never succeed.
+    assert.equal(recoveryFailureKind({ code: "bad_idempotency_key", status: 400 }), "missing");
+  });
+
+  await test("an error reads as failed, NOT as missing", () => {
+    /* THE ONE THAT MATTERS. Recovery used to forget the key on ANY
+       error, so a student on a train tapping retry was told their paid
+       notes had expired and lost the only handle on them, while the
+       server held the result for another week.
+
+       Same rule as fetchNote in aiNotesStore.js, second location. */
+    for (const err of [
+      new TypeError("Failed to fetch"), // offline: no code, no status
+      { status: 500, code: "server_error" },
+      { status: 401, code: "unauthenticated" },
+      { status: 429, code: "rate_limited" },
+      { status: 503 },
+      {},
+      null,
+    ]) {
+      assert.equal(recoveryFailureKind(err), "failed", `${JSON.stringify(err)} was read as definitively gone`);
+    }
+  });
+
+  await test("an unrecognised code is failed rather than missing", () => {
+    // Failing this way round is the cheap direction: keeping a dead key
+    // costs a dismissible card, discarding a live one costs a lecture.
+    assert.equal(recoveryFailureKind({ code: "something_new", status: 400 }), "failed");
+  });
+
+  await test("only a failed recovery keeps the key; only a missing one drops it", () => {
+    /* Asserted against the source, because the branch is what decides
+       whether a paid result stays reachable and there is no way to
+       reach it from Node without a DOM. */
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    const recover = src.slice(src.indexOf("const recover = async"), src.indexOf("const recover = async") + 1600);
+    assert.match(recover, /recoveryFailureKind\(err\) === "missing"/, "recovery no longer distinguishes the two");
+    const missingBranch = recover.slice(recover.indexOf('=== "missing"'), recover.indexOf("} else {"));
+    assert.match(missingBranch, /forget\(\)/, "a definitively-gone result no longer drops its key");
+    const failedBranch = recover.slice(recover.indexOf("} else {"));
+    assert.doesNotMatch(
+      failedBranch.slice(0, failedBranch.indexOf("}")),
+      /forget\(\)/,
+      "a FAILED recovery still forgets the key — this is the data-loss bug"
+    );
+  });
+
+  await test("the two recovery messages say different things about what was lost", () => {
+    const { expired, unreachable } = AI_NOTES_COPY.recovery;
+    assert.notEqual(expired, unreachable);
+    // "expired" is a goodbye; "unreachable" must not read as one.
+    assert.match(unreachable, /still waiting|nothing has been lost/i);
+    assert.match(unreachable, /try again/i);
+    assert.doesNotMatch(unreachable, /expired|no longer/i);
+  });
+
+  await test("every definitive code is one the endpoint can actually return", () => {
+    /* Derived rather than restated: a code that no longer exists would
+       silently stop being definitive, and recovery would start keeping
+       keys it should drop. */
+    const fn = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/index.ts"), "utf8");
+    for (const code of RECOVERY_MISSING_CODES) {
+      assert.ok(fn.includes(`"${code}"`), `recovery treats "${code}" as definitive but ai-notes never returns it`);
+    }
   });
 
   await test("npm test still runs the function ownership tests", () => {

@@ -213,6 +213,41 @@ export function describeRecorderError(err) {
   }
 }
 
+/* ---------- absence has to be proven ----------
+
+   THE RULE, and this is its second occurrence: NEVER TREAT A FAILED
+   REQUEST AS EVIDENCE OF ABSENCE. A dropped connection, a 500, an
+   expired token and a rate limit all look like "no data" to a caller
+   that only checks whether it got something back -- and this code runs
+   precisely when the network is misbehaving.
+
+   The first occurrence is fetchNote in aiNotesStore.js, which returns
+   three outcomes for exactly this reason. This is the same distinction
+   in the one place where the thing at stake has ALREADY BEEN BILLED:
+   the recovery card is the only handle a student has on a summary they
+   paid for, and throwing the key away on a transient error makes it
+   unreachable while the server still holds it for days.
+
+   Only these two are definitive:
+
+     recording_missing    the function looked in the bucket and there is
+                          nothing there -- swept, or never uploaded
+     bad_idempotency_key  the stored key is malformed, so every future
+                          attempt fails identically; keeping it would
+                          leave a card that can never succeed
+
+   EVERYTHING ELSE IS "failed", including an error with no code at all
+   (a fetch that rejects outright). Failing this way round is the cheap
+   direction: keeping a key whose result is really gone costs a card the
+   student can dismiss, while discarding a live one costs them a lecture. */
+export const RECOVERY_MISSING_CODES = new Set(["recording_missing", "bad_idempotency_key"]);
+
+/** "missing" (definitively not there) or "failed" (we do not know). */
+export function recoveryFailureKind(err) {
+  const code = err && err.code;
+  return code && RECOVERY_MISSING_CODES.has(code) ? "missing" : "failed";
+}
+
 // Codes in this set mean retrying with the same recording would fail
 // identically (the provider rejected it outright, not a transient
 // hiccup) — the UI uses this to withhold the "Try again" option, since
