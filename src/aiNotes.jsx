@@ -33,6 +33,7 @@ import {
   setPendingRecovery,
   clearPendingRecovery,
   pendingRecovery,
+  recoveryFailureKind,
   defaultCardSelection,
   folderForRecording,
   DEFAULT_CARDS_SELECTED,
@@ -1082,6 +1083,11 @@ function RecoveryGate({ session, courses, folders, addItem, data, setData }) {
   const [recovered, setRecovered] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /* Survives the key being cleared. The card renders on `pending`, so
+     forgetting a genuinely-gone result used to unmount the card in the
+     same tick as the explanation was set -- the student tapped "Get it
+     back", everything vanished, and they were told nothing at all. */
+  const [gone, setGone] = useState(false);
 
   const forget = () => setData((d) => ({ ...d, meta: clearPendingRecovery(d.meta) }));
 
@@ -1098,10 +1104,20 @@ function RecoveryGate({ session, courses, folders, addItem, data, setData }) {
       });
       setRecovered(result);
     } catch (err) {
-      // A swept row is the expected failure, not a bug: results are only
-      // kept for the retention window.
-      setError(AI_NOTES_COPY.recovery.expired);
-      forget();
+      /* NEVER TREAT A FAILED REQUEST AS EVIDENCE OF ABSENCE. This used
+         to forget the key on ANY error, so a dropped connection told a
+         student their paid notes had expired and then deleted the only
+         handle they had on them, while the server held the result for
+         another week. Second occurrence of the fetchNote rule; see
+         recoveryFailureKind. */
+      if (recoveryFailureKind(err) === "missing") {
+        setError(AI_NOTES_COPY.recovery.expired);
+        setGone(true);
+        forget();
+      } else {
+        // The key is KEPT, so the button below is a real retry.
+        setError(AI_NOTES_COPY.recovery.unreachable);
+      }
     } finally {
       setBusy(false);
     }
@@ -1109,21 +1125,38 @@ function RecoveryGate({ session, courses, folders, addItem, data, setData }) {
 
   return (
     <>
-      {pending && !recovered && (
+      {/* Shown while there is a key to redeem, and for one beat after a
+          definitively-gone one is dropped, so the explanation outlives
+          the thing it explains. */}
+      {(pending || gone) && !recovered && (
         <Card className="mb-3">
-          <p className="text-sm font-medium text-stone-800">{AI_NOTES_COPY.recovery.title}</p>
-          <p className="mt-1 text-sm text-stone-500">
-            {AI_NOTES_COPY.recovery.detail({ course: pending.course, week: pending.week })}
-          </p>
-          {error && <p className="mt-2 text-sm text-rose-700">{error}</p>}
-          <div className="mt-3 flex justify-end gap-2">
-            <button className={btnGhost} onClick={forget} disabled={busy}>
-              <X size={15} /> {AI_NOTES_COPY.recovery.dismiss}
-            </button>
-            <button className={btnPrimary} onClick={recover} disabled={busy}>
-              <RefreshCw size={15} className={busy ? "animate-spin" : ""} /> {AI_NOTES_COPY.recovery.action}
-            </button>
-          </div>
+          {gone ? (
+            <>
+              <p className="text-sm font-medium text-stone-800">That recording has expired.</p>
+              <p className="mt-1 text-sm text-stone-500">{error}</p>
+              <div className="mt-3 flex justify-end">
+                <button className={btnGhost} onClick={() => setGone(false)}>
+                  <X size={15} /> OK
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-stone-800">{AI_NOTES_COPY.recovery.title}</p>
+              <p className="mt-1 text-sm text-stone-500">
+                {AI_NOTES_COPY.recovery.detail({ course: pending.course, week: pending.week })}
+              </p>
+              {error && <p className="mt-2 text-sm text-rose-700">{error}</p>}
+              <div className="mt-3 flex justify-end gap-2">
+                <button className={btnGhost} onClick={forget} disabled={busy}>
+                  <X size={15} /> {AI_NOTES_COPY.recovery.dismiss}
+                </button>
+                <button className={btnPrimary} onClick={recover} disabled={busy}>
+                  <RefreshCw size={15} className={busy ? "animate-spin" : ""} /> {AI_NOTES_COPY.recovery.action}
+                </button>
+              </div>
+            </>
+          )}
         </Card>
       )}
       <Recorder

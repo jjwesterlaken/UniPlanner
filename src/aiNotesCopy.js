@@ -141,5 +141,14 @@ export const AI_NOTES_COPY = {
     dismiss: "Forget it",
     expired:
       "That recording is no longer on our server — results are only kept for a short time. Nothing further was charged.",
+
+    /* NOT the same as expired, and the difference is the whole point.
+       We could not reach the server, so we do not know whether the
+       result is still there -- and it very likely is. The key is KEPT,
+       so this is a "try again", not a goodbye. Saying "expired" here
+       would be telling a student their paid notes are gone while they
+       sit on our server for another week. */
+    unreachable:
+      "We couldn't reach the server just then, so your notes are still waiting — nothing has been lost. Try again when you have a connection.",
   },
 };
