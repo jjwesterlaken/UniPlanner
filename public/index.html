@@ -26,6 +26,10 @@
   <body>
     <div id="root"></div>
     <script src="app.js"></script>
+    <!-- sw-register:start — stripped by scripts/prepare-native.mjs for the
+         packaged shells. The markers are the contract: prepare-native
+         removes everything between them, so this script can be rewritten
+         freely without breaking the native build. Do not remove them. -->
     <script>
       /* Only the hosted web build gets a service worker.
 
@@ -64,5 +68,6 @@
         });
       })();
     </script>
+    <!-- sw-register:end -->
   </body>
 </html>
