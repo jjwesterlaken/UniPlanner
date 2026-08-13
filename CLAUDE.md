@@ -595,18 +595,34 @@ re-uploaded without inventing a new version), gives the same commit a
 higher number tomorrow, and has ~4,000 years of headroom before Android's
 signed 32-bit `versionCode` overflows.
 
-**Google Play requires new apps to target API 36 from 31 August 2026.**
+**DEADLINE: 31 August 2026 — Google Play requires new apps to target
+API 36 from that date, and nothing has been submitted yet.**
 Being below it blocks submission outright rather than failing the build.
 Capacitor's template already sets 36, but `stamp-native.mjs` checks the
 *generated* `variables.gradle` and warns, because the template is not the
 thing that ships. Our minimum is 26 (Capacitor defaults to 24); iOS
 deploys at 15 (default 14).
 
-**The longest lead item is the Play account, not the code.** Personal
-developer accounts have needed a closed test with ~12 testers over ~2
-weeks before production access. It can start the moment a debug APK
-exists, which is why the Android compile is worth doing before the iOS
-one. Confirm the current requirement in the Play Console — it changes.
+**The longest lead item is the Play account, and it is RECRUITMENT, not
+code.** Personal developer accounts have needed a closed test before
+production access is granted, and the shape of it is what makes it work
+rather than a checkbox:
+
+- **12 real Google accounts on real devices**, not 12 email addresses.
+- **Opted in continuously for 14 days.** The clock is a streak, not a
+  total: if the count drops below 12 at any point it resets, so recruit
+  more than 12 and expect attrition.
+- It can start the moment a debug APK exists, which is why the Android
+  compile is worth doing before the iOS one.
+
+Treat finding those people as a task with a two-week floor on it, owned
+by someone, running in parallel with everything else. It is the item that
+decides when Android can ship. Confirm the current rule in the Play
+Console — it changes.
+
+**Email delivery blocks the testers too.** A closed tester who cannot
+confirm their account wastes the fortnight they are spending on you, so
+Resend (below) is a prerequisite for the test, not just for launch.
 
 `MOBILE-BUILD.md` has the two first-time compile guides and the
 hardware verification list. The item that decides whether offline notes
@@ -902,6 +918,24 @@ SMTP Settings before launch. This is on the pending list below rather
 than in it as a footnote because the symptom — "the email never arrived"
 — is indistinguishable from a code bug to everyone except whoever checks
 the SMTP configuration.
+
+`EMAIL-SETUP.md` is the step-by-step, and **the SPF conflict is the part
+to read before touching DNS.** The domain already carries an SPF record
+for Google Workspace, and a domain may have exactly one: publishing a
+second does not add to the first, it invalidates both, and Jared's actual
+mail stops. Verifying a *subdomain* at Resend (`send.uniplannerapp.com`)
+avoids the conflict entirely and is the route to prefer; if the root is
+used instead, the include must be merged into the existing record.
+
+Nothing on the code side needs to change for this. The sending domain and
+the redirect allowlist are independent — one decides who mail is from,
+the other where a link may land — so `https://www.uniplannerapp.com` must
+still be on **Authentication → URL Configuration → Redirect URLs**, for
+the same reason as before: the app passes `redirectTo` explicitly, and
+Supabase silently falls back to the Site URL if it is not allowlisted.
+
+**It blocks the closed test, not just launch.** A tester who cannot
+confirm their account wastes the fortnight they are giving you.
 
 ## When Netlify was the host
 
