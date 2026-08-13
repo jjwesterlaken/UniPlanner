@@ -535,6 +535,38 @@ The build id is shown in the app (Account tab). It is the only way to
 answer "which build is this user on", which is the first question after
 any caching bug.
 
+### The native build, and the two mechanisms that keep a worker out of it
+
+`npm run build` was **broken on `main` for a fortnight** and nothing said
+so. `prepare-native.mjs` stripped the registration script with a regex
+that restated the shape of the script it was removing; the service-worker
+work rewrote that script, the regex matched nothing, and the check below
+it threw. All three desktop platforms exited 1 in ~36 seconds, before
+electron-builder was reached.
+
+It survived because **`npm test` builds only the web bundle** and
+`build-apps.yml` is `workflow_dispatch`, so nothing ever ran
+`prepare:native`. The sixth instance of the restatement pattern, in a new
+flavour: a regex restating the *shape of code* rather than a value.
+
+The strip now works from **markers** — `<!-- sw-register:start -->` and
+`<!-- sw-register:end -->` in `index.html` — which is a contract the file
+can keep while its contents change freely. And a test in
+`scripts/test-service-worker.mjs` runs the real `prepare-native` and
+checks both shells come out with no `serviceWorker` and no `sw.js`,
+**and** still have a body and still load `app.js`, so "stripped the whole
+page" cannot pass. That test runs in `npm test`, which CI runs on every
+push and pull request.
+
+**The two halves of the strip are not equally load-bearing**, and this is
+recorded so nobody deletes the wrong one. Registration is gated on
+`https:` with a non-localhost host, which already excludes all three
+shells — so removing the *script* is belt-and-braces. Removing `sw.js`
+from the bundle is not: it means there is nothing to register even if
+that gate is relaxed later, and Android is the live case, since
+`http://localhost` is a secure context and is excluded only by the
+protocol check.
+
 ## Build scripts
 
 `scripts/build-web.mjs` and `prepare-native.mjs` run on Windows, macOS and
@@ -713,11 +745,21 @@ record.
    change quietly does nothing, which is the failure that is hardest to
    notice. Verify by saving one AI note while signed in and checking a
    row appears in `ai_notes`.
-3. **Resend (or another real SMTP provider)** configured in Supabase
+3. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
+   every workflow. Both currently target Node 20, which GitHub has
+   deprecated; the runners force them onto Node 24 and they work, so this
+   is a warning today and not a failure. It becomes a failure on
+   **GitHub's timetable, not ours**, and when the fallback is removed
+   every workflow in the repo stops at once — tests, the desktop build
+   and the function deploy together. Scheduled here rather than
+   remembered, and deliberately kept out of the native-build fix so a
+   packaging change and a runner change can be told apart if either
+   misbehaves.
+4. **Resend (or another real SMTP provider)** configured in Supabase
    Auth → SMTP Settings. The built-in sender is rate-limited and lands in
    spam, so password reset does not work for real users without it. See
    the section above.
-4. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+5. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
    Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states
    are aspirational rather than enforced. 0004 raises a notice saying so
