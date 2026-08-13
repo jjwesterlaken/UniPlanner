@@ -21,7 +21,7 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.uniplanner.app",
+    "appId": "com.uniplannerapp.planner",
     "productName": "University Planner",
     "files": [
       "main.js",
