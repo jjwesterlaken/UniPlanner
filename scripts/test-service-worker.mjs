@@ -23,6 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const pathToUrl = (p) => new URL(`file://${p}`).href;
 const rootDir = path.join(__dirname, "..");
 const pub = (f) => fs.readFileSync(path.join(rootDir, "public", f), "utf8");
 const dist = (f) => fs.readFileSync(path.join(rootDir, "dist-web", f), "utf8");
@@ -209,6 +210,27 @@ async function run() {
     const html = fs.readFileSync(path.join(rootDir, "public/index.html"), "utf8");
     assert.match(html, /sw-register:start/, "the start marker is gone; the native build will keep the worker");
     assert.match(html, /sw-register:end/, "the end marker is gone");
+  });
+
+  await test("every shell ships under the same bundle identifier", async () => {
+    /* A bundle identifier is PERMANENT once published: changing it later
+       means a new store listing rather than an update, losing reviews,
+       rankings and installs. It is also the one value that has to agree
+       across three build systems that never see each other -- Capacitor
+       generates the iOS bundle id and the Android applicationId from its
+       config, electron-builder reads its own.
+
+       Derived from SITE_URL rather than typed, so the identifier and the
+       domain it is named after cannot drift apart. */
+    const { SITE_URL } = await import(pathToUrl(path.join(rootDir, "src/legalLinks.js")));
+    const domain = new URL(SITE_URL).hostname.replace(/^www\./, ""); // uniplannerapp.com
+    const expected = `${domain.split(".").reverse().join(".")}.planner`; // com.uniplannerapp.planner
+
+    const cap = JSON.parse(fs.readFileSync(path.join(rootDir, "mobile/capacitor.config.json"), "utf8"));
+    const desktop = JSON.parse(fs.readFileSync(path.join(rootDir, "desktop/package.json"), "utf8"));
+
+    assert.equal(cap.appId, expected, "the mobile bundle id is not derived from the domain we own");
+    assert.equal(desktop.build.appId, expected, "the desktop app id disagrees with the mobile one");
   });
 
   await test("npm test still runs the service worker tests", () => {
