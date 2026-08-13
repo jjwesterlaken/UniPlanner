@@ -271,6 +271,13 @@ to doubt it.
    that the recording is deleted once transcribed.
 9. **Record a short lecture end to end**, save it, and confirm it files
    itself into a `<COURSE> recordings` folder.
+10. **"Record from" offers Microphone only**, with "This computer's
+    audio" greyed out and reading *"Phones and tablets can only record
+    through the microphone."* An option that is simply missing is a
+    fail — the student should be told, not left guessing.
+11. **Unplug a Bluetooth headset mid-recording.** The recording must
+    continue on the built-in microphone. If it stops or errors, the
+    device constraint is being requested as `exact` somewhere.
 
 ### Handwriting — for Grace on the iPad
 

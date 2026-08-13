@@ -37,6 +37,19 @@ import {
   folderForRecording,
   DEFAULT_CARDS_SELECTED,
 } from "./aiNotesLogic.js";
+import {
+  describeCapabilities,
+  canUseSource,
+  micConstraints,
+  systemConstraints,
+  checkCapturedAudio,
+  pickDevice,
+  audioInputs,
+  loadPreferredInput,
+  savePreferredInput,
+  ROOM_HIGHPASS_HZ,
+  AUDIO_SOURCES,
+} from "./audioSources.js";
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
 import { noteCache } from "./noteCache.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
@@ -105,7 +118,12 @@ function useLectureRecorder() {
 
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
-  const streamRef = useRef(null);
+  /* An ARRAY now: "Both" holds a microphone stream and a display stream
+     at once, and the display one carries a video track we never record
+     but do keep alive (see startCapture). All of them have to be
+     stopped, or the browser's "sharing" indicator outlives the
+     recording. */
+  const streamsRef = useRef([]);
   const audioCtxRef = useRef(null);
   const analyserRef = useRef(null);
   const rafRef = useRef(null);
@@ -113,11 +131,17 @@ function useLectureRecorder() {
   const startTimeRef = useRef(0);
   const pausedMsRef = useRef(0);
   const pauseStartRef = useRef(0);
+  /* Set when the recording ended because the share did, so the review
+     screen can say so rather than leaving a short recording unexplained.
+     stopRef exists because the track listener is registered inside
+     start(), above where stop() is defined. */
+  const shareEndedRef = useRef(false);
+  const stopRef = useRef(() => {});
 
   const cleanupStream = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
+    if (streamsRef.current.length) {
+      streamsRef.current.forEach((s) => s.getTracks().forEach((t) => t.stop()));
+      streamsRef.current = [];
     }
     if (audioCtxRef.current) {
       audioCtxRef.current.close().catch(() => {});
@@ -149,26 +173,115 @@ function useLectureRecorder() {
     rafRef.current = requestAnimationFrame(tickLevel);
   };
 
-  const start = async () => {
-    dispatch({ type: "request" });
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      dispatch({ type: "requestDenied", message: describeRecorderError(err) });
-      return;
+  /* Opens the streams the chosen source needs.
+     Returns { micStream, sysStream } or { failed, message }. */
+  const openStreams = async (source, deviceId, caps) => {
+    let sysStream = null;
+    let micStream = null;
+
+    /* THE DISPLAY PROMPT GOES FIRST, and the order is load-bearing.
+       getDisplayMedia requires transient user activation, and awaiting
+       a microphone permission prompt first can outlast it — so asking
+       for the microphone first turns "Both" into a silent refusal on
+       the browsers that enforce activation strictly. */
+    if (source === "system" || source === "both") {
+      try {
+        sysStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: systemConstraints(),
+        });
+      } catch (err) {
+        return { failed: true, message: describeRecorderError(err) };
+      }
+
+      /* Before the recorder exists, before anything is billed. */
+      const check = checkCapturedAudio(sysStream);
+      if (!check.ok) {
+        sysStream.getTracks().forEach((t) => t.stop());
+        return { failed: true, message: AI_NOTES_COPY.audioSource.noAudioCaptured(caps.platform) };
+      }
     }
+
+    if (source === "microphone" || source === "both") {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(deviceId) });
+      } catch (err) {
+        if (sysStream) sysStream.getTracks().forEach((t) => t.stop());
+        return { failed: true, message: describeRecorderError(err) };
+      }
+    }
+
+    return { micStream, sysStream };
+  };
+
+  /* Mic -> high-pass -> destination, system -> destination, both -> both.
+     The analyser taps the same nodes, so the level meter shows what is
+     actually being recorded rather than one half of it.
+
+     Returns null if the graph can't be built. That is survivable for a
+     single source (fall back to the raw stream, losing the filter and
+     the meter — exactly the behaviour before this feature) and fatal
+     for "Both", where mixing is the entire point. */
+  const buildGraph = ({ micStream, sysStream }) => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtx();
+      const dest = ctx.createMediaStreamDestination();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+
+      if (micStream) {
+        const src = ctx.createMediaStreamSource(micStream);
+        const highpass = ctx.createBiquadFilter();
+        highpass.type = "highpass";
+        highpass.frequency.value = ROOM_HIGHPASS_HZ;
+        src.connect(highpass);
+        highpass.connect(dest);
+        highpass.connect(analyser);
+      }
+      if (sysStream) {
+        /* No high-pass. Loopback has no room in it to remove, and
+           filtering a clean digital signal only loses bass. */
+        const src = ctx.createMediaStreamSource(sysStream);
+        src.connect(dest);
+        src.connect(analyser);
+      }
+      return { ctx, analyser, stream: dest.stream };
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const start = async (source = "microphone", deviceId = null) => {
+    dispatch({ type: "request" });
+    const caps = describeCapabilities();
 
     const picked = pickSupportedMimeType();
     if (!picked) {
-      stream.getTracks().forEach((t) => t.stop());
       dispatch({ type: "requestDenied", message: "This browser can't record audio in a supported format." });
       return;
     }
 
-    streamRef.current = stream;
+    const opened = await openStreams(source, deviceId, caps);
+    if (opened.failed) {
+      dispatch({ type: "requestDenied", message: opened.message });
+      return;
+    }
+    const { micStream, sysStream } = opened;
+    const stopEverything = () => [micStream, sysStream].forEach((s) => s && s.getTracks().forEach((t) => t.stop()));
+
+    const graph = buildGraph({ micStream, sysStream });
+    if (!graph && micStream && sysStream) {
+      stopEverything();
+      dispatch({ type: "requestDenied", message: AI_NOTES_COPY.audioSource.mixFailed });
+      return;
+    }
+
+    const recordedStream = graph ? graph.stream : micStream || new MediaStream(sysStream.getAudioTracks());
+
+    streamsRef.current = [micStream, sysStream].filter(Boolean);
     chunksRef.current = [];
-    const recorder = new MediaRecorder(stream, {
+    const recorder = new MediaRecorder(recordedStream, {
       mimeType: picked.mimeType,
       audioBitsPerSecond: RECORDER_AUDIO_BITS_PER_SECOND,
     });
@@ -177,18 +290,30 @@ function useLectureRecorder() {
     };
     mediaRecorderRef.current = recorder;
 
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtx();
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      audioCtxRef.current = ctx;
-      analyserRef.current = analyser;
+    /* The student clicking Chrome's "Stop sharing" bar, closing the tab
+       or ending the meeting kills the track — and MediaRecorder does not
+       notice. It keeps writing silence and the billed duration keeps
+       climbing. Stop on the first track that ends and keep what we have.
+
+       The video track is watched too: it is the one the browser's own
+       stop-sharing control ends, and it is never fed to the recorder --
+       only audio tracks reach recordedStream -- so nothing else in here
+       would have noticed it going. */
+    if (sysStream) {
+      sysStream.getTracks().forEach((t) =>
+        t.addEventListener("ended", () => {
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+            shareEndedRef.current = true;
+            stopRef.current();
+          }
+        })
+      );
+    }
+
+    if (graph) {
+      audioCtxRef.current = graph.ctx;
+      analyserRef.current = graph.analyser;
       rafRef.current = requestAnimationFrame(tickLevel);
-    } catch (e) {
-      /* level meter is a nice-to-have; recording still works without it */
     }
 
     if (navigator.wakeLock) {
@@ -202,6 +327,7 @@ function useLectureRecorder() {
 
     startTimeRef.current = Date.now();
     pausedMsRef.current = 0;
+    shareEndedRef.current = false;
     setElapsedSeconds(0);
     recorder.start(1000);
     dispatch({ type: "started" });
@@ -250,14 +376,165 @@ function useLectureRecorder() {
       recorder.stop();
     });
 
+  stopRef.current = stop;
+
   const discard = () => {
     cleanupStream();
     setElapsedSeconds(0);
     setLevel(0);
+    shareEndedRef.current = false;
     dispatch({ type: "discard" });
   };
 
-  return { state, dispatch, elapsedSeconds, level, start, pause, resume, stop, discard };
+  return {
+    state,
+    dispatch,
+    elapsedSeconds,
+    level,
+    start,
+    pause,
+    resume,
+    stop,
+    discard,
+    shareEnded: shareEndedRef,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Audio source picker                                               */
+/* ------------------------------------------------------------------ */
+
+/* Unavailable options are DISABLED WITH A REASON, never hidden. A
+   student in Firefox who sees only "Microphone" learns nothing and
+   concludes the feature doesn't exist; one who sees the option greyed
+   out with "Needs Chrome or Edge" knows exactly what to do. The one
+   exception is a platform where the option could never work at all --
+   iOS has no device picker, so there is nothing informative to grey
+   out.
+
+   EXPORTED only so the smoke test can mount it. The recorder refuses to
+   render in demo mode -- AI notes needs a real account -- so the tab
+   walk can never reach this, and a component nothing renders is exactly
+   where all four wiring faults this repo has shipped lived. */
+export function AudioSourcePicker({ caps, source, setSource, deviceId, setDeviceId }) {
+  const copy = AI_NOTES_COPY.audioSource;
+  const [devices, setDevices] = useState([]);
+  const [labelsHidden, setLabelsHidden] = useState(false);
+
+  const refresh = async () => {
+    try {
+      const inputs = audioInputs(await navigator.mediaDevices.enumerateDevices());
+      setDevices(inputs);
+      /* Before permission is granted every label is the empty string, so
+         the list reads as "Microphone, Microphone, Microphone". That is
+         why enumeration is offered but not forced: ask first, populate
+         after. */
+      setLabelsHidden(inputs.length > 0 && inputs.every((d) => !d.label));
+    } catch (e) {
+      setDevices([]);
+    }
+  };
+
+  useEffect(() => {
+    if (!caps.devicePicker.available) return;
+    refresh();
+    const md = navigator.mediaDevices;
+    if (!md.addEventListener) return;
+    md.addEventListener("devicechange", refresh);
+    return () => md.removeEventListener("devicechange", refresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [caps.devicePicker.available]);
+
+  /* Runs on every change to the list, which covers both restoring a
+     saved choice and a device being unplugged mid-session: if what is
+     selected is no longer there, fall back to the preference, and then
+     to the system default. Silently — see pickDevice. */
+  useEffect(() => {
+    if (!devices.length) return;
+    if (deviceId && devices.some((d) => d.deviceId === deviceId)) return;
+    setDeviceId(pickDevice(devices, loadPreferredInput()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [devices]);
+
+  const grantAccess = async () => {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach((t) => t.stop());
+      await refresh();
+    } catch (e) {
+      /* Denied. The default input still works, and Start recording will
+         ask again and explain properly if it is refused there. */
+    }
+  };
+
+  const chooseDevice = (id) => {
+    setDeviceId(id || null);
+    const match = devices.find((d) => d.deviceId === id);
+    savePreferredInput(id ? { deviceId: id, label: (match && match.label) || "" } : null);
+  };
+
+  const wantsMic = source === "microphone" || source === "both";
+  const btn = (active, enabled) =>
+    `rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${
+      active
+        ? "u-accent-bg border-transparent text-white"
+        : enabled
+          ? "border-stone-200 bg-white text-stone-600 hover:bg-stone-50"
+          : "cursor-not-allowed border-stone-100 bg-stone-50 text-stone-300"
+    }`;
+
+  return (
+    <div className="col-span-2">
+      <label className={labelCls}>{copy.label}</label>
+      <div className="flex flex-wrap gap-1.5">
+        {AUDIO_SOURCES.map((s) => {
+          const enabled = canUseSource(s, caps);
+          return (
+            <button
+              key={s}
+              type="button"
+              className={btn(source === s, enabled)}
+              disabled={!enabled}
+              onClick={() => setSource(s)}
+            >
+              {copy.options[s]}
+            </button>
+          );
+        })}
+      </div>
+
+      <p className="mt-1 text-xs text-stone-400">{copy.hint[source]}</p>
+
+      {!caps.system.available && caps.system.reason && (
+        <p className="mt-0.5 text-xs text-stone-400">
+          {copy.options.system} — {copy.unavailable[caps.system.reason]}
+        </p>
+      )}
+
+      {caps.system.mode === "tab" && (source === "system" || source === "both") && (
+        <p className="mt-1 rounded-lg bg-stone-100 px-2.5 py-1.5 text-xs text-stone-600">{copy.tabOnlyHint}</p>
+      )}
+
+      {wantsMic && caps.devicePicker.available && devices.length > 1 && (
+        <div className="mt-2">
+          {labelsHidden ? (
+            <button type="button" className="text-xs text-stone-500 underline" onClick={grantAccess}>
+              Show my microphones
+            </button>
+          ) : (
+            <select className={inputCls} value={deviceId || ""} onChange={(e) => chooseDevice(e.target.value)}>
+              <option value="">Default microphone</option>
+              {devices.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.label || "Microphone"}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -479,10 +756,17 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
 /* ------------------------------------------------------------------ */
 
 function Recorder({ session, courses, folders = [], addItem, setData, initialRecovery = null }) {
-  const { state, dispatch, elapsedSeconds, level, start, pause, resume, stop, discard } = useLectureRecorder();
+  const { state, dispatch, elapsedSeconds, level, start, pause, resume, stop, discard, shareEnded } =
+    useLectureRecorder();
   const [course, setCourse] = useState("");
   const [week, setWeek] = useState("");
   const [translateTo, setTranslateTo] = useState("");
+  /* Computed once. Nothing about the platform changes while the app is
+     open, and describeCapabilities reads navigator, which is not
+     something to do on every render. */
+  const [caps] = useState(() => describeCapabilities());
+  const [source, setSource] = useState("microphone");
+  const [deviceId, setDeviceId] = useState(null);
   /* Which study cards the student wants. Null until a result arrives,
      then the default selection, so the checkboxes have somewhere to
      live and Save has something to read. */
@@ -640,6 +924,13 @@ function Recorder({ session, courses, folders = [], addItem, setData, initialRec
               ))}
             </select>
           </div>
+          <AudioSourcePicker
+            caps={caps}
+            source={source}
+            setSource={setSource}
+            deviceId={deviceId}
+            setDeviceId={setDeviceId}
+          />
         </div>
       )}
 
@@ -648,11 +939,19 @@ function Recorder({ session, courses, folders = [], addItem, setData, initialRec
           status={state.status}
           elapsedSeconds={elapsedSeconds}
           level={level}
-          onStart={start}
+          onStart={() => start(source, deviceId)}
           onPause={pause}
           onResume={resume}
           onStop={stop}
         />
+      )}
+
+      {/* The recording stopped on its own because the share did. Said
+          here rather than left as an unexplained short recording. */}
+      {shareEnded.current && ["uploading", "review", "saving"].includes(state.status) && (
+        <p className="mb-3 rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-600">
+          {AI_NOTES_COPY.audioSource.shareEnded}
+        </p>
       )}
 
       {state.status === "uploading" && (
@@ -665,8 +964,11 @@ function Recorder({ session, courses, folders = [], addItem, setData, initialRec
         <div className="space-y-3 py-2">
           <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{state.errorMessage}</p>
           <div className="flex justify-end gap-2">
+            {/* "Discard" is wrong when nothing was ever recorded -- which
+                is every failure that happens before the recorder starts,
+                including picking the wrong thing in the share dialog. */}
             <button className={btnGhost} onClick={discard}>
-              <X size={15} /> Discard
+              <X size={15} /> {state.blob ? "Discard" : "Back"}
             </button>
             {state.blob && !PERMANENT_FAILURE_CODES.has(state.errorCode) && (
               <button className={btnPrimary} onClick={runUpload}>

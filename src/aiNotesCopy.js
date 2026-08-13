@@ -65,6 +65,68 @@ export const AI_NOTES_COPY = {
     return "This lecture was unusually long, so a few of the closing sections weren't saved into your planner. The full version is on your account — download it if you need it.";
   },
 
+  /* ---------- choosing what to record from ---------- */
+  audioSource: {
+    label: "Record from",
+    options: {
+      microphone: "Microphone",
+      system: "This computer's audio",
+      both: "Both",
+    },
+    hint: {
+      microphone: "For a lecture in a room.",
+      system: "For a lecture played on this computer — a recorded video or an online class.",
+      both: "The online class and your own microphone together.",
+    },
+
+    /* Why an option is greyed out rather than missing. A student in
+       Firefox who sees only "Microphone" learns nothing; one who sees
+       "This computer's audio — needs Chrome or Edge" knows what to do. */
+    unavailable: {
+      "unsupported-browser": "Needs Chrome or Edge — Firefox and Safari can't record this computer's audio.",
+      "mobile-platform": "Phones and tablets can only record through the microphone.",
+    },
+
+    /* Said BEFORE the share dialog opens on a Mac, not after it goes
+       wrong. The failure below is recoverable but wastes a click and a
+       moment of confidence; this costs one line and usually prevents
+       it. */
+    tabOnlyHint: "On a Mac, choose a browser tab in the box that appears — a window or the whole screen won't include sound.",
+
+    /* THE billed-silence message. Reached when the capture came back
+       with no audio track, which is the normal outcome of picking the
+       wrong thing in the browser's share dialog. Nothing was recorded
+       and nothing was charged, and it names what to pick instead --
+       "no audio was captured" on its own is a dead end for exactly the
+       student who needed the instruction. */
+    noAudioCaptured: (platform) => {
+      const nothing = " Nothing was recorded and none of your allowance was used.";
+      if (platform === "macos") {
+        return (
+          "That share didn't include any sound. On a Mac, only a browser tab can be recorded — " +
+          "start again and choose the Chrome Tab option, not a window or the whole screen." +
+          nothing
+        );
+      }
+      if (platform === "windows" || platform === "linux") {
+        return (
+          "That share didn't include any sound. Start again and tick \"Also share system audio\" " +
+          "(or \"Share tab audio\") in the box the browser shows." + nothing
+        );
+      }
+      return "That share didn't include any sound. Start again and make sure audio is included in what you share." + nothing;
+    },
+
+    /* The share ending mid-recording. Without this the recorder happily
+       carries on producing silence and the billed duration keeps
+       climbing, which is the same failure as above arriving late. */
+    shareEnded: "Sharing stopped, so the recording ended there. Everything up to that point was kept.",
+
+    /* Only reachable for "Both", where mixing two inputs is the whole
+       point and there is no useful half of it to fall back to. */
+    mixFailed: "This browser couldn't combine the two sources. Record from one of them instead.",
+  },
+
   /* Offered when a recording was interrupted and the app still holds
      the key to the finished result on the server. */
   recovery: {

@@ -419,6 +419,10 @@ async function run() {
     "uni-planner-demo-session": { noUserContent: "demo sign-in bookkeeping; the policy covers demo mode wholesale" },
     "uni-planner-demo-cloud": { documented: { privacy: /stores everything locally and syncs nothing/i, deletion: /local copy/i } },
     "uni-planner-device-id": { noUserContent: "a random id distinguishing devices during merge; not derived from the device or the user" },
+    "uni-planner-audio-input": {
+      noUserContent:
+        "which microphone to record from, by the browser's own device id and its label. Device-local by design — it is never synced and never uploaded — and holds none of the student's work; nothing recorded, transcribed or written passes through it",
+    },
     "uni-planner-__BUILD_ID__": { noUserContent: "the service worker's asset cache: the app's own files, none of the user's" },
   };
 
