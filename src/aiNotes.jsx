@@ -116,6 +116,11 @@ function useLectureRecorder() {
   const [state, dispatch] = useReducer(recorderReducer, INITIAL_RECORDER_STATE);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [level, setLevel] = useState(0);
+  /* Two ways a recording quietly becomes silence while still being
+     billed. Neither stops the recording -- see the note on the mute
+     listener below -- so both are surfaced instead. */
+  const [micMuted, setMicMuted] = useState(false);
+  const [wentToBackground, setWentToBackground] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
@@ -300,6 +305,27 @@ function useLectureRecorder() {
        stop-sharing control ends, and it is never fed to the recorder --
        only audio tracks reach recordedStream -- so nothing else in here
        would have noticed it going. */
+    /* ANDROID MUTES THE MICROPHONE IN THE BACKGROUND. API 30+ refuses
+       mic capture to an app without a foreground service, and the track
+       does NOT end -- it goes `muted`, which fires here and nothing was
+       listening for it before. Without this, a student who locks their
+       screen mid-lecture gets forty minutes of silence and is billed for
+       it, which is the same billed-silence failure checkCapturedAudio
+       exists to prevent, arriving through the one door it can't watch:
+       that guard runs once, before recording starts.
+
+       IT DOES NOT STOP THE RECORDING, deliberately. A mute can be
+       momentary -- an incoming call, a permission toast -- and killing
+       an hour of lecture over three seconds of it would be the worse
+       failure. It warns, and it is remembered, so the review screen can
+       say part of the recording may be silent. */
+    if (micStream) {
+      micStream.getAudioTracks().forEach((t) => {
+        t.addEventListener("mute", () => setMicMuted(true));
+        t.addEventListener("unmute", () => setMicMuted(false));
+      });
+    }
+
     if (sysStream) {
       sysStream.getTracks().forEach((t) =>
         t.addEventListener("ended", () => {
@@ -329,6 +355,8 @@ function useLectureRecorder() {
     startTimeRef.current = Date.now();
     pausedMsRef.current = 0;
     shareEndedRef.current = false;
+    setMicMuted(false);
+    setWentToBackground(false);
     setElapsedSeconds(0);
     recorder.start(1000);
     dispatch({ type: "started" });
@@ -340,6 +368,24 @@ function useLectureRecorder() {
       setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startTimeRef.current - pausedMsRef.current) / 1000)));
     }, 250);
     return () => clearInterval(t);
+  }, [state.status]);
+
+  /* Backgrounding the app degrades a recording on a phone and there is
+     nothing we can do about it from a WebView -- so the app says so
+     rather than degrading silently. Only while actually recording, and
+     only on the platforms where it is true: a desktop browser keeps
+     getUserMedia alive in a background tab, so warning there would be
+     noise that teaches people to ignore the warning that matters. */
+  useEffect(() => {
+    if (state.status !== "recording" && state.status !== "paused") return;
+    if (typeof document === "undefined") return;
+    const caps = describeCapabilities();
+    if (!caps.mobile) return;
+    const onHide = () => {
+      if (document.hidden) setWentToBackground(true);
+    };
+    document.addEventListener("visibilitychange", onHide);
+    return () => document.removeEventListener("visibilitychange", onHide);
   }, [state.status]);
 
   const pause = () => {
@@ -384,6 +430,8 @@ function useLectureRecorder() {
     setElapsedSeconds(0);
     setLevel(0);
     shareEndedRef.current = false;
+    setMicMuted(false);
+    setWentToBackground(false);
     dispatch({ type: "discard" });
   };
 
@@ -398,6 +446,8 @@ function useLectureRecorder() {
     stop,
     discard,
     shareEnded: shareEndedRef,
+    micMuted,
+    wentToBackground,
   };
 }
 
@@ -753,12 +803,39 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
 }
 
 /* ------------------------------------------------------------------ */
-/*  Recorder — course/week form + drives the whole flow                */
+/*  useRecordingSession — the whole recording, ABOVE the tab switcher   */
 /* ------------------------------------------------------------------ */
 
-function Recorder({ session, courses, folders = [], addItem, setData, initialRecovery = null }) {
-  const { state, dispatch, elapsedSeconds, level, start, pause, resume, stop, discard, shareEnded } =
-    useLectureRecorder();
+/**
+ * Everything a recording is: the stream, the form fields that describe
+ * it, the upload driver, and saving the result.
+ *
+ * WHY IT LIVES IN PlannerApp AND NOT IN THE PANEL. The AI Notes tab is
+ * rendered as `{tab === "ai-notes" && ...}`, so tapping another tab
+ * unmounts the subtree. Before this, that ran cleanupStream() — every
+ * track stopped, the AudioContext closed, chunksRef garbage-collected —
+ * WITHOUT calling recorder.stop(), so no Blob was ever assembled and no
+ * recovery key had been parked yet. A two-hour lecture disappeared on
+ * one stray tap, silently. Called once at app level, none of that can
+ * happen: a component unmounting no longer takes the recording with it.
+ *
+ * IT ALSO HAD TO BE THE WHOLE SESSION, not just the stream. runUpload
+ * reads `course`, `week` and `translateTo` out of this closure at the
+ * moment recording stops — so hoisting the stream alone would leave a
+ * stopped recording with nothing to drive it, and the form fields still
+ * dying with the panel.
+ *
+ * The happy side effect is that saving moves up here, where addItem,
+ * setData, folders and session already live. That DELETES the prop-relay
+ * chain — `folders` no longer travels PlannerApp -> AiNotesPanel ->
+ * RecoveryGate -> Recorder — which is the exact shape that produced the
+ * ReferenceError that white-screened Android. There is nothing left to
+ * relay, so there is nothing left to drop.
+ */
+export function useRecordingSession({ session, folders = [], addItem, setData }) {
+  const recorder = useLectureRecorder();
+  const { state, dispatch, discard } = recorder;
+
   const [course, setCourse] = useState("");
   const [week, setWeek] = useState("");
   const [translateTo, setTranslateTo] = useState("");
@@ -813,21 +890,19 @@ function Recorder({ session, courses, folders = [], addItem, setData, initialRec
     }
   };
 
-  /* A recovered result re-enters the flow at exactly the point the app
-     closed: the review screen, with Save and Discard, rather than a
-     separate "recovered note" path that would need its own testing. */
-  useEffect(() => {
-    if (initialRecovery) dispatch({ type: "processed", result: initialRecovery });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialRecovery]);
-
   useEffect(() => {
     if (state.status === "stopped") runUpload();
     // Deliberately only re-runs when status itself changes (not on every
     // course/week/translateTo keystroke) — those are read fresh from this
-    // closure at the moment recording stops.
+    // closure at the moment recording stops, which is now a closure that
+    // outlives the panel.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.status]);
+
+  /* A recovered result re-enters the flow at exactly the point the app
+     closed: the review screen, with Save and Discard, rather than a
+     separate "recovered note" path that would need its own testing. */
+  const acceptRecovered = (result) => dispatch({ type: "processed", result });
 
   const onSave = async () => {
     dispatch({ type: "save" });
@@ -890,6 +965,140 @@ function Recorder({ session, courses, folders = [], addItem, setData, initialRec
     discard();
   };
 
+  /* Is there a recording or a result the student would lose track of by
+     navigating away? This is what the indicator watches. "done" is
+     excluded: the note is saved, there is nothing in flight. */
+  const busyStatuses = ["requesting", "recording", "paused", "stopped", "uploading", "review", "saving"];
+  const active = busyStatuses.includes(state.status);
+  const capturing = state.status === "recording" || state.status === "paused";
+
+  return {
+    ...recorder,
+    course,
+    setCourse,
+    week,
+    setWeek,
+    translateTo,
+    setTranslateTo,
+    caps,
+    source,
+    setSource,
+    deviceId,
+    setDeviceId,
+    selectedCards,
+    setSelectedCards,
+    runUpload,
+    acceptRecovered,
+    onSave,
+    onDiscard,
+    active,
+    capturing,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  The indicator — visible from every tab                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Rendered OUTSIDE the tab switch, so it is on screen wherever the
+ * student goes. Two jobs, and the second is not a nicety:
+ *
+ *   - say what is happening (elapsed time, or writing up)
+ *   - STOP, one tap, from anywhere
+ *
+ * "I can't stop the recording" is a privacy problem before it is a
+ * usability one — a student who walks out of a lecture into a private
+ * conversation must be able to stop it without hunting for a tab.
+ *
+ * All wording is in aiNotesCopy.js and the markup is one small
+ * component, so Grace can restyle this without going near the state
+ * machine that decides when it appears.
+ */
+export function RecordingIndicator({ recording, onOpen }) {
+  if (!recording || !recording.active) return null;
+  const copy = AI_NOTES_COPY.indicator;
+  const { state, elapsedSeconds, capturing, stop } = recording;
+
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-3 pointer-events-none">
+      <div className="pointer-events-auto flex w-full max-w-md items-center gap-2 rounded-xl border border-stone-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+        <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onOpen}>
+          {capturing ? (
+            <>
+              <span
+                className={`h-2.5 w-2.5 flex-shrink-0 rounded-full bg-rose-600 ${
+                  state.status === "recording" ? "animate-pulse" : ""
+                }`}
+              />
+              <span className="font-mono text-sm text-stone-700">{formatElapsed(elapsedSeconds)}</span>
+              <span className="truncate text-xs text-stone-500">
+                {state.status === "paused" ? copy.paused : copy.recording}
+              </span>
+            </>
+          ) : (
+            <>
+              <RefreshCw size={14} className="flex-shrink-0 animate-spin text-stone-400" />
+              <span className="truncate text-xs text-stone-600">
+                {state.status === "review" ? copy.waitingToSave : copy.processing}
+              </span>
+            </>
+          )}
+        </button>
+
+        {/* Never more than one tap away. */}
+        {capturing && (
+          <button
+            className="inline-flex flex-shrink-0 items-center gap-1 rounded-lg bg-rose-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-rose-700 u-focus"
+            onClick={stop}
+          >
+            <Square size={12} /> {copy.stop}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Recorder — a view over the session                                 */
+/* ------------------------------------------------------------------ */
+
+/* Owns no recording state at all now. It reads and renders; everything
+   it touches lives in useRecordingSession, above the tab switch. Note
+   what it no longer takes: folders, addItem, setData. Those went up
+   with the save, which is what removed the relay chain. */
+function Recorder({ session, courses, recording }) {
+  const {
+    state,
+    elapsedSeconds,
+    level,
+    start,
+    pause,
+    resume,
+    stop,
+    discard,
+    shareEnded,
+    micMuted,
+    wentToBackground,
+    course,
+    setCourse,
+    week,
+    setWeek,
+    translateTo,
+    setTranslateTo,
+    caps,
+    source,
+    setSource,
+    deviceId,
+    setDeviceId,
+    selectedCards,
+    setSelectedCards,
+    runUpload,
+    onSave,
+    onDiscard,
+  } = recording;
+
   const showForm = state.status === "idle";
   const showControls = ["idle", "requesting", "recording", "paused"].includes(state.status);
 
@@ -935,6 +1144,13 @@ function Recorder({ session, courses, folders = [], addItem, setData, initialRec
         </div>
       )}
 
+      {/* Switching tabs is fine and the student is told so, because the
+          old behaviour was to lose the recording and they have no way of
+          knowing that changed. */}
+      {["recording", "paused"].includes(state.status) && (
+        <p className="mt-2 text-center text-xs text-stone-400">{AI_NOTES_COPY.indicator.keepsRunning}</p>
+      )}
+
       {showControls && (
         <RecorderControls
           status={state.status}
@@ -945,6 +1161,13 @@ function Recorder({ session, courses, folders = [], addItem, setData, initialRec
           onResume={resume}
           onStop={stop}
         />
+      )}
+
+      {/* The two ways a recording quietly becomes silence. Both are
+          warnings rather than stops -- see the mute listener. */}
+      {micMuted && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{AI_NOTES_COPY.micMuted}</p>}
+      {wentToBackground && (
+        <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{AI_NOTES_COPY.wentToBackground}</p>
       )}
 
       {/* The recording stopped on its own because the share did. Said
@@ -1023,7 +1246,7 @@ function Recorder({ session, courses, folders = [], addItem, setData, initialRec
 /*  Panel — consent + account gating, then the recorder                */
 /* ------------------------------------------------------------------ */
 
-export function AiNotesPanel({ session, backend, courses, folders, data, setData, addItem }) {
+export function AiNotesPanel({ session, backend, courses, data, setData, recording }) {
   if (!session || backend.isDemo) {
     return (
       <Card>
@@ -1044,16 +1267,7 @@ export function AiNotesPanel({ session, backend, courses, folders, data, setData
     );
   }
 
-  return (
-    <RecoveryGate
-      session={session}
-      courses={courses}
-      folders={folders}
-      addItem={addItem}
-      data={data}
-      setData={setData}
-    />
-  );
+  return <RecoveryGate session={session} courses={courses} data={data} setData={setData} recording={recording} />;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1065,22 +1279,12 @@ export function AiNotesPanel({ session, backend, courses, folders, data, setData
    calling the function with the same key: the insert hits a unique
    violation, the scoped lookup finds the completed row and returns it.
    No new endpoint, no audio, and no minutes -- billing happens on the
-   transcription path this request never reaches. */
-/* NOTE `folders` is threaded through here for no reason of its own: this
-   component does not use it, it only passes it to Recorder, which files
-   a saved recording into its per-course folder.
+   transcription path this request never reaches.
 
-   That is exactly why it went missing. The auto-folder feature threaded
-   folders from PlannerApp -> AiNotesPanel -> Recorder and skipped the
-   component in the middle that merely relays it, so Recorder's JSX read
-   a bare `folders` that nothing in scope defined. It crashed the whole
-   panel for every signed-in user, on every platform, and nothing caught
-   it: the demo-mode smoke walk returns early from AiNotesPanel without a
-   real account, so the panel had never been rendered by anything
-   automated. The walk now mounts it signed in and past consent. */
-function RecoveryGate({ session, courses, folders, addItem, data, setData }) {
+   It hands a recovered result straight to the session rather than
+   passing it down as a prop, which is one fewer thing to relay. */
+function RecoveryGate({ session, courses, data, setData, recording }) {
   const pending = pendingRecovery(data.meta);
-  const [recovered, setRecovered] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   /* Survives the key being cleared. The card renders on `pending`, so
@@ -1102,7 +1306,7 @@ function RecoveryGate({ session, courses, folders, addItem, data, setData }) {
         idempotencyKey: pending.key,
         estimatedDurationSeconds: 0,
       });
-      setRecovered(result);
+      recording.acceptRecovered(result);
     } catch (err) {
       /* NEVER TREAT A FAILED REQUEST AS EVIDENCE OF ABSENCE. This used
          to forget the key on ANY error, so a dropped connection told a
@@ -1123,12 +1327,13 @@ function RecoveryGate({ session, courses, folders, addItem, data, setData }) {
     }
   };
 
+  /* Hidden once the session is showing the result: the card's job was to
+     get it back, and it has. */
+  const showCard = (pending || gone) && recording.state.status === "idle";
+
   return (
     <>
-      {/* Shown while there is a key to redeem, and for one beat after a
-          definitively-gone one is dropped, so the explanation outlives
-          the thing it explains. */}
-      {(pending || gone) && !recovered && (
+      {showCard && (
         <Card className="mb-3">
           {gone ? (
             <>
@@ -1159,14 +1364,7 @@ function RecoveryGate({ session, courses, folders, addItem, data, setData }) {
           )}
         </Card>
       )}
-      <Recorder
-        session={session}
-        courses={courses}
-        folders={folders}
-        addItem={addItem}
-        setData={setData}
-        initialRecovery={recovered}
-      />
+      <Recorder session={session} courses={courses} recording={recording} />
     </>
   );
 }

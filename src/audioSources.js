@@ -106,6 +106,13 @@ export function describeCapabilities(env = readEnv()) {
   return {
     platform,
     engine,
+    /* Whether backgrounding the app degrades a recording. True on the
+       phone shells, where Android refuses mic capture to an app without
+       a foreground service and iOS suspends the WebView; false in a
+       desktop browser, which keeps getUserMedia alive in a background
+       tab. Warning where it isn't true would teach people to ignore the
+       warning where it is. */
+    mobile,
     microphone: { available: true },
     /* iOS routes audio input at the system level and returns unlabelled
        devices that cannot reliably be selected, so a picker there is a

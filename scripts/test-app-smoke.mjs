@@ -122,6 +122,62 @@ dom.window.localStorage.setItem(
   })
 );
 
+/* ---------- faked media, so a recording can actually be driven ----------
+
+   jsdom has no MediaRecorder and no getUserMedia, so without these the
+   recording flow is untestable and the one path a real student takes --
+   start, leave the tab, stop from the indicator, save -- would be
+   covered by nothing.
+
+   AudioContext is deliberately LEFT UNDEFINED. buildGraph then returns
+   null and the recorder falls back to the raw stream, which is the
+   documented fallback and worth exercising rather than mocking away. */
+{
+  const w = dom.window;
+  const track = (kind) => ({
+    kind,
+    stop() {
+      this.stopped = true;
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  });
+  const fakeStream = { getTracks: () => [track("audio")], getAudioTracks: () => [track("audio")], getVideoTracks: () => [] };
+  w.navigator.mediaDevices = {
+    getUserMedia: async () => fakeStream,
+    getDisplayMedia: async () => fakeStream,
+    enumerateDevices: async () => [],
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  class FakeMediaRecorder {
+    static isTypeSupported() {
+      return true;
+    }
+    constructor(stream, opts) {
+      this.stream = stream;
+      this.mimeType = (opts && opts.mimeType) || "audio/webm";
+      this.state = "inactive";
+    }
+    start() {
+      this.state = "recording";
+      // One chunk, immediately, so stop() has something to assemble.
+      setTimeout(() => this.ondataavailable && this.ondataavailable({ data: new w.Blob(["x"], { type: this.mimeType }) }), 0);
+    }
+    pause() {
+      this.state = "paused";
+    }
+    resume() {
+      this.state = "recording";
+    }
+    stop() {
+      this.state = "inactive";
+      setTimeout(() => this.onstop && this.onstop(), 0);
+    }
+  }
+  w.MediaRecorder = FakeMediaRecorder;
+}
+
 let threw = null;
 try {
   dom.window.eval(bundle.outputFiles[0].text);
@@ -419,13 +475,35 @@ for (const [tabName, phrases] of [
    The bundle is rebuilt exposing the pieces on window rather than
    importing the JSX from Node, which cannot parse it. */
 {
+  /* The network layer, faked. Aliased into the probe bundle the same way
+     config.js is aliased for demo mode -- so the recording flow runs end
+     to end without a server, and what is being tested is our own state
+     machine rather than fetch. */
+  const clientStub = path.join(tmp, "client-stub.js");
+  fs.writeFileSync(
+    clientStub,
+    "export const fetchUsage = async () => ({ unavailable: true });\n" +
+      "export const uploadAudio = async () => ({ path: 'u/k.webm' });\n" +
+      // Records its arguments, so the test can assert the form fields
+      // reached the REQUEST rather than inferring it from the output.
+      "export const callAiNotes = async (args) => {\n" +
+      "  globalThis.__aiCalls = [...(globalThis.__aiCalls || []), args];\n" +
+      "  return {\n" +
+      "  summaryFailed: false,\n" +
+      "  translated: null,\n" +
+      "  original: { overview: 'What the lecture covered', keyPoints: ['a point'],\n" +
+      "    terms: [{ term: 'Entropy', content: 'A measure of disorder' }], assessable: [], openQuestions: [] },\n" +
+      "  };\n};\n"
+  );
+
   const probe = path.join(tmp, "probe.jsx");
   fs.writeFileSync(
     probe,
     'import { createRoot } from "react-dom/client";\n' +
       'import { AudioSourcePicker } from "../src/aiNotes.jsx";\n' +
       'import { SummariseReading } from "../src/aiText.jsx";\n' +
-      'import { AiNotesPanel } from "../src/aiNotes.jsx";\n' +
+      'import { useState } from "react";\n' +
+      'import { AiNotesPanel, useRecordingSession, RecordingIndicator } from "../src/aiNotes.jsx";\n' +
       'import { describeCapabilities } from "../src/audioSources.js";\n' +
       "window.__probe = (env, source) => {\n" +
       '  const host = document.createElement("div");\n' +
@@ -447,14 +525,38 @@ for (const [tabName, phrases] of [
          touches the network: no session token is valid, so the usage
          badge's fetch simply fails, which is the state a phone in a
          lecture theatre is in anyway. */
+      /* A miniature of the real app: a tab switcher with the session
+         hoisted ABOVE it, exactly as PlannerApp holds it. That shape is
+         the thing under test -- the panel must be able to unmount
+         without the recording going with it. */
+      "function Harness({ consented, sink }) {\n" +
+      '  const [tab, setTab] = useState("ai-notes");\n' +
+      "  const recording = useRecordingSession({\n" +
+      '    session: { token: "t", user: { id: "u" } },\n' +
+      "    folders: sink.folders,\n" +
+      "    addItem: (k, item) => sink[k].push(item),\n" +
+      "    setData: () => {},\n" +
+      "  });\n" +
+      "  sink.api = recording;\n" +
+      "  return (\n" +
+      "    <>\n" +
+      '      <button data-t="notes" onClick={() => setTab("notes")}>Go to notes</button>\n' +
+      '      {tab === "ai-notes" && (\n' +
+      '        <AiNotesPanel session={{ token: "t", user: { id: "u" } }} backend={{ isDemo: false }}\n' +
+      "          courses={[{ id: 'c1', name: 'PHYS1001' }]} setData={() => {}} recording={recording}\n" +
+      "          data={{ meta: consented ? { aiConsent: { version: 99 } } : {} }} />\n" +
+      "      )}\n" +
+      '      {tab === "notes" && <p>Another tab entirely</p>}\n' +
+      '      <RecordingIndicator recording={recording} onOpen={() => setTab("ai-notes")} />\n' +
+      "    </>\n" +
+      "  );\n" +
+      "}\n" +
       "window.__probeAiNotes = (consented) => {\n" +
       '  const host = document.createElement("div");\n' +
       "  document.body.appendChild(host);\n" +
-      "  createRoot(host).render(\n" +
-      '    <AiNotesPanel session={{ token: "t", user: { id: "u" } }} backend={{ isDemo: false }}\n' +
-      "      courses={[]} folders={[]} addItem={() => {}} setData={() => {}}\n" +
-      "      data={{ meta: consented ? { aiConsent: { version: 99 } } : {} }} />\n" +
-      "  );\n" +
+      "  const sink = { pages: [], notes: [], folders: [], api: null };\n" +
+      "  host.__sink = sink;\n" +
+      "  createRoot(host).render(<Harness consented={consented} sink={sink} />);\n" +
       "  return host;\n" +
       "};\n" +
       "window.__probeReading = (allowance, reading, summaryPage) => {\n" +
@@ -477,6 +579,15 @@ for (const [tabName, phrases] of [
     write: false,
     absWorkingDir: rootDir,
     define: { "process.env.NODE_ENV": '"development"' },
+    plugins: [
+      {
+        name: "probe-stubs",
+        setup(b) {
+          b.onResolve({ filter: /(^|\/)config\.js$/ }, () => ({ path: demoConfig }));
+          b.onResolve({ filter: /aiNotesClient\.js$/ }, () => ({ path: clientStub }));
+        },
+      },
+    ],
   });
 
   let probeThrew = null;
@@ -584,6 +695,84 @@ for (const [tabName, phrases] of [
       (panel.textContent || "").includes("Record from"),
       "the audio source picker is reachable through the real panel, not only on its own"
     );
+
+    /* ---------- THE ONE THAT MATTERS ----------
+
+       Start a recording in AI Notes, switch tabs so the panel unmounts,
+       press Stop ON THE INDICATOR, and check the note lands with the
+       right course, week, translation setting and folder.
+
+       This is the path a student in a classroom actually takes, and it
+       crosses everything that moved: the hoisted session, the form
+       fields read at stop time, the upload driver, and Save at app
+       level. If any of those still lived in the panel, the recording
+       would have died with it and this would go red. */
+    {
+      const sink = panel.__sink;
+      const btn = (label) => [...panel.querySelectorAll("button")].find((b) => (b.textContent || "").trim().includes(label));
+      const setField = (el, value) => {
+        const proto = value === "" || isNaN(Number(value)) ? dom.window.HTMLSelectElement : dom.window.HTMLInputElement;
+        const setter = Object.getOwnPropertyDescriptor(proto.prototype, "value").set;
+        setter.call(el, value);
+        el.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+        el.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      };
+
+      /* Fill the form through the real controls, not by poking state. */
+      const selects = [...panel.querySelectorAll("select")];
+      const courseSel = selects.find((el) => (el.textContent || "").includes("PHYS1001"));
+      const translateSel = selects.find((el) => (el.textContent || "").includes("English only"));
+      setField(courseSel, "PHYS1001");
+      setField(panel.querySelector('input[type="number"]'), "7");
+      setField(translateSel, "es");
+      await new Promise((r) => setTimeout(r, 60));
+
+      btn("Start recording").click();
+      await new Promise((r) => setTimeout(r, 120));
+      check(sink.api.state.status === "recording", "recording starts", sink.api.state.status);
+
+      /* Leave. This is the tap that used to destroy the lecture. */
+      [...panel.querySelectorAll("button")].find((b) => b.dataset.t === "notes").click();
+      await new Promise((r) => setTimeout(r, 120));
+      check(
+        (panel.textContent || "").includes("Another tab entirely"),
+        "the student can leave AI Notes while recording"
+      );
+      check(
+        sink.api.state.status === "recording",
+        "the recording survives the panel unmounting",
+        sink.api.state.status
+      );
+      check((panel.textContent || "").includes("Recording your lecture"), "the indicator shows the state from another tab");
+
+      /* Stop, from the indicator, without going back. */
+      const stopBtn = [...panel.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Stop");
+      check(!!stopBtn, "stop is one tap away from another tab");
+      stopBtn.click();
+      await new Promise((r) => setTimeout(r, 300));
+
+      check(sink.api.state.status === "review", "stopping from another tab runs the upload", sink.api.state.status);
+
+      await sink.api.onSave();
+      await new Promise((r) => setTimeout(r, 120));
+
+      const page = sink.pages[0];
+      check(!!page, "the note is saved");
+      if (page) {
+        check(page.aiMeta.course === "PHYS1001", "the course survived the tab switch", JSON.stringify(page.aiMeta));
+        check(page.aiMeta.week === "7", "the week survived the tab switch", JSON.stringify(page.aiMeta));
+        /* Asserted on the REQUEST, not the note: the stub returns no
+           translated copy, so activeLanguage correctly stays "en". What
+           matters is that a choice made before the tab switch reached
+           the call made after it. */
+        const call = (dom.window.__aiCalls || [])[0];
+        check(call && call.translateTo === "es", "the translation choice survived the tab switch", JSON.stringify(call));
+        check(call && call.course === "PHYS1001", "the course reached the request, not just the note");
+        check(!!page.folderId, "the note is filed into its course folder");
+        check(sink.folders.length === 1, "the course folder was created", JSON.stringify(sink.folders));
+      }
+      check(sink.notes.length > 0, "the study cards are saved with it");
+    }
 
     /* Consent is enforced at the point of use, and by showing the gate
        rather than by hiding the action -- a feature nobody can see is

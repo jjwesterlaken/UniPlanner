@@ -1750,6 +1750,60 @@ async function run() {
     }
   });
 
+  /* ---------- the recording lives above the tab switch ---------- */
+
+  await test("the indicator is rendered OUTSIDE the tab conditional", () => {
+    /* The whole point. Inside it, the indicator would only be visible
+       on the tab you already have to be on to see the recorder, which
+       is nothing. Asserted from the source because demo mode -- the
+       only mode the tab walk runs in -- cannot record at all. */
+    const app = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    assert.match(app, /<RecordingIndicator/, "the indicator is not rendered at all");
+
+    const open = app.indexOf('{tab === "ai-notes" && (');
+    assert.ok(open > -1, "the AI notes tab block moved; this assertion needs rewriting");
+    // Walk to the matching close of that JSX block.
+    let depth = 0;
+    let i = open;
+    for (; i < app.length; i++) {
+      if (app[i] === "{") depth++;
+      else if (app[i] === "}") {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    const tabBlock = app.slice(open, i);
+    assert.doesNotMatch(
+      tabBlock,
+      /<RecordingIndicator/,
+      "the indicator is inside the AI notes tab block, so it is invisible from every other tab"
+    );
+  });
+
+  await test("the session is held at app level, not by the panel", () => {
+    const app = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    assert.match(app, /useRecordingSession\(/, "PlannerApp no longer owns the recording session");
+    const notes = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    const panel = notes.slice(notes.indexOf("export function AiNotesPanel"), notes.indexOf("function RecoveryGate"));
+    assert.doesNotMatch(panel, /useRecordingSession\(/, "the panel calls the session hook, so it dies with the tab");
+  });
+
+  await test("the panel no longer relays props it does not use", () => {
+    /* folders travelled PlannerApp -> AiNotesPanel -> RecoveryGate ->
+       Recorder and was dropped by the component in the middle, which
+       white-screened Android. Saving moved up with the session, so
+       there is nothing left to relay -- and nothing left to drop. */
+    const notes = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    const sig = notes.match(/export function AiNotesPanel\(\{([^}]*)\}/)[1];
+    for (const prop of ["folders", "addItem"]) {
+      assert.ok(!sig.includes(prop), `AiNotesPanel still takes "${prop}" only to pass it on`);
+    }
+    const recorderSig = notes.match(/\nfunction Recorder\(\{([^}]*)\}/)[1];
+    for (const prop of ["folders", "addItem", "setData"]) {
+      assert.ok(!recorderSig.includes(prop), `Recorder still takes "${prop}"; saving should live above it`);
+    }
+  });
+
   await test("npm test still runs the function ownership tests", () => {
     // They guard a cross-user data disclosure; dropping them from the
     // suite would remove the only thing checking it.

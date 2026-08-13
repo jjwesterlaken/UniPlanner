@@ -279,6 +279,14 @@ to doubt it.
    that the recording is deleted once transcribed.
 9. **Record a short lecture end to end**, save it, and confirm it files
    itself into a `<COURSE> recordings` folder.
+9a. **Switch tabs while recording.** The timer must appear at the bottom
+    of every other tab, keep counting, and offer **Stop** without going
+    back. Then stop from there and check the note saves with the right
+    course and week. This used to lose the whole recording.
+9b. **Background the app mid-recording**, then return. A warning should
+    say part of it may be silent. Confirm the recording did NOT stop —
+    and if the audio really is silent for that stretch, say so, because
+    it decides whether the warning is strong enough.
 10. **"Record from" offers Microphone only**, with "This computer's
     audio" greyed out and reading *"Phones and tablets can only record
     through the microphone."* An option that is simply missing is a

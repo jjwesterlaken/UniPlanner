@@ -489,6 +489,81 @@ build**, and worth remembering when the marketing site is written:
 browsers only ever offer loopback alongside a screen or tab share, and
 macOS Chrome only alongside a tab. Electron asks the OS directly.
 
+### A recording outlives the tab it was started on
+
+The AI Notes tab renders as `{tab === "ai-notes" && ...}`. Switching
+tabs unmounts the subtree, and the recorder's unmount effect ran
+`cleanupStream()` — every track stopped, the `AudioContext` closed,
+`chunksRef` garbage-collected — **without ever calling
+`recorder.stop()`.** No `Blob` was assembled, no recovery key had been
+parked yet (that happens in `runUpload`, after a successful stop), and
+nothing was said. A two-hour lecture vanished on one stray tap.
+
+`useRecordingSession` is called once in `PlannerApp`, above the switch,
+so a tab change is now a re-render of something else.
+
+**It had to be the whole session, not just the stream.** `runUpload`
+reads `course`, `week` and `translateTo` out of that closure at the
+moment recording stops, so hoisting the stream alone would leave a
+stopped recording with nothing to drive it and the form fields still
+dying with the panel. The end-to-end test is named for that path —
+*"the course/week/translation survived the tab switch"* — and it goes
+red if any of them moves back down.
+
+**Saving moved up too, and that is the part worth keeping.** `addItem`,
+`setData`, `folders` and `session` already live in `PlannerApp`, so the
+save has no reason to be anywhere else — which **deletes the prop-relay
+chain** that `folders` travelled (`PlannerApp → AiNotesPanel →
+RecoveryGate → Recorder`) and that produced the `ReferenceError` which
+white-screened Android. There is nothing left to relay, so there is
+nothing left to drop. A test asserts the panel and the recorder no
+longer take props they only pass on.
+
+**Processing was already survivable and only the UI pretended
+otherwise.** `runUpload` parks the idempotency key before the upload,
+and `callAiNotes` is one long request rather than a poll, so an unmount
+discards the `dispatch` and nothing else. The recovery card picked it up
+on return. What was missing was any indication it was still happening.
+
+The indicator is rendered **outside** the tab conditional — inside it,
+it would only be visible on the tab you already had to be on, which is
+nothing. A test walks the JSX block to assert that. **Stop is on the
+indicator**, because "I can't stop the recording" is a privacy problem
+before it is a usability one.
+
+### Two ways a recording quietly becomes billed silence
+
+`checkCapturedAudio` runs once, before the recorder is constructed, and
+the `ended` listener catches a track that *stops*. Neither sees a track
+that goes **muted**, and that is exactly what Android does:
+
+**API 30+ refuses microphone capture to an app without a foreground
+service of type `microphone`.** Our `minSdk` is 26 and target 36, so it
+applies to every device. Lock the screen mid-lecture and the track does
+not end — it mutes, everything downstream keeps recording, and the
+duration keeps billing. A `mute`/`unmute` listener on the microphone
+track now catches it, and a `visibilitychange` listener catches the
+backgrounding itself (**only on the phone shells** — a desktop browser
+keeps `getUserMedia` alive in a background tab, and warning there would
+teach people to ignore the warning that matters).
+
+**Neither stops the recording, deliberately.** A mute can be momentary —
+an incoming call, a permission toast — and killing an hour of lecture
+over three seconds of it is the worse failure. They warn, and the
+warning persists to the review screen so the student knows part of it
+may be silent before they save.
+
+**Recording while the app itself is backgrounded is out of scope**, and
+this finding is why: a recording that "continues but degrades
+unpredictably" is worse than one that visibly requires the app to stay
+open. What it would take, if it is ever revisited: a Capacitor plugin
+exposing an Android foreground service with
+`foregroundServiceType="microphone"`, the `FOREGROUND_SERVICE_MICROPHONE`
+permission, a persistent notification and a Play Console declaration;
+on iOS the `audio` background mode and an App Store review that asks why
+a study app records in the background. Different product, different
+submission risk.
+
 ### Handwriting is a live storage problem, and compression probably solves it
 
 A stroke serialises to **~1,420 bytes** today, so a 200-stroke page is
