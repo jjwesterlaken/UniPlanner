@@ -567,6 +567,52 @@ that gate is relaxed later, and Android is the live case, since
 `http://localhost` is a secure context and is excluded only by the
 protocol check.
 
+## The mobile shells, and what has to be decided before the first submission
+
+**`mobile/ios` and `mobile/android` do not exist in the repository.** They
+are generated per machine by `cap add` and git-ignored, which is why
+every setting that lives inside them is applied by a script instead:
+`mobile/scripts/native-permissions.mjs` for the microphone declarations,
+`scripts/stamp-native.mjs` for the display name, the minimum OS versions
+and the two version numbers. Both re-run after every `cap add` and
+`cap sync`. Nothing is lost by deleting those folders and regenerating.
+
+That is also why the bundle identifier rename was two text files. It is
+`com.uniplannerapp.planner` — derived from the domain, and **permanent
+once published**, since changing it later means a new store listing
+rather than an update. A test derives it from `SITE_URL` rather than
+restating it.
+
+**Two version numbers, and only one of them matters to a store.** The
+marketing version (`1.0.0`, from the root `package.json`) is cosmetic.
+Android's `versionCode` and iOS's `CFBundleVersion` are enforced: they
+must strictly increase on every upload, and a store rejects a build that
+reuses one — after the upload, when you are already trying to ship a fix.
+So the build number is **derived, not remembered**: minutes since
+2020-01-01 UTC. It is monotonic by construction, needs no stored state,
+is independent of the marketing version (so a rejected build can be
+re-uploaded without inventing a new version), gives the same commit a
+higher number tomorrow, and has ~4,000 years of headroom before Android's
+signed 32-bit `versionCode` overflows.
+
+**Google Play requires new apps to target API 36 from 31 August 2026.**
+Being below it blocks submission outright rather than failing the build.
+Capacitor's template already sets 36, but `stamp-native.mjs` checks the
+*generated* `variables.gradle` and warns, because the template is not the
+thing that ships. Our minimum is 26 (Capacitor defaults to 24); iOS
+deploys at 15 (default 14).
+
+**The longest lead item is the Play account, not the code.** Personal
+developer accounts have needed a closed test with ~12 testers over ~2
+weeks before production access. It can start the moment a debug APK
+exists, which is why the Android compile is worth doing before the iOS
+one. Confirm the current requirement in the Play Console — it changes.
+
+`MOBILE-BUILD.md` has the two first-time compile guides and the
+hardware verification list. The item that decides whether offline notes
+work at all is the aeroplane-mode test: open a note online, kill the
+connection, force-quit, reopen it.
+
 ## Build scripts
 
 `scripts/build-web.mjs` and `prepare-native.mjs` run on Windows, macOS and

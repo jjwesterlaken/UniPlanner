@@ -233,6 +233,33 @@ async function run() {
     assert.equal(desktop.build.appId, expected, "the desktop app id disagrees with the mobile one");
   });
 
+  await test("a build number always increases, and never repeats", async () => {
+    /* This is the number the STORES enforce. Android versionCode and iOS
+       CFBundleVersion must strictly increase on every upload, and a
+       store rejects a build that reuses one -- which lands after a long
+       upload, when you are already trying to ship a fix. */
+    const { buildNumber } = await import(pathToUrl(path.join(rootDir, "scripts/stamp-native.mjs")));
+    const t = Date.UTC(2026, 7, 13);
+    assert.ok(buildNumber(t + 60_000) > buildNumber(t), "a minute later must produce a higher number");
+    assert.equal(buildNumber(t), buildNumber(t), "the same instant must be stable");
+    // Independent of the marketing version: a REJECTED build has to be
+    // re-uploaded without inventing a new version number.
+    const src = fs.readFileSync(path.join(rootDir, "scripts/stamp-native.mjs"), "utf8");
+    const fn = src.slice(src.indexOf("export const buildNumber"), src.indexOf("/* ---------- settings"));
+    assert.ok(!/version/i.test(fn), "the build number must not be derived from the marketing version");
+    // Android's versionCode is a signed 32-bit int.
+    assert.ok(buildNumber(Date.UTC(2100, 0, 1)) < 2_147_483_647, "the scheme overflows versionCode before 2100");
+  });
+
+  await test("the marketing version is stamped from one place", async () => {
+    const { stamp } = await import(pathToUrl(path.join(rootDir, "scripts/stamp-native.mjs")));
+    const root = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    const desktop = JSON.parse(fs.readFileSync(path.join(rootDir, "desktop/package.json"), "utf8"));
+    assert.equal(desktop.version, root.version, "desktop drifted from the root version — run `npm run stamp`");
+    // And the stamper is what keeps them together, rather than luck.
+    assert.match(fs.readFileSync(path.join(rootDir, "scripts/stamp-native.mjs"), "utf8"), /d\.version = version/);
+  });
+
   await test("npm test still runs the service worker tests", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     assert.match(pkg.scripts.test, /test-service-worker\.mjs/, "the update-delivery tests were dropped from `npm test`");

@@ -4,13 +4,14 @@
   "private": true,
   "description": "University Planner - iOS and Android app shell.",
   "scripts": {
-    "add:ios": "cap add ios && npm run permissions",
-    "add:android": "cap add android && npm run permissions",
+    "add:ios": "cap add ios && npm run settings",
+    "add:android": "cap add android && npm run settings",
     "assets": "capacitor-assets generate --iconBackgroundColor #0f766e --splashBackgroundColor #f5f5f4",
     "permissions": "node scripts/native-permissions.mjs",
-    "sync": "cap sync && npm run permissions",
+    "sync": "cap sync && npm run settings",
     "open:ios": "cap open ios",
-    "open:android": "cap open android"
+    "open:android": "cap open android",
+    "settings": "npm run permissions && node ../scripts/stamp-native.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.2",
