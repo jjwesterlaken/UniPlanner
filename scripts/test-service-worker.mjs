@@ -174,6 +174,43 @@ async function run() {
     assert.match(src, /new URL\("\.\/", self\.location\)/, "the shell paths aren't derived from the worker's own location");
   });
 
+  await test("the packaged shells really do come out with no service worker", () => {
+    /* `npm run build` was BROKEN ON MAIN FOR A FORTNIGHT and nothing said
+       so. prepare-native stripped the registration script with a regex
+       that restated the script's shape; rewriting that script left the
+       regex matching nothing, so the safety check below it threw and the
+       whole native build exited 1.
+
+       It survived because `npm test` builds only the web bundle and
+       build-apps.yml is workflow_dispatch, so neither ran. This runs the
+       real script and checks the real output -- which is the only thing
+       that would have caught it. */
+    execFileSync(process.execPath, [path.join(rootDir, "scripts/prepare-native.mjs")], {
+      cwd: rootDir,
+      stdio: "pipe",
+    });
+
+    for (const shell of ["desktop/www", "mobile/www"]) {
+      const html = fs.readFileSync(path.join(rootDir, shell, "index.html"), "utf8");
+      assert.ok(
+        !html.includes("serviceWorker"),
+        `${shell}/index.html still registers a service worker — inside a packaged app it can serve ` +
+          "files from before a store update replaced them"
+      );
+      assert.ok(!fs.existsSync(path.join(rootDir, shell, "sw.js")), `${shell} still ships sw.js`);
+      // And it must not have stripped the whole page while it was at it.
+      assert.ok(html.includes("<body"), `${shell}/index.html lost its body`);
+      assert.ok(html.includes("app.js"), `${shell}/index.html no longer loads the app`);
+    }
+  });
+
+  await test("index.html keeps the markers prepare-native strips between", () => {
+    // The contract that lets the registration script be rewritten freely.
+    const html = fs.readFileSync(path.join(rootDir, "public/index.html"), "utf8");
+    assert.match(html, /sw-register:start/, "the start marker is gone; the native build will keep the worker");
+    assert.match(html, /sw-register:end/, "the end marker is gone");
+  });
+
   await test("npm test still runs the service worker tests", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     assert.match(pkg.scripts.test, /test-service-worker\.mjs/, "the update-delivery tests were dropped from `npm test`");

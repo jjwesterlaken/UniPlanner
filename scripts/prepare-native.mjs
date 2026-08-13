@@ -37,10 +37,20 @@ for (const target of TARGETS) {
 
   const htmlPath = path.join(target, "index.html");
   let html = fs.readFileSync(htmlPath, "utf8");
-  html = html.replace(
-    /\s*<script>\s*if \("serviceWorker" in navigator\)[\s\S]*?<\/script>/,
-    ""
-  );
+  /* Strip between the MARKERS, not by matching the script's contents.
+
+     The previous regex looked for `<script>` immediately followed by
+     `if ("serviceWorker" in navigator)`. That restated the shape of the
+     code it was removing, so when the registration block was rewritten --
+     gaining a comment, an IIFE wrapper and a negated condition -- it
+     silently stopped matching and `npm run build` began failing on the
+     check below. Nothing noticed for a fortnight, because `npm test`
+     builds only the web bundle and the desktop workflow is manual.
+
+     Markers are a contract index.html can keep while its contents
+     change. Same rule as everywhere else here: derive the guard from
+     something stable, don't restate the thing being guarded. */
+  html = html.replace(/[ \t]*<!-- sw-register:start[\s\S]*?sw-register:end -->\n?/, "");
   html = html.replace("  </head>", SAFE_AREA);
   fs.writeFileSync(htmlPath, html);
 
