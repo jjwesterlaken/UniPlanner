@@ -1,4 +1,4 @@
-// ai-text — one endpoint, four tasks, no user content read from the
+// ai-text — one endpoint, five tasks, no user content read from the
 // database.
 //
 // See config.ts for why that last clause is the security posture rather
@@ -36,6 +36,7 @@ import {
   WEAKSPOTS_MAX_TOPICS,
   TASK_UNITS,
   TEXT_TIERS,
+  MAX_READING_CHUNKS,
   limitForTier,
 } from "./config.ts";
 
@@ -128,6 +129,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       maxInputChars: MAX_INPUT_CHARS,
       practiceMaxCards: PRACTICE_MAX_CARDS,
       weakspotsMaxTopics: WEAKSPOTS_MAX_TOPICS,
+      maxReadingChunks: MAX_READING_CHUNKS,
     });
     if (!valid.ok) {
       // `detail` says which rule failed, in the LOG only. The response

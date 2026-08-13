@@ -424,6 +424,7 @@ for (const [tabName, phrases] of [
     probe,
     'import { createRoot } from "react-dom/client";\n' +
       'import { AudioSourcePicker } from "../src/aiNotes.jsx";\n' +
+      'import { SummariseReading } from "../src/aiText.jsx";\n' +
       'import { describeCapabilities } from "../src/audioSources.js";\n' +
       "window.__probe = (env, source) => {\n" +
       '  const host = document.createElement("div");\n' +
@@ -431,6 +432,15 @@ for (const [tabName, phrases] of [
       "  createRoot(host).render(\n" +
       "    <AudioSourcePicker caps={describeCapabilities(env)} source={source}\n" +
       "      setSource={() => {}} deviceId={null} setDeviceId={() => {}} />\n" +
+      "  );\n" +
+      "  return host;\n" +
+      "};\n" +
+      "window.__probeReading = (allowance, readings) => {\n" +
+      '  const host = document.createElement("div");\n' +
+      "  document.body.appendChild(host);\n" +
+      "  createRoot(host).render(\n" +
+      '    <SummariseReading session={{ token: "t", user: { id: "u" } }} readings={readings}\n' +
+      "      allowanceApi={{ allowance, applyFraction: () => {} }} onSummarised={() => {}} />\n" +
       "  );\n" +
       "  return host;\n" +
       "};\n"
@@ -485,6 +495,30 @@ for (const [tabName, phrases] of [
       (ffHost.querySelectorAll("button[disabled]") || []).length > 0,
       "the source that cannot work is disabled, not merely explained"
     );
+
+    /* Summarising a reading, mounted the same way and for the same
+       reason: it is gated on a real session, so the demo-mode tab walk
+       cannot reach it either. */
+    const allowance = { tier: "free", limit: 10, used: 0, remaining: 10, fraction: 0, isFree: true };
+    const readingHost = dom.window.__probeReading(allowance, [
+      { id: "r1", course: "PHYS1001", week: "3", pages: "ch. 4" },
+    ]);
+    await new Promise((r) => setTimeout(r, 200));
+    const readingText = readingHost.textContent || "";
+    check(readingText.includes("Summarise a reading"), "the reading summariser renders");
+    check(
+      readingText.includes("isn't stored") || readingText.includes("not stored"),
+      "it says up front that the pasted text isn't kept",
+      readingText.slice(0, 250)
+    );
+    check(
+      readingText.includes("PHYS1001"),
+      "an existing reading can be linked to the summary",
+      readingText.slice(0, 250)
+    );
+    /* Nothing pasted yet, so nothing has been priced. The estimate must
+       not appear (or read as zero) before there is anything to price. */
+    check(!readingText.includes("characters"), "no cost is quoted before anything is pasted");
   }
 }
 

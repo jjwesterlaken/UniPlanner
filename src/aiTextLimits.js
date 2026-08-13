@@ -26,6 +26,7 @@ export const TASK_UNITS = {
   weakspots: 1,
   practice: 2,
   summarise: 3,
+  merge: 1,
 };
 
 export const MONTHLY_TEXT_UNITS_LIMIT = 150;

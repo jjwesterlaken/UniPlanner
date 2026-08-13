@@ -110,10 +110,24 @@ import {
   Mic,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
-import { PracticePanel, WeakSpotsExplain, ExplainItBack, SummariseNote, useTextAllowance } from "./aiText.jsx";
+import {
+  PracticePanel,
+  WeakSpotsExplain,
+  ExplainItBack,
+  SummariseNote,
+  SummariseReading,
+  useTextAllowance,
+} from "./aiText.jsx";
 import { buildAttempt, pruneAttempts, weakTopics } from "./practice.js";
 import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
-import { aiNotePreview, mapAiResultToItems } from "./aiNotesLogic.js";
+import {
+  aiNotePreview,
+  mapAiResultToItems,
+  needsConsent,
+  buildConsentPatch,
+  AI_CONSENT_VERSION,
+} from "./aiNotesLogic.js";
+import { ConsentGate } from "./aiNotesConsent.jsx";
 import {
   isAiNote,
   isRemote,
@@ -4658,6 +4672,49 @@ export default function PlannerApp() {
     noteItems.forEach((n) => addItem("notes", n));
   };
 
+  /* A summarised reading. Same storage path again -- the result is the
+     same shape, so it is the same kind of note.
+
+     `sourceReadingId` is DECORATIVE. Deleting the reading it came from
+     leaves this note exactly where it is: the summary is the student's
+     work and must not vanish with a row of metadata about which pages
+     they were on. The viewer resolves the id if it still resolves and
+     shows nothing if it doesn't.
+
+     THE PASTED TEXT IS NOT STORED. It is not in pageItem, not in the
+     row, and never reached the server as anything but a request body --
+     ai-text writes only ai_usage. A test asserts that by name. */
+  const summariseReading = async ({ result, reading, sourceReadingId }) => {
+    const { pageItem, noteItems } = mapAiResultToItems({
+      result: { summaryFailed: false, original: result, translated: null },
+      course: (reading && reading.course) || "",
+      week: (reading && reading.week) || "",
+      language: null,
+      uid,
+      nowISO,
+    });
+    const what = reading ? [reading.course, reading.pages].filter(Boolean).join(" ") : "";
+    pageItem.title = what ? `Reading notes — ${what}` : "Reading notes";
+    if (sourceReadingId) pageItem.aiMeta = { ...(pageItem.aiMeta || {}), sourceReadingId };
+    /* The merge failing is a property of the note, not of this session:
+       a student opening it next month should still see that these are
+       sections put end to end rather than one summary. */
+    if (result && result.merged === false) {
+      pageItem.aiMeta = { ...(pageItem.aiMeta || {}), partsMerged: false, parts: result.parts || 0 };
+    }
+
+    let toStore = pageItem;
+    if (supabase && session && session.user) {
+      const { ok, stub } = await migrateNote({ supabaseClient: supabase, userId: session.user.id, page: pageItem });
+      if (ok) {
+        toStore = stub;
+        await noteCache.put(pageItem.id, buildContent(pageItem));
+      }
+    }
+    addItem("pages", toStore);
+    noteItems.forEach((n) => addItem("notes", n));
+  };
+
   /* Study bookkeeping.
 
      Both of these read the CURRENT collection inside the updater and
@@ -4976,6 +5033,35 @@ export default function PlannerApp() {
             </Section>
             <Section icon={ClipboardList} title="Weekly reading planner" subtitle="Add as many weeks per course as you need">
               <Textbook textbook={sem.textbook} courses={sem.courses} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} />
+              {/* Under the reading list rather than on a tab of its own:
+                  the reading it summarises is the thing directly above,
+                  and the optional picker links the two.
+
+                  CONSENT IS ENFORCED HERE, not merely covered by the
+                  wording. Consent v5 exists to describe supplied text
+                  going overseas, and a feature that sends it without
+                  the student having agreed makes the document true on
+                  paper and false in the app.
+
+                  NOTE the other four text features are NOT gated -- a
+                  gap that predates this and changes four existing
+                  screens to close, so it is reported rather than
+                  widened here. */}
+              {session &&
+                (needsConsent(data.meta) ? (
+                  <ConsentGate
+                    onAccept={() =>
+                      setData((d) => ({ ...d, meta: { ...d.meta, ...buildConsentPatch(AI_CONSENT_VERSION, nowISO) } }))
+                    }
+                  />
+                ) : (
+                  <SummariseReading
+                    session={session}
+                    readings={(sem.textbook || []).filter((t) => !t.deletedAt)}
+                    allowanceApi={textAllowance}
+                    onSummarised={summariseReading}
+                  />
+                ))}
             </Section>
             <Section icon={FileText} title="Assignments" subtitle="Editable, with due dates in DD/MM/YYYY">
               <Assignments

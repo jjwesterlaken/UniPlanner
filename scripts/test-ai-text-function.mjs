@@ -365,6 +365,11 @@ async function main() {
       ["weakspots", { topics: [{ term: "a", lapses: 3 }] }, 1, { topics: [{ term: "a", why: "w", try: "t" }] }],
       ["practice", { cards: [{ term: "a", content: "b" }] }, 2, { questions: [{ q: "?", a: "!" }] }],
       ["summarise", { text: "a note" }, 3, { overview: "o" }],
+      /* 1, not 3. A merge takes four short summaries where summarise
+         takes 20,000 characters, so pricing it as a summarise would
+         overcharge for a step the student only needs because their
+         reading was long. */
+      ["merge", { parts: [{ overview: "a" }, { overview: "b" }] }, 1, { overview: "o" }],
     ]) {
       const admin = makeAdmin();
       await run({ task, ...body }, { supabaseAdmin: admin, summarizer: okSummarizer(out) });
@@ -423,6 +428,47 @@ async function main() {
     );
     assert.equal((await free.json()).code, "ai_failed");
     assert.equal((await charged.json()).code, "ai_failed_charged");
+  });
+
+  await test("every task has an output ceiling, an input cap and a weight", async () => {
+    /* Adding a task and forgetting one of the three is silent in the
+       worst direction each time: no MAX_TOKENS sends `max_tokens:
+       undefined` and lets the model run to the model's own ceiling, no
+       MAX_INPUT_CHARS means validateRequest compares against undefined
+       and every length passes, and no TASK_UNITS bills zero.
+
+       Derived from TASKS rather than listing the tasks here, so the
+       fifth one was covered the moment it was added. */
+    const cfg = await import(pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
+    for (const task of cfg.TASKS) {
+      assert.ok(cfg.MAX_TOKENS[task] > 0, `${task} has no output ceiling`);
+      assert.ok(cfg.MAX_INPUT_CHARS[task] > 0, `${task} has no input cap`);
+      assert.ok(cfg.TASK_UNITS[task] > 0, `${task} bills nothing`);
+    }
+  });
+
+  await test("merge reads the allowance before it calls the provider, like every other task", async () => {
+    /* The ordering that makes migration 0006 fail free. Asserted for
+       the new task specifically: the sequence is a property of the
+       handler, but a task that took a different path through it would
+       not be covered by an assertion about `explain`. */
+    const admin = makeAdmin({ usageError: { code: "42703", message: "column ai_usage.text_units_used does not exist" } });
+    let called = false;
+    const res = await run(
+      { task: "merge", parts: [{ overview: "a" }, { overview: "b" }] },
+      {
+        supabaseAdmin: admin,
+        summarizer: {
+          complete: async () => {
+            called = true;
+            return "{}";
+          },
+        },
+      }
+    );
+    assert.equal(res.status, 500);
+    assert.equal(called, false, "the provider was called before the allowance was read — that spends money then errors");
+    assert.equal(admin.seen.filter((s) => s.op === "upsert").length, 0);
   });
 
   await test("both post-provider failure codes have wording, and the charged one says so", async () => {

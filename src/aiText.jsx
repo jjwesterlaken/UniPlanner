@@ -1,7 +1,7 @@
 /* ==================================================================
-   aiText.jsx — the four text AI features
+   aiText.jsx — the text AI features
 
-   All four share one frame, and the frame is the point: every feature
+   All of them share one frame, and the frame is the point: every feature
    says what it will cost BEFORE the student does the work. Typing out a
    full explanation and only then learning the allowance is gone is a
    worse experience than being told up front, and a worse advertisement
@@ -12,7 +12,7 @@
    editing one file.
    ================================================================== */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Sparkles, X, TriangleAlert, RefreshCw, Check } from "lucide-react";
 import {
   AI_TEXT_FAILURES,
@@ -20,8 +20,10 @@ import {
   describeExhausted,
   allowanceLine,
   LAST_ACTION_WARNING,
+  READING_COPY,
 } from "./aiTextCopy.js";
 import { allowanceState, canAfford, isLastAction, TASK_UNITS } from "./aiTextLimits.js";
+import { estimateReading, combineParts } from "./readingChunks.js";
 import { fetchTextAllowance, callAiText } from "./aiTextClient.js";
 import { btnPrimary, btnGhost, iconBtn, inputCls, labelCls, Card } from "./PlannerApp.jsx";
 
@@ -402,5 +404,198 @@ export function SummariseNote({ session, page, allowanceApi, onSummarised }) {
         </button>
       </AiActionFrame>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  5. Summarise a reading  (Planner tab)                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Paste a section of a reading, get something to revise from.
+ *
+ * PASTE ONLY. No PDF parsing, no upload, no OCR, no stored library —
+ * and that is the shape rather than a missing feature. What makes this
+ * defensible is that the student supplies a piece at a time, of
+ * material they already have, which is relayed and never stored; a bulk
+ * upload with a library is a different product with a different answer.
+ *
+ * Long readings are split (readingChunks.js), each part summarised, and
+ * the parts combined by the `merge` task. A FAILED MERGE KEEPS THE
+ * PARTS: each was summarised and each was charged, so discarding them
+ * because the last cheap step failed would take the allowance and give
+ * nothing back.
+ */
+export function SummariseReading({ session, readings = [], allowanceApi, onSummarised }) {
+  const { allowance, applyFraction } = allowanceApi;
+  const { run, busy, error } = useTask(session, applyFraction);
+
+  const [text, setText] = useState("");
+  const [readingId, setReadingId] = useState("");
+  const [result, setResult] = useState(null);
+  const [progress, setProgress] = useState(null);
+  const [mergeOutcome, setMergeOutcome] = useState(null); // null | "failed" | "charged"
+  const [saved, setSaved] = useState(false);
+
+  /* Memoised because it is not cheap and it is on the typing path:
+     chunkReading splits and repacks the whole text, and at the 80,000
+     character ceiling that is real work to redo on every keystroke. */
+  const estimate = useMemo(() => estimateReading(text), [text]);
+  const unknown = !allowance || allowance.unavailable;
+  const affordable = unknown || !estimate.ok || allowance.remaining >= estimate.units;
+  const reading = readings.find((r) => r.id === readingId) || null;
+
+  const reset = () => {
+    setResult(null);
+    setMergeOutcome(null);
+    setProgress(null);
+    setSaved(false);
+  };
+
+  const go = async () => {
+    reset();
+    if (!estimate.ok) return;
+    const parts = [];
+    for (let i = 0; i < estimate.chunkTexts.length; i++) {
+      setProgress({ done: i, total: estimate.chunkTexts.length });
+      const part = await run("summarise", { text: estimate.chunkTexts[i] });
+      /* A part failing stops the run rather than pressing on with a hole
+         in the middle. Whatever came back before it is kept and shown --
+         it was done and it was charged. */
+      if (!part) break;
+      parts.push(part);
+    }
+    setProgress(null);
+    if (parts.length === 0) return;
+
+    if (parts.length === 1) {
+      setResult({ ...parts[0], merged: true });
+      return;
+    }
+
+    const merged = await run("merge", { parts });
+    if (merged) {
+      setResult({ ...merged, merged: true });
+      return;
+    }
+    /* The merge failed. Combine locally -- no provider call, nothing
+       further charged -- and say which kind of failure it was, because
+       one cost the student allowance and the other didn't. */
+    setMergeOutcome(error === "ai_failed_charged" ? "charged" : "failed");
+    setResult(combineParts(parts));
+  };
+
+  const mergeCopy = mergeOutcome === "charged" ? READING_COPY.mergeCharged : READING_COPY.mergeFailed;
+
+  return (
+    <Card>
+      <AiActionFrame
+        title={READING_COPY.title}
+        task="summarise"
+        allowance={allowance}
+        /* The merge failure has its own panel below, with its own
+           billing sentence -- the generic notice would say the wrong
+           thing about what was charged. */
+        error={mergeOutcome ? null : error}
+        busy={busy && !progress}
+      >
+        <p className="text-sm text-stone-600">{READING_COPY.intro}</p>
+
+        {readings.length > 0 && (
+          <div className="mt-2">
+            <label className={labelCls}>Which reading is this? (optional)</label>
+            <select className={inputCls} value={readingId} onChange={(e) => setReadingId(e.target.value)}>
+              <option value="">Not from my reading list</option>
+              {readings.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {[r.course, r.week ? `week ${r.week}` : "", r.pages].filter(Boolean).join(" — ")}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="mt-2">
+          <label className={labelCls}>{READING_COPY.pasteLabel}</label>
+          <textarea
+            className={`${inputCls} min-h-[8rem]`}
+            placeholder={READING_COPY.placeholder}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              reset();
+            }}
+          />
+        </div>
+
+        <p className="text-xs text-stone-400">{READING_COPY.privacy}</p>
+
+        {/* THE PRE-FLIGHT ESTIMATE, before anything is spent. */}
+        {text.trim() && estimate.ok && <p className="text-xs text-stone-500">{READING_COPY.estimate(estimate)}</p>}
+
+        {estimate.code === "too_long" && (
+          <p className="rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-600">
+            {READING_COPY.tooLong({ chars: estimate.chars, limit: estimate.limit })}
+          </p>
+        )}
+
+        {estimate.ok && !affordable && (
+          <div className="rounded-lg bg-stone-100 px-3 py-2.5 text-sm">
+            <p className="font-medium text-stone-700">
+              {READING_COPY.cantAfford({ chunks: estimate.chunks, isFree: allowance.isFree }).title}
+            </p>
+            <p className="mt-0.5 text-stone-600">
+              {READING_COPY.cantAfford({ chunks: estimate.chunks, isFree: allowance.isFree }).detail}
+            </p>
+          </div>
+        )}
+
+        {progress && (
+          <p className="flex items-center gap-1.5 text-xs text-stone-500">
+            <RefreshCw size={13} className="animate-spin" /> Part {progress.done + 1} of {progress.total}…
+          </p>
+        )}
+
+        {!result && (
+          <button className={`${btnPrimary} mt-1`} disabled={busy || !estimate.ok || !affordable} onClick={go}>
+            <Sparkles size={15} /> {READING_COPY.runLabel}
+          </button>
+        )}
+
+        {mergeOutcome && (
+          <div className="space-y-1 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+            <p className="font-medium">
+              <TriangleAlert size={14} className="mr-1 inline" />
+              {mergeCopy.title}
+            </p>
+            <p>{mergeCopy.billing}</p>
+            <p>{mergeCopy.detail}</p>
+          </div>
+        )}
+
+        {result && !saved && (
+          <div className="space-y-2 border-t border-stone-100 pt-2">
+            <p className="text-sm text-stone-600">{result.overview}</p>
+            {result.terms && result.terms.length > 0 && (
+              <p className="text-xs text-stone-500">
+                {result.terms.length} term{result.terms.length === 1 ? "" : "s"} — you'll pick which become study cards
+                on the note.
+              </p>
+            )}
+            <button
+              className={btnPrimary}
+              onClick={() => {
+                onSummarised({ result, reading, sourceReadingId: reading ? reading.id : null });
+                setSaved(true);
+              }}
+            >
+              <Check size={15} /> {READING_COPY.saveLabel}
+            </button>
+          </div>
+        )}
+
+        {saved && <p className="text-sm text-stone-500">Saved to Notes.</p>}
+      </AiActionFrame>
+    </Card>
   );
 }

@@ -143,3 +143,102 @@ export function describeExhausted(state) {
 
 /** The allowance line shown above each feature, before anything is typed. */
 export const allowanceLine = (state) => describeAllowance(state ? state.fraction : 0);
+
+/* ==================================================================
+   Summarising a reading
+
+   A THIRD RULE, and it is not a style preference either.
+
+   EVERY SENTENCE HERE DESCRIBES STUDY, NEVER SUBSTITUTION. "Summarise a
+   reading to revise it" is the product. "Skip the reading" is not --
+   not here, not in an empty state, not in a store listing, not in the
+   consent text.
+
+   This is a legal position as much as a tonal one. What makes the
+   feature defensible is that it is a private-study tool a student
+   points at material they already have lawful access to; copy that
+   suggests replacing the material undermines exactly that. So the
+   wording assumes the student has done or will do the reading, and the
+   output is framed as a companion to it.
+
+   scripts/test-readings.mjs greps this module for the substitution
+   framings. A blunt guard -- but so was "every code has wording", and
+   that found a real gap within the hour.
+   ================================================================== */
+
+export const READING_COPY = {
+  title: "Summarise a reading",
+
+  /* Says what it is for and what it assumes, in that order. */
+  intro:
+    "Paste a section of a reading you're working through and get an overview, the key points and the terms worth knowing — something to revise from once you've read it, and to check yourself against.",
+
+  pasteLabel: "Paste the reading",
+  placeholder: "Paste the section you're studying…",
+
+  /* Where the text goes and, just as importantly, where it doesn't. */
+  privacy:
+    "The text is sent to the AI to do this and isn't stored anywhere — not in your planner and not on our server. Only the summary is saved.",
+
+  /* THE PRE-FLIGHT ESTIMATE. Mandatory before any call: the cost of a
+     reading is variable, and nothing else on screen would hint that a
+     long one costs four times what a short one does. */
+  estimate: ({ chars, chunks }) =>
+    chunks > 1
+      ? `That's about ${chars.toLocaleString()} characters, so it'll be done in ${chunks} parts and then combined.`
+      : `That's about ${chars.toLocaleString()} characters, so it'll be done in one go.`,
+
+  /* Refused rather than trimmed. Names the overage, because "too long"
+     without a number leaves someone guessing how much to cut. */
+  tooLong: ({ chars, limit }) =>
+    `That's ${chars.toLocaleString()} characters and the most this can take at once is ${limit.toLocaleString()}. Do it in two halves — each one gets its own summary.`,
+
+  /* Not enough allowance. The free-tier message NAMES THE NUMBER OF
+     PARTS, because the interaction is otherwise baffling: a free
+     allowance covers one short reading, and a student who has done
+     nothing all month and is refused a long one will read the counter
+     as broken rather than as spent. */
+  cantAfford: ({ chunks, isFree }) => {
+    const size = chunks > 1 ? `This reading needs ${chunks} parts.` : "This reading needs one pass.";
+    if (isFree) {
+      return {
+        title: size,
+        detail:
+          "The free monthly allowance covers about one shorter reading. The AI plan covers readings this size, along with recording and writing up your lectures — and your free allowance comes back at the start of next month either way.",
+        action: "See what the AI plan includes",
+      };
+    }
+    return {
+      title: size,
+      detail: "There isn't enough of this month's AI study help left for it. It comes back at the start of next month.",
+      action: null,
+    };
+  },
+
+  /* THE MERGE FAILED, and the sections did not.
+
+     Each section was summarised and each of those calls was charged;
+     the combining step is the only thing that failed and it is the only
+     thing that wasn't. Saying exactly that is the same rule the AI
+     notes failure screen follows -- if we charged, say so, and if we
+     didn't, say that too. */
+  mergeFailed: {
+    title: "Your sections are here, but we couldn't combine them.",
+    billing:
+      "Each section was summarised and counted; combining them is the part that failed, and that part hasn't been counted. You have everything the AI produced.",
+    detail: "They're saved in order, so they read as one set of notes. Summarising the reading again would start from scratch.",
+  },
+
+  /* The merge ran, was charged for, and came back unusable. Different
+     fact, different sentence: the student paid for the combining step
+     and did not get it. */
+  mergeCharged: {
+    title: "Your sections are here. Combining them came back unusable.",
+    billing:
+      "We were charged for that last step, so it has used a little of your AI study help — we'd rather tell you than have you find out from the number.",
+    detail: "The sections themselves are fine and are saved in order.",
+  },
+
+  saveLabel: "Save to Notes",
+  runLabel: "Summarise it",
+};
