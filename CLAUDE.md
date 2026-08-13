@@ -354,17 +354,46 @@ what it is next month. The two failures get different sentences: a merge
 that failed outright cost nothing, a merge that returned unusable output
 was charged.
 
+**It lives on the reading row**, collapsed to one line, opening inline —
+the same shape as `RubricPanel` on an assignment, deliberately, because
+this app has one way of attaching a paste-and-do-something panel to a
+row and a second one would be a second thing to learn. The student is
+looking at "pp. 89–112" when the thought occurs, which is where the
+action belongs. The result is filed into the per-course folder exactly
+as a recording is, inside its own `try` for the same reason: a folder is
+a convenience and must never take down work just paid for.
+
 **The pre-flight estimate is mandatory**, because the cost is variable
 and nothing else on screen hints that a long reading costs four times a
-short one. The free-tier message **names the number of parts**: ten
-units is *one shorter reading*, not four of anything, and a student
-refused a long one after using nothing all month reads the counter as
-broken rather than as spent.
+short one. A refusal states the *specific* situation — how many parts
+the reading is, how many are left, and whether a shorter paste still
+fits, which is the one thing the student can act on.
+
+**Both numbers are in parts, and that is what keeps rule 1 intact.**
+"This needs 13 and you have 7" would be the first time an internal unit
+count reached a screen, and it would mean nothing to anyone; parts are
+the currency the feature already shows. `sectionsAffordable` in
+`aiTextLimits.js` is `canAfford` extended to a variable-cost action
+rather than a second scheme beside it.
+
+**There is no attempt to identify what the pasted text is.** No
+heuristic for "this looks published" — there isn't a reliable one, and a
+false positive blocks a student summarising their own handout, which
+reads as the app being broken. The posture rests on the design facts
+(student-initiated, paste-only, never stored, no library) and on the
+wording rule, not on content identification this cannot do.
+
+**Consent is enforced at the point of use, by showing the gate rather
+than hiding the action.** A feature nobody can see is not consent, it is
+absence — the student never learns it exists. Note the other four text
+features are *not* gated; that gap predates this and closing it changes
+four existing screens.
 
 `sourceReadingId` on the stub is **decorative**. Deleting the reading
 leaves the summary note exactly where it is — it is the student's work
 and must not vanish with a row of metadata about which pages they were
-on.
+on. It is read in one direction only: the reading row uses it to show
+"Summarised" and link to the note, and nothing cascades the other way.
 
 ### Recording: the failure that costs money is silence, not an error
 

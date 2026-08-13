@@ -28,7 +28,7 @@ import {
   READING_MAX_CHARS,
 } from "../src/readingChunks.js";
 import { READING_COPY } from "../src/aiTextCopy.js";
-import { TASK_UNITS } from "../src/aiTextLimits.js";
+import { TASK_UNITS, sectionsAffordable, canAffordUnits } from "../src/aiTextLimits.js";
 import { validateRequest } from "../supabase/functions/ai-text/guards.js";
 import { buildMessages, parseTaskResult } from "../supabase/functions/ai-text/prompts.js";
 
@@ -157,16 +157,82 @@ test("a single-chunk reading is never charged for a merge", () => {
   assert.equal(r.units, TASK_UNITS.summarise);
 });
 
-test("the free-tier message names how many parts the reading needs", () => {
-  /* The interaction is otherwise baffling: ten units is ONE shorter
-     reading, not four of anything, and a student refused a long one
-     after using nothing all month reads the counter as broken. */
-  const copy = READING_COPY.cantAfford({ chunks: 4, isFree: true });
-  assert.match(copy.title, /4 parts/);
-  assert.ok(copy.action, "a free student is told what the plan adds");
-  const paid = READING_COPY.cantAfford({ chunks: 4, isFree: false });
-  assert.equal(paid.action, null, "a paying student is not sold the plan they already have");
+test("a refusal states the real numbers: how big it is and what's left", () => {
+  /* Not a generic "not enough left". The interaction is otherwise
+     baffling: ten units is ONE shorter reading, not four of anything,
+     and a student refused a long one after using nothing all month
+     reads the counter as broken rather than as spent. */
+  const copy = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, isFree: true });
+  assert.match(copy.title, /4 parts/, "the size of the reading is not stated");
+  assert.match(copy.title, /one/, "what is left is not stated");
+});
+
+test("a refusal says a shorter paste still fits, when it does", () => {
+  /* The actionable half. It turns a dead end into a smaller paste,
+     which is the one thing the student can do about it. */
+  const some = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 2, isFree: true });
+  assert.match(some.detail, /section at a time/i);
+
+  const none = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 0, isFree: true });
+  assert.doesNotMatch(none.detail, /section at a time/i, "offered a smaller paste that would also be refused");
+  assert.match(none.title, /none of them/i);
+});
+
+test("both numbers in a refusal are parts, never units", () => {
+  /* Rule 1 of aiTextCopy.js. "This needs 13 and you have 7" would be
+     the first time an internal unit count reached a screen, and it
+     would mean nothing to anyone. */
+  for (const sectionsLeft of [0, 1, 3]) {
+    for (const isFree of [true, false]) {
+      const c = READING_COPY.cantAfford({ chunks: 4, sectionsLeft, isFree });
+      assert.doesNotMatch(`${c.title} ${c.detail}`, /\bunits?\b/i);
+    }
+  }
+});
+
+test("only a free student is told what the plan adds", () => {
+  const free = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, isFree: true });
+  assert.ok(free.action, "a free student is told what the plan adds");
+  const paid = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, isFree: false });
+  /* Selling someone the plan they already have is the fastest way to
+     make an app feel like it isn't listening. */
+  assert.equal(paid.action, null);
+  assert.doesNotMatch(paid.detail, /AI plan/i);
   assert.match(paid.detail, /next month/);
+});
+
+test("how many sections are left is the same arithmetic the server bills", () => {
+  /* Reusing canAfford's machinery rather than a second scheme beside
+     it: sectionsAffordable counts SINGLE-section pastes, which is
+     exactly what the advice tells the student to do. */
+  assert.equal(sectionsAffordable({ remaining: 10 }), 3);
+  assert.equal(sectionsAffordable({ remaining: 3 }), 1);
+  assert.equal(sectionsAffordable({ remaining: 2 }), 0);
+  assert.equal(sectionsAffordable(null), 0);
+  assert.equal(canAffordUnits({ remaining: 13 }, 13), true);
+  assert.equal(canAffordUnits({ remaining: 12 }, 13), false);
+});
+
+test("a summarised reading is filed into the per-course folder, like a recording", () => {
+  /* One place per course for everything the AI wrote, rather than
+     readings landing loose while lectures get filed. And the folder is
+     a convenience: its own try, so a failure leaves the note filed
+     nowhere rather than losing work just paid for. */
+  const app = source("src/PlannerApp.jsx");
+  const handler = app.slice(app.indexOf("const summariseReading ="));
+  const body = handler.slice(0, handler.indexOf("\n  };"));
+  assert.match(body, /folderForRecording/, "a summarised reading is not filed anywhere");
+  const filing = body.slice(body.indexOf("folderForRecording") - 400, body.indexOf("folderForRecording") + 400);
+  assert.match(filing, /try \{/, "the folder lookup can take the note down with it");
+});
+
+test("the row says whether a reading has been summarised already", () => {
+  /* Built from sourceReadingId on the stub, which is the same field
+     that must NOT cascade a deletion. */
+  const app = source("src/PlannerApp.jsx");
+  assert.match(app, /aiMeta\.sourceReadingId/, "nothing reads the link back onto the reading row");
+  assert.ok(READING_COPY.summarisedLink, "no wording for an already-summarised reading");
+  assert.ok(READING_COPY.rowAction, "no wording for the action on the row");
 });
 
 test("the estimate is stated in parts, never in units", () => {

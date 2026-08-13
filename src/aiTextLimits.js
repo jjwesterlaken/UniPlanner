@@ -69,3 +69,22 @@ export const canAfford = (state, task) => !!state && state.remaining >= (TASK_UN
  */
 export const isLastAction = (state, task) =>
   !!state && canAfford(state, task) && state.remaining - (TASK_UNITS[task] || 0) < (TASK_UNITS[task] || 1);
+
+/* ---------- variable-cost actions ----------
+
+   Everything above prices a task at a fixed weight. Summarising a
+   reading doesn't have one: it costs 3, 7, 10 or 13 depending on how
+   long the reading is. These two are the same `canAfford` /
+   `isLastAction` idea extended to that, rather than a second scheme
+   beside it.
+
+   `sectionsAffordable` is the number that makes a refusal useful. A
+   student told "not enough left" learns nothing; one told "you've got
+   enough for one section" knows to paste a smaller piece, which is the
+   thing they can actually do about it. It counts SINGLE-SECTION pastes,
+   since that is what the advice is -- a one-part reading costs
+   TASK_UNITS.summarise with no merge on top. */
+export const canAffordUnits = (state, units) => !!state && state.remaining >= (units || 0);
+
+export const sectionsAffordable = (state) =>
+  !state ? 0 : Math.floor(state.remaining / (TASK_UNITS.summarise || 1));

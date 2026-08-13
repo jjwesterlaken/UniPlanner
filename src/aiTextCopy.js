@@ -169,6 +169,11 @@ export const allowanceLine = (state) => describeAllowance(state ? state.fraction
 export const READING_COPY = {
   title: "Summarise a reading",
 
+  /* The collapsed line on the reading row itself. Short, because it
+     sits under "pp. 89-112" and must not compete with it. */
+  rowAction: "Summarise this",
+  summarisedLink: "Summarised — open the notes",
+
   /* Says what it is for and what it assumes, in that order. */
   intro:
     "Paste a section of a reading you're working through and get an overview, the key points and the terms worth knowing — something to revise from once you've read it, and to check yourself against.",
@@ -193,24 +198,54 @@ export const READING_COPY = {
   tooLong: ({ chars, limit }) =>
     `That's ${chars.toLocaleString()} characters and the most this can take at once is ${limit.toLocaleString()}. Do it in two halves — each one gets its own summary.`,
 
-  /* Not enough allowance. The free-tier message NAMES THE NUMBER OF
-     PARTS, because the interaction is otherwise baffling: a free
-     allowance covers one short reading, and a student who has done
-     nothing all month and is refused a long one will read the counter
-     as broken rather than as spent. */
-  cantAfford: ({ chunks, isFree }) => {
-    const size = chunks > 1 ? `This reading needs ${chunks} parts.` : "This reading needs one pass.";
+  /* Not enough allowance. THE SPECIFIC SITUATION, not a generic
+     refusal: how big this reading is, how much is left, and — the part
+     that makes it useful — whether a smaller paste would still work.
+
+     BOTH NUMBERS ARE IN PARTS. That is a deliberate reading of "say the
+     real numbers": parts are the currency this feature already shows
+     ("done in 3 parts"), a student can act on them, and stating the
+     allowance the same way keeps rule 1 at the top of this file intact.
+     Saying "this needs 13 and you have 7" would be the first time a
+     unit count reached a screen, and it would mean nothing to anyone.
+
+     Without this a free student who has used nothing all month, pastes
+     a long reading and is refused reads the counter as broken rather
+     than as spent — the interaction is baffling precisely because ten
+     units is ONE shorter reading, not four of anything. */
+  cantAfford: ({ chunks, sectionsLeft, isFree }) => {
+    const size =
+      chunks > 1
+        ? `This reading is ${chunks} parts, and there's enough left this month for ${
+            sectionsLeft === 0 ? "none of them" : sectionsLeft === 1 ? "one" : sectionsLeft
+          }.`
+        : "There isn't enough of this month's AI study help left for this reading.";
+
+    /* The actionable half. If a single section still fits, saying so is
+       worth more than anything else on the screen: it turns a dead end
+       into a smaller paste. */
+    const smaller =
+      sectionsLeft > 0
+        ? "A section at a time still fits — paste a shorter piece and each one gets its own summary."
+        : "";
+
     if (isFree) {
       return {
         title: size,
-        detail:
-          "The free monthly allowance covers about one shorter reading. The AI plan covers readings this size, along with recording and writing up your lectures — and your free allowance comes back at the start of next month either way.",
+        detail: [
+          smaller,
+          "The AI plan covers readings this size in one go, along with recording and writing up your lectures. Your free allowance comes back at the start of next month either way.",
+        ]
+          .filter(Boolean)
+          .join(" "),
         action: "See what the AI plan includes",
       };
     }
     return {
       title: size,
-      detail: "There isn't enough of this month's AI study help left for it. It comes back at the start of next month.",
+      /* Nothing about the plan. Selling someone what they already have
+         is the fastest way to make an app feel like it isn't listening. */
+      detail: [smaller, "It comes back at the start of next month."].filter(Boolean).join(" "),
       action: null,
     };
   },

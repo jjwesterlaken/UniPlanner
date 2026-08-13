@@ -22,8 +22,16 @@ import {
   LAST_ACTION_WARNING,
   READING_COPY,
 } from "./aiTextCopy.js";
-import { allowanceState, canAfford, isLastAction, TASK_UNITS } from "./aiTextLimits.js";
+import {
+  allowanceState,
+  canAfford,
+  isLastAction,
+  canAffordUnits,
+  sectionsAffordable,
+  TASK_UNITS,
+} from "./aiTextLimits.js";
 import { estimateReading, combineParts } from "./readingChunks.js";
+import { ConsentGate } from "./aiNotesConsent.jsx";
 import { fetchTextAllowance, callAiText } from "./aiTextClient.js";
 import { btnPrimary, btnGhost, iconBtn, inputCls, labelCls, Card } from "./PlannerApp.jsx";
 
@@ -408,11 +416,19 @@ export function SummariseNote({ session, page, allowanceApi, onSummarised }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  5. Summarise a reading  (Planner tab)                             */
+/*  5. Summarise a reading  (on the reading row)                      */
 /* ------------------------------------------------------------------ */
 
 /**
  * Paste a section of a reading, get something to revise from.
+ *
+ * ON THE READING ROW, not a screen of its own. The student is looking
+ * at "Ch. 4, pp. 89-112" when the thought "I should summarise this"
+ * occurs, so the action belongs there — collapsed to one line, opening
+ * inline. Same interaction shape as RubricPanel on an assignment, and
+ * deliberately so: this app has one way of attaching a paste-and-do-
+ * something panel to a row, and a second one would be a second thing to
+ * learn.
  *
  * PASTE ONLY. No PDF parsing, no upload, no OCR, no stored library —
  * and that is the shape rather than a missing feature. What makes this
@@ -420,36 +436,53 @@ export function SummariseNote({ session, page, allowanceApi, onSummarised }) {
  * material they already have, which is relayed and never stored; a bulk
  * upload with a library is a different product with a different answer.
  *
+ * THERE IS NO ATTEMPT TO IDENTIFY WHAT THE TEXT IS. No heuristic for
+ * "this looks published", because there isn't a reliable one and a
+ * false positive blocks a student summarising their own handout — which
+ * reads as the app being broken. The posture rests on the design facts
+ * above and on the wording rule in aiTextCopy.js, not on content
+ * identification this cannot do.
+ *
  * Long readings are split (readingChunks.js), each part summarised, and
  * the parts combined by the `merge` task. A FAILED MERGE KEEPS THE
  * PARTS: each was summarised and each was charged, so discarding them
  * because the last cheap step failed would take the allowance and give
  * nothing back.
  */
-export function SummariseReading({ session, readings = [], allowanceApi, onSummarised }) {
+export function SummariseReading({
+  session,
+  reading,
+  summaryPage = null,
+  allowanceApi,
+  onSummarised,
+  onOpenSummary,
+  consentNeeded = false,
+  onAcceptConsent,
+}) {
   const { allowance, applyFraction } = allowanceApi;
   const { run, busy, error } = useTask(session, applyFraction);
 
+  const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
-  const [readingId, setReadingId] = useState("");
   const [result, setResult] = useState(null);
   const [progress, setProgress] = useState(null);
   const [mergeOutcome, setMergeOutcome] = useState(null); // null | "failed" | "charged"
-  const [saved, setSaved] = useState(false);
 
   /* Memoised because it is not cheap and it is on the typing path:
      chunkReading splits and repacks the whole text, and at the 80,000
      character ceiling that is real work to redo on every keystroke. */
   const estimate = useMemo(() => estimateReading(text), [text]);
+
+  /* An unreadable allowance must not read as an exhausted one — a
+     paywall caused by going into a tunnel is worse than a missing
+     line. Same rule as AiActionFrame. */
   const unknown = !allowance || allowance.unavailable;
-  const affordable = unknown || !estimate.ok || allowance.remaining >= estimate.units;
-  const reading = readings.find((r) => r.id === readingId) || null;
+  const affordable = unknown || !estimate.ok || canAffordUnits(allowance, estimate.units);
 
   const reset = () => {
     setResult(null);
     setMergeOutcome(null);
     setProgress(null);
-    setSaved(false);
   };
 
   const go = async () => {
@@ -485,117 +518,147 @@ export function SummariseReading({ session, readings = [], allowanceApi, onSumma
     setResult(combineParts(parts));
   };
 
+  const save = () => {
+    onSummarised({ result, reading, sourceReadingId: reading.id });
+    setOpen(false);
+    setText("");
+    reset();
+  };
+
+  /* ---- collapsed: one line on the row ---- */
+  if (!open) {
+    /* Already summarised: say so and link to it, rather than offering
+       to do it again as if nothing had happened. Summarising again is
+       still possible from inside — this is a signpost, not a lock. */
+    if (summaryPage) {
+      return (
+        <button
+          className="mt-1.5 text-xs font-medium u-accent-text hover:underline"
+          onClick={() => onOpenSummary(summaryPage.id)}
+        >
+          <Check size={12} className="mr-0.5 inline" />
+          {READING_COPY.summarisedLink}
+        </button>
+      );
+    }
+    return (
+      <button className="mt-1.5 text-xs font-medium text-stone-500 hover:u-accent-text" onClick={() => setOpen(true)}>
+        <Sparkles size={12} className="mr-0.5 inline" />
+        {READING_COPY.rowAction}
+      </button>
+    );
+  }
+
+  /* ---- expanded: inline, in the row ---- */
+  const cantAfford =
+    estimate.ok && !affordable
+      ? READING_COPY.cantAfford({
+          chunks: estimate.chunks,
+          sectionsLeft: sectionsAffordable(allowance),
+          isFree: allowance.isFree,
+        })
+      : null;
   const mergeCopy = mergeOutcome === "charged" ? READING_COPY.mergeCharged : READING_COPY.mergeFailed;
 
   return (
-    <Card>
-      <AiActionFrame
-        title={READING_COPY.title}
-        task="summarise"
-        allowance={allowance}
-        /* The merge failure has its own panel below, with its own
-           billing sentence -- the generic notice would say the wrong
-           thing about what was charged. */
-        error={mergeOutcome ? null : error}
-        busy={busy && !progress}
-      >
-        <p className="text-sm text-stone-600">{READING_COPY.intro}</p>
-
-        {readings.length > 0 && (
-          <div className="mt-2">
-            <label className={labelCls}>Which reading is this? (optional)</label>
-            <select className={inputCls} value={readingId} onChange={(e) => setReadingId(e.target.value)}>
-              <option value="">Not from my reading list</option>
-              {readings.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {[r.course, r.week ? `week ${r.week}` : "", r.pages].filter(Boolean).join(" — ")}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        <div className="mt-2">
-          <label className={labelCls}>{READING_COPY.pasteLabel}</label>
-          <textarea
-            className={`${inputCls} min-h-[8rem]`}
-            placeholder={READING_COPY.placeholder}
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              reset();
-            }}
-          />
+    <div className="mt-2 space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-2.5">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <Sparkles size={14} className="u-accent-text" />
+          <h4 className="text-sm font-semibold text-stone-700">{READING_COPY.title}</h4>
         </div>
+        <button className={iconBtn} onClick={() => setOpen(false)} aria-label="Close">
+          <X size={14} />
+        </button>
+      </div>
 
-        <p className="text-xs text-stone-400">{READING_COPY.privacy}</p>
+      {/* CONSENT IS ENFORCED HERE, at the point of use, and not by
+          hiding the button. Consent v5 exists to describe supplied text
+          going overseas, so a feature that sends it without agreement
+          makes the document true on paper and false in the app -- but a
+          feature nobody can see is not consent, it is absence, and the
+          student never learns it exists.
 
-        {/* THE PRE-FLIGHT ESTIMATE, before anything is spent. */}
-        {text.trim() && estimate.ok && <p className="text-xs text-stone-500">{READING_COPY.estimate(estimate)}</p>}
+          NOTE the other four text features are NOT gated. That gap
+          predates this and closing it changes four existing screens, so
+          it is reported rather than widened. */}
+      {consentNeeded ? (
+        <ConsentGate onAccept={onAcceptConsent} />
+      ) : (
+        <>
+      {!unknown && <p className="text-xs text-stone-500">{allowanceLine(allowance)}</p>}
+      <p className="text-xs text-stone-500">{READING_COPY.intro}</p>
 
-        {estimate.code === "too_long" && (
-          <p className="rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-600">
-            {READING_COPY.tooLong({ chars: estimate.chars, limit: estimate.limit })}
+      <textarea
+        className={`${inputCls} min-h-[7rem]`}
+        placeholder={READING_COPY.placeholder}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          reset();
+        }}
+      />
+
+      <p className="text-xs text-stone-400">{READING_COPY.privacy}</p>
+
+      {/* THE PRE-FLIGHT ESTIMATE, before anything is spent. */}
+      {text.trim() && estimate.ok && <p className="text-xs text-stone-500">{READING_COPY.estimate(estimate)}</p>}
+
+      {estimate.code === "too_long" && (
+        <p className="rounded-lg bg-stone-100 px-2.5 py-2 text-xs text-stone-600">
+          {READING_COPY.tooLong({ chars: estimate.chars, limit: estimate.limit })}
+        </p>
+      )}
+
+      {cantAfford && (
+        <div className="rounded-lg bg-stone-100 px-2.5 py-2 text-xs">
+          <p className="font-medium text-stone-700">{cantAfford.title}</p>
+          <p className="mt-0.5 text-stone-600">{cantAfford.detail}</p>
+        </div>
+      )}
+
+      {progress && (
+        <p className="flex items-center gap-1.5 text-xs text-stone-500">
+          <RefreshCw size={12} className="animate-spin" /> Part {progress.done + 1} of {progress.total}…
+        </p>
+      )}
+
+      {/* The generic failure notice is suppressed once a merge failure
+          has its own panel below: that one says something different
+          about what was charged. */}
+      {error && !mergeOutcome && <FailureNotice code={error} />}
+
+      {mergeOutcome && (
+        <div className="space-y-1 rounded-lg bg-amber-50 px-2.5 py-2 text-xs text-amber-900">
+          <p className="font-medium">
+            <TriangleAlert size={13} className="mr-1 inline" />
+            {mergeCopy.title}
           </p>
-        )}
+          <p>{mergeCopy.billing}</p>
+          <p>{mergeCopy.detail}</p>
+        </div>
+      )}
 
-        {estimate.ok && !affordable && (
-          <div className="rounded-lg bg-stone-100 px-3 py-2.5 text-sm">
-            <p className="font-medium text-stone-700">
-              {READING_COPY.cantAfford({ chunks: estimate.chunks, isFree: allowance.isFree }).title}
+      {result ? (
+        <div className="space-y-2 border-t border-stone-200 pt-2">
+          <p className="text-sm text-stone-600">{result.overview}</p>
+          {result.terms && result.terms.length > 0 && (
+            <p className="text-xs text-stone-500">
+              {result.terms.length} term{result.terms.length === 1 ? "" : "s"} — you'll pick which become study cards on
+              the note.
             </p>
-            <p className="mt-0.5 text-stone-600">
-              {READING_COPY.cantAfford({ chunks: estimate.chunks, isFree: allowance.isFree }).detail}
-            </p>
-          </div>
-        )}
-
-        {progress && (
-          <p className="flex items-center gap-1.5 text-xs text-stone-500">
-            <RefreshCw size={13} className="animate-spin" /> Part {progress.done + 1} of {progress.total}…
-          </p>
-        )}
-
-        {!result && (
-          <button className={`${btnPrimary} mt-1`} disabled={busy || !estimate.ok || !affordable} onClick={go}>
-            <Sparkles size={15} /> {READING_COPY.runLabel}
+          )}
+          <button className={btnPrimary} onClick={save}>
+            <Check size={15} /> {READING_COPY.saveLabel}
           </button>
-        )}
-
-        {mergeOutcome && (
-          <div className="space-y-1 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
-            <p className="font-medium">
-              <TriangleAlert size={14} className="mr-1 inline" />
-              {mergeCopy.title}
-            </p>
-            <p>{mergeCopy.billing}</p>
-            <p>{mergeCopy.detail}</p>
-          </div>
-        )}
-
-        {result && !saved && (
-          <div className="space-y-2 border-t border-stone-100 pt-2">
-            <p className="text-sm text-stone-600">{result.overview}</p>
-            {result.terms && result.terms.length > 0 && (
-              <p className="text-xs text-stone-500">
-                {result.terms.length} term{result.terms.length === 1 ? "" : "s"} — you'll pick which become study cards
-                on the note.
-              </p>
-            )}
-            <button
-              className={btnPrimary}
-              onClick={() => {
-                onSummarised({ result, reading, sourceReadingId: reading ? reading.id : null });
-                setSaved(true);
-              }}
-            >
-              <Check size={15} /> {READING_COPY.saveLabel}
-            </button>
-          </div>
-        )}
-
-        {saved && <p className="text-sm text-stone-500">Saved to Notes.</p>}
-      </AiActionFrame>
-    </Card>
+        </div>
+      ) : (
+        <button className={btnPrimary} disabled={busy || !estimate.ok || !affordable} onClick={go}>
+          <Sparkles size={15} /> {READING_COPY.runLabel}
+        </button>
+      )}
+        </>
+      )}
+    </div>
   );
 }
