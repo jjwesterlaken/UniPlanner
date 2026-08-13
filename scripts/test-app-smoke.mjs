@@ -406,6 +406,88 @@ for (const [tabName, phrases] of [
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*  The audio source picker, mounted on its own                       */
+/* ------------------------------------------------------------------ */
+
+/* The tab walk cannot reach this: AiNotesPanel refuses to render
+   without a real account, which demo mode by definition does not have.
+   So it is mounted directly, against the capability sets that differ --
+   otherwise the one new screen in this change is the only screen with
+   no render coverage, which is where every wiring fault here has lived.
+
+   The bundle is rebuilt exposing the pieces on window rather than
+   importing the JSX from Node, which cannot parse it. */
+{
+  const probe = path.join(tmp, "probe.jsx");
+  fs.writeFileSync(
+    probe,
+    'import { createRoot } from "react-dom/client";\n' +
+      'import { AudioSourcePicker } from "../src/aiNotes.jsx";\n' +
+      'import { describeCapabilities } from "../src/audioSources.js";\n' +
+      "window.__probe = (env, source) => {\n" +
+      '  const host = document.createElement("div");\n' +
+      "  document.body.appendChild(host);\n" +
+      "  createRoot(host).render(\n" +
+      "    <AudioSourcePicker caps={describeCapabilities(env)} source={source}\n" +
+      "      setSource={() => {}} deviceId={null} setDeviceId={() => {}} />\n" +
+      "  );\n" +
+      "  return host;\n" +
+      "};\n"
+  );
+
+  const probeBundle = await build({
+    entryPoints: [probe],
+    bundle: true,
+    format: "iife",
+    jsx: "automatic",
+    write: false,
+    absWorkingDir: rootDir,
+    define: { "process.env.NODE_ENV": '"development"' },
+  });
+
+  let probeThrew = null;
+  try {
+    dom.window.eval(probeBundle.outputFiles[0].text);
+  } catch (err) {
+    probeThrew = err;
+  }
+  check(!probeThrew, "the audio source picker bundles and evaluates", probeThrew && probeThrew.message);
+
+  if (!probeThrew) {
+    const mac = {
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+      isCapacitor: false,
+      hasGetDisplayMedia: true,
+      hasEnumerateDevices: false,
+    };
+    const firefox = { ...mac, userAgent: "Mozilla/5.0 (Windows NT 10.0; rv:130.0) Gecko/20100101 Firefox/130.0" };
+
+    const macHost = dom.window.__probe(mac, "system");
+    const ffHost = dom.window.__probe(firefox, "microphone");
+    await new Promise((r) => setTimeout(r, 200));
+
+    const macText = macHost.textContent || "";
+    check(macText.includes("Microphone"), "the picker renders its options");
+    check(
+      macText.includes("browser tab"),
+      "macOS is warned about tab-only capture BEFORE the share dialog opens",
+      macText.slice(0, 200)
+    );
+
+    const ffText = ffHost.textContent || "";
+    check(
+      ffText.includes("Chrome or Edge"),
+      "an unavailable source is shown with its reason rather than hidden",
+      ffText.slice(0, 200)
+    );
+    check(
+      (ffHost.querySelectorAll("button[disabled]") || []).length > 0,
+      "the source that cannot work is disabled, not merely explained"
+    );
+  }
+}
+
 check(complaints.length === 0, "nothing logged a React error or warning", complaints.slice(0, 3).join(" | ").slice(0, 400));
 
 fs.rmSync(tmp, { recursive: true, force: true });

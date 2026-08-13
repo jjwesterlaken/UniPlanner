@@ -282,6 +282,63 @@ RLS, which costs nothing and calls no function. **A failed read degrades
 to "unknown", never "none left"**: a paywall caused by going into a
 tunnel is worse than a missing line.
 
+### Recording: the failure that costs money is silence, not an error
+
+`src/audioSources.js` decides what a platform can record from and what
+to ask for. It is pure and takes the environment as an argument, so the
+whole matrix is a table in `scripts/test-audio-sources.mjs` rather than
+something only a real browser can answer.
+
+**The trap is that a silent capture looks exactly like a good one.**
+`getDisplayMedia({audio:true})` resolves happily with a stream that has
+**no audio track** when the student picked a screen or a window on macOS
+Chrome — where only a browser *tab* carries audio — or anywhere if they
+did not tick the share-audio box. `MediaRecorder` will record an hour of
+that, the upload succeeds, transcription runs on silence, the
+three-minute minimum applies, and the student has paid for nothing.
+
+So `checkCapturedAudio` runs **before the recorder is constructed**, and
+a failure aborts having recorded and billed nothing. The message names
+what to pick instead per platform, because "no audio was captured" is a
+dead end for exactly the student who needed the instruction. The same
+guard covers the desktop build, where the OS may decline loopback for
+its own reasons — which is why `desktop/main.js` promises nothing and
+`describeCapabilities` only says the option exists.
+
+The same failure arrives late when the student clicks "Stop sharing"
+mid-lecture: the track ends, `MediaRecorder` does not notice, and the
+billed duration keeps climbing on silence. Both audio and video tracks
+of a display stream get an `ended` listener; the video one is watched
+precisely because it is never recorded, so nothing else would have seen
+it go.
+
+**Two constraint sets, not one with a flag.** The microphone path turns
+echo cancellation, noise suppression and AGC *off* — all three are tuned
+for a phone call, and noise suppression in particular treats a quiet
+steady voice eight metres away much the way it treats a hum. System
+audio is already a clean digital signal with no room in it, so there is
+nothing to disable; sharing one object is how the two silently become
+one. The ~80 Hz high-pass is a `BiquadFilterNode`, not a constraint, so
+the microphone path now runs through a WebAudio graph — **with a
+fallback to the raw stream if the graph can't be built**, which keeps
+exactly the robustness the feature had before. "Both" is the one case
+where a graph failure is fatal, because mixing is the whole point.
+
+`deviceId` is requested as **`ideal`, never `exact`**: exact throws
+`OverconstrainedError` on a headset that has been unplugged, so a
+student who took their earphones out would be told recording failed
+instead of falling back to the laptop microphone. The saved preference
+lives in `uni-planner-audio-input`, **outside the synced blob** — a
+deviceId means nothing on another machine, so syncing it is at best a
+no-op and at worst two devices fighting through last-write-wins. It
+matches by id, then by label (Safari rotates ids every session), then
+falls back to the default *silently*.
+
+**System audio is the first genuine reason to install the desktop
+build**, and worth remembering when the marketing site is written:
+browsers only ever offer loopback alongside a screen or tab share, and
+macOS Chrome only alongside a tab. Electron asks the OS directly.
+
 ### Handwriting is a live storage problem, and compression probably solves it
 
 A stroke serialises to **~1,420 bytes** today, so a 200-stroke page is
