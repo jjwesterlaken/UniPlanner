@@ -2,7 +2,33 @@
 
    Inside a packaged app the files are already local, so the service worker
    is redundant -- and worse, it can keep serving old files after an update.
-   It gets stripped here, and iPhone safe-area padding is added. */
+   It gets stripped here, and iPhone safe-area padding is added.
+
+   ---------------------------------------------------------------------
+   IS THE STRIP STILL LOAD-BEARING? Two halves, two different answers, and
+   this is written down because the first half looks dead and isn't quite.
+
+   Since the service-worker work, index.html only registers on `https:`
+   with a non-localhost host -- which already excludes Electron
+   (`file://`), Capacitor iOS (`capacitor://localhost`) and Capacitor
+   Android (`http://localhost`). So:
+
+     removing the SCRIPT   is now belt-and-braces. The gate would stop
+                           registration on all three shells anyway. Two
+                           independent mechanisms, deliberately, in the
+                           same spirit as the derived cache name plus the
+                           network-first shell.
+
+     removing sw.js        still does something the gate does not. The
+                           file is absent from the bundle, so there is
+                           nothing to register even if the gate were
+                           relaxed or bypassed later. Android is the live
+                           case: `http://localhost` IS a secure context,
+                           so it is excluded only by the protocol check,
+                           and someone could reasonably decide to allow it.
+
+   Delete the script strip if you like; do not delete the sw.js skip.
+   --------------------------------------------------------------------- */
 
 import fs from "node:fs";
 import path from "node:path";
@@ -25,7 +51,9 @@ for (const target of TARGETS) {
   fs.mkdirSync(target, { recursive: true });
 
   for (const entry of fs.readdirSync(SRC, { withFileTypes: true })) {
-    if (entry.name === "sw.js") continue; // not wanted inside a packaged app
+    // Not wanted inside a packaged app -- and see the header: this is
+    // the half of the strip that is still doing real work.
+    if (entry.name === "sw.js") continue;
     const from = path.join(SRC, entry.name);
     const to = path.join(target, entry.name);
     if (entry.isDirectory()) {
