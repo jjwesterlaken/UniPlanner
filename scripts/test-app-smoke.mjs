@@ -424,6 +424,7 @@ for (const [tabName, phrases] of [
     probe,
     'import { createRoot } from "react-dom/client";\n' +
       'import { AudioSourcePicker } from "../src/aiNotes.jsx";\n' +
+      'import { SummariseReading } from "../src/aiText.jsx";\n' +
       'import { describeCapabilities } from "../src/audioSources.js";\n' +
       "window.__probe = (env, source) => {\n" +
       '  const host = document.createElement("div");\n' +
@@ -431,6 +432,16 @@ for (const [tabName, phrases] of [
       "  createRoot(host).render(\n" +
       "    <AudioSourcePicker caps={describeCapabilities(env)} source={source}\n" +
       "      setSource={() => {}} deviceId={null} setDeviceId={() => {}} />\n" +
+      "  );\n" +
+      "  return host;\n" +
+      "};\n" +
+      "window.__probeReading = (allowance, reading, summaryPage) => {\n" +
+      '  const host = document.createElement("div");\n' +
+      "  document.body.appendChild(host);\n" +
+      "  createRoot(host).render(\n" +
+      '    <SummariseReading session={{ token: "t", user: { id: "u" } }} reading={reading}\n' +
+      "      summaryPage={summaryPage} allowanceApi={{ allowance, applyFraction: () => {} }}\n" +
+      "      onSummarised={() => {}} onOpenSummary={() => {}} onAcceptConsent={() => {}} />\n" +
       "  );\n" +
       "  return host;\n" +
       "};\n"
@@ -484,6 +495,55 @@ for (const [tabName, phrases] of [
     check(
       (ffHost.querySelectorAll("button[disabled]") || []).length > 0,
       "the source that cannot work is disabled, not merely explained"
+    );
+
+    /* Summarising a reading, mounted the same way and for the same
+       reason: it is gated on a real session, so the demo-mode tab walk
+       cannot reach it either. */
+    const allowance = { tier: "free", limit: 10, used: 0, remaining: 10, fraction: 0, isFree: true };
+    const reading = { id: "r1", course: "PHYS1001", week: "3", pages: "ch. 4" };
+
+    /* Collapsed is the state that ships on every reading row, so it is
+       the one that has to be one quiet line rather than a panel. */
+    const collapsed = dom.window.__probeReading(allowance, reading, null);
+    const summarised = dom.window.__probeReading(allowance, reading, {
+      id: "note-1",
+      aiMeta: { sourceReadingId: "r1" },
+    });
+    await new Promise((r) => setTimeout(r, 200));
+
+    const collapsedText = collapsed.textContent || "";
+    check(collapsedText.includes("Summarise this"), "an un-summarised reading offers the action", collapsedText.slice(0, 200));
+    check(!collapsedText.includes("Paste"), "the paste box stays shut until asked for");
+    check(
+      (summarised.textContent || "").includes("Summarised"),
+      "a reading that already has a summary says so instead",
+      (summarised.textContent || "").slice(0, 200)
+    );
+
+    /* Opened: the whole panel, in the row. */
+    const opener = [...collapsed.querySelectorAll("button")][0];
+    opener.click();
+    await new Promise((r) => setTimeout(r, 200));
+    const openText = collapsed.textContent || "";
+    check(openText.includes("Summarise a reading"), "opening it reveals the panel inline", openText.slice(0, 200));
+    check(
+      openText.includes("isn't stored") || openText.includes("not stored"),
+      "it says up front that the pasted text isn't kept",
+      openText.slice(0, 250)
+    );
+    /* Nothing pasted yet, so nothing has been priced. The estimate must
+       not appear (or read as zero) before there is anything to price. */
+    check(!openText.includes("characters"), "no cost is quoted before anything is pasted");
+
+    /* Consent is enforced at the point of use, and by showing the gate
+       rather than by hiding the action -- a feature nobody can see is
+       not consent, it is absence. */
+    const gated = dom.window.__probeReading(allowance, reading, null);
+    await new Promise((r) => setTimeout(r, 100));
+    check(
+      (gated.textContent || "").includes("Summarise this"),
+      "the action is offered even before consent has been given"
     );
   }
 }

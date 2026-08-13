@@ -18,7 +18,7 @@
  * need a lookup starts from the safe shape rather than having to be
  * retrofitted into it.
  */
-export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, weakspotsMaxTopics }) {
+export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, weakspotsMaxTopics, maxReadingChunks }) {
   const bad = (detail) => ({ ok: false, code: "bad_request", error: "That request wasn't valid.", detail });
 
   if (!body || typeof body !== "object") return bad("body is not an object");
@@ -60,6 +60,25 @@ export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, 
     }
     if (serialisedLength(cards) > maxInputChars.practice) {
       return { ok: false, code: "too_long", error: "That's too many cards at once. Pick fewer and try again." };
+    }
+  }
+
+  if (task === "merge") {
+    const parts = body.parts;
+    /* Two is the minimum that means anything: merging one section is a
+       call that returns its input having charged for it. The client
+       never sends one -- a single-chunk reading skips the merge
+       entirely -- so reaching this is a hand-built request, and taking
+       money for a no-op would be the worst way to answer it. */
+    if (!Array.isArray(parts) || parts.length < 2) return bad("merge needs at least two parts");
+    if (parts.length > maxReadingChunks) return bad("too many parts");
+    for (const p of parts) {
+      if (!p || typeof p !== "object" || typeof p.overview !== "string" || !p.overview.trim()) {
+        return bad("a part has the wrong shape");
+      }
+    }
+    if (serialisedLength(parts) > maxInputChars.merge) {
+      return { ok: false, code: "too_long", error: "That reading is too long to combine. Try it in two halves." };
     }
   }
 

@@ -110,10 +110,25 @@ import {
   Mic,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView } from "./aiNotes.jsx";
-import { PracticePanel, WeakSpotsExplain, ExplainItBack, SummariseNote, useTextAllowance } from "./aiText.jsx";
+import {
+  PracticePanel,
+  WeakSpotsExplain,
+  ExplainItBack,
+  SummariseNote,
+  SummariseReading,
+  useTextAllowance,
+} from "./aiText.jsx";
 import { buildAttempt, pruneAttempts, weakTopics } from "./practice.js";
 import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
-import { aiNotePreview, mapAiResultToItems } from "./aiNotesLogic.js";
+import {
+  aiNotePreview,
+  mapAiResultToItems,
+  needsConsent,
+  buildConsentPatch,
+  folderForRecording,
+  AI_CONSENT_VERSION,
+} from "./aiNotesLogic.js";
+import { ConsentGate } from "./aiNotesConsent.jsx";
 import {
   isAiNote,
   isRemote,
@@ -594,7 +609,19 @@ function ReadTick({ state, onCycle, label }) {
   );
 }
 
-function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused }) {
+function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused, pages = [], session, textAllowance, onSummariseReading, onOpenSummary, consentNeeded, onAcceptConsent }) {
+  /* Which readings already have a summary. Built once per render rather
+     than scanned per row: sourceReadingId lives on the stub's aiMeta,
+     so this is a pass over pages, not a pass per reading over pages. */
+  const summaries = useMemo(() => {
+    const map = new Map();
+    for (const p of pages) {
+      const src = p && !p.deletedAt && p.aiMeta && p.aiMeta.sourceReadingId;
+      if (src) map.set(src, p);
+    }
+    return map;
+  }, [pages]);
+
   const [form, setForm] = useState({ course: "", week: "", pages: "", notes: "" });
   const [editingId, setEditingId] = useState(null);
   const [edit, setEdit] = useState({});
@@ -720,6 +747,23 @@ function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused }
                       <div className="min-w-0 flex-1">
                         {e.pages ? <p className={`text-sm font-medium ${isRead(e) ? "text-stone-400 line-through" : "text-stone-800"}`}>{e.pages}</p> : <p className="text-sm text-stone-400">No pages set</p>}
                         {e.notes && <p className="mt-0.5 whitespace-pre-wrap text-sm text-stone-500">{e.notes}</p>}
+                        {/* The action goes where the thought occurs: the
+                            student is looking at "pp. 89-112" when they
+                            decide to summarise it. Collapsed to one
+                            line, opening inline -- the same shape as
+                            RubricPanel on an assignment. */}
+                        {session && onSummariseReading && (
+                          <SummariseReading
+                            session={session}
+                            reading={e}
+                            summaryPage={summaries.get(e.id) || null}
+                            allowanceApi={textAllowance}
+                            onSummarised={onSummariseReading}
+                            onOpenSummary={onOpenSummary}
+                            consentNeeded={consentNeeded}
+                            onAcceptConsent={onAcceptConsent}
+                          />
+                        )}
                       </div>
                       <div className="flex flex-shrink-0 gap-0.5">
                         <button className={iconBtn} onClick={() => { setEditingId(e.id); setEdit({ ...e }); }}>
@@ -2235,7 +2279,7 @@ function ReferenceSheetView({ page, onEdit, onClose }) {
 
 /* ---- Notes tab: a flat list of all notes (folders live in their own tab) ---- */
 
-function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAllowance, onSummariseNote }) {
+function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAllowance, onSummariseNote, openId, onOpened }) {
   const [draft, setDraft] = useState(null);
   const [choosing, setChoosing] = useState(false);
   const [aiViewId, setAiViewId] = useState(null);
@@ -2246,6 +2290,21 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
      reference sheets and AI notes, which already open read-only. */
   const [viewId, setViewId] = useState(null);
   const showList = !draft && !choosing && !viewId;
+
+  /* Opened from somewhere else -- today, the "Summarised" link on a
+     reading row. Cleared immediately via onOpened so pressing back
+     lands on the list rather than reopening the same note forever.
+
+     Declared BELOW viewId deliberately: a useEffect placed above the
+     const it reads is a temporal dead zone, and that has taken this
+     app down on every render twice. */
+  useEffect(() => {
+    if (!openId) return;
+    setViewId(openId);
+    setDraft(null);
+    setChoosing(false);
+    onOpened();
+  }, [openId]);
 
   const [sheetViewId, setSheetViewId] = useState(null);
   const room = canAddSheet(pages);
@@ -4251,6 +4310,11 @@ export default function PlannerApp() {
   // { reason, bytes } while the last local save failed, null once one succeeds.
   const [saveError, setSaveError] = useState(null);
   const dataRef = useRef(DEFAULT);
+  /* Set by the "Summarised" link on a reading row, consumed by the
+     Notes tab on its next render. A plain id rather than a route,
+     because there is no router here and one note is the only thing
+     anything needs to deep-link to. */
+  const [openNoteId, setOpenNoteId] = useState(null);
   const toggleFocus = (name) => setFocusedCourse((cur) => (cur === name ? null : name));
   const navRef = useRef(null);
   const [navScroll, setNavScroll] = useState({ left: false, right: false });
@@ -4658,6 +4722,76 @@ export default function PlannerApp() {
     noteItems.forEach((n) => addItem("notes", n));
   };
 
+  /* A summarised reading. Same storage path again -- the result is the
+     same shape, so it is the same kind of note.
+
+     `sourceReadingId` is DECORATIVE. Deleting the reading it came from
+     leaves this note exactly where it is: the summary is the student's
+     work and must not vanish with a row of metadata about which pages
+     they were on. The viewer resolves the id if it still resolves and
+     shows nothing if it doesn't.
+
+     THE PASTED TEXT IS NOT STORED. It is not in pageItem, not in the
+     row, and never reached the server as anything but a request body --
+     ai-text writes only ai_usage. A test asserts that by name. */
+  const openSummaryNote = (id) => {
+    setOpenNoteId(id);
+    setTab("notes");
+  };
+
+  const summariseReading = async ({ result, reading, sourceReadingId }) => {
+    const { pageItem, noteItems } = mapAiResultToItems({
+      result: { summaryFailed: false, original: result, translated: null },
+      course: (reading && reading.course) || "",
+      week: (reading && reading.week) || "",
+      language: null,
+      uid,
+      nowISO,
+    });
+    const what = reading ? [reading.course, reading.pages].filter(Boolean).join(" ") : "";
+    pageItem.title = what ? `Reading notes — ${what}` : "Reading notes";
+    if (sourceReadingId) pageItem.aiMeta = { ...(pageItem.aiMeta || {}), sourceReadingId };
+    /* The merge failing is a property of the note, not of this session:
+       a student opening it next month should still see that these are
+       sections put end to end rather than one summary. */
+    if (result && result.merged === false) {
+      pageItem.aiMeta = { ...(pageItem.aiMeta || {}), partsMerged: false, parts: result.parts || 0 };
+    }
+
+    let toStore = pageItem;
+    if (supabase && session && session.user) {
+      const { ok, stub } = await migrateNote({ supabaseClient: supabase, userId: session.user.id, page: pageItem });
+      if (ok) {
+        toStore = stub;
+        await noteCache.put(pageItem.id, buildContent(pageItem));
+      }
+    }
+
+    /* Filed into the per-course folder, exactly as a recording is --
+       one place per course for everything the AI wrote, rather than
+       readings landing loose while lectures get filed.
+
+       The folder is a CONVENIENCE and must never block the note: its
+       own try, so a failure leaves the note filed nowhere and visible
+       in the list rather than losing work the student just paid for.
+       Same rule as the recording path. */
+    try {
+      const { folderId, newFolder } = folderForRecording({
+        folders: (dataRef.current.semesters[dataRef.current.semester] || {}).folders || [],
+        course: (reading && reading.course) || "",
+        uid,
+        nowISO,
+      });
+      if (newFolder) addItem("folders", newFolder);
+      if (folderId) toStore = { ...toStore, folderId };
+    } catch (e) {
+      /* filed nowhere, saved anyway */
+    }
+
+    addItem("pages", toStore);
+    noteItems.forEach((n) => addItem("notes", n));
+  };
+
   /* Study bookkeeping.
 
      Both of these read the CURRENT collection inside the updater and
@@ -4975,7 +5109,23 @@ export default function PlannerApp() {
               <WorkloadForecast assignments={sem.assignments} assessments={sem.assessments} calendar={settings} />
             </Section>
             <Section icon={ClipboardList} title="Weekly reading planner" subtitle="Add as many weeks per course as you need">
-              <Textbook textbook={sem.textbook} courses={sem.courses} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} />
+              <Textbook
+                textbook={sem.textbook}
+                courses={sem.courses}
+                addItem={addItem}
+                patchItem={patchItem}
+                removeItem={removeItem}
+                focused={focused}
+                pages={sem.pages}
+                session={session}
+                textAllowance={textAllowance}
+                onSummariseReading={summariseReading}
+                onOpenSummary={openSummaryNote}
+                consentNeeded={needsConsent(data.meta)}
+                onAcceptConsent={() =>
+                  setData((d) => ({ ...d, meta: { ...d.meta, ...buildConsentPatch(AI_CONSENT_VERSION, nowISO) } }))
+                }
+              />
             </Section>
             <Section icon={FileText} title="Assignments" subtitle="Editable, with due dates in DD/MM/YYYY">
               <Assignments
@@ -5000,7 +5150,7 @@ export default function PlannerApp() {
 
         {tab === "notes" && (
           <Section icon={StickyNote} title="Notes" subtitle="Titled notes on lined or blank pages">
-            <Notes pages={sem.pages} folders={sem.folders} addItem={addItem} patchItem={patchItem} removeItem={removeItem} session={session} textAllowance={textAllowance} onSummariseNote={summariseNote} />
+            <Notes pages={sem.pages} folders={sem.folders} addItem={addItem} patchItem={patchItem} removeItem={removeItem} session={session} textAllowance={textAllowance} onSummariseNote={summariseNote} openId={openNoteId} onOpened={() => setOpenNoteId(null)} />
           </Section>
         )}
 

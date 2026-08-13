@@ -282,6 +282,119 @@ RLS, which costs nothing and calls no function. **A failed read degrades
 to "unknown", never "none left"**: a paywall caused by going into a
 tunnel is worse than a missing line.
 
+### "Text the student supplies" is the governing category
+
+Consent v4 said "writing you have already done". That was too narrow,
+and — this is the part worth keeping — **it was already too narrow
+before readings existed.** A lecture recording captures a lecturer's
+copyrighted delivery, so the app has always worked on material the
+student did not write. Lecture audio was an *example* of the category,
+never a separate thing beside it.
+
+v5 names the category instead: **text and audio the student supplies, of
+whatever origin, relayed to do what they asked and — for text — not
+stored at all.** The next feature that takes supplied text needs no
+bump. Consent bumped here because *what happens to the content* changed
+twice over: a new kind of material leaves the country, and a new promise
+is made about it. That is the test, and it is why the storage move
+didn't bump — a row moving tables is not a change a student can
+meaningfully accept or refuse.
+
+`scripts/test-legal.mjs` used to require the literal phrase "your own
+writing", so **correcting the policy failed the test that existed to
+keep the policy true.** That is the seventh instance of the restatement
+pattern and the first one inside a test. It now asserts the category and
+checks the two documents against each other.
+
+The distinction that has to survive rewording: a lecture keeps a
+server-side transcript for 7 or 30 days; supplied text has **no
+server-side copy at any point**, because `ai-text` writes only
+`ai_usage`. If both read the same, the stronger promise isn't being
+made, it is being blurred.
+
+### Summarising a reading, and the wording rule that holds it up
+
+Paste only. No PDF parsing, no upload, no OCR, no stored library — and
+that is **the shape, not a missing feature.** What makes this defensible
+is that a student supplies a piece at a time, of material they already
+have, which is relayed and never stored. A bulk upload with a library is
+a different product with a different answer, and there is no cheap
+version of it that keeps this shape.
+
+**Every piece of user-facing wording describes study, never
+substitution.** "Summarise a reading to revise it" is the product; "skip
+the reading" is not — not in the feature copy, not in an empty state,
+not in the consent text, not in a store listing. This is a legal
+position as much as a tonal one: copy offering to replace the material
+undermines the private-study framing the whole thing rests on. A blunt
+grep in `scripts/test-readings.mjs` enforces it, and it caught its own
+documentation on the first run — so it strips comments first, the same
+way the device-store guard does and for the same reason.
+
+**Chunking.** Over `MAX_INPUT_CHARS.summarise` (20k) the reading is
+split on paragraph boundaries with ~200 characters of overlap, capped at
+`MAX_READING_CHUNKS` (4), and the parts combined by a `merge` task. The
+overlap is why the merge prompt is *told* the sections overlap —
+otherwise the model reports the repetition as emphasis. Packing is to
+`cap − overlap`, since packing to the cap and then prepending the
+overlap produces a chunk the server answers with a 413 after the earlier
+parts have already been charged.
+
+`merge` is weighted **1, not 3**: `summarise` is priced for 20,000
+characters and a merge takes four short summaries. A whole reading costs
+3 / 7 / 10 / 13 units by chunk count.
+
+**A failed merge must not waste the chunks.** Every section was
+summarised and every one of those calls was charged; discarding them
+because the last, cheapest step failed takes the allowance and returns
+nothing. So the parts are combined locally — no provider call, nothing
+further charged — terms deduplicated because the overlap really does
+repeat them, and the note records `partsMerged: false` so it still says
+what it is next month. The two failures get different sentences: a merge
+that failed outright cost nothing, a merge that returned unusable output
+was charged.
+
+**It lives on the reading row**, collapsed to one line, opening inline —
+the same shape as `RubricPanel` on an assignment, deliberately, because
+this app has one way of attaching a paste-and-do-something panel to a
+row and a second one would be a second thing to learn. The student is
+looking at "pp. 89–112" when the thought occurs, which is where the
+action belongs. The result is filed into the per-course folder exactly
+as a recording is, inside its own `try` for the same reason: a folder is
+a convenience and must never take down work just paid for.
+
+**The pre-flight estimate is mandatory**, because the cost is variable
+and nothing else on screen hints that a long reading costs four times a
+short one. A refusal states the *specific* situation — how many parts
+the reading is, how many are left, and whether a shorter paste still
+fits, which is the one thing the student can act on.
+
+**Both numbers are in parts, and that is what keeps rule 1 intact.**
+"This needs 13 and you have 7" would be the first time an internal unit
+count reached a screen, and it would mean nothing to anyone; parts are
+the currency the feature already shows. `sectionsAffordable` in
+`aiTextLimits.js` is `canAfford` extended to a variable-cost action
+rather than a second scheme beside it.
+
+**There is no attempt to identify what the pasted text is.** No
+heuristic for "this looks published" — there isn't a reliable one, and a
+false positive blocks a student summarising their own handout, which
+reads as the app being broken. The posture rests on the design facts
+(student-initiated, paste-only, never stored, no library) and on the
+wording rule, not on content identification this cannot do.
+
+**Consent is enforced at the point of use, by showing the gate rather
+than hiding the action.** A feature nobody can see is not consent, it is
+absence — the student never learns it exists. Note the other four text
+features are *not* gated; that gap predates this and closing it changes
+four existing screens.
+
+`sourceReadingId` on the stub is **decorative**. Deleting the reading
+leaves the summary note exactly where it is — it is the student's work
+and must not vanish with a row of metadata about which pages they were
+on. It is read in one direction only: the reading row uses it to show
+"Summarised" and link to the note, and nothing cascades the other way.
+
 ### Recording: the failure that costs money is silence, not an error
 
 `src/audioSources.js` decides what a platform can record from and what
@@ -1139,7 +1252,15 @@ the same way: it hardcoded the value it was supposed to be guarding.
   student watches their allowance move by, so a drift makes the figure on
   screen disagree with the figure being charged.
 
-One is an anecdote. Five is a rule: **derive a guard from its source of
+- The documents' **"AI works on your own writing" assertion** was typed
+  into `test-legal.mjs` as a literal phrase. The policy was wrong — the
+  app has always worked on material the student did not write, since a
+  lecture recording captures the lecturer — so **correcting it failed
+  the test that existed to keep it true.** First instance inside a test
+  rather than in code, and the tell is the same: a guard that pins the
+  wording cannot survive the wording being wrong.
+
+One is an anecdote. Seven is a rule: **derive a guard from its source of
 truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the

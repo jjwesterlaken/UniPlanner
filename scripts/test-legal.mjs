@@ -516,11 +516,64 @@ async function run() {
 
   await test("the policy covers text features too, or it becomes untrue when they ship", () => {
     const text = prose("privacy.html");
-    assert.match(text, /text you have already written|your own writing/i, "the policy still describes audio only");
+    assert.match(text, /text you (supply|give|paste|chose|choose)/i, "the policy still describes audio only");
     assert.match(text, /practice questions/i, "the policy doesn't name what the text is used for");
     // The old wording promised nothing left the country unless you used
     // AI LECTURE NOTES specifically. That is the clause that breaks.
     assert.doesNotMatch(text, /none of this happens unless you use the AI notes feature/i);
+  });
+
+  /* THE SEVENTH RESTATEMENT, and it was in a test rather than in code.
+     This assertion used to require the literal phrase "your own
+     writing" -- so widening the policy to cover text of ANY origin, the
+     correction the policy needed, failed the test that existed to keep
+     the policy true. A guard that pins the wording cannot survive the
+     wording being wrong.
+
+     What is actually being claimed is a CATEGORY: whatever a student
+     supplies, however they came by it, is relayed and not stored. So
+     that is what is asserted, and the two documents that make the
+     promise are checked against each other rather than against a
+     phrase typed in here. */
+  await test("supplied text is described by what it is, not by who wrote it", () => {
+    const text = prose("privacy.html");
+    const consent = CONSENT_TEXT.bullets.join(" ");
+
+    /* The narrow framing is now FALSE and must not come back. It was
+       false before readings existed, too: a lecture recording captures
+       a lecturer's copyrighted delivery, so the app has always worked
+       on material the student did not write. */
+    assert.doesNotMatch(text, /your own writing/i, "the policy is back to describing only what the student wrote");
+    assert.doesNotMatch(consent, /writing you have already done/i, "the consent text narrowed again");
+
+    /* The new promise, in both places. This is the one that changed
+       what happens to the content, which is why consent was bumped. */
+    assert.match(text, /(is )?not stored|never stored|no server-side copy/i, "the policy doesn't say supplied text isn't kept");
+    assert.match(consent, /not stored/i, "the consent text doesn't say supplied text isn't kept");
+
+    /* And the distinction that makes it meaningful: a lecture DOES have
+       a server-side copy for a window. If both read the same, the
+       stronger promise is not being made -- it is being blurred. */
+    assert.match(text, /transcript/i);
+  });
+
+  await test("consent was bumped for the change in what happens to the content", () => {
+    /* v5 covers text the student supplies of any origin. The rule for a
+       bump is a change in what happens to the content -- where it goes,
+       who sees it, how long it is kept -- not a change in which table
+       holds it. This one qualifies twice: a new kind of material leaves
+       the country, and a new promise is made about it. */
+    assert.ok(AI_CONSENT_VERSION >= 5, "consent was not bumped for the supplied-text category");
+  });
+
+  await test("the consent text says a summary sits alongside the material, not instead of it", () => {
+    /* The same rule the feature copy is held to in test-readings.mjs,
+       applied to the document a store reviewer reads. What makes this
+       defensible is that it is a private-study tool pointed at material
+       the student already has. */
+    const consent = CONSENT_TEXT.bullets.join(" ");
+    assert.match(consent, /right to use|responsib/i, "consent doesn't put the rights question to the student");
+    assert.doesNotMatch(consent, /(don't|do not) (have to|need to) read|instead of reading|skip the reading/i);
   });
 
   await test("consent links the published policy and names where the server is", () => {

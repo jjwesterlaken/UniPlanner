@@ -50,6 +50,23 @@ const SYSTEM = {
     'Schema: {"overview":string,"keyPoints":[string],"terms":[{"term":string,"content":string}],' +
     '"assessable":[string],"openQuestions":[string]}. ' +
     "Draw only on the note. `openQuestions` is for things the note leaves unresolved, not for questions you invent.",
+
+  /* Combining the per-chunk summaries of one long reading.
+     Same schema as `summarise` on purpose: the result goes down the
+     identical storage path, so there is one shape of AI note rather
+     than two.
+
+     "Consecutive sections overlap" is in the prompt because the chunker
+     deliberately repeats ~200 characters across a boundary so a claim
+     spanning one survives whole somewhere -- and without being told,
+     the model reports the repetition as emphasis. */
+  merge:
+    `${SHARED_RULES} You are given summaries of consecutive sections of ONE reading, in order. ` +
+    "Combine them into a single summary of the whole reading. " +
+    'Schema: {"overview":string,"keyPoints":[string],"terms":[{"term":string,"content":string}],' +
+    '"assessable":[string],"openQuestions":[string]}. ' +
+    "Consecutive sections overlap slightly, so the same point may appear twice — say it once. " +
+    "Add nothing that is not in the summaries given, and drop nothing that only one of them mentions.",
 };
 
 /**
@@ -72,6 +89,17 @@ export function buildMessages(task, body) {
     return [
       { role: "system", content: system },
       { role: "user", content: String(body.text || "") },
+    ];
+  }
+  if (task === "merge") {
+    /* One user message per section, in order, so the model sees the
+       sequence rather than one blob it has to infer an order from. */
+    return [
+      { role: "system", content: system },
+      ...(body.parts || []).map((p, i) => ({
+        role: "user",
+        content: `Section ${i + 1} of ${(body.parts || []).length}:\n${JSON.stringify(p)}`,
+      })),
     ];
   }
   if (task === "practice") {
@@ -134,11 +162,12 @@ export function parseTaskResult(task, raw) {
     return { questions };
   }
 
-  // summarise — the same shape ai-notes produces, so the whole storage
-  // path (stub, row, cache, reconciliation) is reused rather than
-  // reimplemented for a second kind of AI note.
+  // summarise and merge — the same shape ai-notes produces, so the whole
+  // storage path (stub, row, cache, reconciliation) is reused rather
+  // than reimplemented for a second kind of AI note. `merge` shares the
+  // parser as well as the schema: one shape, one place it can be wrong.
   const overview = asString(parsed.overview);
-  if (!overview) throw new Error("summarise: no overview");
+  if (!overview) throw new Error(`${task}: no overview`);
   return {
     overview,
     keyPoints: asArray(parsed.keyPoints).map(asString).filter(Boolean),

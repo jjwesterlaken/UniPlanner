@@ -1,5 +1,5 @@
 /* ==================================================================
-   ai-text — one endpoint, four tasks
+   ai-text — one endpoint, five tasks
 
    THE DESIGN DECISION THAT SHAPES EVERYTHING ELSE: this function reads
    no user content from the database. The client sends the text -- it
@@ -24,7 +24,7 @@
 
 export const SUMMARY_PROVIDER = "openai";
 
-export const TASKS = ["practice", "explain", "weakspots", "summarise"] as const;
+export const TASKS = ["practice", "explain", "weakspots", "summarise", "merge"] as const;
 export type Task = (typeof TASKS)[number];
 
 /* ---------- output ceilings, one justification each ----------
@@ -55,6 +55,10 @@ export const MAX_TOKENS: Record<Task, number> = {
      student's own note rather than a lecture transcript -- shorter
      source, no translation, so a quarter of ai-notes' ceiling. */
   summarise: 2000,
+
+  /* One summary out of several. Same output shape as `summarise`, so
+     the same ceiling -- the input is bigger and the output is not. */
+  merge: 2000,
 };
 
 /* ---------- input caps ----------
@@ -68,8 +72,26 @@ export const MAX_INPUT_CHARS: Record<Task, number> = {
   explain: 4_000, // an explanation of one concept; ~700 words
   weakspots: 6_000, // the derived digest, not free text
   practice: 8_000, // PRACTICE_MAX_CARDS cards of term + content
-  summarise: 20_000, // a long typed note; ~3,500 words
+  summarise: 20_000, // a long typed note, or one chunk of a reading; ~3,500 words
+  /* MAX_READING_CHUNKS summaries, serialised. A summary of one chunk
+     lands around 1,500 characters of JSON, so four is ~6,000; 12,000
+     leaves room for a verbose one without leaving room for a second
+     reading's worth. */
+  merge: 12_000,
 };
+
+/* ---------- readings ----------
+
+   A reading longer than MAX_INPUT_CHARS.summarise is split client-side
+   (src/readingChunks.js), each chunk summarised on its own, and the
+   summaries combined by the `merge` task. This constant is the CEILING
+   ON THE SPLIT, mirrored there and asserted equal by a test.
+
+   Four, because a fifth call buys less than it costs: by then the merge
+   is working from so much material that it is summarising summaries of
+   summaries, and the honest answer to a longer reading is to do it in
+   two halves rather than to pretend one pass handles it. */
+export const MAX_READING_CHUNKS = 4;
 
 /** Cards a practice request may carry. Bounds the input and the output together. */
 export const PRACTICE_MAX_CARDS = 30;
@@ -102,6 +124,21 @@ export const TASK_UNITS: Record<Task, number> = {
   weakspots: 1,
   practice: 2,
   summarise: 3,
+
+  /* 1, not 3, even though the output ceiling matches `summarise`.
+     `summarise` is priced for 20,000 characters of input; a merge takes
+     four summaries -- around 6,000 characters -- and returns one. It is
+     under a third of the input at the same output, so charging it as a
+     summarise would be overcharging for the step the student did not
+     ask for and only needs because their reading was long.
+
+     What that makes a whole reading cost:
+
+       <= 20k chars   1 chunk            3 units
+       <= 40k         2 chunks + merge   7
+       <= 60k         3 chunks + merge  10
+       <= 80k         4 chunks + merge  13    (the ceiling)  */
+  merge: 1,
 };
 
 export const MONTHLY_TEXT_UNITS_LIMIT = 150;
