@@ -168,6 +168,7 @@ import {
 } from "./reference.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL } from "./legalLinks.js";
 import { migratePages, roundPoint, GRID } from "./ink.js";
+import { inkOf, htmlOf, bodyOf } from "./noteBlocks.js";
 
 /* ------------------------------------------------------------------ */
 /*  Setup                                                             */
@@ -1451,8 +1452,8 @@ function RichTextEditor({ draft, setDraft }) {
   // Load the saved note in once; after that the div owns its own content
   // (rewriting it on every keystroke would move the cursor to the start).
   useEffect(() => {
-    if (ref.current && ref.current.innerHTML !== (draft.html || "")) {
-      ref.current.innerHTML = sanitizeHtml(draft.html || "");
+    if (ref.current && ref.current.innerHTML !== htmlOf(draft)) {
+      ref.current.innerHTML = sanitizeHtml(htmlOf(draft));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.id]);
@@ -1688,7 +1689,7 @@ function DrawingCanvas({ draft, setDraft }) {
   const [width, setWidth] = useState(3);
   const [erasing, setErasing] = useState(false);
 
-  const strokes = draft.strokes || [];
+  const strokes = inkOf(draft);
 
   /* ---- drawing ---- */
 
@@ -2111,9 +2112,9 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
           <ListTodo size={14} /> {sheetSummary(p)}
         </p>
       ) : p.kind === "drawing" ? (
-        (p.strokes || []).length > 0 && (
+        inkOf(p).length > 0 && (
           <p className="mt-1.5 flex items-center gap-1.5 text-sm text-stone-500">
-            <PenLine size={14} /> {p.strokes.length} stroke{p.strokes.length === 1 ? "" : "s"}
+            <PenLine size={14} /> {inkOf(p).length} stroke{inkOf(p).length === 1 ? "" : "s"}
           </p>
         )
       ) : (
@@ -2122,8 +2123,8 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
            older one still has the whole summary in aiMeta, and an
            ordinary note has html. The list must never need the network --
            it is the first thing on screen. */
-        (notePreview(p) || htmlToText(p.html)) && (
-          <p className="mt-1.5 line-clamp-3 text-sm text-stone-600">{notePreview(p) || htmlToText(p.html)}</p>
+        (notePreview(p) || htmlToText(htmlOf(p))) && (
+          <p className="mt-1.5 line-clamp-3 text-sm text-stone-600">{notePreview(p) || htmlToText(htmlOf(p))}</p>
         )
       )}
     </li>
@@ -2248,9 +2249,13 @@ function NoteView({ page, folders, onEdit, onClose, onMove, onDelete }) {
         </div>
       </div>
 
+      {/* Through blocksOf, not off the page. Neutral by the inverse
+          theorem in noteBlocks.js -- for a legacy note these return the
+          identical fields -- and it is what lets the editor start
+          writing `blocks` without touching this component again. */}
       {isDrawing ? (
         <div className="mt-3">
-          <StrokeCanvas strokes={page.strokes || []} readOnly style={page.style} />
+          <StrokeCanvas strokes={inkOf(page)} readOnly style={page.style} />
         </div>
       ) : (
         <div
@@ -2258,7 +2263,7 @@ function NoteView({ page, folders, onEdit, onClose, onMove, onDelete }) {
             page.font === "serif" ? "font-serif" : page.font === "mono" ? "font-mono" : ""
           }`}
         >
-          {page.body || htmlToText(page.html) || <span className="text-stone-400">This note is empty.</span>}
+          {bodyOf(page) || htmlToText(htmlOf(page)) || <span className="text-stone-400">This note is empty.</span>}
         </div>
       )}
     </Card>

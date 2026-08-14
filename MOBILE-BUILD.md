@@ -226,6 +226,42 @@ The build succeeding proves almost nothing. These are the behaviours that
 have never run outside a desktop browser, and each has a specific reason
 to doubt it.
 
+### What has actually been run, and on what
+
+**Android, moto g05, 14 August 2026 — the recording chain passes.**
+Items **9, 9a, 9b and 9c** were all confirmed on the device, in that
+order, which is the order they unblock each other in: without 9c there
+is no microphone, and without a microphone nothing below it can be
+tested at all.
+
+Two bugs were found by that hardware and by nothing else, which is the
+argument for the list:
+
+- the `folders` `ReferenceError` that white-screened the AI Notes panel
+  for **every signed-in user on every platform** — invisible to the
+  suite because the panel refuses to render without an account, and
+  demo mode is the only mode the smoke walk runs in;
+- the missing `MODIFY_AUDIO_SETTINGS` declaration, which made the
+  WebView report "microphone access was denied" to someone who had just
+  granted it. No desktop browser has a manifest, so no environment the
+  suite runs in could have been unhappy about it.
+
+**Everything else on this list is still outstanding**, and the groups
+worth naming because it is easy to read "hardware verified" as covering
+them:
+
+| Group | State |
+|---|---|
+| Storage and offline (1–4), including the aeroplane-mode test | **not run** |
+| Sync across devices (5–6) | **not run** |
+| No service worker on either platform (7) | **not run** — Android is the live risk |
+| "Record from" wording and the Bluetooth-headset case (10–11) | **not run** |
+| Handwriting on the iPad, and the stylus sample | **not run** — and the ink-compression work is blocked on it |
+| **iOS, all of it** | **not run** — nothing has been compiled to an Apple device |
+
+The renderer-recovery hardening below is also still open: the crash that
+triggered it is fixed, the *response* to the next one is not.
+
 ### Storage and offline
 
 1. **IndexedDB exists at all.** Open an AI lecture note, then check the
