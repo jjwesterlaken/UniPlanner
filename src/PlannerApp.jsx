@@ -167,6 +167,7 @@ import {
   SHEET_ENTRIES_MAX,
 } from "./reference.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL } from "./legalLinks.js";
+import { migratePages, roundPoint, GRID } from "./ink.js";
 
 /* ------------------------------------------------------------------ */
 /*  Setup                                                             */
@@ -288,6 +289,15 @@ function normalizeData(parsed) {
         it && it.updatedAt ? it : { ...it, updatedAt: nowISO() }
       );
     }
+    /* Ink is stored at a tenth of a canvas unit. Run on EVERY load,
+       silently, because it is lossless at display resolution and
+       idempotent -- an already-rounded page comes back identical and
+       the array reference is unchanged, so a load that alters nothing
+       writes nothing.
+
+       It deliberately does NOT bump updatedAt. See migratePages. */
+    sem.pages = migratePages(sem.pages);
+
     out.semesters[name] = sem;
   }
   out.meta = { updatedAt: nowISO(), lastSyncedAt: null, ...(parsed.meta || {}) };
@@ -1708,12 +1718,18 @@ function DrawingCanvas({ draft, setDraft }) {
 
   /* ---- pointer handling ---- */
 
+  /* Rounded HERE, at capture, not only by the migration on load.
+     Otherwise every new stroke arrives at full float precision and the
+     migration is forever cleaning up after the drawing code. A tenth of
+     a canvas unit is below one physical pixel at the largest device
+     pixel ratio the app uses, so nothing is visibly lost. */
   const toCanvas = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
-    return [
+    const [x, y] = [
       ((e.clientX - rect.left) / rect.width) * CANVAS_W,
       ((e.clientY - rect.top) / rect.height) * CANVAS_H,
     ];
+    return [Math.round(x * GRID) / GRID, Math.round(y * GRID) / GRID];
   };
 
   const pressureOf = (e) => {
@@ -1741,7 +1757,7 @@ function DrawingCanvas({ draft, setDraft }) {
       color,
       width: erasing ? width * 3 : width,
       erase: erasing,
-      points: [[x, y, pressureOf(e)]],
+      points: [roundPoint(x, y, pressureOf(e))],
     };
     redraw();
   };
@@ -1756,7 +1772,7 @@ function DrawingCanvas({ draft, setDraft }) {
     const events = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : [e];
     for (const ev of events.length ? events : [e]) {
       const [x, y] = toCanvas(ev);
-      currentStroke.current.points.push([x, y, pressureOf(ev)]);
+      currentStroke.current.points.push(roundPoint(x, y, pressureOf(ev)));
     }
     redraw();
   };
