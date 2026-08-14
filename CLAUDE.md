@@ -614,6 +614,13 @@ width of 3 the whole pressure range spans 1.2px to 6px, so 100 levels
 move the line by 0.048px per step. Two decimal places is invisible; a
 single byte would be too.
 
+**SHIPPED: rounding is in.** `src/ink.js` rounds at capture *and* in
+`normalizeData` on load. Capture-time matters as much as the migration —
+without it every new stroke arrives at full float precision and the
+migration is forever cleaning up after the drawing code, which means the
+first load after every drawing session rewrites the note. The two
+further stages are **not** built and wait on a real export.
+
 **The migration must NOT bump `updatedAt`.** A lossless representation
 change is not an edit, and if it looked like one, two devices each
 loading the app would rewrite the same notes and fight through
@@ -660,6 +667,28 @@ longer stores the whole transcript (~88 KB for a two-hour lecture) in the
 blob — see `TRANSCRIPT_EXCERPT_CHARS`. The Edge Function returns
 `transcript` on the success path too, so a test asserts it reaches
 neither the page nor the notes items.
+
+### Invisible rewrites may be bulk. Shape changes must be lazy.
+
+Two migrations, two answers, and the difference is worth stating as a
+rule because it will come up again.
+
+**The ink rounding runs on every load, over everything.** That is safe
+precisely because it is *invisible*: no reader can tell a rounded stroke
+from an unrounded one, it is idempotent, and it returns the same array
+reference when nothing changed, so a load that alters nothing writes
+nothing. Bulk costs nothing when the result is indistinguishable.
+
+**A change to the shape readers branch on must convert lazily**, on
+first edit, one note at a time. Doing it in bulk on load rewrites the
+entire collection on the first launch after deploy — a full blob write,
+a full sync — and if the conversion has a bug it has already touched
+everything before anyone notices. Lazy means a bug reaches one note
+instead of all of them.
+
+The test for which you are doing: *could a reader tell?* If no, bulk is
+free. If yes, it is a shape change, and shape changes convert on first
+edit with readers handling both forms indefinitely.
 
 ## Two notions of "week", deliberately not reconciled
 

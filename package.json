@@ -8,7 +8,7 @@
     "build:web": "node scripts/build-web.mjs",
     "prepare:native": "node scripts/prepare-native.mjs",
     "build": "npm run build:web && npm run prepare:native",
-    "test": "node scripts/build-web.mjs && node scripts/test-ai-notes.mjs && node scripts/test-ai-notes-function.mjs && node scripts/test-ai-text-function.mjs && node scripts/test-grades.mjs && node scripts/test-storage.mjs && node scripts/test-service-worker.mjs && node scripts/test-legal.mjs && node scripts/test-reference.mjs && node scripts/test-practice.mjs && node scripts/test-audio-sources.mjs && node scripts/test-readings.mjs && node scripts/test-ai-store.mjs && node scripts/test-app-smoke.mjs && node scripts/test-migrations.mjs",
+    "test": "node scripts/build-web.mjs && node scripts/test-ai-notes.mjs && node scripts/test-ai-notes-function.mjs && node scripts/test-ai-text-function.mjs && node scripts/test-grades.mjs && node scripts/test-storage.mjs && node scripts/test-service-worker.mjs && node scripts/test-legal.mjs && node scripts/test-reference.mjs && node scripts/test-practice.mjs && node scripts/test-audio-sources.mjs && node scripts/test-ink.mjs && node scripts/test-readings.mjs && node scripts/test-ai-store.mjs && node scripts/test-app-smoke.mjs && node scripts/test-migrations.mjs",
     "test:migrations": "node scripts/test-migrations.mjs",
     "stamp": "node scripts/stamp-native.mjs"
   },
