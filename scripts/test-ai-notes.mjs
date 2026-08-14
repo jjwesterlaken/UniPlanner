@@ -106,7 +106,7 @@ import {
   patchAndroidManifest,
   MIC_USAGE_DESCRIPTION,
   IOS_PLIST_KEY,
-  ANDROID_PERMISSION,
+  ANDROID_PERMISSIONS,
 } from "../mobile/scripts/native-permissions.mjs";
 
 /* ---------- tiny test harness ---------- */
@@ -845,7 +845,16 @@ async function run() {
     assert.ok(left.xml.includes("A deliberately different wording."), "a hand-edited description must survive");
   });
 
-  await test("patchAndroidManifest declares RECORD_AUDIO exactly once, alongside the existing permissions", () => {
+  await test("the manifest declares BOTH audio permissions, not just RECORD_AUDIO", () => {
+    /* THE ONE THAT REACHED HARDWARE. RECORD_AUDIO alone looks
+       sufficient: the runtime prompt appears and the student taps Allow.
+       The WebView then still refuses, logging "Requires
+       MODIFY_AUDIO_SETTINGS and RECORD_AUDIO. No audio device will be
+       available for recording" -- so the app reports "microphone access
+       was denied" to someone who just granted it.
+
+       Uncatchable anywhere but on a device: desktop browsers have no
+       manifest, so every environment we test in is happy without it. */
     const { xml, changed } = patchAndroidManifest(CAP_ANDROID_MANIFEST);
     assert.equal(changed, true);
     const doc = parseXml(xml, "AndroidManifest.xml");
@@ -853,11 +862,35 @@ async function run() {
     const declared = [...doc.getElementsByTagName("uses-permission")].map((el) =>
       el.getAttribute("android:name")
     );
-    assert.deepEqual(declared, ["android.permission.INTERNET", ANDROID_PERMISSION]);
+    assert.deepEqual(declared, ["android.permission.INTERNET", ...ANDROID_PERMISSIONS]);
+    assert.ok(
+      ANDROID_PERMISSIONS.includes("android.permission.MODIFY_AUDIO_SETTINGS"),
+      "MODIFY_AUDIO_SETTINGS is what the WebView actually needs to expose an audio device"
+    );
 
     const again = patchAndroidManifest(xml);
-    assert.equal(again.changed, false, "re-running cap sync must not duplicate the permission");
+    assert.equal(again.changed, false, "re-running cap sync must not duplicate the permissions");
     assert.equal(again.xml, xml);
+  });
+
+  await test("a manifest with only one of the two gains the other", () => {
+    /* The state every existing generated project is in right now: built
+       by the older script, RECORD_AUDIO present, MODIFY_AUDIO_SETTINGS
+       missing. An all-or-nothing check would see "already present" and
+       leave the phone broken through every future cap sync. */
+    const half = patchAndroidManifest(CAP_ANDROID_MANIFEST).xml.replace(
+      /\n[ \t]*<uses-permission android:name="android\.permission\.MODIFY_AUDIO_SETTINGS" \/>/,
+      ""
+    );
+    assert.ok(!half.includes("MODIFY_AUDIO_SETTINGS"), "the fixture did not actually lose the permission");
+
+    const { xml, changed } = patchAndroidManifest(half);
+    assert.equal(changed, true, "a half-patched manifest was left alone");
+    const declared = [...parseXml(xml, "AndroidManifest.xml").getElementsByTagName("uses-permission")].map((el) =>
+      el.getAttribute("android:name")
+    );
+    assert.deepEqual(declared.filter((n) => n.includes("AUDIO")).sort(), [...ANDROID_PERMISSIONS].sort());
+    assert.equal(declared.filter((n) => n === "android.permission.RECORD_AUDIO").length, 1, "RECORD_AUDIO duplicated");
   });
 
   await test("patchAndroidManifest still works on a manifest that declares no permissions at all", () => {
@@ -870,9 +903,30 @@ async function run() {
     assert.equal(changed, true);
     const doc = parseXml(xml, "AndroidManifest.xml");
     const permissions = [...doc.getElementsByTagName("uses-permission")];
-    assert.equal(permissions.length, 1);
-    assert.equal(permissions[0].getAttribute("android:name"), ANDROID_PERMISSION);
+    assert.deepEqual(
+      permissions.map((el) => el.getAttribute("android:name")),
+      ANDROID_PERMISSIONS
+    );
     assert.equal(permissions[0].parentNode.tagName, "manifest", "uses-permission belongs directly under <manifest>");
+  });
+
+  await test("iOS deploys high enough for getUserMedia to exist in the WebView", async () => {
+    /* THE IOS ANALOGUE of the Android manifest gap, and the reason to
+       look for one: the platforms are not symmetric. iOS needs no
+       routing permission -- WKWebView manages its own AVAudioSession
+       under the usage description -- but getUserMedia only EXISTS in
+       WKWebView from iOS 14.3. Below that the recorder is simply absent
+       with no error anywhere, which is the same class of silent failure
+       and would have hit Grace's first compile.
+
+       We deploy at 15.0, so there is margin; this guards the number
+       rather than assuming it stays. */
+    const { IOS_DEPLOYMENT_TARGET } = await import(pathToFileURL(path.join(rootDir, "scripts/stamp-native.mjs")).href);
+    const [major, minor = 0] = IOS_DEPLOYMENT_TARGET.split(".").map(Number);
+    assert.ok(
+      major > 14 || (major === 14 && minor >= 3),
+      `iOS ${IOS_DEPLOYMENT_TARGET} is below 14.3, where WKWebView gained getUserMedia — recording would not exist`
+    );
   });
 
   await test("the OS permission prompt makes the same promise the in-app consent does", () => {
