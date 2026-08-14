@@ -509,6 +509,22 @@ permission — install-time, no second prompt.
 no manifest, so every environment the suite runs in is happy without it.
 It took a real device, a granted permission and a Logcat line.
 
+**VERIFIED ON HARDWARE: Android recording works, moto g05, 14 August
+2026.** The whole recording chain passed — the permission prompt leads
+to an actual microphone, a lecture records end to end and files itself
+into its course folder, the timer survives a tab switch and stops from
+the indicator, and backgrounding warns without stopping. That is
+`MOBILE-BUILD.md` items 9, 9a, 9b and 9c.
+
+It is worth being precise about what that does *not* cover, because
+"verified on hardware" reads much broader than it is. **Nothing about
+offline storage, sync between devices, or the no-service-worker rule has
+been run on a device**, and the service-worker check is the one with a
+live risk behind it: `http://localhost` is a secure context, so Android
+is excluded only by the protocol test in `index.html`, and a worker
+there would shadow an app-store update. **iOS has never been compiled at
+all.** The list and its current state live in `MOBILE-BUILD.md`.
+
 **The platforms are not symmetric, and looking for the mirror is the
 habit worth keeping.** iOS needs no routing permission — WKWebView
 manages its own `AVAudioSession` under the usage string — but it has a
@@ -649,6 +665,42 @@ migration is forever cleaning up after the drawing code, which means the
 first load after every drawing session rewrites the note. The two
 further stages are **not** built and wait on a real export.
 
+**The first real export has now been measured, and it corrected the
+conclusion above.** 8 strokes, 553 points, 69.1 points per stroke.
+Rounding **57%**, + simplification **80%**, + delta **88%** — every
+figure below the synthetic ones, which is the direction to expect and
+the reason a synthetic benchmark is not a promise.
+
+What that changes: *"rounding alone is enough"* was too generous. At 57%
+a dense 200-stroke page is still **~93 KB**, so ten of them are ~930 KB
+against a 1 MB budget — one student's handwriting filling the whole
+planner. The later stages are needed, not merely nice.
+
+What it does **not** settle: every pressure value in the sample was
+exactly `0.5`, so it was drawn with a finger or a mouse. Simplification
+and delta encoding are both sensitive to sampling rate and stroke shape,
+and a stylus samples far denser than a finger. **The 80% and 88% still
+wait on a stylus sample** — Grace's iPad page, verification item 11.
+
+**ASSUMPTIONS THE ENCODER MUST HOLD TO, recorded before the code exists
+because the sample is what revealed them:**
+
+- **Coordinates are NOT bounded by `CANVAS_W`/`CANVAS_H`, and are not
+  non-negative.** The real sample runs to **x = −99**. The pointer
+  handlers use pointer capture, so events keep arriving after the
+  pointer leaves the element, and the coordinate is a plain division by
+  the element's rect — nothing clamps it. Anything that packs into a
+  fixed range, assumes a sign, or sizes a field from `CANVAS_W` will
+  silently corrupt the parts of a stroke drawn off the edge, and those
+  are the parts nobody looks at closely. Clamping at encode time is not
+  the fix either: it would move ink that currently renders.
+- **A point may be missing its pressure**, and the neutral value is
+  `0.5`, not `0`. `roundPoint` already does this; an encoder that
+  defaults a missing third element to zero renders hairlines.
+- **Rounding is already applied**, at capture and on load, so the
+  encoder's input is grid-aligned and its own gain is measured on top of
+  57%, not on top of raw floats.
+
 **The migration must NOT bump `updatedAt`.** A lossless representation
 change is not an edit, and if it looked like one, two devices each
 loading the app would rewrite the same notes and fight through
@@ -717,6 +769,61 @@ instead of all of them.
 The test for which you are doing: *could a reader tell?* If no, bulk is
 free. If yes, it is a shape change, and shape changes convert on first
 edit with readers handling both forms indefinitely.
+
+### The unified note: `blocks`, and how "neutral" was demonstrated
+
+`src/noteBlocks.js` is the block view of a note — a stack of
+`{type:"text", html, body}` and `{type:"ink", strokes}` — and step 3
+introduced it as **readers only**. Nothing in that file writes, nothing
+converts, and no screen changed. A note is `blocks` if it has them and
+is *derived* into blocks if it doesn't, which is the lazy half of the
+rule above: the editor (step 4) is what starts writing them, one note at
+a time on first edit.
+
+The claim that had to be established is that pointing every reader at
+`blocksOf` changed nothing anyone can see. It rests on an inverse
+theorem — `fieldsFromBlocks(blocksOf(P))` is exactly `P`'s
+`html`/`body`/`strokes` — so derivation is lossless and a reader that
+goes through it sees the identical bytes.
+
+**But a theorem is about the function, and the risk is a reader you
+forgot to think about.** So `scripts/test-blocks-neutral.mjs` builds the
+bundle from *the previous commit*, mounts both in jsdom over identical
+seeded data with the clock and `Math.random` frozen, and compares the
+rendered HTML byte for byte. The baseline is derived — the parent of
+whichever commit added `noteBlocks.js` — rather than a pinned sha, for
+the usual reason. It skips without git history and `REQUIRE_BASELINE=1`
+in CI turns that skip into a failure, the same arrangement the migration
+tests use; CI checks out with `fetch-depth: 0` so it really runs.
+
+A second comparison renders **the same note in both shapes** through the
+current bundle — legacy fields against `blocks` with the legacy fields
+emptied. That one does not expire when the editor lands, and it is the
+claim step 4 rests on.
+
+**Three things that only came out of trying to make the test fail:**
+
+- **A stub that swallows the calls makes a test blind.** The canvas
+  context was a no-op proxy, so a canvas with six strokes and a canvas
+  with none produced identical HTML — and reverting the note viewer to
+  `page.strokes`, the exact "reader left behind" the file exists to
+  catch, passed. Handwriting is half of what step 3 touched, so half the
+  test was decorative. The context now *records* every call, and the log
+  is part of the snapshot; it resets on `clearRect`, which both redraw
+  paths start with, so the comparison sees the last complete picture and
+  is insensitive to how many times it was drawn. **The general form: a
+  fake that returns nothing makes everything downstream of it agree.**
+- **Reference identity is part of `inkOf`'s contract.** Both canvases
+  redraw from `useEffect(..., [strokes])`, so an accessor that builds a
+  fresh array on every render redraws a 200-stroke page on every render,
+  *during handwriting*. It is invisible in the DOM, so the differential
+  render structurally cannot see it — one unit test is the only thing
+  asserting it.
+- **Block order is not observable today.** Reversing `blocksOf` to emit
+  text-first always leaves every screen byte-identical, because readers
+  concatenate by type. It becomes observable in step 4. Recorded in the
+  test's header as a named hole, because a guard that says what it
+  cannot see is worth more than one that looks thorough.
 
 ## Two notions of "week", deliberately not reconciled
 
@@ -1489,6 +1596,14 @@ no framework, matching the style of the build scripts.
   backup case and "an error reads as failed, NOT as missing"
 - `scripts/test-storage.mjs` — save failures are reported, transcripts
   aren't stored whole; both cover things that used to fail invisibly
+- `scripts/test-note-blocks.mjs` — the block view: the inverse theorem
+  over every shape a page is stored in, block ordering, and `inkOf`'s
+  reference-identity contract, which nothing else can see
+- `scripts/test-blocks-neutral.mjs` — the differential render: this
+  commit's bundle against the previous one's, and a legacy note against
+  the same note stored as blocks, HTML compared byte for byte. **Skips**
+  without git history, which is why CI sets `REQUIRE_BASELINE=1` and
+  `fetch-depth: 0`
 - `scripts/test-app-smoke.mjs` — the app mounts and renders in demo mode
 - `scripts/test-migrations.mjs` — SQL against a real postgres; **skips**
   without one locally, which is why CI forces it

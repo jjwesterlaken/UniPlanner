@@ -1875,6 +1875,26 @@ async function run() {
     assert.match(workflow, /image:\s*postgres:/, "the test workflow no longer starts a postgres service container");
   });
 
+  await test("CI forces the differential render to run rather than skip", () => {
+    /* Same arrangement, same reason, and it lives HERE rather than in
+       test-blocks-neutral.mjs for the same reason the migration guard
+       does: a check inside a file that skips itself would skip in
+       exactly the situation it exists to catch.
+
+       fetch-depth matters as much as the flag. The differential builds
+       the PREVIOUS commit's bundle, and actions/checkout's default
+       shallow clone has no previous commit -- so without it the test
+       would skip, REQUIRE_BASELINE would turn that into a failure, and
+       the fix would look like "drop the flag". */
+    const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    assert.match(pkg.scripts.test, /test-blocks-neutral\.mjs/, "the differential render was dropped from `npm test`");
+    assert.match(pkg.scripts.test, /test-note-blocks\.mjs/, "the block-view tests were dropped from `npm test`");
+
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
+    assert.match(workflow, /REQUIRE_BASELINE:\s*"1"/, "CI no longer forces the differential render to run");
+    assert.match(workflow, /fetch-depth:\s*0/, "CI checks out shallow, so the differential render has no baseline to build");
+  });
+
   /* ---------- no API key ever ends up in the shipped bundle ---------- */
 
   await test("dist-web/app.js contains no leaked provider keys or secrets", () => {
