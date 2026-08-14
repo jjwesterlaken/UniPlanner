@@ -132,7 +132,13 @@ function syntheticStroke(points = 24) {
 /* ---------- reading a real export ---------- */
 
 function strokesFromBackup(file) {
-  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  /* The app's own export is {app, exportedAt, data:{semesters}}; a raw
+     localStorage dump is {semesters} directly. Accept both -- this read
+     the wrong one and reported "no handwritten pages found" for a
+     backup that had them, which is the most misleading way a
+     measurement tool can fail. */
+  const data = parsed.data && parsed.data.semesters ? parsed.data : parsed;
   const found = [];
   for (const sem of Object.values(data.semesters || {})) {
     for (const page of (sem && sem.pages) || []) {
