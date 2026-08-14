@@ -1889,6 +1889,11 @@ async function run() {
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     assert.match(pkg.scripts.test, /test-blocks-neutral\.mjs/, "the differential render was dropped from `npm test`");
     assert.match(pkg.scripts.test, /test-note-blocks\.mjs/, "the block-view tests were dropped from `npm test`");
+    /* The local-only audit is the evidence behind a published promise
+       ("nothing reaches us" without an account) and an answer on
+       Apple's privacy questionnaire. Dropping it from the suite would
+       leave both resting on nothing. */
+    assert.match(pkg.scripts.test, /test-local-only\.mjs/, "the local-only audit was dropped from `npm test`");
 
     const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
     assert.match(workflow, /REQUIRE_BASELINE:\s*"1"/, "CI no longer forces the differential render to run");

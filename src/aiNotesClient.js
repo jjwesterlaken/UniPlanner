@@ -53,7 +53,14 @@ const EXTENSION_FOR_MIME = { "audio/webm;codecs=opus": "webm", "audio/webm": "we
  * Function ever reports `recording_missing`.
  */
 export async function uploadAudio({ session, audioBlob, mimeType, idempotencyKey, supabaseClient = supabase }) {
-  if (!supabaseClient) throw new Error("AI notes needs a real signed-in account.");
+  /* The session check is not redundant with the client check. `supabase`
+     is non-null for every user of the real build, signed in or not --
+     `isConfigured` is about whether the project is set up, not about
+     who is using it. Without this, a signed-out upload would fail on
+     `session.user.id` being undefined, which is a crash rather than a
+     refusal and would have put the audio on the wire first if the path
+     had ever been built differently. */
+  if (!supabaseClient || !session || !session.user) throw new Error("AI notes needs a real signed-in account.");
   const extension = EXTENSION_FOR_MIME[mimeType] || "webm";
   const path = `${session.user.id}/${idempotencyKey}.${extension}`;
   const { error } = await supabaseClient.storage.from(BUCKET).upload(path, audioBlob, { contentType: mimeType, upsert: true });
@@ -81,6 +88,15 @@ export async function callAiNotes(
   { token, course, translateTo, idempotencyKey, estimatedDurationSeconds },
   fetchImpl = fetch
 ) {
+  // Same reasoning as callAiText: the gate belongs at the boundary, not
+  // only on the panel. AiNotesPanel already refuses without a session --
+  // this is what makes that refusal a property of the code rather than
+  // of one component's early return.
+  if (!token) {
+    const err = new Error("Please sign in again to use AI notes.");
+    err.code = "unauthenticated";
+    throw err;
+  }
   const res = await fetchImpl(`${SUPABASE_URL}/functions/v1/ai-notes`, {
     method: "POST",
     headers: {

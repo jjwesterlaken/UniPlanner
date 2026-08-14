@@ -53,6 +53,22 @@ export async function fetchTextAllowance(session, { supabaseClient = supabase, i
 
 /** Call the ai-text endpoint. Throws with `code` set, so copy can be looked up. */
 export async function callAiText({ token, task, payload = {}, fetchImpl = fetch }) {
+  /* THE GATE IS HERE, not only on the screen that calls this.
+     Every text feature is hidden behind `session &&` in the UI, which
+     is correct and is also one refactor away from being wrong: a
+     signed-out student's typing would leave the device before anything
+     rejected it, and "nothing leaves your device without an account" is
+     a claim in the privacy policy, not a preference.
+
+     `unauthenticated` deliberately reuses the server's own code, so the
+     student sees the wording that already exists for being signed out
+     rather than a new sentence nobody has read. */
+  if (!token) {
+    const err = new Error("You need to be signed in to use the AI study features.");
+    err.code = "unauthenticated";
+    err.stage = "client";
+    throw err;
+  }
   const res = await fetchImpl(`${SUPABASE_URL}/functions/v1/ai-text`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
