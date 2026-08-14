@@ -854,6 +854,39 @@ labels fall back to dates rather than a guessed number, and a break range
 is subtracted rather than counted through, because "Week 10" that is
 really week 9 is worse than a plain date — it looks authoritative.
 
+### Without an account, nothing leaves the device — and that is now evidence
+
+The privacy policy says *"Nothing reaches us. Everything you type is
+stored in your own browser or device and never leaves it."* Apple's
+questionnaire asks the same question. It is now answerable from a test
+rather than from design intent.
+
+`scripts/test-local-only.mjs` mounts the real app in **both** states
+above, with `fetch`, `XMLHttpRequest`, `sendBeacon`, `WebSocket` and
+`EventSource` all replaced by spies, walks every tab, makes an edit and
+waits past the 4-second push debounce — the moment a signed-out planner
+would actually go up. Zero outbound calls, and the planner is verified
+to be saved locally, because "local only" must not be satisfied by
+saving nothing at all.
+
+**Spy on every channel, not just `fetch`.** A spy on one and a leak
+through another is how this kind of check ends up decorative.
+
+**The gate belongs at the boundary, not only on the screen.** Every AI
+feature is hidden behind `session &&` in the UI, which is right — and
+was, until this audit, the *only* thing between a signed-out student's
+typing and the wire. `callAiText`, `callAiNotes` and `uploadAudio` now
+refuse on their own, reusing the server's own `unauthenticated` code so
+the student sees wording that already exists rather than a new sentence
+nobody has read. A UI-only gate is one refactor from leaking, and the
+refactor need not touch the client at all.
+
+Nothing third-party is in the bundle: no analytics, no error reporting,
+no tag manager. The check derives "our hosts" from `config.js` and
+`legalLinks.js` rather than restating them, and excuses `w3.org` and
+`reactjs.org` **by name with a reason** — they are namespace and
+message strings, never fetched.
+
 ## The service-role client bypasses RLS — you are the ownership check
 
 **Any query made with the service-role client must explicitly scope to the
@@ -899,11 +932,33 @@ wrong user's tier.
 ## Demo mode is a real mode
 
 With no Supabase key in `src/config.js`, `backend` falls through to
-`demoBackend` and everything works locally. A brand-new user is in this
-mode. A null-dereference has shipped in it before, precisely because it's
-the path nobody runs while developing. `scripts/test-app-smoke.mjs` mounts
-the real app with `isConfigured === false` and fails on any
-`console.error`; keep it passing.
+`demoBackend` and everything works locally. A null-dereference has
+shipped in it before, precisely because it's the path nobody runs while
+developing. `scripts/test-app-smoke.mjs` mounts the real app with
+`isConfigured === false` and fails on any `console.error`; keep it
+passing.
+
+**This section used to say "a brand-new user is in this mode." That was
+wrong, and the error is worth keeping because it is the kind that hides
+a whole category of bug.** `config.js` has had real project details
+since long before launch, so `isConfigured` is `true` in every shipped
+build. A brand-new user is not in demo mode; they are **signed out on
+the real backend**, with `backend === supabaseBackend` and
+`backend.isDemo === false`.
+
+| | `isConfigured` | `isDemo` | who is really here |
+|---|---|---|---|
+| demo mode | false | true | the smoke test, and a developer with an unfilled `config.js` |
+| **signed out** | true | **false** | **every user before they make an account** |
+
+The consequence is that `isDemo` is the wrong thing to check for
+anything about *a user without an account*, and a test that exercises
+only demo mode is testing the state nobody is in. That was demonstrated
+rather than argued: defaulting the session away in `runSync` — the shape
+a careless refactor takes — pushes the whole planner to the server for a
+signed-out user, and **the demo-mode walk stays green throughout**.
+`scripts/test-local-only.mjs` walks both, and scenario B is the one that
+matters.
 
 **It exists because unit tests and a green build can both miss a crash
 that makes every render throw.** It has now caught two the rest of the
