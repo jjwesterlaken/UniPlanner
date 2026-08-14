@@ -134,6 +134,8 @@ the Play Console clock.**
 | `Installation failed: INSTALL_FAILED_UPDATE_INCOMPATIBLE` | An older build with the same identifier is installed. Uninstall the app from the phone and run again. |
 | The app opens to a white screen | `mobile/www` is empty or stale. Run `npm run build` from the repo root, then `npx cap sync android`. |
 | Recording does nothing, no permission prompt | `RECORD_AUDIO` is missing from the manifest — `npm run settings` was not run after `cap add`. |
+| **"Microphone access was denied" AFTER you tapped Allow** | Look in Logcat for `Requires MODIFY_AUDIO_SETTINGS and RECORD_AUDIO. No audio device will be available for recording`. That is the **manifest**, not the user: Android's WebView needs both permissions declared before it will expose an audio device at all, and a runtime grant does not substitute. Fixed in the script — re-run `npm run settings` and rebuild. |
+| A red **"JWT issued at future"** banner | The **device clock is ahead of real time**, so the token looks like it was issued in the future and the server rejects it. Fix the phone's Date & time (turn on "Set automatically"). Nothing to do with the app. |
 
 ---
 
@@ -287,6 +289,11 @@ to doubt it.
     say part of it may be silent. Confirm the recording did NOT stop —
     and if the audio really is silent for that stretch, say so, because
     it decides whether the warning is strong enough.
+9c. **Tapping Allow on the mic prompt actually gives you a microphone.**
+    If the app says access was denied straight after you granted it, see
+    the MODIFY_AUDIO_SETTINGS row in the Android table above — that is a
+    manifest problem, not a permissions one, and everything below it is
+    blocked until recording works.
 10. **"Record from" offers Microphone only**, with "This computer's
     audio" greyed out and reading *"Phones and tablets can only record
     through the microphone."* An option that is simply missing is a

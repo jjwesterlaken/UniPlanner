@@ -489,6 +489,34 @@ build**, and worth remembering when the marketing site is written:
 browsers only ever offer loopback alongside a screen or tab share, and
 macOS Chrome only alongside a tab. Electron asks the OS directly.
 
+### Android needs TWO audio permissions, and the second one is invisible
+
+`RECORD_AUDIO` alone looks sufficient: the runtime prompt appears, the
+student taps Allow — and the WebView still refuses, logging
+
+```
+Requires MODIFY_AUDIO_SETTINGS and RECORD_AUDIO.
+No audio device will be available for recording
+```
+
+so the app reports "microphone access was denied" to someone who has
+just granted it. Android's WebView needs the **app** to declare
+`MODIFY_AUDIO_SETTINGS` before it will expose an audio device at all;
+a user's runtime grant does not substitute for it. It is a *normal*
+permission — install-time, no second prompt.
+
+**Nothing but hardware could have caught this.** Desktop browsers have
+no manifest, so every environment the suite runs in is happy without it.
+It took a real device, a granted permission and a Logcat line.
+
+**The platforms are not symmetric, and looking for the mirror is the
+habit worth keeping.** iOS needs no routing permission — WKWebView
+manages its own `AVAudioSession` under the usage string — but it has a
+version floor instead: `getUserMedia` only *exists* in WKWebView from
+**iOS 14.3**, and below that the recorder is silently absent with no
+error anywhere. We deploy at 15.0, and a test now guards the number
+rather than the comment.
+
 ### A recording outlives the tab it was started on
 
 The AI Notes tab renders as `{tab === "ai-notes" && ...}`. Switching

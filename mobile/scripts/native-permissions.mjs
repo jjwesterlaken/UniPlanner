@@ -14,6 +14,16 @@
    be re-applied after every `cap add`. This script does that, and is
    idempotent so `npm run sync` can run it every time.
 
+   THE TWO PLATFORMS ARE NOT SYMMETRIC, and the asymmetry cost a
+   hardware round. Android needs TWO manifest permissions (see
+   ANDROID_PERMISSIONS); iOS needs only the usage string, because
+   WKWebView manages its own AVAudioSession under that declaration and
+   there is no routing permission to ask for. What iOS has instead is a
+   VERSION floor: getUserMedia only exists in WKWebView from iOS 14.3.
+   That is guarded by IOS_DEPLOYMENT_TARGET in scripts/stamp-native.mjs
+   and asserted by a test, because lowering it would remove recording
+   from the phone build with no error anywhere.
+
    Run directly (`node scripts/native-permissions.mjs`) or via
    `npm run permissions` from the `mobile` folder. Missing platforms are
    skipped, not an error — most people only ever add one. */
@@ -36,7 +46,32 @@ export const MIC_USAGE_DESCRIPTION =
   "transcription service and is deleted as soon as it has been transcribed.";
 
 export const IOS_PLIST_KEY = "NSMicrophoneUsageDescription";
-export const ANDROID_PERMISSION = "android.permission.RECORD_AUDIO";
+
+/* BOTH are required, and the second one is the whole reason this list
+   is a list.
+
+   RECORD_AUDIO alone looks sufficient -- the runtime prompt appears, the
+   student taps Allow -- and then the WebView still refuses, logging:
+
+     Requires MODIFY_AUDIO_SETTINGS and RECORD_AUDIO.
+     No audio device will be available for recording
+
+   Android's WebView needs the APP to declare MODIFY_AUDIO_SETTINGS
+   before it will expose an audio device to getUserMedia at all. The
+   user's runtime grant does not substitute for it: the app is asking to
+   change audio routing and mode to record, and that is an app-manifest
+   question rather than a user-consent one.
+
+   It is a NORMAL permission -- granted at install, no second prompt, and
+   not on Google Play's list of permissions needing a declaration form.
+   (Confirm at submission rather than trusting this comment; the check
+   costs nothing and store rules move.) Empirically it is confirmed by
+   the absence of a new prompt on the next install.
+
+   THIS CANNOT BE CAUGHT ANYWHERE BUT ON HARDWARE. Desktop browsers have
+   no manifest, so every environment we test in is happy without it. It
+   took a real device, a granted permission, and a Logcat line to find. */
+export const ANDROID_PERMISSIONS = ["android.permission.RECORD_AUDIO", "android.permission.MODIFY_AUDIO_SETTINGS"];
 
 const IOS_PLIST_PATH = path.join("ios", "App", "App", "Info.plist");
 const ANDROID_MANIFEST_PATH = path.join("android", "app", "src", "main", "AndroidManifest.xml");
@@ -81,21 +116,27 @@ export function patchInfoPlist(xml, description = MIC_USAGE_DESCRIPTION) {
 }
 
 /**
- * Adds the RECORD_AUDIO <uses-permission> to an AndroidManifest.
+ * Adds every permission in ANDROID_PERMISSIONS that isn't already there.
  *
- * Capacitor's bridge already grants the WebView's audio-capture request
- * at runtime, but only if the app itself declares the permission here —
- * so this one line is the whole difference between a working mic and a
- * recorder that never starts.
+ * Capacitor's bridge grants the WebView's audio-capture request at
+ * runtime, but only if the app itself declares these — so these two
+ * lines are the whole difference between a working mic and a recorder
+ * that reports "microphone access was denied" to a student who just
+ * granted it.
+ *
+ * Adds only what is MISSING, so a manifest that already has one of them
+ * (hand-edited, or half-patched by an older version of this script)
+ * gains the other rather than being left broken or duplicated.
  *
  * Returns `{ xml, changed, reason }`.
  */
 export function patchAndroidManifest(xml) {
-  if (xml.includes(ANDROID_PERMISSION)) {
+  const missing = ANDROID_PERMISSIONS.filter((name) => !xml.includes(name));
+  if (missing.length === 0) {
     return { xml, changed: false, reason: "already present" };
   }
 
-  const element = `<uses-permission android:name="${ANDROID_PERMISSION}" />`;
+  const elements = missing.map((name) => `<uses-permission android:name="${name}" />`);
 
   // Prefer grouping with the permissions Capacitor already declares (it
   // puts them after </application>); fall back to just inside <manifest>
@@ -105,10 +146,11 @@ export function patchAndroidManifest(xml) {
     const last = permissionLines[permissionLines.length - 1];
     const indent = last[1] || "";
     const insertAt = last.index + last[0].length;
+    const block = elements.map((el) => `\n${indent}${el}`).join("");
     return {
-      xml: `${xml.slice(0, insertAt)}\n${indent}${element}${xml.slice(insertAt)}`,
+      xml: `${xml.slice(0, insertAt)}${block}${xml.slice(insertAt)}`,
       changed: true,
-      reason: "added",
+      reason: `added ${missing.length}`,
     };
   }
 
@@ -117,9 +159,12 @@ export function patchAndroidManifest(xml) {
     throw new Error("AndroidManifest.xml has no </manifest> to insert into — is this a valid manifest?");
   }
   return {
-    xml: xml.replace(manifestClose, (whole, indent) => `${indent}    ${element}\n${indent}</manifest>`),
+    xml: xml.replace(
+      manifestClose,
+      (whole, indent) => `${elements.map((el) => `${indent}    ${el}\n`).join("")}${indent}</manifest>`
+    ),
     changed: true,
-    reason: "added",
+    reason: `added ${missing.length}`,
   };
 }
 
@@ -147,9 +192,9 @@ function describe(platform, file, result) {
     case "skipped":
       return `${platform}: skipped (no ${file} — run "npx cap add ${platform}" first)`;
     case "patched":
-      return `${platform}: microphone permission added to ${file}`;
+      return `${platform}: microphone declarations ${result.reason} in ${file}`;
     default:
-      return `${platform}: microphone permission ${result.reason} in ${file}`;
+      return `${platform}: microphone declarations ${result.reason} in ${file}`;
   }
 }
 
