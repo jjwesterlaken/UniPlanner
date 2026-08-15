@@ -89,11 +89,6 @@ import {
   SUMMARY_MAX_TOKENS,
   MONTHLY_MINUTES_LIMIT,
   MINIMUM_BILLED_MINUTES,
-  USD_PER_TRANSCRIBED_MINUTE,
-  USD_PER_1M_SUMMARY_INPUT,
-  USD_PER_1M_SUMMARY_OUTPUT,
-  TYPICAL_SUMMARY_OUTPUT_TOKENS,
-  TYPICAL_SUMMARY_INPUT_TOKENS,
 } from "../supabase/functions/ai-notes/config.ts";
 import { deepgramAdapter } from "../supabase/functions/ai-notes/deepgram.js";
 import { groqAdapter, isSizeError } from "../supabase/functions/ai-notes/groq.js";
@@ -531,16 +526,8 @@ async function run() {
        Derived from the constants, so raising the allowance or the
        summariser's ceiling re-runs the arithmetic instead of quietly
        skipping it. Prices are the ones in config.ts's derivation. */
-    /* DERIVED, NOT RESTATED. These two lines used to be literals, and
-       that made this test blind to the only thing it exists to notice:
-       raising SUMMARY_MAX_TOKENS from 8,000 to 15,000 left it green,
-       because the cost it checked could not move. Eighth instance of
-       the pattern, first one where the restated value was a price. */
-    const TRANSCRIBE_PER_MINUTE = USD_PER_TRANSCRIBED_MINUTE;
-    const SUMMARISE_PER_REQUEST =
-      (TYPICAL_SUMMARY_OUTPUT_TOKENS * USD_PER_1M_SUMMARY_OUTPUT +
-        TYPICAL_SUMMARY_INPUT_TOKENS * USD_PER_1M_SUMMARY_INPUT) /
-      1_000_000;
+    const TRANSCRIBE_PER_MINUTE = 0.04 / 60;
+    const SUMMARISE_PER_REQUEST = 0.0018; // typical: short note + a translation
 
     const cost = (recordings, realMinutesEach) => {
       const billedEach = Math.max(realMinutesEach, MINIMUM_BILLED_MINUTES);
@@ -570,92 +557,6 @@ async function run() {
       withoutFloor > realistic * 2,
       "without a minimum increment this test would have nothing to catch — check the premise still holds"
     );
-  });
-
-  await test("the minimum billed increment still covers what one summary costs", () => {
-    /* THE GUARD THE DEPTH CHANGE NEEDED, and the reason the constants
-       moved to config.ts. The previous test compares two totals, so a
-       rise in summary cost lifts BOTH sides and the ratio survives -- it
-       is a fairness check, not a coverage check. This one asks the
-       question that actually decides the floor: does one billed minute
-       times the floor pay for one summary?
-
-       Stated as an inequality against the derived cost rather than as
-       "MINIMUM_BILLED_MINUTES === 4", because pinning the answer is how
-       a guard stops noticing the input. Make the prompt deeper, raise
-       TYPICAL_SUMMARY_OUTPUT_TOKENS to match, and this fails until
-       someone decides what the floor should be. */
-    const summaryCost =
-      (TYPICAL_SUMMARY_OUTPUT_TOKENS * USD_PER_1M_SUMMARY_OUTPUT +
-        TYPICAL_SUMMARY_INPUT_TOKENS * USD_PER_1M_SUMMARY_INPUT) /
-      1_000_000;
-    const requiredFloor = Math.ceil(summaryCost / USD_PER_TRANSCRIBED_MINUTE);
-
-    assert.ok(
-      MINIMUM_BILLED_MINUTES >= requiredFloor,
-      `one summary costs $${summaryCost.toFixed(5)}, which is ${requiredFloor} billed minutes, but the floor is ` +
-        `${MINIMUM_BILLED_MINUTES}. A short recording now costs more to summarise than it is charged for — ` +
-        "raise MINIMUM_BILLED_MINUTES to at least " + requiredFloor + ", or make the summariser cheaper."
-    );
-
-    /* And the ceiling has to be above the typical, with room. A ceiling
-       at or near the typical means ordinary lectures start hitting it --
-       and hitting it is a HARD FAILURE on a request whose transcription
-       has already been billed, with no retry path. */
-    assert.ok(
-      SUMMARY_MAX_TOKENS >= TYPICAL_SUMMARY_OUTPUT_TOKENS * 3,
-      `the output ceiling (${SUMMARY_MAX_TOKENS}) leaves too little room above a typical summary ` +
-        `(${TYPICAL_SUMMARY_OUTPUT_TOKENS}). A long lecture with a translation runs several times the typical, ` +
-        "and hitting the ceiling costs the student a lecture they have already paid for."
-    );
-  });
-
-  await test("the summariser is told what depth means, not just which sections to fill", () => {
-    /* Jared's verdict on real output was "helpful and great, but
-       shallower than I'd like". The cause was visible in the prompt: it
-       named the five sections and said nothing about what belonged in
-       them, so the model wrote headings.
-
-       Asserted from the source because the alternative is a paid call
-       to OpenAI. That makes this a check on the INSTRUCTIONS rather
-       than on the output -- it cannot tell you the notes got better,
-       only that the prompt still asks for the things that were supposed
-       to make them better. The output side is
-       scripts/measure-summary-depth.mjs, which needs a real key. */
-    const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/openai.ts"), "utf8");
-
-    for (const [what, pattern] of [
-      ["key points must carry the reasoning, not just the claim", /reasoning or evidence/i],
-      ["key points must keep the lecturer's specifics", /names, dates, figures, formulae or worked examples/i],
-      ["a bare topic label is rejected as a key point", /bare topic label is not a key point/i],
-      ["terms are explained as the lecturer explained them", /AS THE LECTURER DID/],
-      ["a dictionary gloss is rejected", /dictionary gloss/i],
-      ["the assessable signal is quoted so the student can see why", /Quote or closely paraphrase the signal/i],
-      ["padding is forbidden in as many words", /never from padding/i],
-      ["inventing material is forbidden", /Do not add material the lecturer did not cover/i],
-      ["a translation is held to the same depth", /same structure at the same depth/i],
-    ]) {
-      assert.match(src, pattern, `the depth prompt no longer says: ${what}`);
-    }
-
-    /* THE STRUCTURE DID NOT CHANGE. Depth was supposed to go into the
-       sections, not add new ones -- a sixth section would change every
-       screen that renders a note and every note already saved. */
-    const schema = src.slice(src.indexOf("SUMMARY_SCHEMA_OBJECT"), src.indexOf("LECTURE_SUMMARY_SCHEMA"));
-    const fields = [...schema.matchAll(/^\s{4}(\w+):/gm)].map((m) => m[1]);
-    assert.deepEqual(
-      fields,
-      ["overview", "keyPoints", "terms", "assessable", "openQuestions"],
-      "the note's five sections changed — depth was meant to go INTO them, not beside them"
-    );
-
-    /* The standing wording rule. These notes are made from a lecture the
-       student attended; nothing in the prompt may ask for a replacement
-       for attending or for the reading. */
-    for (const banned of [/instead of attending/i, /so (?:you|the student) (?:need not|don't need to|do not need to) attend/i, /replace the lecture/i, /skip the (?:lecture|reading)/i]) {
-      assert.doesNotMatch(src, banned, "the summariser prompt drifted into substitution rather than study");
-    }
-    assert.match(src, /revise from/i, "the prompt no longer frames the notes as something to revise from");
   });
 
   await test("the client's copy of the billing constants matches the server's", () => {
@@ -1997,6 +1898,36 @@ async function run() {
     const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
     assert.match(workflow, /REQUIRE_BASELINE:\s*"1"/, "CI no longer forces the differential render to run");
     assert.match(workflow, /fetch-depth:\s*0/, "CI checks out shallow, so the differential render has no baseline to build");
+  });
+
+  await test("the function deploy refuses to ship an unmeasured billing constant", () => {
+    /* Lives here, with the other wiring guards, because a check inside
+       the workflow can be deleted along with the workflow.
+
+       WHY THIS GUARD AND NOT A BETTER MIRROR TEST. The mirror test
+       compares the server's MINIMUM_BILLED_MINUTES to the client's
+       hint. Both moved together when a parked billing change leaked
+       onto main inside a documentation-only pull request, so it stayed
+       green throughout. A test that compares two copies to each other
+       cannot notice both moving before the decision was approved.
+
+       The precondition is not internal consistency. It is "has anyone
+       measured the number the floor is derived from" -- so that is what
+       the deploy checks, and UNMEASURED in config.ts is the marker. */
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/deploy-functions.yml"), "utf8");
+    assert.match(workflow, /UNMEASURED/, "the deploy no longer refuses an unmeasured billing constant");
+    assert.match(workflow, /exit 1/, "the unmeasured check no longer fails the deploy");
+
+    // And the marker has to mean something: it must appear in config.ts
+    // whenever a billing input is modelled rather than measured.
+    const config = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/config.ts"), "utf8");
+    const modelled = /modelled/i.test(config);
+    const marked = /UNMEASURED/.test(config);
+    assert.ok(
+      !modelled || marked,
+      "config.ts describes a billing input as modelled but does not carry the UNMEASURED marker, " +
+        "so the deploy guard would let it ship"
+    );
   });
 
   /* ---------- no API key ever ends up in the shipped bundle ---------- */

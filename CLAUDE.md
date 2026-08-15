@@ -764,75 +764,6 @@ change, no server involvement, and no migration ordering to get wrong.
 Two fixed buckets that nothing ever clears is still the growth that
 matters most, and no amount of per-feature capping addresses it.
 
-### Depth is bought with instructions, and it moves the billing floor
-
-Real output was "helpful and great, but shallower than I'd like", and
-the cause was visible in the prompt: it named the five sections and said
-nothing about what belonged in them, so the model wrote headings. The
-schema cannot help — OpenAI's strict structured-output mode does not
-support `minItems` — so depth is a prompt property or it is nothing.
-
-**Depth went into the sections, not beside them.** The five sections are
-unchanged; a sixth would touch every screen that renders a note and
-every note already saved. What changed is that each section now says
-what belongs in it: the reasoning as well as the claim, the lecturer's
-own names, dates, figures and worked examples, terms explained *as the
-lecturer explained them* rather than glossed from the model's own
-knowledge, and the examinable signal quoted so a student can see why a
-line is listed.
-
-**"Do not pad" is load-bearing, not decorative.** Told to go deeper and
-given nothing to be deep about, a model reliably inflates — the same
-claim in three registers, invented open questions to fill a section,
-dictionary definitions. That is longer output at the same information
-content, and the student pays for the tokens. Every rule in the prompt
-is either *include what was actually said* or *do not invent*.
-
-**The floor moved from 3 minutes to 4, and that is the interesting
-part.** `MINIMUM_BILLED_MINUTES` exists because summarising is charged
-per request while transcription is charged per minute, so it is priced
-against a SHORT recording. A deeper prompt costs output tokens on every
-request, including short ones — so depth is not free, and it is not
-free in the place nobody looks.
-
-**The test that was supposed to catch that could not.** It hardcoded
-`SUMMARISE_PER_REQUEST = 0.0018`. Raising `SUMMARY_MAX_TOKENS` from
-8,000 to 15,000 — nearly doubling the ceiling — left it **green**,
-demonstrated by doing it. Eighth instance of the restatement pattern and
-the first where the restated value was a **price**. The prices and the
-token counts now live in `config.ts`, the test computes the cost from
-them, and a separate assertion asks the question that actually decides
-the floor: *does the floor times one billed minute pay for one summary?*
-It is written as an inequality against the derived cost rather than
-`=== 4`, because pinning the answer is how a guard stops noticing its
-input.
-
-**The ceiling went up too, and the asymmetry is the reason.** Hitting
-`SUMMARY_MAX_TOKENS` is not a truncated note — it is a hard failure on a
-request whose transcription has already succeeded and already been
-billed, with no retry endpoint and the audio deleted (see the known gap
-below). So an under-set ceiling costs a student a lecture they paid for,
-while an over-set one costs money only in a case that fails today
-anyway. 8,000 → 12,000, still well under the model's 16,384.
-
-`MAX_AI_NOTE_BYTES` was deliberately **not** raised, for the same
-asymmetry read the other way: exceeding it is graceful — the note drops
-the language the student did not ask for — not a failure. Raising a
-safety cap on a model is backwards; raising it on a measurement is fine.
-
-**What none of this proves.** `TYPICAL_SUMMARY_OUTPUT_TOKENS` is
-modelled at ~1.3× the pre-depth figure and is **unmeasured**, and both
-the floor and the ceiling derive from it. No test can notice a prompt
-quietly getting wordier without that constant being updated — that hole
-is real and named rather than papered over.
-`scripts/measure-summary-depth.mjs` is the instrument: two real paid
-calls, before-prompt and after-prompt, on the same transcript, reporting
-tokens, bytes, key-point count **and words per key point** — because
-"deeper" that turns out to be *more entries* rather than *more per
-entry* is a different change from the one asked for. Re-derive the
-constants from a short real recording once someone with a key has run
-it. Same shape as `measure-ink.mjs`, and for the same reason.
-
 ### Known gap: there is no way to retry a summary
 
 When summarising fails, transcription has already succeeded and **has
@@ -1734,6 +1665,62 @@ including one that agrees with you.** Examine the individual objects,
 not the summary statistics — the summary said "3 strokes at 0.5
 pressure" and was true, and the conclusion drawn from it was false.
 
+**And get the DISTRIBUTION before sizing a fix to it.** The faint-writing
+bug was diagnosed as light touches failing to register, and the obvious
+remedy was a floor on rendered pressure. Measuring first showed that
+**989 of 1,579 pen points — 63% — sat below the proposed floor**: it
+would have clamped two-thirds of a real page to a single width and
+thrown away the thick-and-thin that makes handwriting look handwritten.
+The fix became a monotonic remap, which lifts the faint end by ~48% at
+the observed mode and keeps every distinction the writer made.
+
+That is the same lesson as the ink measurement gate, in a different
+costume: a remedy sized to an anecdote is sized to the wrong thing.
+A floor, a cap and a threshold all need the shape of the data, not the
+existence of the problem.
+
+## Branch from `main`, verified — and a mirror test cannot see a decision
+
+Two failures from one mistake, both worth keeping.
+
+**`git checkout -b` starts from wherever you are standing.** A branch
+meant for a documentation change was cut while still on a feature
+branch, so the squash merge carried that feature's commit too. A pull
+request titled *"documentation only — no code, so the build id does not
+move"* shipped a **billing change** — `MINIMUM_BILLED_MINUTES` 3 → 4,
+`SUMMARY_MAX_TOKENS` 8,000 → 12,000, and a rewritten summariser prompt —
+that had been explicitly parked pending a measurement. It reached
+`main`, and the client half of it reached production, because the web
+app deploys from `main`.
+
+This is *check the mutation actually applied*, pointed at git. The fix
+is the same shape: `git fetch origin main && git checkout -b <name>
+origin/main`, and read `git log --oneline -1` before committing rather
+than trusting where you think you are. What made it invisible was that
+every check passed — the tests were green, the diff of the branch
+looked right, and the PR body described the change accurately for the
+commit it was *about*.
+
+**A test comparing two copies to each other cannot notice both moving.**
+`MINIMUM_BILLED_MINUTES_HINT` mirrors the server constant and a test
+asserts they are equal. That test was green throughout, correctly: both
+copies moved together. Mirror equality guards *drift*; it cannot guard a
+*decision*.
+
+So a guard on a decision has to anchor to the decision's precondition.
+Here the precondition is "has anyone measured the number the floor is
+derived from", and it is now enforced where it bites:
+`deploy-functions.yml` refuses while `config.ts` carries the
+`UNMEASURED` marker. Same move as the allowance read preceding the
+provider call in `ai-text` — make the bad interleaving unreachable
+rather than documented.
+
+The residue worth remembering: for a while the screen said one number
+and the server charged another, in the under-charging direction, and
+nothing could have told us. The Edge Function is `workflow_dispatch`
+only, so what stood between a parked decision and real charges was
+nobody clicking a button.
+
 ## A guard that restates its subject will drift
 
 Five separate times now, a check has been weaker than it looked, always
@@ -1768,14 +1755,7 @@ the same way: it hardcoded the value it was supposed to be guarding.
   rather than in code, and the tell is the same: a guard that pins the
   wording cannot survive the wording being wrong.
 
-- **`SUMMARISE_PER_REQUEST`** was typed into the billing test as
-  `0.0018`. It is the number that decides `MINIMUM_BILLED_MINUTES`, and
-  it could not move — so raising `SUMMARY_MAX_TOKENS` from 8,000 to
-  15,000 left the test green, which was demonstrated rather than
-  assumed. First instance where the restated value was a **price**, and
-  the failure mode is a bill rather than a bug.
-
-One is an anecdote. Eight is a rule: **derive a guard from its source of
+One is an anecdote. Seven is a rule: **derive a guard from its source of
 truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the
