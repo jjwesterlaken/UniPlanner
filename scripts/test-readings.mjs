@@ -26,8 +26,14 @@ import {
   CHUNK_OVERLAP_CHARS,
   MAX_READING_CHUNKS,
   READING_MAX_CHARS,
+  estimatePhotos,
+  batchPhotos,
+  photoNumberFor,
+  PHOTOS_PER_CHUNK,
+  MAX_READING_PHOTOS,
 } from "../src/readingChunks.js";
 import { READING_COPY } from "../src/aiTextCopy.js";
+import * as failuresCopy from "../src/aiTextCopy.js";
 import { TASK_UNITS, sectionsAffordable, canAffordUnits } from "../src/aiTextLimits.js";
 import { validateRequest } from "../supabase/functions/ai-text/guards.js";
 import { buildMessages, parseTaskResult } from "../supabase/functions/ai-text/prompts.js";
@@ -406,6 +412,86 @@ test("the pasted text is never persisted anywhere", () => {
   const handler = app.slice(app.indexOf("const summariseReading ="), app.indexOf("const summariseReading =") + 2000);
   assert.doesNotMatch(handler, /\btext\b/, "the reading save path mentions the source text");
   assert.match(handler, /sourceReadingId/);
+});
+
+/* ---------- photographed pages ---------- */
+
+test("photos are priced as parts of the reading, not as a second scheme", () => {
+  /* The entire pricing story: a batch of PHOTOS_PER_CHUNK pages is one
+     summarise call, further batches are further chunks, merge as
+     today. Derived from TASK_UNITS, so a weight change re-runs this
+     instead of leaving it green. */
+  assert.equal(estimatePhotos(1).units, TASK_UNITS.summarise);
+  assert.equal(estimatePhotos(4).units, TASK_UNITS.summarise);
+  assert.equal(estimatePhotos(5).units, 2 * TASK_UNITS.summarise + TASK_UNITS.merge);
+  /* The photo ceiling costs exactly what the text ceiling costs -- 16
+     photos and an 80,000-character reading are the same 4-chunk job. */
+  assert.equal(estimatePhotos(MAX_READING_PHOTOS).units, 4 * TASK_UNITS.summarise + TASK_UNITS.merge);
+  assert.equal(estimatePhotos(MAX_READING_PHOTOS).chunks, MAX_READING_CHUNKS);
+});
+
+test("more photos than the ceiling is refused with the numbers, not trimmed", () => {
+  const out = estimatePhotos(MAX_READING_PHOTOS + 1);
+  assert.equal(out.ok, false);
+  assert.equal(out.code, "too_many");
+  assert.equal(out.count, MAX_READING_PHOTOS + 1);
+  assert.equal(out.maxPhotos, MAX_READING_PHOTOS);
+  assert.match(READING_COPY.photosTooMany({ count: 17, max: 16 }), /17/, "the refusal doesn't state the count");
+});
+
+test("the photo constants match the server's", () => {
+  // Restated because a browser bundle can't import from
+  // supabase/functions/ -- so the equality is the guard.
+  const config = source("supabase/functions/ai-text/config.ts");
+  assert.equal(PHOTOS_PER_CHUNK, Number(config.match(/PHOTOS_PER_CHUNK = (\d+)/)[1]));
+  assert.equal(MAX_READING_PHOTOS, Number(config.match(/MAX_READING_PHOTOS = (\d+)/)[1]));
+});
+
+test("an unreadable page maps back to the photo the student can retake", () => {
+  /* The server names 1-based positions within the batch it saw; the
+     student is looking at their whole strip. Batch 2 of a 7-photo run
+     starts at photo 5, so its position 2 is photo 6. */
+  const { batches } = batchPhotos(7);
+  assert.equal(photoNumberFor(batches[0], 2), 2);
+  assert.equal(photoNumberFor(batches[1], 2), 6);
+});
+
+test("the unreadable copy carries BOTH halves: this attempt charged, the resubmit charges again", () => {
+  /* By ruling. A student retaking one page of eight must know the
+     resubmit costs before they send it. */
+  const { AI_TEXT_FAILURES } = failuresCopy;
+  const c = AI_TEXT_FAILURES.pages_unreadable;
+  assert.ok(c, "no copy for pages_unreadable");
+  const text = `${c.title} ${c.detail}`;
+  assert.match(text, /used some of your AI study help/i, "doesn't say this attempt was charged");
+  assert.match(text, /will use more|charge/i, "doesn't say the resubmit costs again");
+  assert.match(text, /smaller batch/i, "doesn't say the retaken pages go as their own smaller batch");
+  assert.match(READING_COPY.unreadablePages([3]), /3/, "the page number never reaches the student");
+});
+
+test("the photos are never persisted anywhere, on any path", () => {
+  /* The same design fact as the pasted text, asserted for photos
+     specifically. Server half: the endpoint writes only ai_usage and
+     has NO storage client at all -- images arrive in the request body
+     and are relayed, the deliberate opposite of the audio path. Client
+     half: photos live in component state; nothing about them reaches
+     the draft, the blob, or localStorage. */
+  const fn = source("supabase/functions/ai-text/index.ts");
+  assert.doesNotMatch(fn, /\.storage/, "ai-text touches the Storage API — photos would have a server-side home");
+  const written = [...fn.matchAll(/\.from\("([^"]+)"\)\s*\.(?:upsert|insert|update|delete)/gs)].map((m) => m[1]);
+  assert.deepEqual([...new Set(written)], ["ai_usage"], "the endpoint writes more than usage");
+
+  /* Comments stripped before the grep -- this assertion caught its own
+     explanatory comment on the first run, the same way the wording
+     guard caught its own documentation. A filter that can be tripped
+     by prose about the rule is measuring the prose. */
+  const stripJs = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  const panel = stripJs(source("src/aiText.jsx"));
+  const summarise = panel.slice(panel.indexOf("export function SummariseReading"));
+  assert.doesNotMatch(summarise, /localStorage/, "the reading panel touches localStorage");
+  const app = source("src/PlannerApp.jsx");
+  const handler = app.slice(app.indexOf("const summariseReading ="), app.indexOf("const summariseReading =") + 2000);
+  assert.doesNotMatch(handler, /photo|image/i, "the reading save path mentions the photos");
 });
 
 test("a deleted reading leaves its summary note intact", () => {

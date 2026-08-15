@@ -46,6 +46,21 @@ export const AI_TEXT_FAILURES = {
       "We were charged for that attempt, so it has used some of your AI study help — we'd rather tell you than have you find out from the number. Trying again usually works.",
   },
 
+  /* The legibility refusal on photographed pages. BOTH HALVES, by
+     ruling: this attempt used allowance (output was generated -- the
+     refusal IS the output), and resubmitting the retaken pages will
+     charge again, as its own smaller batch. A student retaking one page
+     of eight must know the resubmit costs before they send it. The
+     page numbers are interpolated by the panel, which is the only place
+     that knows them. */
+  pages_unreadable: {
+    title: "Some pages couldn't be read clearly.",
+    detail:
+      "Rather than guess at a blurry page, the AI stopped. That attempt used some of your AI study help, " +
+      "and summarising the retaken pages will use more — they'll go as their own smaller batch. " +
+      "Retake the pages named above in better light, closer up, and try again.",
+  },
+
   usage_exceeded: {
     title: "You've used all of this month's AI study help.",
     detail: "It resets at the start of next month. Everything else in the planner keeps working as normal.",
@@ -184,6 +199,25 @@ export const READING_COPY = {
   /* Where the text goes and, just as importantly, where it doesn't. */
   privacy:
     "The text is sent to the AI to do this and isn't stored anywhere — not in your planner and not on our server. Only the summary is saved.",
+
+  /* The same promise for photographed pages, made separately because it
+     is a different kind of material -- a photo can capture more than
+     the words -- and the student should read it with the photos in
+     hand. The honest limit is stated up front: the notes are only as
+     good as the photo. */
+  photosLabel: "Or photograph the pages",
+  photosPrivacy:
+    "Photos are sent to the AI to read the pages and aren't stored anywhere — not in your planner and not on our server. Only the summary is saved.",
+  photosQuality:
+    "The notes can only be as good as the photos — good light, straight on, one page per photo works best.",
+  photosEstimate: ({ count, chunks }) =>
+    chunks > 1
+      ? `${count} page${count === 1 ? "" : "s"}, so it'll be done in ${chunks} parts and then combined.`
+      : `${count} page${count === 1 ? "" : "s"}, done in one go.`,
+  photosTooMany: ({ count, max }) =>
+    `That's ${count} photos and the most this can take is ${max}. Do it in two goes — each gets its own summary.`,
+  unreadablePages: (pages) =>
+    `The AI couldn't clearly read photo${pages.length === 1 ? "" : "s"} ${pages.join(", ")}.`,
 
   /* THE PRE-FLIGHT ESTIMATE. Mandatory before any call: the cost of a
      reading is variable, and nothing else on screen would hint that a

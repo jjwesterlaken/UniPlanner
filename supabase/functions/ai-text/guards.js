@@ -18,7 +18,7 @@
  * need a lookup starts from the safe shape rather than having to be
  * retrofitted into it.
  */
-export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, weakspotsMaxTopics, maxReadingChunks }) {
+export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, weakspotsMaxTopics, maxReadingChunks, photosPerChunk = 4, maxImageBase64Chars = 700_000 }) {
   const bad = (detail) => ({ ok: false, code: "bad_request", error: "That request wasn't valid.", detail });
 
   if (!body || typeof body !== "object") return bad("body is not an object");
@@ -32,6 +32,35 @@ export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, 
      is silently dropped is a field someone will one day rely on. */
   const needsText = task === "explain" || task === "summarise";
   const text = typeof body.text === "string" ? body.text : "";
+
+  /* PHOTOGRAPHED PAGES: `summarise` and no other task, one MEDIUM per
+     request (text XOR images -- a mixed request has no honest ordering
+     and no client sends one), one BATCH per request (the client batches
+     photos the way it chunks text, so the batch cap here is the whole
+     size story). Each image is a data-URL of a raster format; the
+     prefix is checked because whatever follows it is relayed to a paid
+     provider, and the length cap is what stops an un-downscaled
+     original -- the client never sends one, so over-length means a
+     hand-built request. */
+  const images = Array.isArray(body.images) ? body.images : null;
+  if (images && task !== "summarise") return bad("images are only accepted for summarise");
+  if (images && text) return bad("one medium per request: text or images, not both");
+  if (images) {
+    if (images.length < 1) return bad("images is empty");
+    if (images.length > photosPerChunk) return bad(`more than ${photosPerChunk} images in one request — batch them`);
+    for (const img of images) {
+      if (typeof img !== "string") return bad("an image is not a string");
+      if (!/^data:image\/(jpeg|png|webp);base64,/.test(img)) return bad("an image is not a base64 data-URL of a raster format");
+      if (img.length > maxImageBase64Chars) {
+        return {
+          ok: false,
+          code: "too_long",
+          error: "One of those photos is too large. Retake it or crop it and try again.",
+        };
+      }
+    }
+    return { ok: true, task, text: "", images };
+  }
 
   if (needsText) {
     if (!text.trim()) return bad("text is required for this task");
@@ -94,7 +123,7 @@ export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, 
     }
   }
 
-  return { ok: true, task, text };
+  return { ok: true, task, text, images: null };
 }
 
 const serialisedLength = (value) => {

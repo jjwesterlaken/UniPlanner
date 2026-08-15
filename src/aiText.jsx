@@ -12,8 +12,8 @@
    editing one file.
    ================================================================== */
 
-import { useEffect, useMemo, useState } from "react";
-import { Sparkles, X, TriangleAlert, RefreshCw, Check } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Sparkles, X, TriangleAlert, RefreshCw, Check, Camera } from "lucide-react";
 import {
   AI_TEXT_FAILURES,
   describeTextFailure,
@@ -30,7 +30,7 @@ import {
   sectionsAffordable,
   TASK_UNITS,
 } from "./aiTextLimits.js";
-import { estimateReading, combineParts } from "./readingChunks.js";
+import { estimateReading, estimatePhotos, photoNumberFor, combineParts, MAX_READING_PHOTOS } from "./readingChunks.js";
 import { bodyOf } from "./noteBlocks.js";
 import { ConsentGate } from "./aiNotesConsent.jsx";
 import { fetchTextAllowance, callAiText } from "./aiTextClient.js";
@@ -134,27 +134,66 @@ function FailureNotice({ code }) {
   );
 }
 
+
+/* A page photo, downscaled CLIENT-SIDE before it goes anywhere: 1536px
+   on the long edge (plenty for print, and the size the provider's
+   high-detail tiling actually reads), JPEG at 0.8. This is what keeps a
+   12MP camera original off the wire and under the server's per-image
+   cap -- the cap exists for hand-built requests, not for this path. */
+async function downscalePhoto(file, { maxEdge = 1536, quality = 0.8 } = {}) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("could not read the image"));
+      el.src = url;
+    });
+    const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", quality);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 /** One place that runs a task, so every feature handles failure identically. */
 function useTask(session, applyFraction) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [errorDetail, setErrorDetail] = useState(null);
+  /* The ref is the synchronous copy: a caller looping over parts reads
+     the failure body IN THE SAME TICK the null came back, before React
+     has re-rendered. State alone would hand it last render's value. */
+  const errorDetailRef = useRef(null);
 
   const run = async (task, payload) => {
     setBusy(true);
     setError(null);
+    setErrorDetail(null);
+    errorDetailRef.current = null;
     try {
       const res = await callAiText({ token: session.token, task, payload });
       applyFraction(res.allowanceUsed);
       return res.result;
     } catch (err) {
       setError(err.code || "server_error");
+      /* The body rides along for codes that carry something actionable
+         -- pages_unreadable's page list is the one today. Kept separate
+         from `error` so every existing `error === code` check is
+         untouched. */
+      setErrorDetail((err && err.body) || null);
+      errorDetailRef.current = (err && err.body) || null;
       return null;
     } finally {
       setBusy(false);
     }
   };
 
-  return { run, busy, error, clearError: () => setError(null) };
+  return { run, busy, error, errorDetail, errorDetailRef, clearError: () => setError(null) };
 }
 
 /* ------------------------------------------------------------------ */
@@ -477,18 +516,51 @@ export function SummariseReading({
   standalone = false,
 }) {
   const { allowance, applyFraction } = allowanceApi;
-  const { run, busy, error } = useTask(session, applyFraction);
+  const { run, busy, error, errorDetailRef } = useTask(session, applyFraction);
 
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
+  /* PHOTOS LIVE IN COMPONENT STATE AND NOWHERE ELSE. Never the draft,
+     never localStorage, gone on unmount -- the never-stored promise is
+     a property of where this array can reach, and it can reach the
+     request body and the screen. */
+  const [photos, setPhotos] = useState([]);
+  const [unreadable, setUnreadable] = useState(null); // photo numbers, 1-based
   const [result, setResult] = useState(null);
   const [progress, setProgress] = useState(null);
   const [mergeOutcome, setMergeOutcome] = useState(null); // null | "failed" | "charged"
 
+  /* ONE MEDIUM PER RUN: pasted text or photographed pages, whichever
+     the student supplied. A mixed run has no honest ordering, so the
+     estimate follows whichever medium has content and the UI says so. */
+  const usingPhotos = photos.length > 0;
+
   /* Memoised because it is not cheap and it is on the typing path:
      chunkReading splits and repacks the whole text, and at the 80,000
      character ceiling that is real work to redo on every keystroke. */
-  const estimate = useMemo(() => estimateReading(text), [text]);
+  const estimate = useMemo(
+    () => (usingPhotos ? estimatePhotos(photos.length) : estimateReading(text)),
+    [text, photos.length, usingPhotos]
+  );
+
+  const addPhotos = async (files) => {
+    const room = MAX_READING_PHOTOS - photos.length;
+    const take = [...files].slice(0, Math.max(0, room));
+    const scaled = [];
+    for (const f of take) {
+      try {
+        scaled.push(await downscalePhoto(f));
+      } catch (e) {
+        /* One unreadable file must not lose the batch -- skip it. The
+           count line makes the miss visible. */
+      }
+    }
+    if (scaled.length) {
+      setPhotos((prev) => [...prev, ...scaled].slice(0, MAX_READING_PHOTOS));
+      reset();
+      setUnreadable(null);
+    }
+  };
 
   /* An unreadable allowance must not read as an exhausted one — a
      paywall caused by going into a tunnel is worse than a missing
@@ -500,19 +572,38 @@ export function SummariseReading({
     setResult(null);
     setMergeOutcome(null);
     setProgress(null);
+    setUnreadable(null);
   };
 
   const go = async () => {
     reset();
     if (!estimate.ok) return;
+    /* One list of requests, whichever medium: a text chunk or a photo
+       batch is one `summarise` call either way, which is what lets the
+       photo path ride the ENTIRE existing pipeline -- progress, the
+       keep-what-was-charged rule on a failed part, the merge, the
+       merge-failure fallback -- with no second scheme. */
+    const requests = usingPhotos
+      ? estimate.batches.map((b) => ({ payload: { images: photos.slice(b.start, b.start + b.size) }, batch: b }))
+      : estimate.chunkTexts.map((t) => ({ payload: { text: t }, batch: null }));
     const parts = [];
-    for (let i = 0; i < estimate.chunkTexts.length; i++) {
-      setProgress({ done: i, total: estimate.chunkTexts.length });
-      const part = await run("summarise", { text: estimate.chunkTexts[i] });
+    for (let i = 0; i < requests.length; i++) {
+      setProgress({ done: i, total: requests.length });
+      const part = await run("summarise", requests[i].payload);
       /* A part failing stops the run rather than pressing on with a hole
          in the middle. Whatever came back before it is kept and shown --
          it was done and it was charged. */
-      if (!part) break;
+      if (!part) {
+        /* The legibility refusal names positions within the batch the
+           server saw; the student is looking at their whole photo
+           strip, so translate before showing. run() has already stored
+           the code and body -- this only maps the numbers. */
+        const detail = errorDetailRef.current;
+        if (requests[i].batch && detail && Array.isArray(detail.pages)) {
+          setUnreadable(detail.pages.map((pos) => photoNumberFor(requests[i].batch, pos)));
+        }
+        break;
+      }
       parts.push(part);
     }
     setProgress(null);
@@ -613,20 +704,87 @@ export function SummariseReading({
       {!unknown && <p className="text-xs text-stone-500">{allowanceLine(allowance)}</p>}
       <p className="text-xs text-stone-500">{READING_COPY.intro}</p>
 
-      <textarea
-        className={`${inputCls} min-h-[7rem]`}
-        placeholder={READING_COPY.placeholder}
-        value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-          reset();
-        }}
-      />
+      {!usingPhotos && (
+        <>
+          <textarea
+            className={`${inputCls} min-h-[7rem]`}
+            placeholder={READING_COPY.placeholder}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              reset();
+            }}
+          />
+          <p className="text-xs text-stone-400">{READING_COPY.privacy}</p>
+        </>
+      )}
 
-      <p className="text-xs text-stone-400">{READING_COPY.privacy}</p>
+      {/* PHOTOGRAPHED PAGES. One medium per run: adding photos stands
+          in for the paste box, and clearing them brings it back. */}
+      {!text.trim() && (
+        <div className="space-y-1.5">
+          <label className={labelCls}>{READING_COPY.photosLabel}</label>
+          {photos.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {photos.map((url, i) => (
+                <span key={i} className="relative inline-block">
+                  <img src={url} alt={`Page photo ${i + 1}`} className="h-16 w-12 rounded border border-stone-200 object-cover" />
+                  <button
+                    type="button"
+                    aria-label={`Remove photo ${i + 1}`}
+                    className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-stone-700 text-white"
+                    onClick={() => {
+                      setPhotos((prev) => prev.filter((_, j) => j !== i));
+                      reset();
+                    }}
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {photos.length < MAX_READING_PHOTOS && (
+            <label className={`${btnGhost} cursor-pointer`}>
+              <Camera size={15} /> {photos.length ? "Add more pages" : "Add photos of the pages"}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  addPhotos(e.target.files || []);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          )}
+          {usingPhotos && (
+            <>
+              <p className="text-xs text-stone-400">{READING_COPY.photosPrivacy}</p>
+              <p className="text-xs text-stone-400">{READING_COPY.photosQuality}</p>
+            </>
+          )}
+        </div>
+      )}
 
-      {/* THE PRE-FLIGHT ESTIMATE, before anything is spent. */}
-      {text.trim() && estimate.ok && <p className="text-xs text-stone-500">{READING_COPY.estimate(estimate)}</p>}
+      {/* THE PRE-FLIGHT ESTIMATE, before anything is spent -- photos
+          count in parts exactly the way text chunks do. */}
+      {usingPhotos && estimate.ok && <p className="text-xs text-stone-500">{READING_COPY.photosEstimate(estimate)}</p>}
+      {!usingPhotos && text.trim() && estimate.ok && <p className="text-xs text-stone-500">{READING_COPY.estimate(estimate)}</p>}
+
+      {usingPhotos && estimate.code === "too_many" && (
+        <p className="rounded-lg bg-stone-100 px-2.5 py-2 text-xs text-stone-600">
+          {READING_COPY.photosTooMany({ count: estimate.count, max: estimate.maxPhotos })}
+        </p>
+      )}
+
+      {unreadable && (
+        <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-900">
+          {READING_COPY.unreadablePages(unreadable)}
+        </p>
+      )}
 
       {estimate.code === "too_long" && (
         <p className="rounded-lg bg-stone-100 px-2.5 py-2 text-xs text-stone-600">

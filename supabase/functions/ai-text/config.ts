@@ -80,6 +80,50 @@ export const MAX_INPUT_CHARS: Record<Task, number> = {
   merge: 12_000,
 };
 
+/* ---------- photographed pages ----------
+
+   A reading arrives as pasted text OR as photos of the pages -- one
+   medium per run, because a mixed run has no honest ordering (which
+   photo goes between which paragraphs?) and no student asked for one.
+
+   PHOTOS ARE PRICED AS PARTS OF THE READING, NOT AS A SECOND SCHEME.
+   The client batches photos the same way it chunks long text: each
+   batch of up to PHOTOS_PER_CHUNK pages is one `summarise` request (3
+   units), further batches are further chunks, merge is 1 as today. So
+   the whole pipeline -- pre-flight estimate in parts, the
+   keep-what-was-charged partial-failure rule, the merge -- is the
+   EXISTING one, and there is no image-specific billing arithmetic to
+   drift.
+
+   Why one batch prices like one text chunk, shown rather than asserted:
+   gpt-4o-mini bills an image as input tokens, ~85 base + ~170 per
+   512px tile at high detail. A page photo downscaled client-side to
+   ~1536px on the long edge is 4-6 tiles, so:
+
+     one photo        ~765-1,105 input tokens   ~$0.00012-0.00017
+     a batch of 4     ~3,100-4,400              ~$0.0005-0.0007
+     one text chunk   20,000 chars ~ 5,000      ~$0.00075
+
+   A full batch of photos costs slightly LESS input than a full text
+   chunk, and the output is the same summary either way -- so weight 3
+   per batch is conservative in the right direction. The derived
+   billing test covers these constants; if the provider's image pricing
+   model changes, change IMAGE_BASE_TOKENS/IMAGE_TILE_TOKENS and the
+   test re-runs the comparison. */
+export const PHOTOS_PER_CHUNK = 4;
+export const MAX_READING_PHOTOS = 16; // mirrors MAX_READING_CHUNKS * PHOTOS_PER_CHUNK
+
+/* Base64 length cap per photo, server-enforced. ~500KB of JPEG is a
+   1536px-long-edge page at quality 0.8 with headroom; anything larger
+   is an un-downscaled original, which the client never sends. */
+export const MAX_IMAGE_BASE64_CHARS = 700_000;
+
+/* The provider's image-token model, mirrored for the derivation above
+   and its test. Published figures, not measurements. */
+export const IMAGE_BASE_TOKENS = 85;
+export const IMAGE_TILE_TOKENS = 170;
+export const IMAGE_MAX_TILES = 6; // a 1536px long edge at high detail
+
 /* ---------- readings ----------
 
    A reading longer than MAX_INPUT_CHARS.summarise is split client-side

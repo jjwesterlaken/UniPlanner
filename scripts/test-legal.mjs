@@ -510,8 +510,29 @@ async function run() {
        of those features shipped. */
     const all = CONSENT_TEXT.bullets.join(" ");
     assert.ok(AI_CONSENT_VERSION >= 4, "the consent version wasn't bumped for the text features");
-    assert.match(all, /writing you have already done|text is sent overseas/i, "text features aren't covered");
+    /* Asserts the CATEGORY, not a phrase -- this line used to pin "text
+       is sent overseas" and correcting the wording for v6 failed the
+       test that existed to keep it true, the same trap as the "your own
+       writing" literal before it. What must be true: supplied material
+       is named, and it goes overseas un-stored. */
+    assert.match(all, /(text|photos|what you supplied).{0,80}sent overseas/i, "supplied material going overseas isn't covered");
     assert.match(all, /study cards|explanation you type/i, "the consent doesn't say what kind of text");
+  });
+
+  await test("consent v6 covers photographed pages, in the same category as text and audio", () => {
+    /* The reading summariser takes photos of pages. A photo is an IMAGE
+       of text, and reading "text you supply" to cover it is the
+       wordsmithing the category naming exists to prevent -- so v6 must
+       name photos, promise they are not stored, and the POLICY must
+       agree, because a promise made in one document and absent from the
+       other is the drift this file exists to catch. */
+    const all = CONSENT_TEXT.bullets.join(" ");
+    assert.ok(AI_CONSENT_VERSION >= 6, "photographed pages shipped without a consent bump");
+    assert.match(all, /photos/i, "the consent never mentions photos");
+    assert.match(all, /not stored: not in your planner and not on our server/i, "the never-stored promise is gone");
+
+    const policy = prose("privacy.html");
+    assert.match(policy, /photo/i, "the policy never mentions photos while the app sends them overseas");
   });
 
   await test("the policy covers text features too, or it becomes untrue when they ship", () => {

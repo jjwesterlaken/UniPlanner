@@ -343,7 +343,23 @@ never a separate thing beside it.
 v5 names the category instead: **text and audio the student supplies, of
 whatever origin, relayed to do what they asked and — for text — not
 stored at all.** The next feature that takes supplied text needs no
-bump. Consent bumped here because *what happens to the content* changed
+bump.
+
+**v6 widened the category to images**, when the reading summariser took
+photographed pages. A photo is an *image* of text, and reading "text
+you supply" to cover it is the wordsmithing the category naming exists
+to prevent. The bump test passed in both directions: a new kind of
+material leaves the country (a photo can capture more than the words),
+and the same promise is made about it. Photos ride the request body and
+are relayed — `ai-text` has **no storage client at all**, and a test
+pins that, because the day someone adds `.storage` there the policy and
+the consent both become false. Photos are priced as *parts of the
+reading* (a batch of 4 pages = one text chunk), so the parts language,
+the pre-flight estimate and the keep-what-was-charged rule are the
+existing ones. Blur is handled by **model refusal** (`pages_unreadable`,
+naming the pages), never a client heuristic — and the refusal is
+billed, under its own code, with copy carrying both halves: this
+attempt charged, the resubmit charges again as its own smaller batch. Consent bumped here because *what happens to the content* changed
 twice over: a new kind of material leaves the country, and a new promise
 is made about it. That is the test, and it is why the storage move
 didn't bump — a row moving tables is not a change a student can

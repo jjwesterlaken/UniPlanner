@@ -158,6 +158,54 @@ export function estimateReading(text, opts = {}) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Photographed pages                                                */
+/* ------------------------------------------------------------------ */
+
+/* Mirrors the server's PHOTOS_PER_CHUNK / MAX_READING_PHOTOS in
+   ai-text/config.ts -- a browser bundle cannot import from
+   supabase/functions/, so these are restatements and a test asserts
+   the equality, per the standing rule. */
+export const PHOTOS_PER_CHUNK = 4;
+export const MAX_READING_PHOTOS = 16;
+
+/**
+ * Batch photos exactly the way chunkReading splits text: each batch of
+ * up to PHOTOS_PER_CHUNK pages is one `summarise` request, and more
+ * than one batch means a merge. That symmetry is the whole pricing
+ * story -- photos ride the text pipeline, in parts, with no second
+ * scheme to keep in step.
+ */
+export function batchPhotos(count, { perChunk = PHOTOS_PER_CHUNK, maxPhotos = MAX_READING_PHOTOS } = {}) {
+  if (!Number.isInteger(count) || count < 1) return { ok: false, code: "empty" };
+  if (count > maxPhotos) {
+    return { ok: false, code: "too_many", count, maxPhotos };
+  }
+  const batches = [];
+  for (let start = 0; start < count; start += perChunk) {
+    batches.push({ start, size: Math.min(perChunk, count - start) });
+  }
+  return { ok: true, batches };
+}
+
+/** The photo estimate, in the same shape estimateReading returns. */
+export function estimatePhotos(count, opts = {}) {
+  const split = batchPhotos(count, opts);
+  if (!split.ok) return { ok: false, ...split };
+  const chunks = split.batches.length;
+  const units = chunks * (TASK_UNITS.summarise || 0) + (chunks > 1 ? TASK_UNITS.merge || 0 : 0);
+  return { ok: true, count, chunks, units, batches: split.batches };
+}
+
+/**
+ * A batch position back to a photo number the student can act on.
+ * The server reports unreadable pages as 1-based positions WITHIN the
+ * batch it saw; the student is looking at their whole photo strip.
+ */
+export function photoNumberFor(batch, positionInBatch) {
+  return batch.start + positionInBatch;
+}
+
+/* ------------------------------------------------------------------ */
 /*  When the merge fails                                              */
 /* ------------------------------------------------------------------ */
 
