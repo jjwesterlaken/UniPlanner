@@ -38,6 +38,15 @@ import { isReferenceSheet } from "./reference.js";
 export const TEXT = "text";
 export const INK = "ink";
 
+/* The canvas a stroke's coordinates live in. Here rather than in
+   PlannerApp because the CONVERSION needs them: a note written before
+   blocks existed was drawn on a full 1000x1400 page, so its derived ink
+   block must say so. Give it the new-block default instead and the
+   bottom half of every existing drawing is cut off -- which is exactly
+   what happened, and what the conversion test caught. */
+export const CANVAS_W = 1000;
+export const CANVAS_H = 1400;
+
 const asArray = (v) => (Array.isArray(v) ? v : []);
 const asString = (v) => (typeof v === "string" ? v : "");
 
@@ -84,7 +93,9 @@ export function blocksOf(page) {
   const strokes = asArray(page.strokes);
 
   const text = html || body ? [{ id: textId(page, 0), type: TEXT, html, body }] : [];
-  const ink = strokes.length ? [{ id: inkId(page, 0), type: INK, strokes }] : [];
+  /* h is the page height these coordinates were captured in, NOT the
+     default for a new block. See CANVAS_H above. */
+  const ink = strokes.length ? [{ id: inkId(page, 0), type: INK, strokes, h: CANVAS_H }] : [];
 
   /* Order follows what the note was: a handwritten note that also
      carries stray html (fieldsOf writes both keys onto every page) reads
@@ -168,4 +179,128 @@ export function bodyOf(page) {
   const blocks = blocksOf(page);
   if (!blocks) return asString(page && page.body);
   return fieldsFromBlocks(blocks).body;
+}
+
+/* ================================================================== */
+/*  Editing — step 4. Pure, so the awkward cases are testable.        */
+/* ================================================================== */
+
+/* An ink block's canvas is CANVAS_W wide and `h` tall. Half a page by
+   default: a note that is a paragraph and a diagram should not be two
+   screens tall. Stored per block rather than derived, so "always full
+   page" is a change to this constant and nothing else -- which is what
+   makes the schema safe to fix before the UX question is settled. */
+export const INK_DEFAULT_H = 700;
+
+/* Ids stay derived from the page, never minted, for the reason in
+   blocksOf. A counter keeps them unique within the note without
+   introducing randomness: two devices editing the same note produce
+   different content, which merge resolves by updatedAt, but neither can
+   produce a COLLIDING id for different content. */
+const nextId = (blocks, pageId, prefix) => {
+  const base = pageId || "new";
+  let n = 0;
+  const taken = new Set(asArray(blocks).map((b) => b && b.id));
+  while (taken.has(`${base}:${prefix}${n}`)) n++;
+  return `${base}:${prefix}${n}`;
+};
+
+export const newTextBlock = (blocks, pageId) => ({
+  id: nextId(blocks, pageId, "t"),
+  type: TEXT,
+  html: "",
+  body: "",
+});
+
+export const newInkBlock = (blocks, pageId, h = INK_DEFAULT_H) => ({
+  id: nextId(blocks, pageId, "i"),
+  type: INK,
+  strokes: [],
+  h,
+  usedPen: false,
+});
+
+export const indexOfBlock = (blocks, id) => asArray(blocks).findIndex((b) => b && b.id === id);
+
+/** Replace one block, leaving every other reference untouched. */
+export function withBlock(blocks, id, patch) {
+  const list = asArray(blocks);
+  const i = indexOfBlock(list, id);
+  if (i < 0) return list;
+  const next = list.slice();
+  next[i] = { ...next[i], ...patch };
+  return next;
+}
+
+/**
+ * Insert an ink block after `afterId`.
+ *
+ * A note must never END in ink: there would be nowhere to type, and the
+ * only way back to typing would be to add a block from the toolbar --
+ * which is exactly the "where did my cursor go" problem the editor
+ * exists to avoid. So a trailing text block comes with it.
+ */
+export function insertInkAfter(blocks, afterId, pageId) {
+  const list = asArray(blocks).slice();
+  const at = indexOfBlock(list, afterId);
+  const ink = newInkBlock(list, pageId);
+  const head = at < 0 ? list.length : at + 1;
+  list.splice(head, 0, ink);
+  if (head === list.length - 1) list.push(newTextBlock(list, pageId));
+  return { blocks: list, focusId: ink.id };
+}
+
+/**
+ * THE BACKSPACE RULE.
+ *
+ * Backspace at offset 0 of a text block merges it into the previous
+ * TEXT block. If the previous block is ink, it does NOTHING -- deleting
+ * handwriting needs the explicit control, with the block selected.
+ *
+ * This is the data-loss case in the whole editor. A student typing under
+ * a diagram, holding backspace to clear a line, must not silently take
+ * the diagram with it: strokes are not recoverable from anywhere, and
+ * nothing about holding a key says "and now the drawing".
+ *
+ * Returns null when the merge is refused, so the caller can leave the
+ * keystroke alone rather than swallowing it.
+ */
+export function mergeTextBack(blocks, id) {
+  const list = asArray(blocks);
+  const i = indexOfBlock(list, id);
+  if (i <= 0) return null; // nothing before it; the caret is at the top
+  const prev = list[i - 1];
+  const here = list[i];
+  if (!prev || !here || here.type !== TEXT) return null;
+
+  // THE REFUSAL. Ink before text is a wall, not a thing to merge into.
+  if (prev.type !== TEXT) return null;
+
+  const next = list.slice();
+  next[i - 1] = {
+    ...prev,
+    html: asString(prev.html) + asString(here.html),
+    body: asString(prev.body) + asString(here.body),
+  };
+  next.splice(i, 1);
+  return { blocks: next, focusId: prev.id, caretAt: asString(prev.body).length };
+}
+
+/** Remove a block outright — the explicit delete, never the keystroke. */
+export function removeBlock(blocks, id) {
+  const list = asArray(blocks).filter((b) => b && b.id !== id);
+  return list.length ? list : [newTextBlock([], null)];
+}
+
+/**
+ * THE LATCH IS NOTE-LEVEL, AND THIS IS THE FUNCTION THAT MAKES IT SO.
+ *
+ * `usedPen` is stored per ink block, but the question a canvas asks is
+ * "has a pen ever been used on THIS NOTE" -- because a block that
+ * consulted only itself would start unprotected the moment a student
+ * added a second one, which is precisely the per-canvas regression the
+ * note-level latch exists to kill.
+ */
+export function noteUsedPen(blocks) {
+  return asArray(blocks).some((b) => b && b.type === INK && b.usedPen);
 }

@@ -1,48 +1,46 @@
-/* DEMONSTRATES that step 3 changed nothing anyone can see, rather than
-   asserting it.
+/* CONVERTING A NOTE MUST NOT CHANGE HOW IT LOOKS.
 
-   test-note-blocks.mjs proves the inverse theorem — derivation is
-   lossless, so a reader that goes through blocksOf sees the same bytes.
-   That is a proof about the FUNCTION. It says nothing about whether I
-   found every reader, and a reader I forgot to think about is exactly
-   the failure a theorem cannot see. So this file renders the app and
-   compares pixels-as-HTML:
+   Step 4 converts lazily: the first time a student edits an existing
+   note, it is rewritten from html/body/strokes into `blocks`. That
+   conversion happens without asking and without telling them, so the
+   only acceptable outcome is that they cannot tell. This file renders
+   the same note both ways through the same bundle and compares what a
+   student can actually see.
 
-     1. THE SAME PLANNER, RENDERED BY BOTH COMMITS. The bundle from the
-        last commit that did not contain noteBlocks.js, and the bundle
-        from the working tree, each mounted in jsdom over identical
-        seeded data with the clock and Math.random frozen. Every notes
-        screen captured and compared byte for byte. A reader left on the
-        old path still renders identically, so this passes; a reader
-        moved to a path that renders DIFFERENTLY fails, whatever the
-        theorem says about the function it now calls.
+   WHY NOT BYTE-IDENTICAL HTML. That was the bar in step 3 and it was
+   the right one there, because the claim was that NOTHING changed. It
+   is the wrong bar here: a converted note is rendered by the stack
+   renderer, so it legitimately gains a wrapper element even when it
+   holds a single block. Insisting on byte-identity would mean
+   contorting the renderer to satisfy a test rather than a user.
 
-     2. THE SAME NOTE IN BOTH SHAPES, RENDERED BY THE CURRENT BUNDLE.
-        Legacy html/body/strokes against the same content stored as
-        `blocks`, with the legacy fields emptied. Byte-identical output
-        is the claim step 4 rests on: it may start writing blocks
-        because every reader already handles both. (1) retires when the
-        editor lands and the UI legitimately changes; this one does not.
+   So the comparison is over the things a student can point at -- the
+   VISIBLE TEXT, the INK actually drawn, and the TYPEFACE classes -- and
+   dropping the stronger check is recorded here rather than quietly
+   loosened. What it still catches: a dropped block, reordered content,
+   lost strokes, a note that renders empty after conversion, a font that
+   stops being applied. What it no longer catches: pure markup churn,
+   which is what it was asked to stop catching.
 
-   (1) needs git history. A shallow checkout has none, so it SKIPS —
-   loudly, and REQUIRE_BASELINE=1 turns the skip into a failure, the same
-   arrangement as REQUIRE_POSTGRES on the migration tests. CI sets
-   fetch-depth: 0 so it really runs there.
+   WHAT THIS FILE USED TO BE, and why it changed. In step 3 it also
+   built the bundle from the PREVIOUS COMMIT and compared the whole app
+   against it, which is what demonstrated that introducing `blocksOf`
+   changed nothing anyone could see. That comparison has now expired,
+   exactly as its header said it would: step 4 changes the editor on
+   purpose, and the faint-writing fix changes how every stroke is drawn
+   on purpose. A guard that has to be suppressed to let intended changes
+   through is not a guard. It is deleted rather than pinned to a moving
+   baseline, and this is the claim that replaced it.
 
-   WHAT THIS FILE CANNOT SEE, established by mutation rather than
-   guessed, because a guard whose hole is written down is worth more
-   than one that looks thorough:
+   THE ORDERING CLAIM IS NEW AND ONLY MEANINGFUL NOW. In step 3, block
+   order was unobservable -- readers concatenated all text then all ink,
+   so reversing blocksOf changed nothing. NoteView now renders the stack
+   in order, so order is a visible property and is asserted directly.
 
-     BLOCK ORDER. Reversing blocksOf to always emit text-first leaves
-     every screen byte-identical. Today's readers concatenate by TYPE
-     (all text, then all ink), so with one block of each the order is
-     genuinely unobservable. It becomes observable in step 4, when
-     blocks render in sequence. test-note-blocks.mjs asserts it
-     directly, and is the only thing that does.
-
-     REFERENCE IDENTITY. inkOf returning a fresh array each call renders
-     identically and redraws the canvas on every render. Also asserted
-     in test-note-blocks.mjs; see the comment on inkOf. */
+   A stub that swallows the canvas calls would make half of this blind
+   -- found by mutation in step 3, when reverting a reader to
+   page.strokes left every byte identical. The context RECORDS, and the
+   log is part of the snapshot. */
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -101,6 +99,12 @@ const PAGES = [
    and the note cache, whose timing is not something two separate jsdom
    runs agree on to the millisecond — and it is covered by the smoke
    test anyway. This file is about the readers step 3 moved. */
+
+/* A page whose legacy fields flatten to more than one block -- those
+   are the shapes where conversion is NOT expected to be invisible,
+   because the stack now renders in order and the flattened form never
+   could. They are covered by the ordering section instead. */
+const isMulti = (p) => (p.html || p.body) && (p.strokes || []).length > 0;
 
 const asBlocks = (page) =>
   isBlockNote(page)
@@ -329,13 +333,27 @@ async function captureAll(js, pages) {
    handwritten note that carries no drawing calls means the recording
    context has stopped working, and every "byte-identical" above it is
    two empty rectangles agreeing. */
-function checkInkWasCaptured(label, shots) {
-  const shot = shots["view:n3"] || "";
+function checkInkWasCaptured(label, shots, id) {
+  const shot = shots[`view:${id}`] || "";
   check(
     shot.includes("lineTo(") && shot.includes("strokeStyle="),
     `${label}: the handwritten note's drawing was actually captured`,
     "no drawing calls in the snapshot — the canvas half of this test is not measuring anything"
   );
+}
+
+/* What a student can point at: the words, the drawing, the typeface.
+   Everything else in the markup is the renderer's business. */
+function visibleOf(snapshot) {
+  const [html, ink = ""] = String(snapshot).split("\n<!-- ink -->\n");
+  const text = html
+    .replace(/<[^>]*>/g, "\u0001")
+    .split("\u0001")
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .join(" | ");
+  const fonts = [...html.matchAll(/font-(serif|mono)|lined-paper/g)].map((m) => m[0]).join(",");
+  return `TEXT ${text}\nFONTS ${fonts}\nINK ${ink}`;
 }
 
 function firstDifference(a, b) {
@@ -352,7 +370,9 @@ function compare(label, before, after) {
       check(false, `${label}: ${key} rendered on both sides`, "one side did not produce this screen at all");
       continue;
     }
-    check(before[key] === after[key], `${label}: ${key} is byte-identical`, before[key] === after[key] ? null : firstDifference(before[key], after[key]));
+    const a = visibleOf(before[key]);
+    const b = visibleOf(after[key]);
+    check(a === b, `${label}: ${key} looks the same`, a === b ? null : firstDifference(a, b));
   }
 }
 
@@ -360,85 +380,63 @@ console.log("\nblocks: behaviour-neutral");
 
 const current = await bundleFrom(rootDir);
 
-/* ---------- 1. against the commit before blocks existed ---------- */
-
-/* DERIVED, not pinned: the parent of whichever commit added
-   noteBlocks.js. A hardcoded sha is the restatement pattern — it would
-   go on "passing" against a baseline that no longer means anything. */
-function baselineCommit() {
-  let added = "";
-  try {
-    added = git(["log", "--diff-filter=A", "--format=%H", "--", "src/noteBlocks.js"]).split("\n")[0];
-  } catch {
-    return null;
-  }
-  // Uncommitted: HEAD is itself the last commit without blocks.
-  if (!added) return git(["rev-parse", "HEAD"]);
-  try {
-    return git(["rev-parse", `${added}^`]);
-  } catch {
-    return null; // shallow clone, or blocks landed in the root commit
-  }
-}
-
-let worktree = null;
-try {
-  const base = baselineCommit();
-  if (!base) throw new Error("no baseline commit is available (shallow clone?)");
-  worktree = path.join(tmp, "baseline");
-  git(["worktree", "add", "--detach", worktree, base]);
-
-  const legacy = PAGES;
-  const beforeShots = await captureAll(await bundleFrom(worktree), legacy);
-  const afterShots = await captureAll(current, legacy);
-  compare(`vs ${base.slice(0, 7)}`, beforeShots, afterShots);
-  checkInkWasCaptured(`vs ${base.slice(0, 7)}`, afterShots);
-
-  // A comparison of two empty strings passes and proves nothing.
-  check(
-    Object.values(afterShots).every((s) => s.length > 500),
-    "every captured screen actually rendered something",
-    "a screen came back near-empty, so the comparison above is vacuous"
-  );
-} catch (err) {
-  const required = process.env.REQUIRE_BASELINE === "1";
-  check(!required, "the differential against the previous commit ran", err.message);
-  if (!required) console.log(`  SKIP  - differential vs the previous commit: ${err.message}`);
-} finally {
-  if (worktree) {
-    try {
-      git(["worktree", "remove", "--force", worktree]);
-    } catch {
-      /* the temp dir goes anyway */
-    }
-  }
-}
-
-/* ---------- 2. the same note in both shapes ---------- */
+/* ---------- the same note, converted ---------- */
 
 {
-  /* This is the claim step 4 depends on, and unlike (1) it does not
-     expire: whatever the editor changes, a note stored as blocks must
-     go on rendering the same as the note it was converted from. */
-  const legacyShots = await captureAll(current, PAGES);
-  const blockShots = await captureAll(current, PAGES.map(asBlocks));
-  compare("legacy vs blocks", legacyShots, blockShots);
-  checkInkWasCaptured("legacy vs blocks", blockShots);
+  /* A SIMPLE note -- one text block, or one ink block -- is what almost
+     every existing note converts to, so this is the case that decides
+     whether the conversion is invisible to real users. */
+  const simple = PAGES.filter((p) => !isMulti(p));
+  const legacyShots = await captureAll(current, simple);
+  const blockShots = await captureAll(current, simple.map(asBlocks));
+  compare("converted", legacyShots, blockShots);
+  checkInkWasCaptured("converted", blockShots, "n3");
 
-  // The block variant has to actually BE in block shape, or the two
-  // sides are the same input and every comparison above is a tautology.
-  const converted = PAGES.map(asBlocks).filter((p) => Array.isArray(p.blocks));
-  check(converted.length === PAGES.length - 1, "every note but the reference sheet was really stored as blocks", `${converted.length} of ${PAGES.length - 1}`);
+  const converted = simple.map(asBlocks).filter((p) => Array.isArray(p.blocks));
+  check(
+    converted.length === simple.length - 1,
+    "every note but the reference sheet was really stored as blocks",
+    `${converted.length} of ${simple.length - 1}`
+  );
   check(
     converted.every((p) => !p.html && !p.body && !p.strokes.length),
-    "the block variant carries NO legacy fields",
+    "the converted variant carries NO legacy fields",
     "a reader could have been reading the legacy copy the whole time"
   );
-  check(
-    converted.some((p) => p.blocks.length > 1),
-    "at least one note converted to more than one block",
-    "single-block notes alone would not exercise ordering"
-  );
+}
+
+/* ---------- order is now a visible property ---------- */
+
+{
+  /* Reversing blocksOf was undetectable in step 3, because readers
+     concatenated by type. NoteView renders the stack, so it is
+     detectable now -- and this is the assertion that says so, rather
+     than the file continuing to claim a coverage it does not have. */
+  const id = "m1";
+  const textFirst = {
+    id,
+    title: "Mixed",
+    kind: "text",
+    style: "lined",
+    font: "sans",
+    folderId: null,
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    blocks: [
+      { id: `${id}:t0`, type: "text", html: "<p>ALPHA</p>", body: "ALPHA" },
+      { id: `${id}:i0`, type: "ink", strokes: [stroke(6)], h: 700 },
+      { id: `${id}:t1`, type: "text", html: "<p>OMEGA</p>", body: "OMEGA" },
+    ],
+  };
+  const inkFirst = { ...textFirst, blocks: [textFirst.blocks[1], textFirst.blocks[0], textFirst.blocks[2]] };
+
+  const a = await captureReading(current, [textFirst]);
+  const b = await captureReading(current, [inkFirst]);
+  check(a[`view:${id}`] !== b[`view:${id}`], "block ORDER is visible in the rendered note", "reordering the blocks changed nothing — the stack is not being rendered in order");
+
+  const html = a[`view:${id}`];
+  check(html.indexOf("ALPHA") < html.indexOf("OMEGA"), "text blocks render in stack order");
+  check(html.includes("ALPHA") && html.includes("OMEGA"), "a note with two text blocks renders BOTH", "the second text block was dropped");
+  check((html.match(/<canvas/g) || []).length === 1, "the ink block between them renders as its own canvas");
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });
