@@ -187,6 +187,7 @@ import {
   mergeTextBack,
   removeBlock,
   noteUsedPen,
+  noteFields,
 } from "./noteBlocks.js";
 
 /* ------------------------------------------------------------------ */
@@ -2580,21 +2581,6 @@ function ReferenceSheetView({ page, onEdit, onClose }) {
    still on the old build can read a note this one saved. That costs
    roughly 2x per EDITED note -- only edited ones, because conversion
    is lazy -- and step 4b is what ends it. */
-export function noteFields(d) {
-  const blocks = blocksOf(d);
-  const legacy = blocks ? fieldsFromBlocks(blocks) : { html: d.html || "", body: d.body || "", strokes: d.strokes || [] };
-  return {
-    title: d.title,
-    ...legacy,
-    ...(blocks ? { blocks } : {}),
-    style: d.style,
-    kind: d.kind || "text",
-    font: d.font || "sans",
-    // Only reference sheets carry entries; every other page keeps the
-    // key absent rather than an empty array it never reads.
-    ...(isReferenceSheet(d) ? { entries: d.entries || [] } : {}),
-  };
-}
 
 function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAllowance, onSummariseNote, openId, onOpened }) {
   const [draft, setDraft] = useState(null);

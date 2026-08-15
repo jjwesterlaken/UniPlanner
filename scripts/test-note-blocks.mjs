@@ -41,6 +41,7 @@ import {
   removeBlock,
   noteUsedPen,
   withBlock,
+  noteFields,
 } from "../src/noteBlocks.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -357,6 +358,80 @@ test("the latch survives being written through withBlock", () => {
   const next = withBlock(blocks, "i1", { usedPen: true });
   assert.equal(noteUsedPen(next), true);
   assert.equal(noteUsedPen(blocks), false, "withBlock mutated the array it was given");
+});
+
+/* ================================================================== */
+/*  Step 4b — the legacy fields are no longer written                 */
+/* ================================================================== */
+
+test("saving a block note writes NO legacy content", () => {
+  /* The whole point of 4b. Keeping html/body/strokes alongside `blocks`
+     stored every note twice -- roughly 2x on a handwritten page, which
+     is ~113KB for a dense stylus page against a 1MB budget. */
+  const draft = {
+    id: "p1",
+    kind: "text",
+    style: "lined",
+    font: "sans",
+    title: "Osmosis",
+    blocks: [T("p1:t0", "<p>water</p>"), I("p1:i0", 5)],
+  };
+  const saved = noteFields(draft);
+  assert.deepEqual(saved.blocks, draft.blocks, "the blocks were not saved");
+  assert.equal(saved.html, "", "html is still being written alongside blocks");
+  assert.equal(saved.body, "", "body is still being written alongside blocks");
+  assert.deepEqual(saved.strokes, [], "strokes are still being written alongside blocks");
+});
+
+test("the emptied keys are PRESENT, not omitted", () => {
+  /* patchItem spreads the patch over the existing item, so a key left
+     out keeps its old value. Omitting them would leave every already-
+     converted note carrying its content twice forever -- the cost this
+     change exists to remove, silently not removed. */
+  const saved = noteFields({ id: "p1", kind: "text", blocks: [T("p1:t0", "<p>x</p>")] });
+  for (const key of ["html", "body", "strokes"]) {
+    assert.ok(key in saved, `"${key}" is omitted rather than emptied, so patchItem would keep the old value`);
+  }
+});
+
+test("SAVING an unconverted note converts it, losing nothing", () => {
+  /* THE LAZY CONVERSION, and the moment it happens: not on load, but on
+     the first save. The legacy fields are emptied in the same write that
+     adds the blocks, so the content exists in exactly one place
+     afterwards -- and it has to be the same content. */
+  const legacy = { id: "p2", kind: "drawing", html: "<p>a</p>", body: "a", strokes: [stroke(4)] };
+  const saved = noteFields(legacy);
+
+  assert.ok(Array.isArray(saved.blocks), "saving did not convert the note");
+  assert.equal(saved.html, "", "the legacy copy survived the conversion");
+  assert.deepEqual(saved.strokes, [], "the legacy strokes survived the conversion");
+
+  // Nothing was lost on the way: the blocks invert back to what it had.
+  assert.deepEqual(fieldsFromBlocks(saved.blocks), {
+    html: "<p>a</p>",
+    body: "a",
+    strokes: legacy.strokes,
+  });
+});
+
+test("a reference sheet is untouched by any of this", () => {
+  const sheet = { id: "s1", kind: "formula", title: "F", entries: [{ id: "e", label: "a", body: "b" }] };
+  const saved = noteFields(sheet);
+  assert.deepEqual(saved.entries, sheet.entries);
+  assert.ok(!("blocks" in saved), "a reference sheet was given blocks");
+});
+
+test("dropping the fields is what actually saves the bytes", () => {
+  /* Measured rather than asserted in the abstract: a handwritten page
+     stored both ways, so the claim "roughly half" is checked against
+     the real serialisation rather than believed. */
+  const page = { id: "p3", kind: "drawing", style: "lined", font: "sans", title: "Lecture", strokes: Array.from({ length: 60 }, () => stroke(24)) };
+  const blocks = blocksOf(page);
+  // What 4a stored: the blocks AND the legacy copy, side by side.
+  const both = JSON.stringify({ ...noteFields(page), ...fieldsFromBlocks(blocks), blocks });
+  const blocksOnly = JSON.stringify(noteFields(page));
+  const saved = 1 - blocksOnly.length / both.length;
+  assert.ok(saved > 0.4, `dropping the legacy fields saved only ${Math.round(saved * 100)}% — expected roughly half`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
