@@ -405,6 +405,42 @@ const current = await bundleFrom(rootDir);
   );
 }
 
+/* ---------- an encoded note draws the same ink ---------- */
+
+{
+  /* Ink compression stores strokes delta-encoded, and every renderer
+     reads through pointsOf. This renders the same handwriting raw and
+     encoded and compares what was DRAWN — the canvas trace — because a
+     renderer still reading stroke.points would draw an encoded note as
+     an empty rectangle while every byte of HTML stayed identical. */
+  /* encodeStroke alone, NOT encodeStrokes: the save chain also
+     simplifies, which deliberately drops points within its tolerance —
+     and the corpus strokes are straight lines that collapse to their
+     endpoints, so comparing against the save chain measured the lossy
+     stage, not the encoding. First run of this test failed exactly
+     there, correctly. Encoding must be render-invisible; simplification
+     is bounded instead, by its own test. */
+  const { encodeStroke } = await import("../src/ink.js");
+  const raw = PAGES.find((p) => p.id === "n3");
+  const encoded = {
+    ...raw,
+    blocks: [{ id: "n3:i0", type: "ink", strokes: raw.strokes.map(encodeStroke), h: 1400 }],
+    html: "", body: "", strokes: [],
+  };
+  const a = await captureReading(current, [raw]);
+  const b = await captureReading(current, [encoded]);
+  const inkOfShot = (shot) => String(shot).split("\n<!-- ink -->\n")[1] || "";
+  check(
+    inkOfShot(a["view:n3"]).length > 100,
+    "the raw side actually drew something, so the comparison is not two blanks"
+  );
+  check(
+    inkOfShot(a["view:n3"]) === inkOfShot(b["view:n3"]),
+    "AN ENCODED NOTE DRAWS THE SAME INK as its raw self",
+    "the drawn strokes differ — a renderer is reading .points directly and seeing nothing"
+  );
+}
+
 /* ---------- order is now a visible property ---------- */
 
 {

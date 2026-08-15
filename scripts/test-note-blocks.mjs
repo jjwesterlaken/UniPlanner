@@ -43,6 +43,7 @@ import {
   withBlock,
   noteFields,
 } from "../src/noteBlocks.js";
+import { decodeStroke, isEncoded } from "../src/ink.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -377,7 +378,17 @@ test("saving a block note writes NO legacy content", () => {
     blocks: [T("p1:t0", "<p>water</p>"), I("p1:i0", 5)],
   };
   const saved = noteFields(draft);
-  assert.deepEqual(saved.blocks, draft.blocks, "the blocks were not saved");
+  /* The blocks are saved WITH THEIR STROKES ENCODED — compression
+     happens on save, so the comparison is through the decoder: the
+     same content, in the compressed shape. */
+  assert.equal(saved.blocks.length, draft.blocks.length, "the blocks were not saved");
+  assert.equal(saved.blocks[0], draft.blocks[0], "a text block was rebuilt for no reason");
+  assert.ok(isEncoded(saved.blocks[1].strokes[0]), "saving did not encode the ink");
+  assert.deepEqual(
+    saved.blocks[1].strokes.map((st) => decodeStroke(st).points),
+    draft.blocks[1].strokes.map((st) => st.points),
+    "encoding on save changed the ink"
+  );
   assert.equal(saved.html, "", "html is still being written alongside blocks");
   assert.equal(saved.body, "", "body is still being written alongside blocks");
   assert.deepEqual(saved.strokes, [], "strokes are still being written alongside blocks");
@@ -406,12 +417,15 @@ test("SAVING an unconverted note converts it, losing nothing", () => {
   assert.equal(saved.html, "", "the legacy copy survived the conversion");
   assert.deepEqual(saved.strokes, [], "the legacy strokes survived the conversion");
 
-  // Nothing was lost on the way: the blocks invert back to what it had.
-  assert.deepEqual(fieldsFromBlocks(saved.blocks), {
-    html: "<p>a</p>",
-    body: "a",
-    strokes: legacy.strokes,
-  });
+  // Nothing was lost on the way: the text inverts back exactly, and the
+  // ink decodes back to the same points (encoded on save, by design).
+  const fields = fieldsFromBlocks(saved.blocks);
+  assert.equal(fields.html, "<p>a</p>");
+  assert.equal(fields.body, "a");
+  assert.deepEqual(
+    fields.strokes.map((st) => decodeStroke(st).points),
+    legacy.strokes.map((st) => st.points)
+  );
 });
 
 test("a reference sheet is untouched by any of this", () => {
