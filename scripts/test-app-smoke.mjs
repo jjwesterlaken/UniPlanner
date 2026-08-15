@@ -372,6 +372,17 @@ for (const [tabName, phrases] of [
       check(text.includes("Reference sheet"), "the note type chooser offers a reference sheet");
       const create = findButton("Create note");
       check(!!create, "the chooser offers Create note");
+
+      /* STEP 5: two kinds, not three. Typing and handwriting stopped
+         being different types of note when the editor became a stack,
+         so offering the choice asks a question whose answer no longer
+         constrains anything. Asserted from the rendered screen rather
+         than the source, because what matters is what a student is
+         shown. */
+      check(text.includes("Note"), "the chooser offers a plain Note");
+      check(!text.includes("Handwritten"), "the chooser NO LONGER offers Handwritten as a separate type");
+      check(!text.includes("Typed"), "the chooser NO LONGER offers Typed as a separate type");
+      check(text.includes("Lined page") && text.includes("Blank page"), "page style is still choosable");
     }
   }
 }
