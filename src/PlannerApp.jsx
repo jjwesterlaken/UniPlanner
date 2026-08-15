@@ -78,6 +78,8 @@ import {
   Brain,
   CalendarDays,
   ChevronLeft,
+  ChevronDown,
+  ChevronUp,
   ChevronRight,
   Clock,
   MapPin,
@@ -2317,12 +2319,22 @@ function NoteMenu({ page, folders, onMove }) {
   );
 }
 
-function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
+/* THE ROW EXPANDS IN PLACE. The old pattern rendered the opened note
+   either INSTEAD of the list (regular notes) or BELOW the whole list
+   (AI notes, reference sheets) -- and on a long list "below the whole
+   list" is off-screen, so tapping a note appeared to do nothing. Both
+   people building the app missed a control because of it. The row is
+   where the student's eye already is, so that is where the note opens.
+
+   The pen has left the row: reading is the default, and editing is a
+   choice made INSIDE the opened note, same as before -- only the place
+   changes. */
+function NoteRow({ p, folders, expanded, onToggle, onMove, onDelete, children }) {
   const f = folders.find((x) => x.id === p.folderId);
   return (
-    <li className="rounded-xl border border-stone-200 p-3.5">
+    <li className="rounded-xl border border-stone-200 p-3.5" data-note-row={p.id}>
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1 cursor-pointer" onClick={onToggle}>
           <h3 className="font-medium text-stone-800">{p.title || <span className="text-stone-400">Untitled note</span>}</h3>
           <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-stone-400">
             <span className="capitalize">
@@ -2340,8 +2352,8 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
           </span>
         </div>
         <div className="relative flex flex-shrink-0 gap-0.5">
-          <button className={iconBtn} onClick={() => onEdit(p)} aria-label="Edit note">
-            <Pencil size={15} />
+          <button className={iconBtn} onClick={onToggle} aria-label={expanded ? "Collapse note" : "Expand note"}>
+            {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
           </button>
           <button className={iconBtn} onClick={() => onDelete(p.id)} aria-label="Delete note">
             <Trash2 size={15} />
@@ -2376,6 +2388,7 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
           )}
         </>
       )}
+      {expanded && <div className="mt-3 border-t border-stone-200 pt-3">{children}</div>}
     </li>
   );
 }
@@ -2597,14 +2610,23 @@ function ReferenceSheetView({ page, onEdit, onClose }) {
 function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAllowance, onSummariseNote, openId, onOpened }) {
   const [draft, setDraft] = useState(null);
   const [choosing, setChoosing] = useState(false);
-  const [aiViewId, setAiViewId] = useState(null);
   const isNew = draft && !draft.id;
   /* Reading is the default; editing is a deliberate act. A palm resting
      on an editable page writes into it, which is the failure this
-     prevents -- and it brings text and handwritten notes into line with
-     reference sheets and AI notes, which already open read-only. */
-  const [viewId, setViewId] = useState(null);
-  const showList = !draft && !choosing && !viewId;
+     prevents.
+
+     ONE id for whichever note is open, whatever its type -- the note
+     opens IN ITS ROW, accordion-style, so the list never disappears and
+     nothing renders below it. The old arrangement did both, one per
+     type, and on a long list "below the list" is off-screen: tapping a
+     note appeared to do nothing, and two people building the app missed
+     a control because of it.
+
+     Editing an EXISTING note happens inside the expansion (draft.id is
+     set), so the list stays. Only the new-note flow still takes the
+     whole panel -- there is no row to expand under yet. */
+  const [expandedId, setExpandedId] = useState(null);
+  const showList = !choosing && !(draft && !draft.id);
 
   /* Opened from somewhere else -- today, the "Summarised" link on a
      reading row. Cleared immediately via onOpened so pressing back
@@ -2615,13 +2637,18 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
      app down on every render twice. */
   useEffect(() => {
     if (!openId) return;
-    setViewId(openId);
+    setExpandedId(openId);
     setDraft(null);
     setChoosing(false);
     onOpened();
+    /* Expand-and-scroll-to, not render-at-the-bottom: the row may be far
+       down the list. Guarded because jsdom has no scrollIntoView. */
+    setTimeout(() => {
+      const row = document.querySelector(`[data-note-row="${openId}"]`);
+      if (row && row.scrollIntoView) row.scrollIntoView({ block: "start", behavior: "smooth" });
+    }, 50);
   }, [openId]);
 
-  const [sheetViewId, setSheetViewId] = useState(null);
   const room = canAddSheet(pages);
 
   const startNew = ({ style, kind }) => {
@@ -2748,7 +2775,7 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
       const id = uid();
       addItem("pages", { id, ...fields, folderId: d.folderId || null });
       setDraft((cur) => (cur ? { ...cur, id } : cur));
-      setViewId(id);
+      setExpandedId(id);
       return;
     }
     patchItem("pages", d.id, fields);
@@ -2777,7 +2804,7 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
           <PageTypeChooser onCreate={startNew} onCancel={() => setChoosing(false)} sheetsFull={!room.ok} />
         </>
       )}
-      {draft && isReferenceSheet(draft) && (
+      {draft && !draft.id && isReferenceSheet(draft) && (
         <div>
           <ReferenceSheetEditor draft={draft} setDraft={setDraft} />
           <div className="mt-3 flex justify-end gap-2">
@@ -2786,7 +2813,7 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
           </div>
         </div>
       )}
-      {draft && !isReferenceSheet(draft) && (
+      {draft && !draft.id && !isReferenceSheet(draft) && (
         <>
           {/* `fromView` means this note was opened for reading and the
               student chose Edit. Done commits and returns to reading;
@@ -2801,56 +2828,114 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
             onCancel={isNew ? () => setDraft(null) : null}
             saveLabel={isNew ? "Save note" : "Done"}
           />
-          {/* Only on a note that already HAS something in it, and only
-              once saved -- summarising an empty draft would spend
-              allowance on nothing. SummariseNote returns null when the
-              body is blank, so a new note shows no control at all. */}
-          {session && !isNew && (
-            <SummariseNote
-              session={session}
-              page={draft}
-              allowanceApi={textAllowance}
-              onSummarised={(result) => onSummariseNote(draft, result)}
-            />
-          )}
         </>
       )}
       {showList && pages.length === 0 && <Empty>No notes yet. Tap "New note" to add one.</Empty>}
       {showList && pages.length > 0 && (
         <ul className="mt-3 space-y-2">
           {pages.map((p) => (
-            <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => (n.aiMeta ? setAiViewId(n.id) : isReferenceSheet(n) ? setSheetViewId(n.id) : setViewId(n.id))} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
+              <NoteRow
+                key={p.id}
+                p={p}
+                folders={folders}
+                expanded={expandedId === p.id}
+                onToggle={() => {
+                  setExpandedId(expandedId === p.id ? null : p.id);
+                  setDraft(null);
+                }}
+                onMove={(id, folderId) => patchItem("pages", id, { folderId })}
+                onDelete={(id) => {
+                  removeItem("pages", id);
+                  if (expandedId === id) setExpandedId(null);
+                }}
+              >
+                <ExpandedNote
+                  page={p}
+                  folders={folders}
+                  draft={draft && draft.id === p.id ? draft : null}
+                  setDraft={setDraft}
+                  onSave={save}
+                  sheetOk={sheetOk}
+                  patchItem={patchItem}
+                  removeItem={removeItem}
+                  onCollapse={() => {
+                    setExpandedId(null);
+                    setDraft(null);
+                  }}
+                  extras={
+                    session && draft && draft.id === p.id && !isReferenceSheet(p) && !p.aiMeta ? (
+                      <SummariseNote
+                        session={session}
+                        page={draft}
+                        allowanceApi={textAllowance}
+                        onSummarised={(result) => onSummariseNote(draft, result)}
+                      />
+                    ) : null
+                  }
+                />
+              </NoteRow>
           ))}
         </ul>
       )}
-      {viewId && !draft && (
-        <NoteView
-          page={pages.find((p) => p.id === viewId)}
-          folders={folders}
-          onEdit={() => setDraft({ ...pages.find((p) => p.id === viewId) })}
-          onClose={() => setViewId(null)}
-          onMove={(id, folderId) => patchItem("pages", id, { folderId })}
-          onDelete={(id) => { removeItem("pages", id); setViewId(null); }}
-        />
-      )}
-      {sheetViewId && (
-        <ReferenceSheetView
-          page={pages.find((p) => p.id === sheetViewId)}
-          onEdit={() => { setDraft({ ...pages.find((p) => p.id === sheetViewId) }); setSheetViewId(null); }}
-          onClose={() => setSheetViewId(null)}
-        />
-      )}
-      {aiViewId && (
-        <AiLectureNoteView
-          page={pages.find((p) => p.id === aiViewId)}
-          patchItem={patchItem}
-          onClose={() => setAiViewId(null)}
-          /* Only ever called for a row that is DEFINITIVELY absent -- the
-             other device deleted it and this one still has the stub. */
-          onMissing={(id) => removeItem("pages", id)}
-        />
-      )}
     </Card>
+  );
+}
+
+/* What an opened row shows: the right read-only view for the page's
+   type, or the right editor once Edit is chosen. Shared by the Notes
+   and Folders tabs, which is what makes the accordion one change and
+   not two -- the same reason their save paths were unified. */
+function ExpandedNote({ page, folders, draft, setDraft, onSave, sheetOk = true, patchItem, removeItem, onCollapse, extras = null }) {
+  if (draft) {
+    if (isReferenceSheet(page)) {
+      return (
+        <div>
+          <ReferenceSheetEditor draft={draft} setDraft={setDraft} />
+          <div className="mt-3 flex justify-end gap-2">
+            <button className={btnPrimary} onClick={onSave} disabled={!sheetOk}><Check size={15} /> Save sheet</button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <>
+        {/* Same editor, same semantics -- autosave, Done, no discard
+            path. Only WHERE it opens changed. */}
+        <NoteEditor draft={draft} setDraft={setDraft} onSave={onSave} saveLabel="Done" />
+        {extras}
+      </>
+    );
+  }
+  if (page.aiMeta) {
+    return (
+      <AiLectureNoteView
+        page={page}
+        patchItem={patchItem}
+        onClose={onCollapse}
+        /* Only ever called for a row that is DEFINITIVELY absent -- the
+           other device deleted it and this one still has the stub. */
+        onMissing={(id) => {
+          removeItem("pages", id);
+          onCollapse();
+        }}
+      />
+    );
+  }
+  if (isReferenceSheet(page)) {
+    return <ReferenceSheetView page={page} onEdit={() => setDraft({ ...page })} onClose={onCollapse} />;
+  }
+  return (
+    <NoteView
+      page={page}
+      folders={folders}
+      onEdit={() => setDraft({ ...page })}
+      onClose={onCollapse}
+      onMove={(id, folderId) => patchItem("pages", id, { folderId })}
+      onDelete={(id) => {
+        removeItem("pages", id);
+        onCollapse();
+      }}
+    />
   );
 }
 
@@ -2861,8 +2946,7 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
   const [confirmId, setConfirmId] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [draft, setDraft] = useState(null);
-  const [viewId, setViewId] = useState(null);
-  const [aiViewId, setAiViewId] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
 
   const saveFolder = () => {
     const name = (folderForm.name || "").trim() || "Untitled folder";
@@ -2885,36 +2969,10 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
   };
   const countFor = (fid) => pages.filter((p) => p.folderId === fid).length;
 
-  /* Reading is the default here too, and there is NO discard path. Both
-     were decided for the Notes tab and this screen was the last
-     holdout; a note that behaves differently depending on which tab you
-     opened it from is two things to learn. */
-  if (draft) {
-    return (
-      <Card>
-        <NoteEditor draft={draft} setDraft={setDraft} onSave={saveNote} saveLabel="Done" />
-      </Card>
-    );
-  }
-
-  if (viewId) {
-    const page = pages.find((p) => p.id === viewId);
-    return (
-      <Card>
-        <NoteView
-          page={page}
-          folders={folders}
-          onEdit={() => setDraft({ ...page })}
-          onClose={() => setViewId(null)}
-          onMove={(id, folderId) => patchItem("pages", id, { folderId })}
-          onDelete={(id) => {
-            removeItem("pages", id);
-            setViewId(null);
-          }}
-        />
-      </Card>
-    );
-  }
+  /* Reading is the default here too, and there is NO discard path --
+     and the note opens IN ITS ROW, exactly as on the Notes tab, through
+     the same ExpandedNote. The fold-in made the save path one thing;
+     this makes the opening behaviour one thing. */
 
   return (
     <Card>
@@ -2996,7 +3054,35 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
                   ) : (
                     <ul className="space-y-2">
                       {notes.map((p) => (
-                        <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => (n.aiMeta ? setAiViewId(n.id) : isReferenceSheet(n) ? setDraft({ ...n }) : setViewId(n.id))} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
+                        <NoteRow
+                          key={p.id}
+                          p={p}
+                          folders={folders}
+                          expanded={expandedId === p.id}
+                          onToggle={() => {
+                            setExpandedId(expandedId === p.id ? null : p.id);
+                            setDraft(null);
+                          }}
+                          onMove={(id, folderId) => patchItem("pages", id, { folderId })}
+                          onDelete={(id) => {
+                            removeItem("pages", id);
+                            if (expandedId === id) setExpandedId(null);
+                          }}
+                        >
+                          <ExpandedNote
+                            page={p}
+                            folders={folders}
+                            draft={draft && draft.id === p.id ? draft : null}
+                            setDraft={setDraft}
+                            onSave={saveNote}
+                            patchItem={patchItem}
+                            removeItem={removeItem}
+                            onCollapse={() => {
+                              setExpandedId(null);
+                              setDraft(null);
+                            }}
+                          />
+                        </NoteRow>
                       ))}
                     </ul>
                   )}
@@ -3006,16 +3092,6 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
           );
         })}
       </ul>
-      {aiViewId && (
-        <AiLectureNoteView
-          page={pages.find((p) => p.id === aiViewId)}
-          patchItem={patchItem}
-          onClose={() => setAiViewId(null)}
-          /* Only ever called for a row that is DEFINITIVELY absent -- the
-             other device deleted it and this one still has the stub. */
-          onMissing={(id) => removeItem("pages", id)}
-        />
-      )}
     </Card>
   );
 }

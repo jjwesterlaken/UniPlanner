@@ -275,18 +275,18 @@ async function captureReading(js, pages) {
   await openNotes(dom);
 
   const shots = { list: snap(dom) };
-  const rows = buttons(dom, "Edit note");
+  /* The accordion: rows expand in place via the chevron, one at a time,
+     and collapse via the same control. Uniform across every note type,
+     which retired the old sheet-closes-differently special case. */
+  const rows = buttons(dom, "Expand note");
   if (rows.length !== pages.length) throw new Error(`expected ${pages.length} note rows, saw ${rows.length}`);
 
   for (let i = 0; i < rows.length; i++) {
-    buttons(dom, "Edit note")[i].click();
+    buttons(dom, "Expand note")[i].click();
     await settle();
     shots[`view:${pages[i].id}`] = snap(dom);
-    // A reference sheet closes with "Close" rather than "Back to notes".
-    const back =
-      dom.window.document.querySelector('[aria-label="Back to notes"]') ||
-      dom.window.document.querySelector('[aria-label="Close"]');
-    if (!back) throw new Error(`no way back from the view of ${pages[i].id}`);
+    const back = dom.window.document.querySelector('[aria-label="Collapse note"]');
+    if (!back) throw new Error(`no way to collapse the view of ${pages[i].id}`);
     back.click();
     await settle();
   }
@@ -307,7 +307,7 @@ async function captureEditor(js, pages, index) {
   const dom = boot(js, pages);
   await settle(300);
   await openNotes(dom);
-  buttons(dom, "Edit note")[index].click();
+  buttons(dom, "Expand note")[index].click();
   await settle();
   const edit = named(dom, "Edit");
   if (!edit) throw new Error(`no Edit button on ${pages[index].id}`);
