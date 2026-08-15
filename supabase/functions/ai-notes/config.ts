@@ -20,6 +20,42 @@ export const PROVIDER_API_KEY_ENV = {
 
 export const MONTHLY_MINUTES_LIMIT = 300;
 
+/* ---------- what the providers charge, and how much they are asked for ----
+
+   THESE ARE HERE SO THE FLOOR IS DERIVED RATHER THAN REMEMBERED.
+
+   The derivation below used to be prose, with the resulting figure
+   ($0.0018 per summary) typed into scripts/test-ai-notes.mjs as a
+   literal. That made the test blind to the one change it was supposed
+   to notice: raising SUMMARY_MAX_TOKENS from 8,000 to 15,000 — nearly
+   doubling the ceiling — left it green, because the number it checked
+   had not moved and could not. Eighth instance of the restatement
+   pattern, and the first where the restated value was a PRICE.
+
+   Now the test computes the summary cost from these and asserts the
+   floor covers it, so a deeper prompt, a pricier model or a raised
+   ceiling all force the arithmetic to be re-run instead of skipping it.
+
+   TYPICAL_SUMMARY_OUTPUT_TOKENS is a MODELLED figure, not a measured
+   one, and it is the one to replace first: run
+   scripts/measure-summary-depth.mjs against a real transcript and put
+   the observed number here. Everything else is a published price. */
+export const USD_PER_TRANSCRIBED_MINUTE = 0.04 / 60; // Groq whisper-large-v3-turbo, ~$0.04/hour
+export const USD_PER_1M_SUMMARY_INPUT = 0.15; // gpt-4o-mini
+export const USD_PER_1M_SUMMARY_OUTPUT = 0.6; // gpt-4o-mini
+
+/* A SHORT recording's summary, which is what the floor exists to cover:
+   a one-minute clip and a fifty-minute lecture cost nearly the same to
+   summarise, so the floor is priced against the short one.
+
+   2,800 was the figure before the depth change (a terse note plus a
+   translation). The deeper prompt asks for the lecturer's specifics
+   rather than more sections, and explicitly forbids padding, so a
+   one-minute clip grows far less than a lecture does — modelled at
+   ~1.3x. UNMEASURED. See the note above. */
+export const TYPICAL_SUMMARY_OUTPUT_TOKENS = 3600;
+export const TYPICAL_SUMMARY_INPUT_TOKENS = 1000;
+
 /* ---------- the minimum a recording can cost ----------
 
    THE HOLE THIS CLOSES: transcription is charged per minute, but
@@ -30,40 +66,50 @@ export const MONTHLY_MINUTES_LIMIT = 300;
    So "300 minutes" priced as 300 minutes of transcription is wrong by
    roughly the number of recordings, not the number of minutes.
 
-   The arithmetic, at Groq whisper-large-v3-turbo (~$0.04/hour) and
-   gpt-4o-mini ($0.15/1M in, $0.60/1M out):
+   The arithmetic is now COMPUTED from the constants above rather than
+   restated here. At today's values:
 
-     transcription        $0.04 / 60          = $0.000667 per minute
-     summarising, typical ~2,800 output tokens (a short note plus a
-                          translation) + ~1,000 input               ≈ $0.0018
-     summarising, ceiling  8,000 output tokens (SUMMARY_MAX_TOKENS)  ≈ $0.005
+     transcription                                    $0.000667 / minute
+     summarising, typical  3,600 out + 1,000 in       ≈ $0.00231
+     summarising, ceiling 12,000 out (SUMMARY_MAX_TOKENS) ≈ $0.00735
 
-   $0.0018 / $0.000667 = 2.7 minutes of transcription buys what one
-   typical summary costs. Rounded UP to 3, because rounding down would
+   $0.00231 / $0.000667 = 3.46 minutes of transcription buys what one
+   typical summary costs. Rounded UP to 4, because rounding down would
    under-cover the case that includes a translation -- which is the case
    a student who needs one always hits.
 
-   What it does to the pathological month (300 one-minute recordings,
-   which the allowance permits today):
+   IT WAS 3, AND THE DEPTH CHANGE IS WHY IT MOVED. The deeper prompt
+   asks for the lecturer's actual specifics, which costs output tokens
+   on every request including a short one. The test derives the required
+   floor and fails if this constant is below it, so that decision could
+   not be skipped -- which is the whole point of the change above.
 
-                             transcription   summarising     total
-     before, 300 recordings     $0.20          $0.54         $0.74
-     after, 100 recordings      $0.067         $0.18         $0.247
+   BOTH THE FLOOR AND THE CEILING NOW REST ON A MODELLED FIGURE
+   (TYPICAL_SUMMARY_OUTPUT_TOKENS). Re-derive them from a real run
+   before treating either as settled; the instrument is
+   scripts/measure-summary-depth.mjs.
+
+   What it does to the pathological month (as many one-minute clips as
+   the allowance permits) against a real timetable:
+
+                                 transcription  summarising   total
+     no floor, 300 clips            $0.20         $0.69       $0.89
+     floor of 4, 75 clips           $0.050        $0.173      $0.223
      a real timetable
-     (6 x 50-minute lectures)   $0.20          $0.024        $0.224
+     (6 x 50-minute lectures)       $0.20         $0.014      $0.214
 
-   3.3x over the intended cost becomes 1.1x. Against the summariser's
-   ceiling rather than a typical response the residual is ~2.5x, and that
-   is left deliberately: covering it needs a 7.5-minute floor, which
-   would charge a student recording a ten-minute tutorial segment for
-   most of a lecture. The ceiling is also the case that FAILS rather than
-   returning notes (see openai.ts), so it is not a mode anyone can
-   usefully sit in.
+   4.2x over the intended cost becomes 1.04x. Against the summariser's
+   CEILING rather than a typical response the residual is larger, and
+   that is left deliberately: covering it needs a floor around 11
+   minutes, which would charge a student recording a ten-minute tutorial
+   segment for more than they used. The ceiling is also the case that
+   FAILS rather than returning notes (see openai.ts), so it is not a
+   mode anyone can usefully sit in.
 
-   Recalculate this if MONTHLY_MINUTES_LIMIT, SUMMARY_MAX_TOKENS or
-   either provider's price changes. scripts/test-ai-notes.mjs holds the
-   arithmetic so raising a limit can't quietly skip it. */
-export const MINIMUM_BILLED_MINUTES = 3;
+   Every figure above is computed by scripts/test-ai-notes.mjs from the
+   constants, so this table is a description of the arithmetic and not
+   the arithmetic itself. */
+export const MINIMUM_BILLED_MINUTES = 4;
 export const MAX_REQUEST_SECONDS = 3 * 3600;
 export const PROCESSING_STALE_MINUTES = 10;
 
@@ -134,8 +180,20 @@ export const MAX_COURSE_LENGTH = 80;
    cents of transcription — the summariser, not Whisper, would set the
    price of the product.
 
-   8000 sits above what the structured notes actually need — a 3-hour
-   lecture summarised into two languages lands around 6k — while halving
-   the theoretical worst case. Hitting it is treated as a failure rather
-   than silently returning truncated notes; see openai.ts. */
-export const SUMMARY_MAX_TOKENS = 8000;
+   RAISED FROM 8,000 TO 12,000 BY THE DEPTH CHANGE, and this is the
+   direction to err in. A 3-hour lecture summarised into two languages
+   landed around 6k under the terse prompt; a prompt that asks for the
+   lecturer's specifics roughly doubles that, which would have put the
+   worst case OVER 8,000.
+
+   Hitting the cap is not a truncated note -- it is a hard failure, on a
+   request whose transcription has already succeeded and already been
+   billed, with no retry endpoint and the audio already deleted (see
+   "there is no way to retry a summary" in CLAUDE.md). So an
+   under-set ceiling costs a student a lecture they paid for, while an
+   over-set one only costs money in a case that fails today anyway.
+   12,000 is still well under the model's 16,384 default.
+
+   Hitting it is treated as a failure rather than silently returning
+   truncated notes; see openai.ts. */
+export const SUMMARY_MAX_TOKENS = 12000;

@@ -682,24 +682,67 @@ and delta encoding are both sensitive to sampling rate and stroke shape,
 and a stylus samples far denser than a finger. **The 80% and 88% still
 wait on a stylus sample** — Grace's iPad page, verification item 11.
 
-**ASSUMPTIONS THE ENCODER MUST HOLD TO, recorded before the code exists
-because the sample is what revealed them:**
+**THE STYLUS SAMPLE HAS NOW LANDED, and it unblocks the delta work.**
+Grace's iPad export, 15 August 2026: three handwritten pages, 61
+strokes, 2,071 points, with **43 distinct pressure values** — the first
+real Apple Pencil data.
 
-- **Coordinates are NOT bounded by `CANVAS_W`/`CANVAS_H`, and are not
-  non-negative.** The real sample runs to **x = −99**. The pointer
-  handlers use pointer capture, so events keep arriving after the
-  pointer leaves the element, and the coordinate is a plain division by
-  the element's rect — nothing clamps it. Anything that packs into a
-  fixed range, assumes a sign, or sizes a field from `CANVAS_W` will
-  silently corrupt the parts of a stroke drawn off the edge, and those
-  are the parts nobody looks at closely. Clamping at encode time is not
-  the fix either: it would move ink that currently renders.
+Read the figures carefully, because they are **not** comparable to the
+finger sample's without adjusting for what had already shipped. That
+export predated capture-time rounding; this one is post-rounding, so
+`measure-ink.mjs` reports **rounding at 0%** — there is nothing left to
+round. That zero is the finding: **capture-side rounding is confirmed
+working in the field**, at 19.5 B/point against 43.5 B/point before it.
+
+Gains available *on top of* what is already shipped, on the 48-stroke
+stylus page:
+
+| | | |
+|---|---|---|
+| stored today | 26.4 KB | 19.5 B/point |
+| + drop near-collinear points | 10.2 KB | **−61%** |
+| + delta-encode along the stroke | 7.0 KB | **−74%** |
+
+Simplification does **better** on stylus than on finger writing (61% vs
+an equivalent ~53%), which is the expected direction: a denser sampling
+rate means more collinear points to drop.
+
+What this means for the budget: a 200-stroke stylus page at the observed
+28.9 points/stroke costs **~113 KB today** and **~29 KB** with the full
+chain. That is the difference between ten dense pages filling the
+planner and ten dense pages costing a quarter of it.
+
+**ASSUMPTIONS THE ENCODER MUST HOLD TO, recorded before the code exists
+because the samples are what revealed them:**
+
+- **Coordinates are NOT bounded by `CANVAS_W`/`CANVAS_H`, are not
+  non-negative, and overrun on BOTH axes.** The finger sample ran to
+  x = −99; the stylus sample runs to **y = −39.7** and **x = 1004.1**,
+  with 14 points outside the canvas box. The pointer handlers use
+  pointer capture, so events keep arriving after the pointer leaves the
+  element, and the coordinate is a plain division by the element's rect
+  — nothing clamps it. Sizing a field from `CANVAS_W` was already
+  unsafe; sizing one from `CANVAS_H` is now demonstrably unsafe too.
+  Clamping at encode time is not the fix either: it would move ink that
+  currently renders.
 - **A point may be missing its pressure**, and the neutral value is
   `0.5`, not `0`. `roundPoint` already does this; an encoder that
   defaults a missing third element to zero renders hairlines.
+- **Observed pressure is [0, 0.5]. ENCODE OVER [0, 1] ANYWAY.** Every
+  value in the stylus sample sits at or below 0.5, and it is tempting to
+  size the field to what was seen. Don't: that is one hand on one device
+  through one browser's mapping, and a byte covers [0, 1] at the same
+  cost. Narrowing to the observation saves nothing and silently clips
+  any device that reports full range.
+- **Width varies WITHIN a page**, not just between notes — 3, 9, 14 and
+  42 on one page, because the eraser is a width. An encoder that hoists
+  one width per note corrupts the eraser strokes.
+- **Single-point strokes exist** (three in the sample), so nothing may
+  assume a stroke has two points to interpolate between. Real
+  distribution: 28.9 points/stroke average, 124 maximum, **1 minimum**.
 - **Rounding is already applied**, at capture and on load, so the
   encoder's input is grid-aligned and its own gain is measured on top of
-  57%, not on top of raw floats.
+  it, never on top of raw floats.
 
 **The migration must NOT bump `updatedAt`.** A lossless representation
 change is not an edit, and if it looked like one, two devices each
@@ -720,6 +763,75 @@ change, no server involvement, and no migration ordering to get wrong.
 **Still outstanding, and unchanged by this work:** the semester archive.
 Two fixed buckets that nothing ever clears is still the growth that
 matters most, and no amount of per-feature capping addresses it.
+
+### Depth is bought with instructions, and it moves the billing floor
+
+Real output was "helpful and great, but shallower than I'd like", and
+the cause was visible in the prompt: it named the five sections and said
+nothing about what belonged in them, so the model wrote headings. The
+schema cannot help — OpenAI's strict structured-output mode does not
+support `minItems` — so depth is a prompt property or it is nothing.
+
+**Depth went into the sections, not beside them.** The five sections are
+unchanged; a sixth would touch every screen that renders a note and
+every note already saved. What changed is that each section now says
+what belongs in it: the reasoning as well as the claim, the lecturer's
+own names, dates, figures and worked examples, terms explained *as the
+lecturer explained them* rather than glossed from the model's own
+knowledge, and the examinable signal quoted so a student can see why a
+line is listed.
+
+**"Do not pad" is load-bearing, not decorative.** Told to go deeper and
+given nothing to be deep about, a model reliably inflates — the same
+claim in three registers, invented open questions to fill a section,
+dictionary definitions. That is longer output at the same information
+content, and the student pays for the tokens. Every rule in the prompt
+is either *include what was actually said* or *do not invent*.
+
+**The floor moved from 3 minutes to 4, and that is the interesting
+part.** `MINIMUM_BILLED_MINUTES` exists because summarising is charged
+per request while transcription is charged per minute, so it is priced
+against a SHORT recording. A deeper prompt costs output tokens on every
+request, including short ones — so depth is not free, and it is not
+free in the place nobody looks.
+
+**The test that was supposed to catch that could not.** It hardcoded
+`SUMMARISE_PER_REQUEST = 0.0018`. Raising `SUMMARY_MAX_TOKENS` from
+8,000 to 15,000 — nearly doubling the ceiling — left it **green**,
+demonstrated by doing it. Eighth instance of the restatement pattern and
+the first where the restated value was a **price**. The prices and the
+token counts now live in `config.ts`, the test computes the cost from
+them, and a separate assertion asks the question that actually decides
+the floor: *does the floor times one billed minute pay for one summary?*
+It is written as an inequality against the derived cost rather than
+`=== 4`, because pinning the answer is how a guard stops noticing its
+input.
+
+**The ceiling went up too, and the asymmetry is the reason.** Hitting
+`SUMMARY_MAX_TOKENS` is not a truncated note — it is a hard failure on a
+request whose transcription has already succeeded and already been
+billed, with no retry endpoint and the audio deleted (see the known gap
+below). So an under-set ceiling costs a student a lecture they paid for,
+while an over-set one costs money only in a case that fails today
+anyway. 8,000 → 12,000, still well under the model's 16,384.
+
+`MAX_AI_NOTE_BYTES` was deliberately **not** raised, for the same
+asymmetry read the other way: exceeding it is graceful — the note drops
+the language the student did not ask for — not a failure. Raising a
+safety cap on a model is backwards; raising it on a measurement is fine.
+
+**What none of this proves.** `TYPICAL_SUMMARY_OUTPUT_TOKENS` is
+modelled at ~1.3× the pre-depth figure and is **unmeasured**, and both
+the floor and the ceiling derive from it. No test can notice a prompt
+quietly getting wordier without that constant being updated — that hole
+is real and named rather than papered over.
+`scripts/measure-summary-depth.mjs` is the instrument: two real paid
+calls, before-prompt and after-prompt, on the same transcript, reporting
+tokens, bytes, key-point count **and words per key point** — because
+"deeper" that turns out to be *more entries* rather than *more per
+entry* is a different change from the one asked for. Re-derive the
+constants from a short real recording once someone with a key has run
+it. Same shape as `measure-ink.mjs`, and for the same reason.
 
 ### Known gap: there is no way to retry a summary
 
@@ -1583,6 +1695,45 @@ sheet containing `$x^2$` today means those literal characters. Rendering
 would need either a new field, a per-entry flag, or a migration that
 guesses — and guessing at someone's coursework is the wrong answer.
 
+## Verify the evidence before endorsing the remedy
+
+A finding that arrives with a fix already attached is the easiest kind
+to act on and the easiest kind to get wrong. The analysis has been done,
+the cause named, the remedy proposed — everything invites you to skip
+straight to building it.
+
+Grace's iPad export came with exactly that: two ink bugs, diagnosed,
+with fixes proposed. Re-measuring the raw strokes rather than the
+summary produced **three corrections**, one of which mattered enormously:
+
+- A page identified as palm contamination — "3 strokes, pressure locked
+  at 0.5, the touch signature" — was a **finger drawing**. The touch
+  signature was right; the palm inference was not. The geometry says so:
+  whole-page sweeps with a median step of 34–50 canvas units, against
+  0.9–5.5 for deliberate contact elsewhere in the same file, and **no pen
+  strokes anywhere on that page**. The proposed remedy was "reject touch
+  once a pen has been seen". It would have deleted the page.
+- Twelve zero-pressure points offered as evidence of vanishing writing
+  were all inside two **eraser** strokes. The genuine light-touch
+  evidence was four points, on a different page.
+- The two bugs were **the same three objects**. The palm marks and the
+  invisible single-point strokes are one set, which means the
+  invisibility is currently *hiding* the palm dots — so fixing the
+  visible symptom first would make three stray marks appear in a
+  student's note. An ordering constraint that only shows up if you look
+  at the strokes themselves.
+
+The root cause neither analysis named came out of the same pass:
+`penSeen` is a `useRef`, reset on unmount, so **every editing session
+starts unprotected**. That is the recurring-bite mechanism, and no
+amount of reasoning about the proposed fix would have found it.
+
+The discipline is the outward-facing form of *check the mutation
+actually applied*: **do not accept a result you have not reproduced,
+including one that agrees with you.** Examine the individual objects,
+not the summary statistics — the summary said "3 strokes at 0.5
+pressure" and was true, and the conclusion drawn from it was false.
+
 ## A guard that restates its subject will drift
 
 Five separate times now, a check has been weaker than it looked, always
@@ -1617,7 +1768,14 @@ the same way: it hardcoded the value it was supposed to be guarding.
   rather than in code, and the tell is the same: a guard that pins the
   wording cannot survive the wording being wrong.
 
-One is an anecdote. Seven is a rule: **derive a guard from its source of
+- **`SUMMARISE_PER_REQUEST`** was typed into the billing test as
+  `0.0018`. It is the number that decides `MINIMUM_BILLED_MINUTES`, and
+  it could not move — so raising `SUMMARY_MAX_TOKENS` from 8,000 to
+  15,000 left the test green, which was demonstrated rather than
+  assumed. First instance where the restated value was a **price**, and
+  the failure mode is a bill rather than a bug.
+
+One is an anecdote. Eight is a rule: **derive a guard from its source of
 truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the

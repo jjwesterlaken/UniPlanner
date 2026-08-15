@@ -27,7 +27,7 @@
 import { FAILED_RESULT_RETENTION_DAYS } from "./aiNotesRetention.js";
 
 export const AI_NOTES_COPY = {
-  /* Why a two-minute recording shows as three minutes used.
+  /* Why a two-minute recording shows as more minutes used than it ran.
 
      Disclosed rather than left to be discovered: a student who records a
      short tutorial segment and watches the counter jump would otherwise
