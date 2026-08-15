@@ -158,6 +158,18 @@ asked for a translation is reading the translation; the language they
 *requested* is kept and the other one goes. Dropping the translation
 would only ever hurt the user who most needed it.
 
+**A long lecture WITH a translation is the case that reaches the cap
+first, and the diagnosis is counter-intuitive.** The deeper prompt took
+a measured note from 2,251 to 6,135 bytes, so a translated 50-minute
+lecture now approaches 20 KB where it used not to. What the cap gives up
+is the copy the student did **not** ask for — so a student reading
+Spanish loses the **English**, and keeps what they wanted. If someone
+reports "my translation vanished on a long lecture", that is *not* this
+mechanism and something else is wrong; if they report the English
+missing from a note they asked to have translated, it is working as
+designed. `summaryForStorage` drops the terms before storing, so the
+stored figure is smaller than anything the measurement script reports.
+
 None of that made sixty lectures fit. At ~6 KB a note it was still
 ~360 KB a semester, and a cap is a guard, not a budget.
 
@@ -763,6 +775,65 @@ change, no server involvement, and no migration ordering to get wrong.
 **Still outstanding, and unchanged by this work:** the semester archive.
 Two fixed buckets that nothing ever clears is still the growth that
 matters most, and no amount of per-feature capping addresses it.
+
+### Depth is bought with instructions, and the billing did NOT move
+
+Real output was "helpful and great, but shallower than I'd like", and
+the cause was visible in the prompt: it named the five sections and said
+nothing about what belonged in them, so the model wrote headings. The
+schema cannot help — OpenAI's strict structured-output mode does not
+support `minItems` — so depth is a prompt property or it is nothing.
+
+**Depth went into the sections, not beside them.** The five are
+unchanged; a sixth would touch every screen that renders a note and
+every note already saved. Each now says what belongs in it: the
+reasoning as well as the claim, the lecturer's own names, dates, figures
+and worked examples, terms explained *as the lecturer explained them*,
+and the examinable signal quoted so a student can see why a line is
+listed. Every rule is either *include what was actually said* or *do not
+invent* — told to go deeper with nothing to be deep about, a model
+inflates, and the student pays for the tokens.
+
+**Measured, on a real 4,772-character recording with a translation:**
+
+| | before | after | |
+|---|---|---|---|
+| key points | 5 | 6 | +20% |
+| **words per key point** | **9** | **26** | **+189%** |
+| terms | 3 | 8 | +167% |
+| overview words | 22 | 58 | +164% |
+| open questions | 2 | **0** | −100% |
+
+Entries barely moved and their contents nearly tripled, which is the
+distinction the instrument was built to report: *more per entry*, not
+*more entries*. The open questions going to zero is the anti-padding
+rule working — the old prompt invented two for a narrated story that has
+none.
+
+**THE BILLING DID NOT MOVE, AND THAT IS THE FINDING.** Both increases
+that had been proposed — `MINIMUM_BILLED_MINUTES` 3 → 4 and
+`SUMMARY_MAX_TOKENS` 8,000 → 12,000 — were arithmetic on
+`TYPICAL_SUMMARY_OUTPUT_TOKENS`, which was **modelled at 2,800 and
+measured at 475: the guess was 5.9× reality.** A constant nobody had
+measured was quietly setting the price of the product. Re-derived, one
+summary costs $0.00096, the floor needs 1.44 minutes, and the 3 that was
+already there covers it 2.08× — so a deeper prompt ships without
+changing what any student is charged.
+
+The general form, and it is the same lesson as the ink measurement gate:
+**re-derive a constant before building on it, especially when the thing
+you are about to build is a price.** Two user-visible increases were
+one measurement away from being unnecessary.
+
+`SUMMARY_MAX_TOKENS` moves **only on a measured long lecture**, never on
+an extrapolation from a short one — a 5-minute sample cannot say what a
+3-hour recording produces, and that constant only matters for long ones.
+
+**A marker a machine greps for is not vocabulary.** The deploy refuses
+while `config.ts` carries the unmeasured flag. Writing that word in a
+sentence — even to say something is *not* it — blocks the deploy. That
+happened while writing the comment explaining the flag. Prose says
+"unverified"; the marker is reserved for the thing it marks.
 
 ### Known gap: there is no way to retry a summary
 
@@ -1755,7 +1826,16 @@ the same way: it hardcoded the value it was supposed to be guarding.
   rather than in code, and the tell is the same: a guard that pins the
   wording cannot survive the wording being wrong.
 
-One is an anecdote. Seven is a rule: **derive a guard from its source of
+- **`SUMMARISE_PER_REQUEST`** was typed into the billing test as
+  `0.0018`. It is the number that decides `MINIMUM_BILLED_MINUTES`, and
+  it could not move — so raising `SUMMARY_MAX_TOKENS` from 8,000 to
+  15,000 left the test green, demonstrated rather than assumed. First
+  instance where the restated value was a **price**. Worse, the figure
+  it restated was itself a guess: re-measured, the underlying token
+  count was **5.9× reality**, and two proposed user-visible increases
+  evaporated with it.
+
+One is an anecdote. Eight is a rule: **derive a guard from its source of
 truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the

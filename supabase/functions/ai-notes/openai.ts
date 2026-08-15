@@ -54,9 +54,41 @@ export const openaiAdapter = {
     translateTo?: string | null;
     apiKey: string;
   }): Promise<{ original: any; translated: any | null }> {
+    /* THE DEPTH RULES.
+
+       The first version of this prompt named the sections and stopped,
+       which is why real output came back accurate but thin: nothing
+       told the model what belonged IN a key point, so it wrote
+       headings. Depth is bought with instructions about specificity,
+       not with more sections -- the structure below is exactly the
+       structure that shipped.
+
+       "Do not pad" is load-bearing rather than decorative. Told to go
+       deeper and given nothing to be deep ABOUT, a model reliably
+       inflates: restating the same claim in three registers, inventing
+       open questions to fill the section, glossing terms from its own
+       knowledge rather than from the lecture. That is longer output at
+       the same information content, and the student pays for the
+       tokens. Every rule below is either "include the specifics that
+       were actually said" or "do not invent".
+
+       The register is study, never substitution: these are revision
+       notes made from a lecture the student attended. Nothing here
+       asks for a replacement for attending or for the reading. */
+    const depthRules = [
+      `"overview": 3-5 sentences saying what the lecture argued and how it was organised, not what topic it was about.`,
+      `"keyPoints": one entry per distinct idea the lecturer developed, in the order they were covered. Each entry is a complete sentence or two carrying the substance: the claim, the reasoning or evidence given for it, and any names, dates, figures, formulae or worked examples the lecturer used. A bare topic label is not a key point. A fifty-minute lecture usually yields 12-20; a short recording yields few, and that is correct.`,
+      `"terms": 8-15 entries. Explain each one AS THE LECTURER DID -- the definition they gave, and why it matters in this course. A dictionary gloss from your own knowledge is not what is wanted.`,
+      `"assessable": anything the lecturer signalled is examinable (e.g. "this will be on the exam", "remember this for the test"). Quote or closely paraphrase the signal so the student can see why it is listed.`,
+      `"openQuestions": only things genuinely left unresolved in the lecture, or that the lecturer said would be covered later. If there were none, return an empty array.`,
+      `Stay with what was actually said. Do not add material the lecturer did not cover, do not restate the same point in several entries, and do not lengthen an entry that is already complete. Depth comes from the lecture's specifics, never from padding.`,
+    ].join(" ");
+
+    const base = `You turn lecture transcripts into detailed structured study notes for a student to revise from. Produce "original" in the transcript's spoken language (expected English). ${depthRules}`;
+
     const systemPrompt = translateTo
-      ? `You turn lecture transcripts into structured study notes. Produce "original" in the transcript's spoken language (expected English). Also produce "translated": the same structure, fully translated into the language with ISO code "${translateTo}". Flag anything the lecturer signals is examinable (e.g. "this will be on the exam") under "assessable". List anything genuinely unclear or left unresolved under "openQuestions".`
-      : `You turn lecture transcripts into structured study notes. Produce "original" in the transcript's spoken language (expected English). Set "translated" to null. Flag anything the lecturer signals is examinable (e.g. "this will be on the exam") under "assessable". List anything genuinely unclear or left unresolved under "openQuestions".`;
+      ? `${base} Also produce "translated": the same structure at the same depth, fully translated into the language with ISO code "${translateTo}".`
+      : `${base} Set "translated" to null.`;
 
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
