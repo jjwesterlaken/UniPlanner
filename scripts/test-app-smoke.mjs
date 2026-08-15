@@ -865,6 +865,24 @@ for (const [tabName, phrases] of [
       "a standalone launch offers course and week pickers, since no reading row pre-fills them"
     );
 
+    /* Photographed pages, through the real panel: open the standalone
+       tool and the photo controls are there, with the never-stored
+       promise and the quality expectation IN VIEW before anything is
+       taken. (Capture itself needs a camera; what a walk can assert is
+       that the door and the promises render.) */
+    {
+      const openBtn = [...panel.querySelectorAll("button")].find((b) => (b.textContent || "").includes("Summarise this"));
+      check(!!openBtn, "the standalone reading tool offers its open control");
+      if (openBtn) {
+        openBtn.click();
+        await new Promise((r) => setTimeout(r, 200));
+        const t = panel.textContent || "";
+        check(t.includes("Add photos of the pages"), "the reading tool offers photographed pages");
+        check(t.includes("photograph the pages") || t.includes("Or photograph"), "the photos option is labelled");
+        check(!!panel.querySelector("textarea"), "pasting is still offered beside photos");
+      }
+    }
+
     /* The free-tier gate, through the real Recorder. The probes above
        ran with the tier UNKNOWN, and the recorder rendered -- which is
        itself the never-gate half of the design. Now the definitive no:

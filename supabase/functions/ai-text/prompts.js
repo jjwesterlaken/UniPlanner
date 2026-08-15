@@ -51,6 +51,26 @@ const SYSTEM = {
     '"assessable":[string],"openQuestions":[string]}. ' +
     "Draw only on the note. `openQuestions` is for things the note leaves unresolved, not for questions you invent.",
 
+  /* The same task over photographed pages. The schema is identical --
+     one shape of AI note, whatever the medium.
+
+     THE LEGIBILITY RULE IS A REFUSAL, NOT A GUESS. There is no reliable
+     client-side blur detector, and a bad heuristic blocks legible
+     photos -- so the model, which actually reads the page, is the one
+     that refuses. A summary quietly built on a misread page is the
+     worst outcome: it is billed, saved, and trusted. What this cannot
+     catch -- a page legible enough to misread -- is stated in the
+     user-facing copy rather than papered over. */
+  summariseImages:
+    `${SHARED_RULES} The images are photographs of pages from a reading the student is studying. ` +
+    "Summarise their content into the structure the app uses for lecture notes. " +
+    'Schema: {"overview":string,"keyPoints":[string],"terms":[{"term":string,"content":string}],' +
+    '"assessable":[string],"openQuestions":[string]}. ' +
+    "Draw only on what the pages actually say. " +
+    "IF ANY PAGE IS NOT CLEARLY LEGIBLE, DO NOT GUESS AT IT: instead reply with exactly " +
+    '{"unreadable":[numbers]} listing the 1-based positions of the illegible images, and nothing else. ' +
+    "Only summarise when every page can be read.",
+
   /* Combining the per-chunk summaries of one long reading.
      Same schema as `summarise` on purpose: the result goes down the
      identical storage path, so there is one shape of AI note rather
@@ -86,6 +106,23 @@ export function buildMessages(task, body) {
     ];
   }
   if (task === "summarise") {
+    if (Array.isArray(body.images) && body.images.length) {
+      /* Vision content: one user message carrying the batch, in order.
+         The data-URLs were validated upstream; "high" detail because a
+         page of print at low detail is a page of grey. The student's
+         photos are CONTENT, never instructions -- same separation as
+         text. */
+      return [
+        { role: "system", content: SYSTEM.summariseImages },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: `Photographs of ${body.images.length} consecutive pages, in order:` },
+            ...body.images.map((url) => ({ type: "image_url", image_url: { url, detail: "high" } })),
+          ],
+        },
+      ];
+    }
     return [
       { role: "system", content: system },
       { role: "user", content: String(body.text || "") },
@@ -134,6 +171,19 @@ export function parseTaskResult(task, raw) {
     throw new Error(`${task}: response was not JSON`);
   }
   if (!parsed || typeof parsed !== "object") throw new Error(`${task}: response was not an object`);
+
+  /* The legibility refusal, detected BEFORE the schema check: the model
+     was told to reply with this shape instead of the schema, so it must
+     not fall through and read as "unusable output". The thrown error
+     carries the positions; the handler turns it into its own code,
+     because it is a different fact from ai_failed_charged -- the
+     student can act on it (retake page 3), not just retry. */
+  if (task === "summarise" && Array.isArray(parsed.unreadable)) {
+    const pages = parsed.unreadable.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 1);
+    const err = new Error(`summarise: pages unreadable (${pages.join(", ")})`);
+    err.unreadablePages = pages.length ? pages : [1];
+    throw err;
+  }
 
   if (task === "explain") {
     const verdict = asString(parsed.verdict);

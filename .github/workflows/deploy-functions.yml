@@ -18,13 +18,14 @@ jobs:
         with:
           version: latest
 
-      - name: Check the function exists
+      - name: Check the functions exist
         run: |
-          if [ ! -d "supabase/functions/ai-notes" ]; then
-            echo "ERROR: supabase/functions/ai-notes not found."
-            echo "Has the AI notes code been pushed to this repository?"
-            exit 1
-          fi
+          for fn in ai-notes ai-text; do
+            if [ ! -d "supabase/functions/$fn" ]; then
+              echo "ERROR: supabase/functions/$fn not found."
+              exit 1
+            fi
+          done
           echo "Found these files:"
           find supabase/functions -type f | sort
 
@@ -64,11 +65,18 @@ jobs:
           fi
           echo "No unmeasured billing inputs. OK to deploy."
 
+      # BOTH functions, deliberately enumerated. This workflow deployed
+      # only ai-notes for as long as ai-text existed, so every ai-text
+      # change needed a by-hand deploy nobody's checklist mentioned --
+      # the photographed-pages PR is what surfaced it, one step short of
+      # shipping a server half with no path to the server.
       - name: Deploy
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           supabase functions deploy ai-notes \
+            --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+          supabase functions deploy ai-text \
             --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
 
       - name: Done

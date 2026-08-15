@@ -430,6 +430,75 @@ async function main() {
     assert.equal((await charged.json()).code, "ai_failed_charged");
   });
 
+  /* ---------- photographed pages ---------- */
+
+  const IMG = "data:image/jpeg;base64," + "A".repeat(120);
+  const SUMMARY_OK = { overview: "o", keyPoints: ["k"], terms: [], assessable: [], openQuestions: [] };
+
+  await test("a photo batch is relayed as vision content, priced exactly like a text chunk", async () => {
+    const admin = makeAdmin();
+    let messages = null;
+    const res = await run(
+      { task: "summarise", images: [IMG, IMG, IMG] },
+      { supabaseAdmin: admin, summarizer: { complete: async (args) => ((messages = args.messages), JSON.stringify(SUMMARY_OK)) } }
+    );
+    assert.equal(res.status, 200);
+    // The images went as vision content, in order, as CONTENT not instructions.
+    const user = messages.find((m) => m.role === "user");
+    const imgs = user.content.filter((c) => c.type === "image_url");
+    assert.equal(imgs.length, 3, "not every image reached the provider");
+    assert.ok(imgs.every((c) => c.image_url.url === IMG));
+    const sys = messages.find((m) => m.role === "system");
+    assert.match(sys.content, /NOT CLEARLY LEGIBLE, DO NOT GUESS/, "the legibility refusal left the prompt");
+    // Billed as ONE summarise -- the same weight as one text chunk.
+    const bill = admin.seen.find((x) => x.op === "upsert");
+    assert.equal(bill.payload.text_units_used, 3, "a photo batch is not priced as one summarise");
+  });
+
+  await test("mixed media and oversize batches are refused before anything is spent", async () => {
+    const cases = [
+      { task: "summarise", text: "x", images: [IMG] },
+      { task: "summarise", images: [IMG, IMG, IMG, IMG, IMG] },
+      { task: "summarise", images: ["http://x/a.jpg"] },
+      { task: "explain", topic: "t", text: "x", images: [IMG] },
+    ];
+    for (const body of cases) {
+      const admin = makeAdmin();
+      const trace = [];
+      const res = await run(body, { supabaseAdmin: admin, summarizer: okSummarizer(SUMMARY_OK, trace) });
+      assert.equal(res.status, 400, JSON.stringify(body).slice(0, 60));
+      assert.ok(!trace.includes("provider:call"), "the provider was called for a refused batch");
+      assert.equal(admin.seen.filter((x) => x.op === "upsert").length, 0, "a refused batch was billed");
+    }
+  });
+
+  await test("THE LEGIBILITY REFUSAL: its own code, the page numbers, and it IS billed", async () => {
+    /* Billing follows spend -- the refusal is generated output. But it
+       is a DIFFERENT fact from ai_failed_charged: the student can act
+       on it (retake page 3), not just retry. The client copy carries
+       both halves: this attempt charged, the resubmit charges again. */
+    const admin = makeAdmin();
+    const res = await run(
+      { task: "summarise", images: [IMG, IMG, IMG] },
+      { supabaseAdmin: admin, summarizer: { complete: async () => JSON.stringify({ unreadable: [1, 3] }) } }
+    );
+    assert.equal(res.status, 422);
+    const body = await res.json();
+    assert.equal(body.code, "pages_unreadable");
+    assert.deepEqual(body.pages, [1, 3], "the pages the student can act on never reached them");
+    assert.equal(admin.seen.filter((x) => x.op === "upsert").length, 1, "the refusal was not billed — billing follows spend");
+  });
+
+  await test("ai-text has NO storage client, so photos cannot have a server-side home", async () => {
+    /* The invariant that survives refactors. Photos ride the request
+       body and are relayed -- the deliberate opposite of the audio
+       path. The day someone adds `.storage` here, the never-stored
+       promise in the policy and consent v6 both become false. */
+    assert.ok(!/\.storage\b/.test(src), "index.ts touches the Storage API");
+    const promptsSrc = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-text/prompts.js"), "utf8");
+    assert.ok(!/\.storage\b/.test(promptsSrc), "prompts.js touches the Storage API");
+  });
+
   await test("every task has an output ceiling, an input cap and a weight", async () => {
     /* Adding a task and forgetting one of the three is silent in the
        worst direction each time: no MAX_TOKENS sends `max_tokens:

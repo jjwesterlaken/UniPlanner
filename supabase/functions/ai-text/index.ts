@@ -32,6 +32,8 @@ import {
   TASKS,
   MAX_TOKENS,
   MAX_INPUT_CHARS,
+  PHOTOS_PER_CHUNK,
+  MAX_IMAGE_BASE64_CHARS,
   PRACTICE_MAX_CARDS,
   WEAKSPOTS_MAX_TOPICS,
   TASK_UNITS,
@@ -130,6 +132,8 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       practiceMaxCards: PRACTICE_MAX_CARDS,
       weakspotsMaxTopics: WEAKSPOTS_MAX_TOPICS,
       maxReadingChunks: MAX_READING_CHUNKS,
+      photosPerChunk: PHOTOS_PER_CHUNK,
+      maxImageBase64Chars: MAX_IMAGE_BASE64_CHARS,
     });
     if (!valid.ok) {
       // `detail` says which rule failed, in the LOG only. The response
@@ -199,6 +203,19 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       logFailure(stage, err, { task });
       const charged = await bill(admin, { userId, month, unitsUsed, cost: allowance.cost, now });
       if (!charged.ok) logFailure("billing", charged.error, { task, cost: allowance.cost, after: "parse_failure" });
+      /* A legibility refusal is not unusable output -- it is the model
+         doing what it was told. BILLED, same as any generated output
+         (billing follows spend), but under its OWN code carrying which
+         pages, because the student can act on it: retake page 3. The
+         client copy states both halves -- this attempt used allowance,
+         and the resubmit charges again as its own smaller batch. */
+      const unreadable = (err as { unreadablePages?: number[] }).unreadablePages;
+      if (Array.isArray(unreadable)) {
+        return jsonResponse(
+          { ok: false, stage, code: "pages_unreadable", error: "Some pages couldn't be read.", pages: unreadable },
+          422
+        );
+      }
       /* A DIFFERENT code from the one above, because these are different
          facts: that one cost the student nothing, this one cost them
          allowance for a result they never saw. The client's wording says

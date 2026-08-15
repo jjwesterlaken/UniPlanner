@@ -1999,6 +1999,17 @@ async function run() {
     assert.match(workflow, /fetch-depth:\s*0/, "CI checks out shallow, so the differential render has no baseline to build");
   });
 
+  await test("the deploy workflow ships BOTH functions", () => {
+    /* It deployed only ai-notes for as long as ai-text existed, so
+       every ai-text change needed a by-hand deploy nobody's checklist
+       mentioned. Surfaced one step short of shipping the
+       photographed-pages server half with no path to the server. */
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/deploy-functions.yml"), "utf8");
+    for (const fn of ["ai-notes", "ai-text"]) {
+      assert.match(workflow, new RegExp(`functions deploy ${fn}`), `the deploy workflow no longer ships ${fn}`);
+    }
+  });
+
   await test("the function deploy refuses to ship an unmeasured billing constant", () => {
     /* Lives here, with the other wiring guards, because a check inside
        the workflow can be deleted along with the workflow.
