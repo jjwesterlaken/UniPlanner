@@ -504,6 +504,26 @@ for (const [tabName, phrases] of [
     }
   }
 
+  /* THE GATED AI NOTES TAB NAMES ITS TOOLS. Discoverable-but-gated:
+     a signed-out or demo student must learn both tools exist, not meet
+     a bare needs-account line -- a feature nobody can see is absence.
+     The demo walk is exactly the state that sees this screen. */
+  {
+    const aiTab = findButton("AI Notes");
+    check(!!aiTab, "the AI Notes tab is reachable");
+    if (aiTab) {
+      aiTab.click();
+      await new Promise((r) => setTimeout(r, 200));
+      const text = doc.body.textContent || "";
+      check(text.includes("Record a lecture"), "the gated tab names the lecture recorder");
+      check(text.includes("Summarise a reading"), "the gated tab names the reading summariser");
+      check(text.includes("needs an account"), "and says an account is what unlocks them");
+      // Back to Notes -- the accordion walk below expects its rows.
+      findButton("Notes").click();
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+
   /* THE ACCORDION. The old pattern rendered an opened note either
      instead of the list or below the whole list -- and "below the whole
      list" is off-screen on a long list, so tapping a note appeared to
@@ -835,6 +855,14 @@ for (const [tabName, phrases] of [
     check(
       (panel.textContent || "").includes("Record from"),
       "the audio source picker is reachable through the real panel, not only on its own"
+    );
+    check(
+      (panel.textContent || "").includes("Summarise a reading"),
+      "the reading summariser has a first-class home on the panel, beside the recorder"
+    );
+    check(
+      !!panel.querySelector("select") && (panel.textContent || "").includes("Week"),
+      "a standalone launch offers course and week pickers, since no reading row pre-fills them"
     );
 
     /* The free-tier gate, through the real Recorder. The probes above

@@ -44,6 +44,16 @@ export const AI_NOTES_COPY = {
      whole lecture and uploaded it -- no money lost, an hour of theirs
      gone. Study framing, same as everywhere: this describes what the
      plan adds, never what it replaces. */
+  /* The signed-out / demo state of the AI Notes tab. It NAMES both
+     tools rather than showing a bare needs-account line: a feature
+     nobody can see is not consent, it is absence -- the same reasoning
+     as showing the consent gate at the point of use. Discoverable but
+     gated. */
+  signedOutTools: {
+    tools: "Record a lecture · Summarise a reading",
+    detail: "AI study help needs an account. Sign in (or create one) from the Account tab first.",
+  },
+
   recordingNeedsPlan: {
     title: "Lecture recording is part of the AI plan.",
     detail:

@@ -13,6 +13,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { Mic, Square, Pause, Play, Check, X, TriangleAlert, RefreshCw, Globe, Download } from "lucide-react";
 import { ConsentGate } from "./aiNotesConsent.jsx";
+import { SummariseReading } from "./aiText.jsx";
 import {
   AI_CONSENT_VERSION,
   needsConsent,
@@ -1286,13 +1287,21 @@ function Recorder({ session, courses, recording }) {
 /*  Panel — consent + account gating, then the recorder                */
 /* ------------------------------------------------------------------ */
 
-export function AiNotesPanel({ session, backend, courses, data, setData, recording }) {
+/* The AI Notes tab is the home for BOTH capture tools -- record a
+   lecture, summarise a reading -- because it is already the "AI does
+   work for you" place and already carries the consent gate and the
+   allowance line. The reading-row control remains as a shortcut into
+   the same tool; it stops being the only door, because two builders in
+   a row failed to find it there. */
+export function AiNotesPanel({ session, backend, courses, data, setData, recording, textAllowance, onSummariseReading, onOpenSummary }) {
   if (!session || backend.isDemo) {
+    /* Gated, but DISCOVERABLE: the tools are named, so a signed-out
+       student learns they exist. A bare needs-account line is the
+       feature-nobody-can-see failure in sign-in clothing. */
     return (
       <Card>
-        <p className="text-sm text-stone-500">
-          AI notes needs a real signed-in account. Sign in (or create one) from the Account tab first.
-        </p>
+        <p className="text-sm font-medium text-stone-700">{AI_NOTES_COPY.signedOutTools.tools}</p>
+        <p className="mt-1 text-sm text-stone-500">{AI_NOTES_COPY.signedOutTools.detail}</p>
       </Card>
     );
   }
@@ -1307,7 +1316,63 @@ export function AiNotesPanel({ session, backend, courses, data, setData, recordi
     );
   }
 
-  return <RecoveryGate session={session} courses={courses} data={data} setData={setData} recording={recording} />;
+  return (
+    <>
+      <RecoveryGate session={session} courses={courses} data={data} setData={setData} recording={recording} />
+      <ReadingHub
+        session={session}
+        courses={courses}
+        textAllowance={textAllowance}
+        onSummariseReading={onSummariseReading}
+        onOpenSummary={onOpenSummary}
+      />
+    </>
+  );
+}
+
+/* The standalone home for the reading summariser. Course and week are
+   the hub's job -- the reading-row path pre-fills them from the row,
+   but a standalone launch has no row to read. The tool itself is the
+   SAME component the row uses, with the same estimate, refusals and
+   filing; only the door is new. */
+function ReadingHub({
+  session,
+  courses,
+  textAllowance = { allowance: null, applyFraction: () => {} },
+  onSummariseReading = () => {},
+  onOpenSummary = () => {},
+}) {
+  const [course, setCourse] = useState("");
+  const [week, setWeek] = useState("");
+  return (
+    <Card className="mt-3">
+      <h3 className="font-serif text-base font-semibold text-stone-800">Summarise a reading</h3>
+      <p className="mt-1 text-sm text-stone-500">
+        Paste a section of a reading and get structured notes to revise from, filed with your course.
+      </p>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <div>
+          <label className={labelCls}>Course</label>
+          <CourseSelect value={course} onChange={setCourse} courses={courses} />
+        </div>
+        <div>
+          <label className={labelCls}>Week</label>
+          <input type="number" min="1" className={inputCls} placeholder="e.g. 5" value={week} onChange={(e) => setWeek(e.target.value)} />
+        </div>
+      </div>
+      <div className="mt-3">
+        <SummariseReading
+          standalone
+          session={session}
+          reading={{ course, week }}
+          summaryPage={null}
+          allowanceApi={textAllowance}
+          onSummarised={onSummariseReading}
+          onOpenSummary={onOpenSummary}
+        />
+      </div>
+    </Card>
+  );
 }
 
 /* ------------------------------------------------------------------ */

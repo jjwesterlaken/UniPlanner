@@ -5667,7 +5667,7 @@ export default function PlannerApp() {
           // They're bigger than manual notes — if sync ever gets noticeably
           // slower, splitting AI notes into their own table/row is the fix.
           <Section icon={Mic} title="AI lecture notes" subtitle="Record a lecture and get an AI-generated summary and study cards">
-            <AiNotesPanel session={session} backend={backend} courses={sem.courses} data={data} setData={setData} recording={recording} />
+            <AiNotesPanel session={session} backend={backend} courses={sem.courses} data={data} setData={setData} recording={recording} textAllowance={textAllowance} onSummariseReading={summariseReading} onOpenSummary={openSummaryNote} />
           </Section>
         )}
 

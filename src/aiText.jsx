@@ -466,6 +466,15 @@ export function SummariseReading({
   onOpenSummary,
   consentNeeded = false,
   onAcceptConsent,
+  /* Standalone: the same tool mounted as a first-class home (the AI
+     Notes tab) rather than as a one-line shortcut on a reading row.
+     Two builders in a row failed to find the row control, and a
+     control nobody finds is absence -- so the row stays as a shortcut
+     into the same tool, and this stops it being the only door. The
+     reading it receives standalone is just {course, week} from the
+     hub's pickers; no id, so no sourceReadingId, which was always
+     decorative. */
+  standalone = false,
 }) {
   const { allowance, applyFraction } = allowanceApi;
   const { run, busy, error } = useTask(session, applyFraction);
@@ -546,6 +555,13 @@ export function SummariseReading({
         >
           <Check size={12} className="mr-0.5 inline" />
           {READING_COPY.summarisedLink}
+        </button>
+      );
+    }
+    if (standalone) {
+      return (
+        <button className={`${btnPrimary} w-full justify-center`} onClick={() => setOpen(true)}>
+          <Sparkles size={15} /> {READING_COPY.rowAction}
         </button>
       );
     }
