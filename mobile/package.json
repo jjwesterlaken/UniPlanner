@@ -11,7 +11,8 @@
     "sync": "cap sync && npm run settings",
     "open:ios": "cap open ios",
     "open:android": "cap open android",
-    "settings": "npm run permissions && node ../scripts/stamp-native.mjs"
+    "settings": "npm run permissions && npm run signing && node ../scripts/stamp-native.mjs",
+    "signing": "node scripts/native-signing.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.2",

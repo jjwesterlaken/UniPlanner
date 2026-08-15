@@ -8,3 +8,10 @@ mobile/ios/
 mobile/android/
 .ai-notes-test-tmp/
 .claude/
+
+# Release signing secrets. The keystore must live OUTSIDE the repo; these
+# entries are the backstop for the day someone creates one inside it and
+# runs `git add -A`. A test asserts they are present.
+*.jks
+*.keystore
+key.properties
