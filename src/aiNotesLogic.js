@@ -168,7 +168,7 @@ export const MONTHLY_MINUTES_LIMIT_HINT = 300;
    Unlike that one, this constant is not cosmetic. It is what a student
    sees their allowance move by, so a drift here makes the number on
    screen disagree with the number being charged. */
-export const MINIMUM_BILLED_MINUTES_HINT = 4;
+export const MINIMUM_BILLED_MINUTES_HINT = 3;
 
 const CANDIDATE_MIME_TYPES = [
   { mimeType: "audio/webm;codecs=opus", extension: "webm" },

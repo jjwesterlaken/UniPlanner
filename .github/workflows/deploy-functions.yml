@@ -28,6 +28,42 @@ jobs:
           echo "Found these files:"
           find supabase/functions -type f | sort
 
+      # THE PRECONDITION, made unreachable rather than documented.
+      #
+      # A billing constant derived from a MODELLED figure must not reach
+      # students. This has already gone wrong once: a floor of 4 minutes
+      # and a deeper prompt were merged into main inside a pull request
+      # described as documentation-only, and the only thing standing
+      # between that and real charges was nobody clicking this button.
+      #
+      # The mirror test could not catch it -- it compares the server
+      # constant to the client constant, and both moved together. A guard
+      # on a DECISION has to anchor to the decision's precondition, which
+      # here is "has anyone measured it", not "do the two copies agree".
+      #
+      # Clearing this is deliberate work: run
+      # scripts/measure-summary-depth.mjs against a real transcript, put
+      # the observed number in config.ts, and delete the UNMEASURED
+      # marker in the same commit that re-derives the floor.
+      - name: Refuse to ship an unmeasured billing constant
+        run: |
+          CONFIG=supabase/functions/ai-notes/config.ts
+          if grep -q "UNMEASURED" "$CONFIG"; then
+            echo "ERROR: $CONFIG still marks a billing input as UNMEASURED."
+            echo
+            grep -n "UNMEASURED" "$CONFIG"
+            echo
+            echo "MINIMUM_BILLED_MINUTES and SUMMARY_MAX_TOKENS are derived from"
+            echo "TYPICAL_SUMMARY_OUTPUT_TOKENS. While that is a model rather than a"
+            echo "measurement, deploying charges students on a guess."
+            echo
+            echo "To clear it: run scripts/measure-summary-depth.mjs against a real"
+            echo "transcript, put the observed value in config.ts, re-derive the floor,"
+            echo "and remove the UNMEASURED marker in that same commit."
+            exit 1
+          fi
+          echo "No unmeasured billing inputs. OK to deploy."
+
       - name: Deploy
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
