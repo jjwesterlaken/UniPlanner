@@ -2029,6 +2029,78 @@ async function run() {
     );
   });
 
+  /* ---------- release signing: applied by script, secrets ignored ---------- */
+
+  await test("the signing secrets are gitignored, and the entries cannot quietly vanish", () => {
+    /* The keystore is close to irreversible to lose and CATASTROPHIC to
+       publish: with the store passwords in key.properties beside it, a
+       committed pair signs malicious updates as us. `git add -A` is the
+       normal way work is committed in this repo, so the ignore entries
+       are load-bearing, not hygiene. */
+    const ignore = fs.readFileSync(path.join(rootDir, ".gitignore"), "utf8");
+    for (const entry of ["*.jks", "*.keystore", "key.properties"]) {
+      assert.ok(ignore.split("\n").some((l) => l.trim() === entry), `.gitignore no longer ignores ${entry}`);
+    }
+  });
+
+  await test("the release signing config is applied by script, and survives what regeneration does", async () => {
+    const { patchBuildGradle } = await import("../mobile/scripts/native-signing.mjs");
+
+    // The shape Capacitor actually generates, abbreviated.
+    const template = [
+      "apply plugin: 'com.android.application'",
+      "",
+      "android {",
+      "    namespace \"com.uniplannerapp.planner\"",
+      "    compileSdk rootProject.ext.compileSdkVersion",
+      "    defaultConfig {",
+      "        applicationId \"com.uniplannerapp.planner\"",
+      "        minSdkVersion rootProject.ext.minSdkVersion",
+      "    }",
+      "    buildTypes {",
+      "        release {",
+      "            minifyEnabled false",
+      "            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'",
+      "        }",
+      "    }",
+      "}",
+    ].join("\n");
+
+    const { gradle, changed } = patchBuildGradle(template);
+    assert.ok(changed, "the template was not patched");
+    assert.match(gradle, /signingConfigs \{/, "no signingConfigs block was added");
+    assert.match(gradle, /keystoreProperties\['storeFile'\]/, "the config does not read key.properties");
+    assert.match(gradle, /signingConfig signingConfigs\.release/, "the release build type is not wired to the config");
+    assert.match(
+      gradle,
+      /if \(keystorePropertiesFile\.exists\(\)\)/,
+      "signing is unconditional — a machine without key.properties would fail to build at all"
+    );
+
+    // Idempotent, so `npm run sync` can run it every time.
+    const again = patchBuildGradle(gradle);
+    assert.equal(again.changed, false, "a second apply patched again — cap sync would stack the block forever");
+    assert.equal(again.gradle, gradle);
+
+    // A template with no release block must fail loudly: a release that
+    // LOOKS configured but builds unsigned is the bad outcome.
+    assert.throws(
+      () => patchBuildGradle(template.replace("buildTypes {", "otherThing {").replace("release {", "other {")),
+      /android \{|buildTypes/,
+      "a template missing the anchor was patched silently instead of refusing"
+    );
+  });
+
+  await test("release signing runs on every sync, like the permissions do", () => {
+    /* The whole reason it is a script: mobile/android/ is regenerated,
+       and a signing config that is not re-applied after cap sync is a
+       release that fails on the machine that matters, the day it
+       matters. Same wiring guard as the migration tests. */
+    const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "mobile/package.json"), "utf8"));
+    assert.match(pkg.scripts.settings, /signing/, "mobile's settings chain no longer applies release signing");
+    assert.match(pkg.scripts.sync, /settings/, "cap sync no longer re-applies settings at all");
+  });
+
   /* ---------- no API key ever ends up in the shipped bundle ---------- */
 
   await test("dist-web/app.js contains no leaked provider keys or secrets", () => {

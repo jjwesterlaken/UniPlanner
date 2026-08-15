@@ -124,6 +124,83 @@ The APK lands in `mobile/android/app/build/outputs/apk/debug/`. That file
 can be sent to a tester and installed directly — **and it is what starts
 the Play Console clock.**
 
+### The release build — signed AAB for the Play Console
+
+The debug APK above starts the tester clock; the Play Console upload
+needs a **signed Android App Bundle**. Four steps, and the first one
+carries the warning.
+
+**1. Create the upload keystore — ONCE, and treat it like a passport.**
+
+> ⚠️ **IF THIS FILE OR ITS PASSWORDS ARE LOST, YOU CANNOT UPDATE THE APP.**
+> Recovering means a Play support request to reset the upload key, which
+> takes days and is not guaranteed. If it is ever *committed or leaked*,
+> anyone holding it can sign updates as you. So: create it **outside the
+> repository**, back it up somewhere that is not this machine (a password
+> manager attachment is fine), and never, ever put it in the repo — not
+> even in `mobile/android/`, which is deleted and regenerated freely,
+> which is exactly what must never happen to a keystore.
+
+```bash
+# From your home directory, NOT the repo:
+mkdir -p ~/keystores
+keytool -genkey -v -keystore ~/keystores/uniplanner-upload.jks \
+  -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+```
+
+`keytool` ships with Android Studio's JDK. It will ask for a password
+(pick one, store it with the backup) and some identity questions — the
+answers are embedded in the certificate and never shown to users.
+
+**2. Write `mobile/key.properties`** (beside, not inside, the generated
+project, so regenerating `mobile/android/` does not destroy it — and
+gitignored by name, with a test asserting the ignore entries exist):
+
+```properties
+storeFile=C:\\Users\\jjwes\\keystores\\uniplanner-upload.jks
+storePassword=THE_STORE_PASSWORD
+keyAlias=upload
+keyPassword=THE_KEY_PASSWORD
+```
+
+Use the absolute path to wherever step 1 put the keystore (forward
+slashes work on Windows too: `C:/Users/jjwes/keystores/...`).
+
+**3. Build.** The signing config is applied by
+`mobile/scripts/native-signing.mjs`, which `npm run settings` already
+runs — so the sequence from the repo root is:
+
+```bash
+npm run build                # web bundle + native prep
+cd mobile
+npx cap sync android         # re-applies permissions, signing, versions
+cd android
+./gradlew bundleRelease      # Windows: .\gradlew.bat bundleRelease
+```
+
+The signed bundle lands in
+`mobile/android/app/build/outputs/bundle/release/app-release.aab`.
+
+**4. Upload** that `.aab` in the Play Console (Testing → Closed testing
+→ Create release), and enrol in **Play App Signing** when it offers —
+Google then holds the app signing key and yours is only the upload key,
+which is what makes a lost upload key recoverable *at all*.
+
+Two things to know before tapping upload:
+
+- The **versionCode is derived** (minutes since 2020) by
+  `stamp-native.mjs`, so every build has a higher one automatically — a
+  rejected build can be rebuilt and re-uploaded without editing
+  anything.
+- If the upload is rejected for a **target API level**, re-run
+  `npm run settings` in `mobile/` and read its warning — it checks the
+  generated project's targetSdk against Google's current floor.
+
+**If `bundleRelease` produces an unsigned bundle**: `key.properties` was
+not found. Check it is at `mobile/key.properties` (not inside
+`mobile/android/`), then re-run `npx cap sync android` so the signing
+script sees it.
+
 ### Failures most likely to come first
 
 | What you see | What it means |
