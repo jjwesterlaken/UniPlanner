@@ -1443,6 +1443,18 @@ would survive either way — but that is precisely the failure mode the
 service worker's network-only list exists to prevent, and there is
 nothing to gain by taking it.
 
+**A deploy ships what it enumerates, and the enumeration is a
+restatement.** The function-deploy workflow named `ai-notes` and nothing
+else, so every `ai-text` change since Batch 4 reached production only by
+hand-deploys no checklist mentioned — found one step before a PR's own
+instructions told someone to run a workflow that would not have touched
+the server half being shipped. Both functions are now enumerated and a
+wiring test pins the list, because a deploy's list of targets drifts
+exactly the way any other restatement does: the repo grows a function,
+the workflow doesn't, and nothing goes red. The completed rule:
+**merging isn't deploying, and deploying isn't deploying *everything* —
+verify what the deploy actually names.**
+
 **Merging to `main` does not mean the change is live.** This has already
 been wrong for an unknown number of merges: Netlify paused production
 deploys when the account ran out of credits, and PR #6 — the fix that

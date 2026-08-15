@@ -415,6 +415,22 @@ triggered it is fixed, the *response* to the next one is not.
     continue on the built-in microphone. If it stops or errors, the
     device constraint is being requested as `exact` somewhere.
 
+### Photographed pages
+
+12. **Photograph a page and summarise it**, on the phone: AI tab →
+    Summarise a reading → Add photos → camera. This is the first time
+    `downscalePhoto` (Image + canvas) runs anywhere real — jsdom cannot
+    execute it — so the whole path is unproven until this passes. Check
+    the photo thumbnail appears, the estimate reads in parts, and the
+    saved note lands in the course folder.
+12a. **The same via the desktop file picker** — same code, different
+    entry, and the `capture="environment"` attribute must not have made
+    file selection impossible on desktop.
+12b. **A deliberately blurry photo.** Expect the "couldn't read photo N"
+    message naming the page, not a garbage summary. This is the model
+    following an instruction rather than code enforcing a rule, so it is
+    exactly the behaviour that needs a real run.
+
 ### Handwriting — for Grace on the iPad
 
 10. **Apple Pencil pressure works**: pressing harder gives a thicker
