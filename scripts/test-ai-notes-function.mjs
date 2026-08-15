@@ -182,9 +182,16 @@ function makeDb(rows, missingObject = false, storedExt = "webm") {
 
 /* ---------- invoke the handler ---------- */
 
-async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath } = {}) {
+async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath, tier = "ai" } = {}) {
   const db = makeDb(rows, missingObject, storedExt);
   db.client.auth.getUser = async () => ({ data: { user: { id: callerId } }, error: null });
+  const baseFrom = db.client.from;
+  db.client.from = (name) => {
+    if (name === "profiles") {
+      return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { tier }, error: null }) }) }) };
+    }
+    return baseFrom(name);
+  };
 
   let handler = null;
   const logs = [];
@@ -205,7 +212,9 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
   globalThis.__FAKE_CLIENT__ = db.client;
   // Groq succeeds; the summariser is left to fail, which the function
   // already handles by returning the transcript with summaryFailed.
+  const providerCalls = [];
   globalThis.fetch = async (url) => {
+    providerCalls.push(String(url));
     if (String(url).includes("groq")) return { ok: true, json: async () => ({ text: "a lecture", duration: 60 }) };
     return { ok: false, status: 500, json: async () => ({}) };
   };
@@ -232,7 +241,7 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
 
   return {
     status: res.status, bodyText, body: JSON.parse(bodyText),
-    rows: db.rows, writes: db.writes, storageCalls: db.storageCalls, logs,
+    rows: db.rows, writes: db.writes, storageCalls: db.storageCalls, logs, providerCalls,
   };
 }
 
@@ -393,6 +402,26 @@ async function run() {
     assert.equal(r.status, 404);
     assert.equal(r.body.code, "recording_missing");
     assert.ok(!r.storageCalls.some((c) => c.op === "sign"), "an unexpected file type was signed");
+  });
+
+  await test("A FREE TIER SPENDS NOTHING: refused before any provider call, before any billing", async () => {
+    /* The client now tells a free user before they record; THIS is the
+       enforcement behind it, and the ordering is the point. The tier
+       check is step 3 and transcription is step 9 -- reverse them and a
+       free student's recording is transcribed (money spent) and then
+       refused. The traced fetch is what makes the ordering a fact
+       rather than a comment. */
+    const out = await invoke({ tier: "free" });
+    assert.equal(out.status, 403);
+    assert.equal(out.body.code, "no_access");
+    assert.deepEqual(out.providerCalls, [], "a provider was called for a free-tier request — money was spent on a refusal");
+    assert.ok(!out.storageCalls.some((c) => c.op === "sign"), "the audio was signed for a request that was refused");
+    const usageWrites = out.writes.filter((w) => w.patch && ("minutes_used" in (w.patch || {})));
+    assert.equal(usageWrites.length, 0, "usage was billed on a refused request");
+    /* And the refusal precedes the idempotency claim, so the upload is a
+       clean orphan: no request row points at it, and the sweep removes
+       it once it is over ORPHAN_SWEEP_HOURS old. */
+    assert.ok(!out.rows.some((r) => r._t === "ai_notes_requests"), "a request row was created for a refused request");
   });
 
   await test("the source never reads a path from the request body", async () => {

@@ -37,6 +37,20 @@ export const AI_NOTES_COPY = {
   minimumBilling: (minutes) =>
     `Recordings count in ${minutes}-minute blocks. Writing the notes up costs us about the same whether a recording is two minutes or twenty, so a very short one still uses ${minutes} minutes of your allowance.`,
 
+  /* Shown INSTEAD of the record button for an account whose tier the
+     app has definitively read as not-AI. Before the work, not after:
+     the server refuses a free-tier request before anything is charged,
+     but that refusal used to arrive after the student had recorded the
+     whole lecture and uploaded it -- no money lost, an hour of theirs
+     gone. Study framing, same as everywhere: this describes what the
+     plan adds, never what it replaces. */
+  recordingNeedsPlan: {
+    title: "Lecture recording is part of the AI plan.",
+    detail:
+      "Recording, transcription and the AI study notes they produce need the AI plan. " +
+      "Everything else in the planner keeps working as normal.",
+  },
+
   /* Shown on the review screen when transcription worked and
      summarising didn't. The user has already been charged at this
      point, so this screen says so. */
