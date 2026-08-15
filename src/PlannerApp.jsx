@@ -98,6 +98,8 @@ import {
   Droplet,
   Eraser,
   Undo2,
+  ZoomIn,
+  ZoomOut,
   Download,
   Upload,
   DatabaseBackup,
@@ -168,7 +170,24 @@ import {
 } from "./reference.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL } from "./legalLinks.js";
 import { migratePages, roundPoint, GRID } from "./ink.js";
-import { inkOf, htmlOf, bodyOf } from "./noteBlocks.js";
+import {
+  inkOf,
+  htmlOf,
+  bodyOf,
+  blocksOf,
+  fieldsFromBlocks,
+  isBlockNote,
+  TEXT,
+  INK,
+  INK_DEFAULT_H,
+  CANVAS_W,
+  CANVAS_H,
+  newTextBlock,
+  insertInkAfter,
+  mergeTextBack,
+  removeBlock,
+  noteUsedPen,
+} from "./noteBlocks.js";
 
 /* ------------------------------------------------------------------ */
 /*  Setup                                                             */
@@ -1445,34 +1464,52 @@ function PageTypeChooser({ onCreate, onCancel, sheetsFull = false }) {
 
 /* ---- Typed notes: fonts, text colour, highlighters ---- */
 
-function RichTextEditor({ draft, setDraft }) {
-  const ref = useRef(null);
-  const [hint, setHint] = useState("");
+/* ==================================================================
+   The block editor — step 4.
 
-  // Load the saved note in once; after that the div owns its own content
-  // (rewriting it on every keystroke would move the cursor to the start).
-  useEffect(() => {
-    if (ref.current && ref.current.innerHTML !== htmlOf(draft)) {
-      ref.current.innerHTML = sanitizeHtml(htmlOf(draft));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.id]);
+   A note is a stack of blocks and the editor is a stack of block
+   editors. Two things about the SHAPE, both decided rather than fallen
+   into:
 
-  const save = () => {
-    if (!ref.current) return;
-    const html = sanitizeHtml(ref.current.innerHTML);
-    setDraft((d) => ({ ...d, html, body: htmlToText(html) }));
-  };
+   ONE PERSISTENT TOOLBAR whose contents swap. The bar is always there;
+   what is in it depends on whether a text block or an ink block has
+   focus. A bar that appeared and disappeared would reflow the editor
+   under the user's finger mid-edit, which is worst on the device where
+   handwriting matters most.
 
-  /* Toolbar buttons must not steal focus, or the text selection is lost
-     before the formatting can be applied - hence preventDefault on mousedown. */
-  const hold = (e) => e.preventDefault();
+   THE TOOLS DO NOT NEED A REF TO THE BLOCK. `document.execCommand`
+   works on the current selection, so the text tools only have to avoid
+   stealing focus and then tell whoever has it to re-save. That is why
+   TextTools takes callbacks rather than a handle on a DOM node.
+   ================================================================== */
 
-  /** Is any text actually selected inside this editor? */
+function ToolButton({ onClick, title, children, active }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      className={`flex h-8 w-8 items-center justify-center rounded-md u-focus ${
+        active ? "u-accent-soft u-accent-deeptext" : "text-stone-600 hover:bg-stone-100"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ---- text tools ---- */
+
+function TextTools({ font, setFont, getArea, afterCommand, hint, setHint }) {
+  const fontCss = (NOTE_FONTS.find((f) => f.id === (font || "sans")) || NOTE_FONTS[0]).css;
+
   const hasSelection = () => {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
-    return ref.current && ref.current.contains(sel.anchorNode);
+    const area = getArea();
+    return !!area && area.contains(sel.anchorNode);
   };
 
   /* After highlighting, the cursor is left sitting inside the coloured span,
@@ -1480,25 +1517,19 @@ function RichTextEditor({ draft, setDraft }) {
      cursor just outside that span so typing continues clean. */
   const stepOutOfHighlight = () => {
     const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || !ref.current) return;
+    const area = getArea();
+    if (!sel || sel.rangeCount === 0 || !area) return;
 
     let node = sel.getRangeAt(0).endContainer;
     let span = null;
-    while (node && node !== ref.current) {
-      if (
-        node.nodeType === 1 &&
-        node.style &&
-        node.style.backgroundColor &&
-        node.style.backgroundColor !== "transparent"
-      ) {
+    while (node && node !== area) {
+      if (node.nodeType === 1 && node.style && node.style.backgroundColor && node.style.backgroundColor !== "transparent") {
         span = node;
       }
       node = node.parentNode;
     }
     if (!span || !span.parentNode) return;
 
-    // An invisible character placed after the span gives the cursor
-    // somewhere to sit that isn't inside the highlight.
     const escapeHatch = document.createTextNode("\u200B");
     span.parentNode.insertBefore(escapeHatch, span.nextSibling);
     const range = document.createRange();
@@ -1509,8 +1540,9 @@ function RichTextEditor({ draft, setDraft }) {
   };
 
   const run = (command, value) => {
-    if (!ref.current) return;
-    ref.current.focus();
+    const area = getArea();
+    if (!area) return;
+    area.focus();
     try {
       document.execCommand("styleWithCSS", false, true);
       if (command === "highlight") {
@@ -1525,12 +1557,11 @@ function RichTextEditor({ draft, setDraft }) {
     } catch (e) {
       /* formatting unavailable - typing still works */
     }
-    save();
+    afterCommand();
   };
 
   /* Highlighters only ever colour text you've selected. Without this they
-     "arm" themselves and highlight whatever you type next, which isn't what
-     a highlighter should do. */
+     "arm" themselves and highlight whatever you type next. */
   const highlight = (hex) => {
     if (!hasSelection()) {
       setHint("Select some words first, then tap a highlighter.");
@@ -1540,129 +1571,160 @@ function RichTextEditor({ draft, setDraft }) {
     run("highlight", hex);
   };
 
-  /* Clearing works on a selection if there is one, and always frees the
-     cursor from any highlight it's sitting in. */
   const clearHighlight = () => {
     if (hasSelection()) {
       run("highlight", "transparent");
     } else {
-      ref.current.focus();
+      const area = getArea();
+      if (area) area.focus();
       stepOutOfHighlight();
-      save();
+      afterCommand();
     }
     setHint("");
   };
 
-  const ToolButton = ({ onClick, title, children, active }) => (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      onMouseDown={hold}
-      onClick={onClick}
-      className={`flex h-8 w-8 items-center justify-center rounded-md u-focus ${
-        active ? "u-accent-soft u-accent-deeptext" : "text-stone-600 hover:bg-stone-100"
-      }`}
-    >
-      {children}
-    </button>
-  );
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {/* Font — applies to the whole note, and is saved with it */}
+      <select
+        className="rounded-md border border-stone-300 bg-white px-2 py-1 text-sm text-stone-700 u-field"
+        value={font || "sans"}
+        onChange={(e) => setFont(e.target.value)}
+        style={{ fontFamily: fontCss }}
+        aria-label="Font"
+      >
+        {NOTE_FONTS.map((f) => (
+          <option key={f.id} value={f.id} style={{ fontFamily: f.css }}>
+            {f.label}
+          </option>
+        ))}
+      </select>
 
-  const fontCss = (NOTE_FONTS.find((f) => f.id === (draft.font || "sans")) || NOTE_FONTS[0]).css;
+      <span className="h-5 w-px bg-stone-300" />
+
+      <ToolButton title="Bold" onClick={() => run("bold")}>
+        <Bold size={15} />
+      </ToolButton>
+      <ToolButton title="Italic" onClick={() => run("italic")}>
+        <Italic size={15} />
+      </ToolButton>
+      <ToolButton title="Underline" onClick={() => run("underline")}>
+        <Underline size={15} />
+      </ToolButton>
+
+      <span className="h-5 w-px bg-stone-300" />
+
+      <span className="flex items-center gap-1">
+        <Baseline size={15} className="text-stone-500" />
+        {TEXT_COLORS.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            title={`${c.label} text`}
+            aria-label={`${c.label} text`}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => run("foreColor", c.hex)}
+            className="h-6 w-6 rounded-full border border-stone-300 u-focus"
+            style={{ backgroundColor: c.hex }}
+          />
+        ))}
+      </span>
+
+      <span className="h-5 w-px bg-stone-300" />
+
+      <span className="flex items-center gap-1">
+        <Highlighter size={15} className="text-stone-500" />
+        {HIGHLIGHTERS.map((h) => (
+          <button
+            key={h.id}
+            type="button"
+            title={`${h.label} highlighter`}
+            aria-label={`${h.label} highlighter`}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => highlight(h.hex)}
+            className="h-6 w-6 rounded-full border border-stone-300 u-focus"
+            style={{ backgroundColor: h.hex }}
+          />
+        ))}
+        <ToolButton title="Remove highlight" onClick={clearHighlight}>
+          <Droplet size={15} />
+        </ToolButton>
+      </span>
+      {hint && <span className="u-accent-text text-xs">{hint}</span>}
+    </div>
+  );
+}
+
+/* ---- one text block ---- */
+
+function TextBlockEditor({ block, onChange, style, font, registerArea, onFocusBlock, onBackspaceAtStart }) {
+  const ref = useRef(null);
+
+  /* Load the block's html in ONCE. Rewriting it on every keystroke would
+     move the cursor to the start; keying on block.id means a block that
+     is merged away and re-rendered as a different one still loads. */
+  useEffect(() => {
+    if (ref.current && ref.current.innerHTML !== (block.html || "")) {
+      ref.current.innerHTML = sanitizeHtml(block.html || "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [block.id]);
+
+  useEffect(() => {
+    registerArea(block.id, ref.current);
+    return () => registerArea(block.id, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [block.id]);
+
+  const save = () => {
+    if (!ref.current) return;
+    const html = sanitizeHtml(ref.current.innerHTML);
+    onChange({ html, body: htmlToText(html) });
+  };
+
+  /* THE BACKSPACE RULE lives here at the keystroke and in
+     mergeTextBack in noteBlocks.js for the decision. Only a COLLAPSED
+     caret at offset 0 with nothing before it in the block counts --
+     backspacing over a selection is an ordinary delete. */
+  const atVeryStart = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+    const range = sel.getRangeAt(0);
+    if (range.startOffset !== 0) return false;
+    const probe = range.cloneRange();
+    probe.selectNodeContents(ref.current);
+    probe.setEnd(range.startContainer, range.startOffset);
+    return probe.toString().length === 0;
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key !== "Backspace" || !atVeryStart()) return;
+    /* Refused merges must not swallow the key silently -- but there is
+       nothing to delete either, so preventing the default is right in
+       both branches. What differs is whether anything happens. */
+    e.preventDefault();
+    onBackspaceAtStart(block.id);
+  };
+
+  const fontCss = (NOTE_FONTS.find((f) => f.id === (font || "sans")) || NOTE_FONTS[0]).css;
 
   return (
-    <div>
-      {/* Toolbar */}
-      <div className="rounded-t-lg border border-b-0 border-stone-300 bg-stone-50 p-2">
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Font — applies to the whole note, and is saved with it */}
-          <select
-            className="rounded-md border border-stone-300 bg-white px-2 py-1 text-sm text-stone-700 u-field"
-            value={draft.font || "sans"}
-            onChange={(e) => setDraft((d) => ({ ...d, font: e.target.value }))}
-            style={{ fontFamily: fontCss }}
-            aria-label="Font"
-          >
-            {NOTE_FONTS.map((f) => (
-              <option key={f.id} value={f.id} style={{ fontFamily: f.css }}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-
-          <span className="h-5 w-px bg-stone-300" />
-
-          <ToolButton title="Bold" onClick={() => run("bold")}>
-            <Bold size={15} />
-          </ToolButton>
-          <ToolButton title="Italic" onClick={() => run("italic")}>
-            <Italic size={15} />
-          </ToolButton>
-          <ToolButton title="Underline" onClick={() => run("underline")}>
-            <Underline size={15} />
-          </ToolButton>
-
-          <span className="h-5 w-px bg-stone-300" />
-
-          {/* Text colour */}
-          <span className="flex items-center gap-1">
-            <Baseline size={15} className="text-stone-500" />
-            {TEXT_COLORS.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                title={`${c.label} text`}
-                aria-label={`${c.label} text`}
-                onMouseDown={hold}
-                onClick={() => run("foreColor", c.hex)}
-                className="h-6 w-6 rounded-full border border-stone-300 u-focus"
-                style={{ backgroundColor: c.hex }}
-              />
-            ))}
-          </span>
-
-          <span className="h-5 w-px bg-stone-300" />
-
-          {/* Highlighters */}
-          <span className="flex items-center gap-1">
-            <Highlighter size={15} className="text-stone-500" />
-            {HIGHLIGHTERS.map((h) => (
-              <button
-                key={h.id}
-                type="button"
-                title={`${h.label} highlighter`}
-                aria-label={`${h.label} highlighter`}
-                onMouseDown={hold}
-                onClick={() => highlight(h.hex)}
-                className="h-6 w-6 rounded-full border border-stone-300 u-focus"
-                style={{ backgroundColor: h.hex }}
-              />
-            ))}
-            <ToolButton title="Remove highlight" onClick={clearHighlight}>
-              <Droplet size={15} />
-            </ToolButton>
-          </span>
-        </div>
-      </div>
-
-      {/* Writing area */}
-      <div
-        ref={ref}
-        contentEditable
-        suppressContentEditableWarning
-        spellCheck
-        onInput={save}
-        onBlur={save}
-        data-placeholder="Start writing..."
-        className={`min-h-[220px] w-full rounded-b-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 u-field ${
-          draft.style === "lined" ? "lined-paper" : "bg-white"
-        }`}
-        style={{ fontFamily: fontCss, outline: "none" }}
-      />
-      <p className={`mt-1 text-xs ${hint ? "u-accent-text" : "text-stone-400"}`}>
-        {hint || "Select some words first, then tap a highlighter."}
-      </p>
-    </div>
+    <div
+      ref={ref}
+      contentEditable
+      suppressContentEditableWarning
+      spellCheck
+      data-block-id={block.id}
+      onInput={save}
+      onBlur={save}
+      onKeyDown={onKeyDown}
+      onFocus={() => onFocusBlock(block.id)}
+      data-placeholder="Start writing..."
+      className={`min-h-[120px] w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 u-field ${
+        style === "lined" ? "lined-paper" : "bg-white"
+      }`}
+      style={{ fontFamily: fontCss, outline: "none" }}
+    />
   );
 }
 
@@ -1671,105 +1733,225 @@ function RichTextEditor({ draft, setDraft }) {
    Strokes are stored as points rather than as a picture, so notes stay
    small, stay sharp at any zoom, and sync quickly. */
 
-const CANVAS_W = 1000;
-const CANVAS_H = 1400;
+/* Imported from noteBlocks: the conversion needs the same numbers, and
+   two copies of "how tall is a page" is how a converted drawing ends up
+   cropped. */
 
 const PEN_PRESETS = ["#1c1917", "#1d4ed8", "#dc2626", "#db2777", "#7c3aed", "#f59e0b", "#059669"];
 
-function DrawingCanvas({ draft, setDraft }) {
+/* ---- ink tools ---- */
+
+function InkTools({ color, setColor, width, setWidth, erasing, setErasing, hue, light, pickShade, onUndo, onClear, zoom, setZoom }) {
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2">
+        {PEN_PRESETS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            title="Pen colour"
+            aria-label={`Pen colour ${c}`}
+            onClick={() => {
+              setColor(c);
+              setErasing(false);
+            }}
+            className={`h-7 w-7 rounded-full border-2 u-focus ${
+              color === c && !erasing ? "border-stone-800" : "border-stone-300"
+            }`}
+            style={{ backgroundColor: c }}
+          />
+        ))}
+
+        <span className="h-5 w-px bg-stone-300" />
+
+        <ToolButton title="Eraser" active={erasing} onClick={() => setErasing(!erasing)}>
+          <Eraser size={16} />
+        </ToolButton>
+        <ToolButton title="Undo" onClick={onUndo}>
+          <Undo2 size={16} />
+        </ToolButton>
+        <ToolButton title="Clear page" onClick={onClear}>
+          <Trash2 size={16} />
+        </ToolButton>
+
+        <span className="h-5 w-px bg-stone-300" />
+
+        {/* Zoom is a VIEW transform. See InkBlockEditor. */}
+        <ToolButton title="Zoom out" onClick={() => setZoom(Math.max(1, Math.round((zoom - 0.5) * 10) / 10))}>
+          <ZoomOut size={16} />
+        </ToolButton>
+        <span className="text-xs tabular-nums text-stone-500">{Math.round(zoom * 100)}%</span>
+        <ToolButton title="Zoom in" onClick={() => setZoom(Math.min(MAX_INK_ZOOM, Math.round((zoom + 0.5) * 10) / 10))}>
+          <ZoomIn size={16} />
+        </ToolButton>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <span
+          className="h-8 w-8 flex-shrink-0 rounded-full border border-stone-300"
+          style={{ backgroundColor: erasing ? "#ffffff" : color }}
+          aria-label="Current colour"
+        />
+        <label className="flex min-w-[130px] flex-1 items-center gap-2 text-xs text-stone-500">
+          Colour
+          <input
+            type="range"
+            min="0"
+            max="360"
+            value={hue}
+            onChange={(e) => pickShade(Number(e.target.value), light)}
+            className="w-full"
+            style={{
+              background: "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
+              borderRadius: "999px",
+              height: "6px",
+              appearance: "none",
+            }}
+          />
+        </label>
+        <label className="flex min-w-[130px] flex-1 items-center gap-2 text-xs text-stone-500">
+          Shade
+          <input
+            type="range"
+            min="10"
+            max="85"
+            value={light}
+            onChange={(e) => pickShade(hue, Number(e.target.value))}
+            className="w-full"
+            style={{
+              background: `linear-gradient(to right, hsl(${hue},75%,10%), hsl(${hue},75%,50%), hsl(${hue},75%,85%))`,
+              borderRadius: "999px",
+              height: "6px",
+              appearance: "none",
+            }}
+          />
+        </label>
+        <label className="flex items-center gap-2 text-xs text-stone-500">
+          Size
+          <input type="range" min="1" max="14" value={width} onChange={(e) => setWidth(Number(e.target.value))} className="w-24" />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+export const MAX_INK_ZOOM = 4;
+
+/* ---- one ink block ---- */
+
+/**
+ * ZOOM IS A VIEW TRANSFORM AND NOTHING ELSE.
+ *
+ * Stroke coordinates stay in the block's own canvas space, so the
+ * tenth-of-a-unit grid stays calibrated to display resolution and the
+ * stored bytes are identical whatever the zoom. Pointer positions are
+ * mapped back through the inverse. If zoom changed the coordinate
+ * space, a zoomed-in stroke would capture precision that the shipped
+ * rounding then visibly destroys.
+ *
+ * The block's LAYOUT HEIGHT never changes with zoom -- the frame is
+ * fixed and the content scales and pans inside it. Growing the frame
+ * would reflow the note and move every block below it, which is the one
+ * thing a zoom control must not do.
+ */
+function InkBlockEditor({ block, onChange, style, notePenUsed, tools, focused, onFocusBlock, onRemove }) {
   const canvasRef = useRef(null);
-  const wrapRef = useRef(null);
   const drawing = useRef(false);
   const currentStroke = useRef(null);
-  const penSeen = useRef(false);
+  const activePointer = useRef(null);
+  /* Touch strokes committed since this editor mounted, newest last, so
+     the first pen event can retroactively drop the ones that landed
+     just before it. {id, at} only -- the strokes themselves live in the
+     block. */
+  const recentTouch = useRef([]);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
 
-  const [hue, setHue] = useState(220);
-  const [light, setLight] = useState(35);
-  const [color, setColor] = useState("#1c1917");
-  const [width, setWidth] = useState(3);
-  const [erasing, setErasing] = useState(false);
-
-  const strokes = inkOf(draft);
-
-  /* ---- drawing ---- */
+  const h = block.h || INK_DEFAULT_H;
+  const strokes = block.strokes || [];
+  const zoom = focused ? tools.zoom : 1;
 
   const redraw = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.clearRect(0, 0, CANVAS_W, h);
     for (const s of strokes) drawStroke(ctx, s);
     if (currentStroke.current) drawStroke(ctx, currentStroke.current);
   };
 
-  useEffect(redraw, [strokes, draft.id]);
+  useEffect(redraw, [strokes, block.id, h]);
 
-  // Keep the drawing crisp on high-resolution screens
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ratio = Math.min(window.devicePixelRatio || 1, 3);
     canvas.width = CANVAS_W * ratio;
-    canvas.height = CANVAS_H * ratio;
+    canvas.height = h * ratio;
     const ctx = canvas.getContext("2d");
-    ctx.scale(ratio, ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /* ---- pointer handling ---- */
+  }, [h]);
 
   /* Rounded HERE, at capture, not only by the migration on load.
-     Otherwise every new stroke arrives at full float precision and the
-     migration is forever cleaning up after the drawing code. A tenth of
-     a canvas unit is below one physical pixel at the largest device
-     pixel ratio the app uses, so nothing is visibly lost. */
+     The zoom and pan are divided back out, so what is stored is always
+     canvas space. */
   const toCanvas = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
-    const [x, y] = [
-      ((e.clientX - rect.left) / rect.width) * CANVAS_W,
-      ((e.clientY - rect.top) / rect.height) * CANVAS_H,
-    ];
+    const x = (((e.clientX - rect.left) / rect.width) * CANVAS_W - pan.x) / zoom;
+    const y = (((e.clientY - rect.top) / rect.height) * h - pan.y) / zoom;
     return [Math.round(x * GRID) / GRID, Math.round(y * GRID) / GRID];
   };
 
   const pressureOf = (e) => {
-    // Mice report 0.5 when pressed; a stylus reports real pressure.
     if (e.pointerType === "pen" && e.pressure > 0) return e.pressure;
     if (e.pressure > 0 && e.pressure !== 0.5) return e.pressure;
     return 0.5;
   };
 
-  const onPointerDown = (e) => {
-    if (e.pointerType === "pen") penSeen.current = true;
-    // Once a stylus has been used, ignore fingers so a resting palm
-    // doesn't scribble on the page.
-    if (penSeen.current && e.pointerType === "touch") return;
+  /* THE LATCH. Three parts, and the note-level read is the important
+     one: a block that consulted only its own usedPen would start
+     unprotected the moment a student added a second ink block. */
+  const rejectTouch = (e) => notePenUsed && e.pointerType === "touch";
 
+  const onPointerDown = (e) => {
+    /* A second pointer during a stroke is a pinch, never a mark. The
+       stroke in progress is abandoned rather than committed, so a
+       two-finger zoom cannot leave a stray line behind. */
+    if (drawing.current && e.pointerId !== activePointer.current) {
+      drawing.current = false;
+      currentStroke.current = null;
+      redraw();
+      return;
+    }
+    if (rejectTouch(e)) return;
+
+    onFocusBlock(block.id);
     e.preventDefault();
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch (err) {
       /* not supported - drawing still works */
     }
+    activePointer.current = e.pointerId;
     drawing.current = true;
     const [x, y] = toCanvas(e);
     currentStroke.current = {
-      color,
-      width: erasing ? width * 3 : width,
-      erase: erasing,
+      color: tools.color,
+      width: tools.erasing ? tools.width * 3 : tools.width,
+      erase: tools.erasing,
       points: [roundPoint(x, y, pressureOf(e))],
+      _via: e.pointerType,
     };
     redraw();
   };
 
   const onPointerMove = (e) => {
     if (!drawing.current || !currentStroke.current) return;
-    if (penSeen.current && e.pointerType === "touch") return;
+    if (e.pointerId !== activePointer.current) return;
+    if (rejectTouch(e)) return;
     e.preventDefault();
 
-    // iPads report several points per frame; using them all gives a
-    // noticeably smoother line.
     const events = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : [e];
     for (const ev of events.length ? events : [e]) {
       const [x, y] = toCanvas(ev);
@@ -1781,135 +1963,38 @@ function DrawingCanvas({ draft, setDraft }) {
   const endStroke = () => {
     if (!drawing.current) return;
     drawing.current = false;
+    activePointer.current = null;
     const stroke = currentStroke.current;
     currentStroke.current = null;
     if (!stroke || stroke.points.length === 0) return;
-    setDraft((d) => ({ ...d, strokes: [...(d.strokes || []), stroke] }));
-  };
 
-  const undo = () => setDraft((d) => ({ ...d, strokes: (d.strokes || []).slice(0, -1) }));
-  const clearAll = () => setDraft((d) => ({ ...d, strokes: [] }));
+    const { _via, ...clean } = stroke;
+    const now = Date.now();
 
-  const pickShade = (h, l) => {
-    setHue(h);
-    setLight(l);
-    setColor(`hsl(${h}, 75%, ${l}%)`);
-    setErasing(false);
+    if (_via === "pen") {
+      /* FIRST PEN CONTACT. Drop touch strokes begun in the window just
+         before it: a palm lands immediately before the pen, and nobody
+         finger-draws and then picks up a pen inside two seconds. The
+         bound is what stops this swallowing a deliberate finger sketch. */
+      const doomed = new Set(
+        recentTouch.current.filter((t) => now - t.at <= TOUCH_DISCARD_MS).map((t) => t.at)
+      );
+      recentTouch.current = [];
+      onChange((b) => ({
+        ...b,
+        usedPen: true,
+        strokes: [...(b.strokes || []).filter((s) => !doomed.has(s._at)), clean],
+      }));
+      return;
+    }
+
+    recentTouch.current.push({ at: now });
+    onChange((b) => ({ ...b, strokes: [...(b.strokes || []), { ...clean, _at: now }] }));
   };
 
   return (
-    <div>
-      {/* Tools */}
-      <div className="rounded-t-lg border border-b-0 border-stone-300 bg-stone-50 p-2">
-        <div className="flex flex-wrap items-center gap-2">
-          {PEN_PRESETS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              title="Pen colour"
-              aria-label={`Pen colour ${c}`}
-              onClick={() => {
-                setColor(c);
-                setErasing(false);
-              }}
-              className={`h-7 w-7 rounded-full border-2 u-focus ${
-                color === c && !erasing ? "border-stone-800" : "border-stone-300"
-              }`}
-              style={{ backgroundColor: c }}
-            />
-          ))}
-
-          <span className="h-5 w-px bg-stone-300" />
-
-          <button
-            type="button"
-            onClick={() => setErasing((v) => !v)}
-            title="Eraser"
-            aria-label="Eraser"
-            className={`flex h-8 w-8 items-center justify-center rounded-md u-focus ${
-              erasing ? "u-accent-soft u-accent-deeptext" : "text-stone-600 hover:bg-stone-100"
-            }`}
-          >
-            <Eraser size={16} />
-          </button>
-          <button
-            type="button"
-            onClick={undo}
-            title="Undo"
-            aria-label="Undo"
-            className="flex h-8 w-8 items-center justify-center rounded-md text-stone-600 hover:bg-stone-100 u-focus"
-          >
-            <Undo2 size={16} />
-          </button>
-          <button
-            type="button"
-            onClick={clearAll}
-            title="Clear page"
-            aria-label="Clear page"
-            className="flex h-8 w-8 items-center justify-center rounded-md text-stone-600 hover:bg-stone-100 u-focus"
-          >
-            <Trash2 size={16} />
-          </button>
-        </div>
-
-        {/* Colour and shade */}
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <span
-            className="h-8 w-8 flex-shrink-0 rounded-full border border-stone-300"
-            style={{ backgroundColor: erasing ? "#ffffff" : color }}
-            aria-label="Current colour"
-          />
-          <label className="flex min-w-[130px] flex-1 items-center gap-2 text-xs text-stone-500">
-            Colour
-            <input
-              type="range"
-              min="0"
-              max="360"
-              value={hue}
-              onChange={(e) => pickShade(Number(e.target.value), light)}
-              className="w-full"
-              style={{
-                background:
-                  "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
-                borderRadius: "999px",
-                height: "6px",
-                appearance: "none",
-              }}
-            />
-          </label>
-          <label className="flex min-w-[130px] flex-1 items-center gap-2 text-xs text-stone-500">
-            Shade
-            <input
-              type="range"
-              min="10"
-              max="85"
-              value={light}
-              onChange={(e) => pickShade(hue, Number(e.target.value))}
-              className="w-full"
-              style={{
-                background: `linear-gradient(to right, hsl(${hue},75%,10%), hsl(${hue},75%,50%), hsl(${hue},75%,85%))`,
-                borderRadius: "999px",
-                height: "6px",
-                appearance: "none",
-              }}
-            />
-          </label>
-          <label className="flex items-center gap-2 text-xs text-stone-500">
-            Size
-            <input
-              type="range"
-              min="1"
-              max="14"
-              value={width}
-              onChange={(e) => setWidth(Number(e.target.value))}
-              className="w-24"
-            />
-          </label>
-        </div>
-      </div>
-
-      {/* Page */}
-      <div ref={wrapRef} className="overflow-hidden rounded-b-lg border border-stone-300">
+    <div className={`rounded-lg border ${focused ? "border-stone-400" : "border-stone-300"}`}>
+      <div className="overflow-hidden rounded-t-lg">
         <canvas
           ref={canvasRef}
           onPointerDown={onPointerDown}
@@ -1917,37 +2002,86 @@ function DrawingCanvas({ draft, setDraft }) {
           onPointerUp={endStroke}
           onPointerCancel={endStroke}
           onPointerLeave={endStroke}
-          className={draft.style === "lined" ? "lined-paper" : "bg-white"}
+          className={style === "lined" ? "lined-paper" : "bg-white"}
           style={{
             width: "100%",
-            aspectRatio: `${CANVAS_W} / ${CANVAS_H}`,
+            aspectRatio: `${CANVAS_W} / ${h}`,
             display: "block",
-            touchAction: "none", // stops the page scrolling while drawing
+            touchAction: "none",
             cursor: "crosshair",
-            // Stops iPad selecting text or popping up the copy/paste menu
-            // when the Pencil or a finger rests on the page.
             WebkitUserSelect: "none",
             userSelect: "none",
             WebkitTouchCallout: "none",
           }}
         />
       </div>
-      <p className="mt-1 text-xs text-stone-400">
-        {strokes.length} stroke{strokes.length === 1 ? "" : "s"} · Apple Pencil and other styluses
-        draw thicker when pressed harder. Once a stylus is used, your palm won't leave marks.
-      </p>
+      <div className="flex items-center justify-between gap-2 border-t border-stone-200 px-2 py-1">
+        <span className="text-xs text-stone-400">
+          {strokes.length} stroke{strokes.length === 1 ? "" : "s"}
+          {notePenUsed ? " · stylus mode" : ""}
+        </span>
+        <button className={iconBtn} onClick={() => onRemove(block.id)} aria-label="Delete handwriting">
+          <Trash2 size={15} />
+        </button>
+      </div>
     </div>
   );
 }
 
-/* ---- The editor, which shows whichever kind the note is ---- */
+export const TOUCH_DISCARD_MS = 2000;
+
+/* ---- The editor: a stack of blocks under one persistent bar ---- */
 
 function NoteEditor({ draft, setDraft, onSave, onCancel, saveLabel = "Save note" }) {
-  const isDrawing = draft.kind === "drawing";
+  const blocks = blocksOf(draft) || [];
+  const [focusId, setFocusId] = useState(null);
+  const [hint, setHint] = useState("");
+  const areas = useRef({});
+
+  // Ink tools live HERE, not in a block: the pen you picked should not
+  // reset because you tapped a different piece of handwriting.
+  const [hue, setHue] = useState(220);
+  const [light, setLight] = useState(35);
+  const [color, setColor] = useState("#1c1917");
+  const [width, setWidth] = useState(3);
+  const [erasing, setErasing] = useState(false);
+  const [zoom, setZoom] = useState(1);
+
+  const focused = blocks.find((b) => b.id === focusId) || blocks[0] || null;
+  const inkFocused = !!focused && focused.type === INK;
+  const notePenUsed = noteUsedPen(blocks);
+
+  const setBlocks = (next) => setDraft((d) => ({ ...d, blocks: typeof next === "function" ? next(blocksOf(d) || []) : next }));
+  const patchBlock = (id, patch) =>
+    setBlocks((bs) => bs.map((b) => (b.id === id ? { ...b, ...(typeof patch === "function" ? patch(b) : patch) } : b)));
+
+  const registerArea = (id, node) => {
+    if (node) areas.current[id] = node;
+    else delete areas.current[id];
+  };
+
+  const onBackspaceAtStart = (id) => {
+    const result = mergeTextBack(blocks, id);
+    if (!result) return; // refused: ink before it, or nothing before it
+    setBlocks(result.blocks);
+    setFocusId(result.focusId);
+  };
+
+  const addInk = () => {
+    const { blocks: next, focusId: id } = insertInkAfter(blocks, focused ? focused.id : null, draft.id);
+    setBlocks(next);
+    setFocusId(id);
+  };
+
+  const removeInk = (id) => {
+    setBlocks(removeBlock(blocks, id));
+    setFocusId(null);
+  };
+
   return (
     <div className="space-y-3">
       <span className="inline-flex items-center gap-1.5 rounded-full u-accent-soft u-accent-deeptext px-2.5 py-1 text-xs font-medium">
-        {isDrawing ? "Handwritten" : "Typed"} · {draft.style} page
+        {draft.style} page
       </span>
       <div>
         <label className={labelCls}>Title</label>
@@ -1959,20 +2093,90 @@ function NoteEditor({ draft, setDraft, onSave, onCancel, saveLabel = "Save note"
           onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
         />
       </div>
-      {isDrawing ? (
-        <DrawingCanvas draft={draft} setDraft={setDraft} />
-      ) : (
-        <RichTextEditor draft={draft} setDraft={setDraft} />
-      )}
-      <div className="flex justify-end gap-2">
-        {onCancel && (
-          <button className={btnGhost} onClick={onCancel}>
-            <X size={15} /> Cancel
-          </button>
+
+      {/* ONE BAR. Its contents swap; it never appears or disappears. */}
+      <div className="sticky top-0 z-10 rounded-lg border border-stone-300 bg-stone-50 p-2">
+        {inkFocused ? (
+          <InkTools
+            color={color}
+            setColor={setColor}
+            width={width}
+            setWidth={setWidth}
+            erasing={erasing}
+            setErasing={setErasing}
+            hue={hue}
+            light={light}
+            pickShade={(h2, l2) => {
+              setHue(h2);
+              setLight(l2);
+              setColor(`hsl(${h2}, 75%, ${l2}%)`);
+              setErasing(false);
+            }}
+            onUndo={() => patchBlock(focused.id, (b) => ({ ...b, strokes: (b.strokes || []).slice(0, -1) }))}
+            onClear={() => patchBlock(focused.id, { strokes: [] })}
+            zoom={zoom}
+            setZoom={setZoom}
+          />
+        ) : (
+          <TextTools
+            font={draft.font}
+            setFont={(f) => setDraft((d) => ({ ...d, font: f }))}
+            getArea={() => (focused ? areas.current[focused.id] : null)}
+            afterCommand={() => {
+              const area = focused ? areas.current[focused.id] : null;
+              if (!area) return;
+              const html = sanitizeHtml(area.innerHTML);
+              patchBlock(focused.id, { html, body: htmlToText(html) });
+            }}
+            hint={hint}
+            setHint={setHint}
+          />
         )}
-        <button className={btnPrimary} onClick={onSave}>
-          <Check size={15} /> {saveLabel}
+      </div>
+
+      <div className="space-y-2">
+        {blocks.map((b) =>
+          b.type === INK ? (
+            <InkBlockEditor
+              key={b.id}
+              block={b}
+              onChange={(patch) => patchBlock(b.id, patch)}
+              style={draft.style}
+              notePenUsed={notePenUsed}
+              tools={{ color, width, erasing, zoom }}
+              focused={focused && focused.id === b.id}
+              onFocusBlock={setFocusId}
+              onRemove={removeInk}
+            />
+          ) : (
+            <TextBlockEditor
+              key={b.id}
+              block={b}
+              onChange={(patch) => patchBlock(b.id, patch)}
+              style={draft.style}
+              font={draft.font}
+              registerArea={registerArea}
+              onFocusBlock={setFocusId}
+              onBackspaceAtStart={onBackspaceAtStart}
+            />
+          )
+        )}
+      </div>
+
+      <div className="flex flex-wrap justify-between gap-2">
+        <button className={btnGhost} onClick={addInk}>
+          <PenLine size={15} /> Add handwriting
         </button>
+        <div className="flex gap-2">
+          {onCancel && (
+            <button className={btnGhost} onClick={onCancel}>
+              <X size={15} /> Cancel
+            </button>
+          )}
+          <button className={btnPrimary} onClick={onSave}>
+            <Check size={15} /> {saveLabel}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1984,6 +2188,34 @@ const notePreview = (p) => (isRemote(p) ? previewFor(p) : aiNotePreview(p));
 /* Hoisted out of the drawing editor so the READ-ONLY view can render the
    same strokes. Two copies of stroke rendering is how a note comes to
    look different depending on which screen you opened it from. */
+/* THE FAINT-WRITING FIX, and why it is a REMAP rather than a floor.
+
+   Measured on Grace's iPad pages: 989 of 1,579 pen points -- 63% --
+   sit below pressure 0.15, with the mode at 0.05-0.10. She writes
+   light, and at 0.05 the old curve gave 1.44 canvas units against 3.6
+   at neutral, so most of her page rendered at ~40% width. That is what
+   "light touches didn't register" actually was.
+
+   A FLOOR would have been the obvious fix and the wrong one: clamping
+   at 0.15 flattens 63% of her points to a single width and throws away
+   the thick-and-thin that makes handwriting look handwritten. The remap
+   is monotonic, so every distinction she made is still a distinction --
+   the faint end just starts higher.
+
+   Note `?? 0.5`, not `|| 0.5`. Zero is falsy, so the old code rendered a
+   genuine zero-pressure point at full NEUTRAL weight while rendering
+   0.01 nearly invisibly. Missing pressure is neutral; a real zero is
+   the lightest touch there is. */
+const INK_MIN_PRESSURE = 0.15;
+const inkPressure = (p) => INK_MIN_PRESSURE + (1 - INK_MIN_PRESSURE) * Math.min(1, Math.max(0, p ?? 0.5));
+
+/* An eraser does NOT vary with pressure. It used to, which is why a
+   light erasing pass left slivers of ink behind and had to be repeated
+   -- visible in the sample as nine erase strokes over one small area.
+   An eraser is a size you chose, not a pressure you applied. */
+const strokeWidthAt = (stroke, pressure) =>
+  stroke.erase ? stroke.width : Math.max(0.5, stroke.width * (0.4 + inkPressure(pressure) * 1.6));
+
 const drawStroke = (ctx, stroke) => {
   const pts = stroke.points;
   if (!pts || pts.length === 0) return;
@@ -1998,8 +2230,12 @@ const drawStroke = (ctx, stroke) => {
   }
 
   if (pts.length === 1) {
+    /* A single-point stroke is a dot -- a tap, or the start of a stroke
+       that never moved. It was already drawn; what it lacked was the
+       lower bound the LINE branch has always had, so a light tap
+       produced a sub-pixel circle nobody could see. */
     ctx.beginPath();
-    ctx.arc(pts[0][0], pts[0][1], (stroke.width * (pts[0][2] || 0.5) * 2) / 2, 0, Math.PI * 2);
+    ctx.arc(pts[0][0], pts[0][1], Math.max(0.6, strokeWidthAt(stroke, pts[0][2]) / 2), 0, Math.PI * 2);
     ctx.fillStyle = stroke.erase ? "rgba(0,0,0,1)" : stroke.color;
     ctx.fill();
     ctx.restore();
@@ -2011,8 +2247,8 @@ const drawStroke = (ctx, stroke) => {
   for (let i = 1; i < pts.length; i++) {
     const [x1, y1, p1] = pts[i - 1];
     const [x2, y2, p2] = pts[i];
-    const pressure = ((p1 || 0.5) + (p2 || 0.5)) / 2;
-    ctx.lineWidth = Math.max(0.5, stroke.width * (0.4 + pressure * 1.6));
+    const pressure = ((p1 ?? 0.5) + (p2 ?? 0.5)) / 2;
+    ctx.lineWidth = strokeWidthAt(stroke, pressure);
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
@@ -2023,24 +2259,24 @@ const drawStroke = (ctx, stroke) => {
 
 
 /** Someone's handwriting, rendered but not editable. */
-function StrokeCanvas({ strokes = [], style }) {
+function StrokeCanvas({ strokes = [], style, h = CANVAS_H }) {
   const ref = useRef(null);
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
     const ratio = Math.min(window.devicePixelRatio || 1, 3);
     canvas.width = CANVAS_W * ratio;
-    canvas.height = CANVAS_H * ratio;
+    canvas.height = h * ratio;
     const ctx = canvas.getContext("2d");
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.clearRect(0, 0, CANVAS_W, h);
     for (const st of strokes) drawStroke(ctx, st);
-  }, [strokes]);
+  }, [strokes, h]);
   return (
     <canvas
       ref={ref}
       className={`w-full rounded-lg border border-stone-200 ${style === "lined" ? "lined-paper" : "bg-white"}`}
-      style={{ aspectRatio: `${CANVAS_W} / ${CANVAS_H}`, touchAction: "none" }}
+      style={{ aspectRatio: `${CANVAS_W} / ${h}`, touchAction: "none" }}
     />
   );
 }
@@ -2230,6 +2466,10 @@ function ReferenceSheetEditor({ draft, setDraft }) {
 function NoteView({ page, folders, onEdit, onClose, onMove, onDelete }) {
   if (!page) return null;
   const isDrawing = page.kind === "drawing";
+  /* Only a note stored AS blocks renders as a stack. A legacy note
+     still goes down the old branch -- readers handle both shapes for as
+     long as both exist, which is the whole point of converting lazily. */
+  const blocks = Array.isArray(page.blocks) ? page.blocks : null;
   return (
     <Card className="mt-3">
       <div className="flex items-start justify-between gap-2">
@@ -2253,7 +2493,37 @@ function NoteView({ page, folders, onEdit, onClose, onMove, onDelete }) {
           theorem in noteBlocks.js -- for a legacy note these return the
           identical fields -- and it is what lets the editor start
           writing `blocks` without touching this component again. */}
-      {isDrawing ? (
+      {blocks ? (
+        blocks.length === 0 ? (
+          /* Same wrapper as the legacy empty note, so an empty lined
+             page keeps its lines after conversion. Found by the
+             comparison below rather than by looking. */
+          <div
+            className={`mt-3 whitespace-pre-wrap text-sm text-stone-700 ${page.style === "lined" ? "lined-paper px-1" : ""} ${
+              page.font === "serif" ? "font-serif" : page.font === "mono" ? "font-mono" : ""
+            }`}
+          >
+            <span className="text-stone-400">This note is empty.</span>
+          </div>
+        ) : (
+          <div className="mt-3 space-y-3">
+            {blocks.map((b) =>
+              b.type === INK ? (
+                <StrokeCanvas key={b.id} strokes={b.strokes || []} style={page.style} h={b.h || INK_DEFAULT_H} />
+              ) : (
+                <div
+                  key={b.id}
+                  className={`whitespace-pre-wrap text-sm text-stone-700 ${page.style === "lined" ? "lined-paper px-1" : ""} ${
+                    page.font === "serif" ? "font-serif" : page.font === "mono" ? "font-mono" : ""
+                  }`}
+                >
+                  {b.body || htmlToText(b.html || "")}
+                </div>
+              )
+            )}
+          </div>
+        )
+      ) : isDrawing ? (
         <div className="mt-3">
           <StrokeCanvas strokes={inkOf(page)} readOnly style={page.style} />
         </div>
@@ -2300,6 +2570,32 @@ function ReferenceSheetView({ page, onEdit, onClose }) {
 
 /* ---- Notes tab: a flat list of all notes (folders live in their own tab) ---- */
 
+/* THE FIELD-WRITING PATH, and the one place step 4 could have lost a
+   note silently. A block-shape draft has EMPTY html/body/strokes --
+   the content is in `blocks` -- so writing the legacy fields straight
+   off the draft would have saved an empty note over a full one, with
+   no error anywhere. It is derived from the blocks instead.
+
+   The legacy fields are still written, for one release, so a device
+   still on the old build can read a note this one saved. That costs
+   roughly 2x per EDITED note -- only edited ones, because conversion
+   is lazy -- and step 4b is what ends it. */
+export function noteFields(d) {
+  const blocks = blocksOf(d);
+  const legacy = blocks ? fieldsFromBlocks(blocks) : { html: d.html || "", body: d.body || "", strokes: d.strokes || [] };
+  return {
+    title: d.title,
+    ...legacy,
+    ...(blocks ? { blocks } : {}),
+    style: d.style,
+    kind: d.kind || "text",
+    font: d.font || "sans",
+    // Only reference sheets carry entries; every other page keeps the
+    // key absent rather than an empty array it never reads.
+    ...(isReferenceSheet(d) ? { entries: d.entries || [] } : {}),
+  };
+}
+
 function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAllowance, onSummariseNote, openId, onOpened }) {
   const [draft, setDraft] = useState(null);
   const [choosing, setChoosing] = useState(false);
@@ -2331,7 +2627,18 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
   const room = canAddSheet(pages);
 
   const startNew = ({ style, kind }) => {
-    setDraft({ title: "", body: "", html: "", strokes: [], entries: [], style, kind, font: "sans", folderId: null });
+    /* A new note is BORN as blocks -- one empty text block, because
+       "always somewhere to type" is the editor's rule and an empty
+       stack has nowhere. Handwritten notes start with an ink block
+       under it; the chooser is step 5's problem, not this one's. */
+    const base = { title: "", body: "", html: "", strokes: [], entries: [], style, kind, font: "sans", folderId: null };
+    if (isReferenceSheet(base)) {
+      setDraft(base);
+    } else {
+      const text = newTextBlock([], null);
+      const blocks = kind === "drawing" ? insertInkAfter([text], text.id, null).blocks : [text];
+      setDraft({ ...base, blocks });
+    }
     setChoosing(false);
   };
   /* ---------- autosave ----------
@@ -2374,12 +2681,17 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
   /* Whether there is anything worth creating a note for. An empty draft
      never becomes a row -- that is what stops "New note, changed my
      mind" leaving litter behind. */
-  const hasContent = (d) =>
-    !!d &&
-    ((d.title || "").trim() ||
-      (d.body || "").trim() ||
-      (d.strokes || []).length > 0 ||
-      ((d.entries || []).length > 0));
+  const hasContent = (d) => {
+    if (!d) return false;
+    // Reads through the blocks, or an unconverted note's own fields.
+    const f = blocksOf(d) ? fieldsFromBlocks(blocksOf(d)) : { body: d.body || "", strokes: d.strokes || [] };
+    return !!(
+      (d.title || "").trim() ||
+      (f.body || "").trim() ||
+      (f.strokes || []).length > 0 ||
+      (d.entries || []).length > 0
+    );
+  };
 
   useEffect(() => {
     if (!draft) return;
@@ -2415,18 +2727,7 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fieldsOf = (d) => ({
-    title: d.title,
-    body: d.body || "",
-    html: d.html || "",
-    strokes: d.strokes || [],
-    style: d.style,
-    kind: d.kind || "text",
-    font: d.font || "sans",
-    // Only reference sheets carry entries; every other page keeps the
-    // key absent rather than an empty array it never reads.
-    ...(isReferenceSheet(d) ? { entries: d.entries || [] } : {}),
-  });
+  const fieldsOf = noteFields;
 
   /* Write the draft into `data`, WITHOUT leaving the editor.
      Autosave and Done both go through here, so there is exactly one
@@ -2556,6 +2857,7 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
   const [confirmId, setConfirmId] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [draft, setDraft] = useState(null);
+  const [viewId, setViewId] = useState(null);
   const [aiViewId, setAiViewId] = useState(null);
 
   const saveFolder = () => {
@@ -2564,24 +2866,48 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
     else addItem("folders", { id: uid(), name, color: folderForm.color });
     setFolderForm(null);
   };
+  /* THE SECOND COPY IS GONE. This used to be a hand-written duplicate of
+     Notes' fieldsOf, and it had already drifted -- it never wrote
+     `entries`, and in step 4 it would have written EMPTY html/body/
+     strokes over a block-shape note, losing the content with no error
+     anywhere. Same disease the folder-picker extraction cured: one save
+     path, two entry points.
+
+     `noteFields` is shared with Notes, so a change to what a note
+     stores cannot reach one screen and miss the other. */
   const saveNote = () => {
-    patchItem("pages", draft.id, {
-      title: draft.title,
-      body: draft.body || "",
-      html: draft.html || "",
-      strokes: draft.strokes || [],
-      style: draft.style,
-      kind: draft.kind || "text",
-      font: draft.font || "sans",
-    });
+    patchItem("pages", draft.id, noteFields(draft));
     setDraft(null);
   };
   const countFor = (fid) => pages.filter((p) => p.folderId === fid).length;
 
+  /* Reading is the default here too, and there is NO discard path. Both
+     were decided for the Notes tab and this screen was the last
+     holdout; a note that behaves differently depending on which tab you
+     opened it from is two things to learn. */
   if (draft) {
     return (
       <Card>
-        <NoteEditor draft={draft} setDraft={setDraft} onSave={saveNote} onCancel={() => setDraft(null)} />
+        <NoteEditor draft={draft} setDraft={setDraft} onSave={saveNote} saveLabel="Done" />
+      </Card>
+    );
+  }
+
+  if (viewId) {
+    const page = pages.find((p) => p.id === viewId);
+    return (
+      <Card>
+        <NoteView
+          page={page}
+          folders={folders}
+          onEdit={() => setDraft({ ...page })}
+          onClose={() => setViewId(null)}
+          onMove={(id, folderId) => patchItem("pages", id, { folderId })}
+          onDelete={(id) => {
+            removeItem("pages", id);
+            setViewId(null);
+          }}
+        />
       </Card>
     );
   }
@@ -2666,7 +2992,7 @@ function Folders({ pages, folders, addItem, patchItem, removeItem, onDeleteFolde
                   ) : (
                     <ul className="space-y-2">
                       {notes.map((p) => (
-                        <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => (n.aiMeta ? setAiViewId(n.id) : setDraft({ ...n }))} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
+                        <NoteRow key={p.id} p={p} folders={folders} onEdit={(n) => (n.aiMeta ? setAiViewId(n.id) : isReferenceSheet(n) ? setDraft({ ...n }) : setViewId(n.id))} onMove={(id, folderId) => patchItem("pages", id, { folderId })} onDelete={(id) => removeItem("pages", id)} />
                       ))}
                     </ul>
                   )}

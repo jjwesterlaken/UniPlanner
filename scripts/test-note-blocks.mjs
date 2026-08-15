@@ -23,7 +23,25 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { blocksOf, fieldsFromBlocks, isBlockNote, inkOf, htmlOf, bodyOf, TEXT, INK } from "../src/noteBlocks.js";
+import {
+  blocksOf,
+  fieldsFromBlocks,
+  isBlockNote,
+  inkOf,
+  htmlOf,
+  bodyOf,
+  TEXT,
+  INK,
+  CANVAS_H,
+  INK_DEFAULT_H,
+  newTextBlock,
+  newInkBlock,
+  insertInkAfter,
+  mergeTextBack,
+  removeBlock,
+  noteUsedPen,
+  withBlock,
+} from "../src/noteBlocks.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -226,6 +244,119 @@ test("no reader still pulls strokes or html straight off a page", () => {
 
   assert.match(app, /inkOf\(p\)\.length/, "the list preview still counts p.strokes");
   assert.match(app, /htmlToText\(htmlOf\(p\)\)/, "the list preview still reads p.html");
+});
+
+/* ================================================================== */
+/*  Step 4 — editing                                                  */
+/* ================================================================== */
+
+const T = (id, html = "") => ({ id, type: TEXT, html, body: html.replace(/<[^>]*>/g, "") });
+const I = (id, n = 1) => ({ id, type: INK, strokes: [stroke(n)], h: 700 });
+
+/* ---------- THE BACKSPACE RULE ---------- */
+
+test("backspace at the start of a text block merges it into the one above", () => {
+  const blocks = [T("a", "<p>one</p>"), T("b", "<p>two</p>")];
+  const out = mergeTextBack(blocks, "b");
+  assert.ok(out, "the merge was refused between two text blocks");
+  assert.equal(out.blocks.length, 1);
+  assert.equal(out.blocks[0].html, "<p>one</p><p>two</p>");
+  assert.equal(out.focusId, "a", "focus did not follow the text it merged into");
+  assert.equal(out.caretAt, 3, "the caret is not at the join");
+});
+
+test("BACKSPACE ABOVE INK DELETES NOTHING", () => {
+  /* THE ONE THAT MATTERS. A student typing under a diagram, holding
+     backspace to clear a line, must not silently take the diagram with
+     it: strokes are recoverable from nowhere, and nothing about holding
+     a key says "and now the drawing".
+
+     Refusal is `null` rather than an unchanged array, so the caller can
+     tell "nothing to do" from "did something". */
+  const blocks = [T("a", "<p>above</p>"), I("ink", 4), T("b", "<p>below</p>")];
+  assert.equal(mergeTextBack(blocks, "b"), null, "backspace merged a text block INTO an ink block");
+});
+
+test("a refused backspace leaves every stroke where it was", () => {
+  // The same claim from the other side: not just "returns null" but
+  // "the ink is still there", which is what a student would check.
+  const ink = I("ink", 6);
+  const blocks = [T("a"), ink, T("b", "<p>x</p>")];
+  const out = mergeTextBack(blocks, "b");
+  assert.equal(out, null);
+  assert.equal(blocks[1], ink, "the ink block was replaced");
+  assert.equal(blocks[1].strokes.length, 1);
+  assert.equal(blocks.length, 3, "a block went missing on a refused merge");
+});
+
+test("backspace in the first block does nothing at all", () => {
+  assert.equal(mergeTextBack([T("a", "<p>x</p>")], "a"), null);
+  assert.equal(mergeTextBack([], "a"), null);
+});
+
+test("merging never mutates the blocks it was given", () => {
+  const blocks = deepFreeze([T("a", "<p>one</p>"), T("b", "<p>two</p>")]);
+  mergeTextBack(blocks, "b");
+});
+
+/* ---------- inserting handwriting ---------- */
+
+test("a note never ENDS in ink", () => {
+  /* Otherwise there is nowhere to type and the only way back to typing
+     is the toolbar -- which is the "where did my cursor go" problem the
+     editor exists to avoid. */
+  const { blocks } = insertInkAfter([T("a", "<p>x</p>")], "a", "p1");
+  assert.deepEqual(blocks.map((b) => b.type), [TEXT, INK, TEXT]);
+});
+
+test("handwriting inserted in the middle does NOT get a trailing block", () => {
+  const { blocks } = insertInkAfter([T("a"), T("b")], "a", "p1");
+  assert.deepEqual(blocks.map((b) => b.type), [TEXT, INK, TEXT]);
+  assert.equal(blocks.length, 3, "a redundant text block was added mid-note");
+});
+
+test("a new ink block is half a page; a CONVERTED one is a full page", () => {
+  /* The bug this pins: an existing handwritten note's coordinates were
+     captured on a 1000x1400 page. Convert it into a block with the
+     new-block default and the bottom half of the drawing is cropped.
+     Caught by the conversion render, not by looking. */
+  assert.equal(newInkBlock([], "p1").h, INK_DEFAULT_H);
+  assert.equal(INK_DEFAULT_H, 700);
+  const legacy = { id: "p9", kind: "drawing", html: "", body: "", strokes: [stroke(3)] };
+  assert.equal(blocksOf(legacy)[0].h, CANVAS_H, "a converted drawing was given the new-block height");
+});
+
+test("block ids never collide, however many are added", () => {
+  let blocks = [newTextBlock([], "p1")];
+  for (let i = 0; i < 5; i++) blocks = insertInkAfter(blocks, blocks[blocks.length - 1].id, "p1").blocks;
+  const ids = blocks.map((b) => b.id);
+  assert.equal(new Set(ids).size, ids.length, `duplicate block id: ${ids.join(",")}`);
+});
+
+test("removing the last block leaves somewhere to type", () => {
+  assert.deepEqual(removeBlock([I("ink")], "ink").map((b) => b.type), [TEXT]);
+});
+
+/* ---------- THE LATCH IS NOTE-LEVEL ---------- */
+
+test("a pen used in ONE block protects EVERY block on the note", () => {
+  /* THE REGRESSION THIS EXISTS TO KILL. usedPen is stored per block, so
+     a canvas that consulted only its own flag would start unprotected
+     the moment a student added a second piece of handwriting -- which
+     is precisely the per-canvas behaviour the note-level latch
+     replaced. Pen in block one, fresh block two, still protected. */
+  const one = { ...I("i1"), usedPen: true };
+  const two = I("i2");
+  assert.equal(noteUsedPen([one, two]), true, "a second ink block starts unprotected");
+  assert.equal(noteUsedPen([two]), false, "a note that has never seen a pen is latched anyway");
+  assert.equal(noteUsedPen([T("a"), one]), true);
+});
+
+test("the latch survives being written through withBlock", () => {
+  const blocks = [I("i1"), I("i2")];
+  const next = withBlock(blocks, "i1", { usedPen: true });
+  assert.equal(noteUsedPen(next), true);
+  assert.equal(noteUsedPen(blocks), false, "withBlock mutated the array it was given");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

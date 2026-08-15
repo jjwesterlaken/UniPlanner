@@ -309,6 +309,54 @@ for (const [tabName, phrases] of [
   }
 }
 
+/* THE FOLDERS TAB, which this walk had never touched.
+
+   It carried a second note editor with its own hand-written save path,
+   and in step 4 that path would have written empty html/body/strokes
+   over a block-shape note -- losing the content with no error anywhere.
+   It now goes through the same NoteView, the same NoteEditor and the
+   same noteFields as the Notes tab.
+
+   Walked rather than asserted from source for the usual reason: the
+   fault would be in how the screen is assembled, which is the one thing
+   testing functions in isolation cannot see. */
+{
+  const folders = findButton("Folders");
+  check(!!folders, "the Folders tab is reachable");
+  if (folders) {
+    folders.click();
+    await new Promise((r) => setTimeout(r, 200));
+    const text = doc.body.textContent || "";
+    check(text.includes("folder"), "the Folders tab renders from an empty semester");
+    check(!!findButton("New folder"), "the Folders tab offers a new folder");
+
+    // Make a folder so the note-browsing half is reachable at all.
+    findButton("New folder").click();
+    await new Promise((r) => setTimeout(r, 150));
+    const nameInput = doc.querySelector('input[placeholder="e.g. Lecture notes"]');
+    check(!!nameInput, "the folder form offers a name");
+    if (nameInput) {
+      const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set;
+      setter.call(nameInput, "Biology");
+      nameInput.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 100));
+      const create = findButton("Create folder");
+      check(!!create, "the folder form offers Create folder");
+      if (create) {
+        create.click();
+        await new Promise((r) => setTimeout(r, 200));
+        check((doc.body.textContent || "").includes("Biology"), "the folder was created");
+      }
+    }
+
+    /* THE DISCARD PATH IS GONE. Reading is the default and there is no
+       Cancel -- both were decided for the Notes tab and this screen was
+       the last holdout. A note that behaves differently depending on
+       which tab you opened it from is two things to learn. */
+    check(!findButton("Cancel"), "the Folders tab no longer offers a discard path on a note");
+  }
+}
+
 // The reference sheet option, and its editor, from empty.
 {
   const notes = findButton("Notes");
