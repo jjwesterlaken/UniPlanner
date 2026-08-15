@@ -560,7 +560,7 @@ for (const [tabName, phrases] of [
     probe,
     'import { createRoot } from "react-dom/client";\n' +
       'import { AudioSourcePicker } from "../src/aiNotes.jsx";\n' +
-      'import { SummariseReading } from "../src/aiText.jsx";\n' +
+      'import { SummariseReading, SummariseNote } from "../src/aiText.jsx";\n' +
       'import { useState } from "react";\n' +
       'import { AiNotesPanel, useRecordingSession, RecordingIndicator } from "../src/aiNotes.jsx";\n' +
       'import { describeCapabilities } from "../src/audioSources.js";\n' +
@@ -616,6 +616,16 @@ for (const [tabName, phrases] of [
       "  const sink = { pages: [], notes: [], folders: [], api: null };\n" +
       "  host.__sink = sink;\n" +
       "  createRoot(host).render(<Harness consented={consented} sink={sink} />);\n" +
+      "  return host;\n" +
+      "};\n" +
+      "window.__probeSummariseNote = (page) => {\n" +
+      '  const host = document.createElement("div");\n' +
+      "  document.body.appendChild(host);\n" +
+      "  createRoot(host).render(\n" +
+      '    <SummariseNote session={{ token: "t", user: { id: "u" } }} page={page}\n' +
+      "      allowanceApi={{ allowance: { tier: \"free\", limit: 10, used: 0, remaining: 10, fraction: 0, isFree: true }, applyFraction: () => {} }}\n" +
+      "      onSummarised={() => {}} />\n" +
+      "  );\n" +
       "  return host;\n" +
       "};\n" +
       "window.__probeReading = (allowance, reading, summaryPage) => {\n" +
@@ -706,6 +716,35 @@ for (const [tabName, phrases] of [
 
     const collapsedText = collapsed.textContent || "";
     check(collapsedText.includes("Summarise this"), "an un-summarised reading offers the action", collapsedText.slice(0, 200));
+
+    /* SUMMARISE-THIS-NOTE, probed for the first time — and the reason it
+       was not probed before is the process answer to the first live
+       regression: it is gated on a real session, so the demo-mode walk
+       never mounted it, and step 3's reader audit was scoped to
+       PlannerApp.jsx while its gate lives in aiText.jsx. When step 4b
+       started writing body as "" on converted notes, the one reader
+       nothing had moved to the accessors made the feature vanish for
+       exactly the notes students edit.
+
+       Both shapes, because the converted one is the shape every edited
+       note now has and the legacy one is every untouched note. */
+    const legacyNote = { id: "sn1", kind: "text", title: "T", body: "Water moves down its gradient.", html: "<p>Water moves down its gradient.</p>", strokes: [] };
+    const convertedNote = {
+      id: "sn2", kind: "text", title: "T", body: "", html: "", strokes: [],
+      blocks: [{ id: "sn2:t0", type: "text", html: "<p>Water moves down its gradient.</p>", body: "Water moves down its gradient." }],
+    };
+    const emptyNote = { id: "sn3", kind: "text", title: "T", body: "", html: "", strokes: [], blocks: [] };
+    const snLegacy = dom.window.__probeSummariseNote(legacyNote);
+    const snConverted = dom.window.__probeSummariseNote(convertedNote);
+    const snEmpty = dom.window.__probeSummariseNote(emptyNote);
+    await new Promise((r) => setTimeout(r, 200));
+    check((snLegacy.textContent || "").includes("Summarise this note"), "a legacy note with content offers Summarise this note");
+    check(
+      (snConverted.textContent || "").includes("Summarise this note"),
+      "A CONVERTED NOTE STILL OFFERS SUMMARISE THIS NOTE",
+      "the gate is reading the legacy body field, which 4b writes as empty"
+    );
+    check(!(snEmpty.textContent || "").includes("Summarise this note"), "a genuinely empty note offers nothing");
     check(!collapsedText.includes("Paste"), "the paste box stays shut until asked for");
     check(
       (summarised.textContent || "").includes("Summarised"),

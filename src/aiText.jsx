@@ -31,6 +31,7 @@ import {
   TASK_UNITS,
 } from "./aiTextLimits.js";
 import { estimateReading, combineParts } from "./readingChunks.js";
+import { bodyOf } from "./noteBlocks.js";
 import { ConsentGate } from "./aiNotesConsent.jsx";
 import { fetchTextAllowance, callAiText } from "./aiTextClient.js";
 import { btnPrimary, btnGhost, iconBtn, inputCls, labelCls, Card } from "./PlannerApp.jsx";
@@ -390,7 +391,14 @@ export function SummariseNote({ session, page, allowanceApi, onSummarised }) {
   const { allowance, applyFraction } = allowanceApi;
   const { run, busy, error } = useTask(session, applyFraction);
 
-  const text = (page && (page.body || "")).trim();
+  /* THROUGH THE ACCESSOR, not off the page. This line was the one
+     reader in the codebase left reading the legacy field directly --
+     step 3's audit mapped every reader in PlannerApp.jsx and never
+     looked here -- so when step 4b started writing body as "" on
+     converted notes, this feature silently vanished for exactly the
+     notes students edit. The gate and the payload broke together:
+     even had the gate passed, the text SENT was the same empty string. */
+  const text = bodyOf(page).trim();
   if (!text) return null;
 
   return (
