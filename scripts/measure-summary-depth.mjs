@@ -263,6 +263,12 @@ if (beforeOut.truncated || afterOut.truncated) {
 
 const rows = [
   ["output tokens", beforeOut.outputTokens, afterOut.outputTokens],
+  /* Reported so no figure in the billing derivation has to be estimated.
+     The first run of this script omitted it, and the input count had to
+     be inferred from character count -- immaterial that time (input is a
+     quarter the price of output), but "mostly complete" is not a
+     property a billing derivation should have. */
+  ["input tokens", beforeOut.inputTokens, afterOut.inputTokens],
   ["bytes (both languages)", beforeOut.bytes, afterOut.bytes],
   ["overview words", beforeOut.overviewWords, afterOut.overviewWords],
   ["key points", beforeOut.keyPoints, afterOut.keyPoints],
@@ -280,7 +286,8 @@ for (const [name, b, a] of rows) console.log(`${pad(name, 24)}${pad(b, 12)}${pad
 console.log(`
 WHAT TO DO WITH THIS
 
-  TYPICAL_SUMMARY_OUTPUT_TOKENS in supabase/functions/ai-notes/config.ts
+  TYPICAL_SUMMARY_OUTPUT_TOKENS and TYPICAL_SUMMARY_INPUT_TOKENS in
+  supabase/functions/ai-notes/config.ts
   should become the observed "after" output tokens FOR A SHORT
   RECORDING -- that constant prices the billing floor, and the floor
   exists to cover short clips. Measuring a 50-minute lecture and putting
