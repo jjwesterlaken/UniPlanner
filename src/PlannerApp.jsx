@@ -1299,7 +1299,7 @@ function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) 
 }
 
 /* ------------------------------------------------------------------ */
-/*  Notes (typed pages with formatting, or handwritten pages)         */
+/*  Notes (one page that takes both typing and handwriting)           */
 /* ------------------------------------------------------------------ */
 
 /* ---- Formatting options ---- */
@@ -1414,29 +1414,30 @@ function PageTypeChooser({ onCreate, onCancel, sheetsFull = false }) {
         />
       </div>
 
-      <p className={`${labelCls} mt-4`}>Note type</p>
+      {/* TWO TYPES, NOT THREE. Typing and handwriting stopped being
+          different KINDS of note when the editor became a stack of
+          blocks -- a note can hold both, and picking one up front is
+          asking a question the answer to which no longer constrains
+          anything. What remains genuinely different is the reference
+          sheet: its own shape (`entries`), its own editor, its own cap,
+          and not a block note at all.
+
+          `kind` still exists on the stored note and still decides one
+          thing: whether a NEW note starts with an ink block under its
+          text. It is a starting point, not a type. */}
+      <p className={`${labelCls} mt-4`}>What kind</p>
       <div className="grid grid-cols-2 gap-3">
         <Option
-          active={kind === "text"}
+          active={kind !== FORMULA_KIND}
           onClick={() => setKind("text")}
           preview={
-            <div className="mb-2 flex h-16 items-center justify-center rounded-md border border-stone-200 bg-white text-stone-400">
-              <Type size={22} />
+            <div className="mb-2 flex h-16 items-center justify-center gap-1 rounded-md border border-stone-200 bg-white text-stone-400">
+              <Type size={20} />
+              <PenLine size={20} />
             </div>
           }
-          label="Typed"
-          hint="Fonts, colours, highlighters"
-        />
-        <Option
-          active={kind === "drawing"}
-          onClick={() => setKind("drawing")}
-          preview={
-            <div className="mb-2 flex h-16 items-center justify-center rounded-md border border-stone-200 bg-white text-stone-400">
-              <PenLine size={22} />
-            </div>
-          }
-          label="Handwritten"
-          hint="Draw with a stylus or finger"
+          label="Note"
+          hint="Type and handwrite on the same page"
         />
         {!sheetsFull && <Option
           active={kind === FORMULA_KIND}
@@ -2325,7 +2326,11 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
           <h3 className="font-medium text-stone-800">{p.title || <span className="text-stone-400">Untitled note</span>}</h3>
           <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-stone-400">
             <span className="capitalize">
-              {isReferenceSheet(p) ? "Reference sheet" : `${p.kind === "drawing" ? "Handwritten" : "Typed"} · ${p.style} page`}
+              {/* Was "Handwritten · lined page" / "Typed · lined page".
+                  A note can be both now, so naming one is wrong as often
+                  as it is right -- the page STYLE is the part that is
+                  still true of the whole note. */}
+              {isReferenceSheet(p) ? "Reference sheet" : `${p.style} page`}
             </span>
             {f && (
               <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5" style={{ backgroundColor: folderColor(f.color).soft, color: folderColor(f.color).text }}>
@@ -2348,21 +2353,28 @@ function NoteRow({ p, folders, onEdit, onMove, onDelete }) {
         <p className="mt-1.5 flex items-center gap-1.5 text-sm text-stone-500">
           <ListTodo size={14} /> {sheetSummary(p)}
         </p>
-      ) : p.kind === "drawing" ? (
-        inkOf(p).length > 0 && (
-          <p className="mt-1.5 flex items-center gap-1.5 text-sm text-stone-500">
-            <PenLine size={14} /> {inkOf(p).length} stroke{inkOf(p).length === 1 ? "" : "s"}
-          </p>
-        )
       ) : (
-        /* Three shapes to preview, in age order: a moved AI note reads
-           its stub's stored preview (in the language being read), an
-           older one still has the whole summary in aiMeta, and an
-           ordinary note has html. The list must never need the network --
-           it is the first thing on screen. */
-        (notePreview(p) || htmlToText(htmlOf(p))) && (
-          <p className="mt-1.5 line-clamp-3 text-sm text-stone-600">{notePreview(p) || htmlToText(htmlOf(p))}</p>
-        )
+        /* PREVIEW WHAT THE NOTE HAS, not what type it was declared to be.
+           This used to branch on `kind`, so a handwritten note that also
+           held typing showed only a stroke count and a typed note that
+           also held a diagram showed no sign of it. A note can be both,
+           so both are shown when both are there.
+
+           Three text shapes to fall through, in age order: a moved AI
+           note reads its stub's stored preview (in the language being
+           read), an older one still has the whole summary in aiMeta, and
+           an ordinary note has html. The list must never need the
+           network -- it is the first thing on screen. */
+        <>
+          {(notePreview(p) || htmlToText(htmlOf(p))) && (
+            <p className="mt-1.5 line-clamp-3 text-sm text-stone-600">{notePreview(p) || htmlToText(htmlOf(p))}</p>
+          )}
+          {inkOf(p).length > 0 && (
+            <p className="mt-1.5 flex items-center gap-1.5 text-sm text-stone-500">
+              <PenLine size={14} /> {inkOf(p).length} stroke{inkOf(p).length === 1 ? "" : "s"}
+            </p>
+          )}
+        </>
       )}
     </li>
   );
@@ -2615,8 +2627,14 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
   const startNew = ({ style, kind }) => {
     /* A new note is BORN as blocks -- one empty text block, because
        "always somewhere to type" is the editor's rule and an empty
-       stack has nowhere. Handwritten notes start with an ink block
-       under it; the chooser is step 5's problem, not this one's. */
+       stack has nowhere.
+
+       `kind` is kept on the stored note and still decides whether a new
+       one starts with an ink block under its text, but the chooser no
+       longer offers that: typing and handwriting are the same note now,
+       and handwriting is one tap on the toolbar. The branch stays
+       because existing notes carry kind === "drawing" and nothing
+       rewrites them. */
     const base = { title: "", body: "", html: "", strokes: [], entries: [], style, kind, font: "sans", folderId: null };
     if (isReferenceSheet(base)) {
       setDraft(base);
