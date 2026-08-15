@@ -34,6 +34,7 @@
    ================================================================== */
 
 import { isReferenceSheet } from "./reference.js";
+import { encodeStrokes } from "./ink.js";
 
 export const TEXT = "text";
 export const INK = "ink";
@@ -315,7 +316,18 @@ export function noteUsedPen(blocks) {
  * One save path, several entry points.
  */
 export function noteFields(d) {
-  const blocks = blocksOf(d);
+  const derived = blocksOf(d);
+  /* THE COMPRESSION HAPPENS HERE, on save — lazy across the collection
+     (only the note being saved), inside a write that bumps updatedAt
+     anyway, so there is no silent-rewrite problem to reason about.
+     encodeStrokes returns the same references when nothing changed. */
+  const blocks =
+    derived &&
+    derived.map((b) => {
+      if (!b || b.type !== INK) return b;
+      const strokes = encodeStrokes(b.strokes);
+      return strokes === b.strokes ? b : { ...b, strokes };
+    });
   /* STEP 4B: the legacy fields are no longer written alongside `blocks`.
      They were kept for one release so a device still on the pre-blocks
      build could read a note this one saved; that release has shipped.

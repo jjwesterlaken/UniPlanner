@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { GRID, PRESSURE_DP, roundPoint, roundStroke, isRounded, migrateStrokes, migratePages } from "../src/ink.js";
+import { GRID, PRESSURE_DP, roundPoint, roundStroke, isRounded, migrateStrokes, migratePages, SIMPLIFY_TOLERANCE, simplifyStroke, encodeStroke, decodeStroke, encodeStrokes, isEncoded, pointsOf } from "../src/ink.js";
 import { mergeData } from "../src/sync.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -164,6 +164,112 @@ test("what a stroke costs is bounded per point", () => {
   // A guard against a future representation change quietly inflating.
   const s = roundStroke(stroke(24));
   assert.ok(JSON.stringify(s).length / s.points.length < 24, "a point costs more than 24 bytes");
+});
+
+/* ---------- stages 2 and 3: simplify and delta-encode ---------- */
+
+test("the round trip is bit-exact on grid-aligned input", () => {
+  /* What makes re-encoding on every save safe: the decoded doubles are
+     the identical doubles rounding produced, so encode(decode(e))
+     cannot drift. Includes the shapes the samples proved exist:
+     negative coordinates on both axes, x past the canvas edge, zero
+     pressure, and a single-point stroke. */
+  const awkward = {
+    color: "#1c1917", width: 3, erase: false,
+    points: [[-99.2, -39.7, 0], [1004.1, 500.8, 0.31], [123.5, 1384.9, 1]],
+  };
+  const rt = decodeStroke(encodeStroke(awkward));
+  assert.deepEqual(rt.points, awkward.points);
+  assert.equal(rt.color, awkward.color);
+  assert.equal(rt.width, awkward.width);
+
+  const dot = { color: "#000", width: 3, erase: false, points: [[505.8, 447, 0.5]] };
+  assert.deepEqual(decodeStroke(encodeStroke(dot)).points, dot.points);
+});
+
+test("EVERY encoder assumption, by name", () => {
+  // Coordinates unbounded and signed: nothing clamps, nothing packs.
+  const far = { color: "#000", width: 3, erase: false, points: [[-5000.5, 99999.9, 0.5], [-4999.5, 99998.9, 0.5]] };
+  assert.deepEqual(decodeStroke(encodeStroke(far)).points, far.points, "an out-of-canvas coordinate was moved");
+  // Missing pressure is the neutral 0.5, never 0.
+  const noP = { color: "#000", width: 3, erase: false, points: [[1, 2], [3, 4]] };
+  assert.deepEqual(decodeStroke(encodeStroke(noP)).points.map((q) => q[2]), [0.5, 0.5]);
+  // Pressure encodes over the FULL [0,1], not the observed [0,0.5].
+  const full = { color: "#000", width: 3, erase: false, points: [[1, 1, 1], [2, 2, 0.97]] };
+  assert.deepEqual(decodeStroke(encodeStroke(full)).points.map((q) => q[2]), [1, 0.97], "full-range pressure was clipped");
+  // Width stays per-stroke — the eraser is a width.
+  const wide = encodeStrokes([{ color: "#000", width: 3, erase: false, points: [[1, 1, 0.5]] }, { color: "#000", width: 42, erase: true, points: [[2, 2, 0.5]] }]);
+  assert.deepEqual(wide.map((st) => st.width), [3, 42]);
+  assert.deepEqual(wide.map((st) => !!st.erase), [false, true]);
+});
+
+test("simplification never moves ink further than the tolerance", () => {
+  /* The bound is the argument for its safety: 0.8 canvas units is under
+     half the thinnest rendered line, so the ink moves within its own
+     width. Checked against the chord test the implementation uses. */
+  const wavy = {
+    color: "#000", width: 3, erase: false,
+    points: Array.from({ length: 60 }, (_, i) => [i * 2, 100 + Math.sin(i / 3) * 6, 0.5]).map(([x, y, p]) => roundPoint(x, y, p)),
+  };
+  const slim = simplifyStroke(wavy);
+  assert.ok(slim.points.length < wavy.points.length, "nothing was dropped, so this proves nothing");
+  assert.equal(slim.points[0], wavy.points[0], "the first point moved");
+  assert.equal(slim.points[slim.points.length - 1], wavy.points[wavy.points.length - 1], "the last point moved");
+  assert.ok(SIMPLIFY_TOLERANCE <= 0.8, "the tolerance grew past the argued-safe bound");
+  // A straight line collapses to its two ends; a dot and a pair survive.
+  const line = { color: "#000", width: 3, erase: false, points: Array.from({ length: 30 }, (_, i) => [i, i, 0.5]) };
+  assert.equal(simplifyStroke(line).points.length, 2);
+  assert.equal(simplifyStroke({ ...line, points: [[1, 1, 0.5]] }).points.length, 1);
+});
+
+test("what the whole chain saves on a dense page", () => {
+  const page = Array.from({ length: 50 }, () => roundStroke(stroke(24)));
+  const before = JSON.stringify(page).length;
+  const after = JSON.stringify(encodeStrokes(page)).length;
+  assert.ok(after < before * 0.6, `only ${Math.round((1 - after / before) * 100)}% smaller`);
+});
+
+test("encoding on load is FORBIDDEN — the migration stays rounding-only", () => {
+  /* The bulk-vs-lazy rule: rounding is invisible, so it may run over
+     everything on load; the encoded stroke is a SHAPE readers branch
+     on, so it converts on save, one note at a time. A load migration
+     that encoded would rewrite the whole collection on first launch. */
+  const page = { id: "p1", strokes: [roundStroke(stroke(10))], updatedAt: "2026-08-01T00:00:00.000Z" };
+  const out = migratePages([page])[0];
+  assert.ok(!out.strokes.some(isEncoded), "migratePages encoded — a bulk rewrite of every note on load");
+});
+
+test("already-encoded strokes pass through every stage untouched, by reference", () => {
+  const e = encodeStroke(simplifyStroke(roundStroke(stroke(20))));
+  assert.equal(encodeStroke(e), e);
+  const arr = [e];
+  assert.equal(encodeStrokes(arr), arr, "a no-op save rebuilt the array");
+  assert.equal(simplifyStroke(e), e, "simplify touched an encoded stroke");
+});
+
+test("the palm latch's _at marker survives encoding", () => {
+  /* The autosave can fire between a palm touch landing and the first
+     pen contact; if encoding stripped _at, the retroactive discard
+     would have nothing to match and the palm mark would survive
+     because a save ran at the wrong moment. */
+  const touch = { color: "#000", width: 3, erase: false, _at: 1723711000000, points: [[1, 1, 0.5], [2, 2, 0.5]] };
+  assert.equal(encodeStroke(touch)._at, touch._at);
+});
+
+test("pointsOf reads both shapes, and by reference for the legacy one", () => {
+  const legacy = roundStroke(stroke(8));
+  assert.equal(pointsOf(legacy), legacy.points, "a legacy stroke's points were rebuilt");
+  const enc = encodeStroke(legacy);
+  assert.deepEqual(pointsOf(enc), legacy.points);
+  assert.deepEqual(pointsOf(null), []);
+});
+
+test("the renderer and the capture path go through the new stages", () => {
+  const src = fsReadPlanner();
+  assert.match(src, /const pts = pointsOf\(stroke\)/, "drawStroke no longer reads through pointsOf — encoded ink would render as nothing");
+  assert.match(src, /const clean = simplifyStroke\(raw\)/, "the finished stroke is no longer simplified at capture");
+  const nb = fs.readFileSync(path.join(rootDir, "src/noteBlocks.js"), "utf8");
+  assert.match(nb, /encodeStrokes\(b\.strokes\)/, "noteFields no longer encodes ink on save");
 });
 
 /* ---------- the drawing code rounds at capture, not only on load ---------- */

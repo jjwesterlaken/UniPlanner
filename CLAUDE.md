@@ -686,6 +686,20 @@ width of 3 the whole pressure range spans 1.2px to 6px, so 100 levels
 move the line by 0.048px per step. Two decimal places is invisible; a
 single byte would be too.
 
+**SHIPPED: all three stages are in.** Rounding at capture and on load
+(below); simplification at stroke end and on save; delta encoding on
+save. The shipped chain measures **73% on the stylus page against the
+instrument's priced 74%** — the shipped figure is the measured figure.
+The encoded stroke is `{color, width, erase, v:2, o, d}`; every
+renderer reads through `pointsOf`, the dual-shape accessor, and the
+differential render asserts an encoded note draws identical ink.
+Encoding happens ONLY on save (lazy, per the shape-change rule — a test
+forbids the load migration from encoding), and the round trip is
+bit-exact because the input is grid-aligned, which is what makes
+re-encoding on every save safe. Simplification's tolerance (0.8 canvas
+units) is argued from the render: under half the thinnest line's own
+width, so the ink moves within its own stroke.
+
 **SHIPPED: rounding is in.** `src/ink.js` rounds at capture *and* in
 `normalizeData` on load. Capture-time matters as much as the migration —
 without it every new stroke arrives at full float precision and the

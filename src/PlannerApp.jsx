@@ -171,7 +171,7 @@ import {
   SHEET_ENTRIES_MAX,
 } from "./reference.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL } from "./legalLinks.js";
-import { migratePages, roundPoint, GRID } from "./ink.js";
+import { migratePages, roundPoint, GRID, pointsOf, simplifyStroke } from "./ink.js";
 import {
   inkOf,
   htmlOf,
@@ -1972,7 +1972,11 @@ function InkBlockEditor({ block, onChange, style, notePenUsed, tools, focused, o
     currentStroke.current = null;
     if (!stroke || stroke.points.length === 0) return;
 
-    const { _via, ...clean } = stroke;
+    const { _via, ...raw } = stroke;
+    /* Simplified at stroke END, never mid-stroke: the live stroke stays
+       raw so drawing feels immediate, and the finished one drops its
+       near-collinear points before it is ever stored. */
+    const clean = simplifyStroke(raw);
     const now = Date.now();
 
     if (_via === "pen") {
@@ -2221,7 +2225,9 @@ const strokeWidthAt = (stroke, pressure) =>
   stroke.erase ? stroke.width : Math.max(0.5, stroke.width * (0.4 + inkPressure(pressure) * 1.6));
 
 const drawStroke = (ctx, stroke) => {
-  const pts = stroke.points;
+  // Dual-shape: an encoded stroke decodes here, a legacy one passes
+  // through by reference. Same accessor pattern as blocksOf.
+  const pts = pointsOf(stroke);
   if (!pts || pts.length === 0) return;
   ctx.save();
   ctx.lineCap = "round";
