@@ -503,6 +503,45 @@ for (const [tabName, phrases] of [
       }
     }
   }
+
+  /* THE ACCORDION. The old pattern rendered an opened note either
+     instead of the list or below the whole list -- and "below the whole
+     list" is off-screen on a long list, so tapping a note appeared to
+     do nothing. The claims that replace it, by name: the note opens IN
+     ITS ROW, the LIST STAYS VISIBLE around it, and the chevron closes
+     what it opened. */
+  {
+    // The walk above leaves the new note expanded. Collapse everything first.
+    const openChevron = doc.querySelector('[aria-label="Collapse note"]');
+    if (openChevron) {
+      openChevron.click();
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    const expanders = [...doc.querySelectorAll('[aria-label="Expand note"]')];
+    check(expanders.length >= 2, "the list shows rows with chevrons, not pencils", `saw ${expanders.length}`);
+    check(!doc.querySelector('[aria-label="Edit note"]'), "the pen has left the row — editing is chosen inside the note");
+
+    if (expanders.length >= 2) {
+      /* Expand the TYPED note, not the AI stub -- an AI lecture note is
+         read-only by design and has no Edit, so it would pass the wrong
+         claim and fail the right one. */
+      const typedRow = [...doc.querySelectorAll("[data-note-row]")].find((li) => (li.textContent || "").includes("Osmosis"));
+      const chev = typedRow ? typedRow.querySelector('[aria-label="Expand note"]') : expanders[0];
+      chev.click();
+      await new Promise((r) => setTimeout(r, 200));
+      const text = doc.body.textContent || "";
+      check(!!doc.querySelector('[aria-label="Collapse note"]'), "an expanded note offers its collapse control");
+      check(
+        [...doc.querySelectorAll('[aria-label="Expand note"]')].length >= 1,
+        "THE LIST STAYS VISIBLE while a note is open — other rows are still on screen"
+      );
+      check(!!findButton("Edit"), "the expanded note opens read-only, with Edit inside it");
+
+      doc.querySelector('[aria-label="Collapse note"]').click();
+      await new Promise((r) => setTimeout(r, 150));
+      check(!doc.querySelector('[aria-label="Collapse note"]'), "the chevron collapses what it opened");
+    }
+  }
 }
 
 // The build identifier: until this existed there was no way to answer
