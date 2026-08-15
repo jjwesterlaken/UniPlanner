@@ -54,7 +54,7 @@ import {
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
 import { noteCache } from "./noteCache.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
-import { fetchUsage, uploadAudio, callAiNotes } from "./aiNotesClient.js";
+import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes } from "./aiNotesClient.js";
 import { nowISO, supabase } from "./sync.js";
 import { inputCls, labelCls, btnPrimary, btnGhost, iconBtn, Card, CourseSelect, uid } from "./PlannerApp.jsx";
 
@@ -1099,8 +1099,48 @@ function Recorder({ session, courses, recording }) {
     onDiscard,
   } = recording;
 
+  /* THE TIER, READ BEFORE THE WORK. The server refuses a free-tier
+     request at its own tier check, before the paid transcription call
+     -- but that refusal used to arrive after the student had recorded
+     the whole lecture and uploaded it. Nothing was charged; an hour of
+     theirs was gone, and the upload sat in Storage until the orphan
+     sweep. Reading profiles.tier here (select-own RLS, same as the text
+     pre-flight) moves the refusal to before the record button.
+
+     Three states, not two: null/unknown NEVER gates. A tier read that
+     failed because the lecture theatre has no signal must not become a
+     paywall -- the server still enforces, this is only the early
+     warning. And it re-reads per session-user, so upgrading the account
+     doesn't leave a stale wall. */
+  const [access, setAccess] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchRecordingAccess(session).then((a) => {
+      if (!cancelled) setAccess(a);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session && session.user.id]);
+
   const showForm = state.status === "idle";
   const showControls = ["idle", "requesting", "recording", "paused"].includes(state.status);
+
+  /* Definitively not entitled -- the read RAN and said so. The controls
+     go entirely: a disabled record button invites tapping it to find
+     out why, and a recording that cannot be summarised is not a thing
+     this screen offers. mid-recording states are untouched, so a
+     downgrade mid-lecture cannot kill a recording in progress. */
+  if (access && access.canRecord === false && state.status === "idle") {
+    return (
+      <Card>
+        <div className="rounded-lg u-accent-soft p-3">
+          <h3 className="text-sm font-semibold text-stone-800">{AI_NOTES_COPY.recordingNeedsPlan.title}</h3>
+          <p className="mt-1 text-sm text-stone-600">{AI_NOTES_COPY.recordingNeedsPlan.detail}</p>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card>

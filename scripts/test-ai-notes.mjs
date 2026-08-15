@@ -2101,6 +2101,57 @@ async function run() {
     assert.match(pkg.scripts.sync, /settings/, "cap sync no longer re-applies settings at all");
   });
 
+  /* ---------- the free-tier recording gate ---------- */
+
+  await test("an unreadable tier NEVER reads as not-entitled", async () => {
+    /* The load-bearing distinction, same as fetchNote's missing-vs-
+       failed: a student in a lecture theatre with no signal must not be
+       shown a paywall because a read timed out. unknown gates nothing;
+       the server still enforces. */
+    const { fetchRecordingAccess } = await import("../src/aiNotesClient.js");
+    const session = { user: { id: "u1" } };
+
+    const failing = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "boom" } }) }) }) }) };
+    assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: failing, isDemo: false }), { unknown: true });
+
+    const throwing = { from: () => { throw new Error("offline"); } };
+    assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: throwing, isDemo: false }), { unknown: true });
+
+    assert.deepEqual(await fetchRecordingAccess(null, { supabaseClient: failing, isDemo: false }), { unknown: true });
+    assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: failing, isDemo: true }), { unknown: true });
+  });
+
+  await test("a tier that was really read gates in both directions", async () => {
+    const { fetchRecordingAccess } = await import("../src/aiNotesClient.js");
+    const session = { user: { id: "u1" } };
+    const withTier = (tier) => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { tier }, error: null }) }) }) }) });
+    assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: withTier("ai"), isDemo: false }), { canRecord: true });
+    assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: withTier("free"), isDemo: false }), { canRecord: false });
+  });
+
+  await test("the recorder consults the gate, and only a definitive no removes the controls", () => {
+    /* Wiring, asserted from source: the paywall branch must key on
+       canRecord === false explicitly -- `!access.canRecord` would also
+       be true for unknown, which is the collapse the whole design
+       refuses. And it must be confined to idle, so a downgrade
+       mid-lecture cannot kill a recording in progress. */
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    assert.match(src, /fetchRecordingAccess\(session\)/, "the recorder no longer reads the tier before the work");
+    assert.match(src, /access\.canRecord === false/, "the gate does not require a DEFINITIVE no — unknown would gate");
+    assert.match(src, /canRecord === false && state\.status === "idle"/, "the gate is not confined to idle — a mid-recording downgrade could kill a recording");
+    assert.match(src, /recordingNeedsPlan/, "the paywall branch does not use the shared copy");
+  });
+
+  await test("the recording paywall copy describes what the plan adds, never what recording replaces", async () => {
+    const { AI_NOTES_COPY } = await import("../src/aiNotesCopy.js");
+    const text = `${AI_NOTES_COPY.recordingNeedsPlan.title} ${AI_NOTES_COPY.recordingNeedsPlan.detail}`;
+    assert.match(text, /AI plan/, "the copy no longer names the plan");
+    assert.match(text, /keeps working as normal/i, "the copy no longer says the rest of the planner is unaffected");
+    for (const banned of [/instead of attending/i, /skip the lecture/i, /don't need to/i]) {
+      assert.doesNotMatch(text, banned);
+    }
+  });
+
   /* ---------- no API key ever ends up in the shipped bundle ---------- */
 
   await test("dist-web/app.js contains no leaked provider keys or secrets", () => {

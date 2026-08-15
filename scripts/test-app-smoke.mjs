@@ -542,6 +542,10 @@ for (const [tabName, phrases] of [
   fs.writeFileSync(
     clientStub,
     "export const fetchUsage = async () => ({ unavailable: true });\n" +
+      /* Steerable per probe: default unknown (never gates), and a test
+         flips it to the definitive no to watch the paywall replace the
+         controls -- through the REAL Recorder, not a re-implementation. */
+      "export const fetchRecordingAccess = async () => globalThis.__recordingAccess || { unknown: true };\n" +
       "export const uploadAudio = async () => ({ path: 'u/k.webm' });\n" +
       // Records its arguments, so the test can assert the form fields
       // reached the REQUEST rather than inferring it from the output.
@@ -793,6 +797,25 @@ for (const [tabName, phrases] of [
       (panel.textContent || "").includes("Record from"),
       "the audio source picker is reachable through the real panel, not only on its own"
     );
+
+    /* The free-tier gate, through the real Recorder. The probes above
+       ran with the tier UNKNOWN, and the recorder rendered -- which is
+       itself the never-gate half of the design. Now the definitive no:
+       the controls go and the plan message replaces them. */
+    globalThis.__recordingAccess = undefined;
+    dom.window.__recordingAccess = { canRecord: false };
+    const paywalled = dom.window.__probeAiNotes(true);
+    await new Promise((r) => setTimeout(r, 250));
+    check(
+      (paywalled.textContent || "").includes("Lecture recording is part of the AI plan"),
+      "a definitively free account is told BEFORE recording, not after the lecture",
+      (paywalled.textContent || "").slice(0, 300)
+    );
+    check(
+      !(paywalled.textContent || "").includes("Start recording"),
+      "the record controls are gone for a definitively free account, not merely disabled"
+    );
+    dom.window.__recordingAccess = undefined;
 
     /* ---------- THE ONE THAT MATTERS ----------
 

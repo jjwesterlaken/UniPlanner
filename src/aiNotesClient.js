@@ -40,6 +40,33 @@ export async function fetchUsage(session, { supabaseClient = supabase, isDemo = 
   return { minutesUsed: (data && data.minutes_used) || 0, unavailable: false };
 }
 
+/**
+ * Whether this account can record lectures at all. Three answers, and
+ * the third is the one that must not collapse into the second:
+ *
+ *   { canRecord: true }               tier is "ai"
+ *   { canRecord: false }              the read RAN and the tier is not
+ *   { unknown: true }                 offline / demo / read failed
+ *
+ * UNKNOWN MUST NEVER GATE. A student in a lecture theatre with no
+ * signal must not be shown a paywall because the tier read timed out --
+ * that is the same rule as the text allowance ("a failed read degrades
+ * to unknown, never to none left"). The server refuses a free-tier
+ * request anyway, at its tier check, BEFORE the paid transcription
+ * call; this read only exists so the refusal arrives before an hour of
+ * recording rather than after it.
+ */
+export async function fetchRecordingAccess(session, { supabaseClient = supabase, isDemo = backend.isDemo } = {}) {
+  if (!session || isDemo || !supabaseClient) return { unknown: true };
+  try {
+    const { data, error } = await supabaseClient.from("profiles").select("tier").eq("user_id", session.user.id).maybeSingle();
+    if (error || !data) return { unknown: true };
+    return { canRecord: data.tier === "ai" };
+  } catch (e) {
+    return { unknown: true };
+  }
+}
+
 const EXTENSION_FOR_MIME = { "audio/webm;codecs=opus": "webm", "audio/webm": "webm", "audio/mp4": "m4a", "audio/aac": "aac" };
 
 /**
