@@ -304,3 +304,43 @@ export function removeBlock(blocks, id) {
 export function noteUsedPen(blocks) {
   return asArray(blocks).some((b) => b && b.type === INK && b.usedPen);
 }
+
+/**
+ * What a note STORES — the single save path, shared by every screen
+ * that can edit one.
+ *
+ * It lives here rather than in PlannerApp because it is note-shape
+ * logic, not screen logic, and because there used to be two of it: the
+ * Folders tab carried a hand-written copy that had already drifted.
+ * One save path, several entry points.
+ */
+export function noteFields(d) {
+  const blocks = blocksOf(d);
+  /* STEP 4B: the legacy fields are no longer written alongside `blocks`.
+     They were kept for one release so a device still on the pre-blocks
+     build could read a note this one saved; that release has shipped.
+
+     THEY ARE EMPTIED RATHER THAN OMITTED, and that is not a detail.
+     `patchItem` spreads the patch over the existing item, so a key left
+     out keeps its OLD value -- a note would carry the content twice
+     forever, which is the exact cost this change exists to remove. The
+     empty keys cost ~30 bytes against roughly half the note.
+
+     Readers stay dual-shape indefinitely. Nothing converts on load, and
+     an unconverted note still reads from its own fields; this only
+     stops NEW writes duplicating. */
+  const legacy = blocks
+    ? { html: "", body: "", strokes: [] }
+    : { html: d.html || "", body: d.body || "", strokes: d.strokes || [] };
+  return {
+    title: d.title,
+    ...legacy,
+    ...(blocks ? { blocks } : {}),
+    style: d.style,
+    kind: d.kind || "text",
+    font: d.font || "sans",
+    // Only reference sheets carry entries; every other page keeps the
+    // key absent rather than an empty array it never reads.
+    ...(isReferenceSheet(d) ? { entries: d.entries || [] } : {}),
+  };
+}

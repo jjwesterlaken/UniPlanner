@@ -910,6 +910,24 @@ the usual reason. It skips without git history and `REQUIRE_BASELINE=1`
 in CI turns that skip into a failure, the same arrangement the migration
 tests use; CI checks out with `fetch-depth: 0` so it really runs.
 
+**Step 4b dropped the legacy fields, and the keys are EMPTIED rather
+than omitted.** For one release a converted note stored its content
+twice — `blocks` plus `html`/`body`/`strokes` — so an older build on
+another device could still read it. Measured on a 200-stroke stylus
+page that was **250 KB against 125 KB**, exactly the 2× predicted, and
+it landed hardest on the notes that were already the storage problem.
+
+The subtlety is in how you stop. `patchItem` spreads the patch over the
+existing item, so a key left OUT of the patch keeps its old value —
+omitting the legacy fields would have left every already-converted note
+carrying both copies forever, which is the cost the change exists to
+remove, silently not removed. They are written as `""` and `[]`.
+
+Conversion happens on the first **save**, not on load, and the same
+write that adds the blocks empties the legacy fields — so the content is
+in exactly one place afterwards. A test asserts the round trip loses
+nothing (`fieldsFromBlocks(saved.blocks)` is what the note had).
+
 A second comparison renders **the same note in both shapes** through the
 current bundle — legacy fields against `blocks` with the legacy fields
 emptied. That one does not expire when the editor lands, and it is the
