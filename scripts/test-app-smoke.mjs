@@ -700,6 +700,24 @@ for (const [tabName, phrases] of [
       "      onSummarised={() => {}} onOpenSummary={() => {}} onAcceptConsent={() => {}} />\n" +
       "  );\n" +
       "  return host;\n" +
+      "};\n" +
+      /* The semester archive panel, which the tab walk can only ever see
+         signed out (its gate) -- the working state needs an account, so
+         it gets a probe, per the rule: a demo-mode walk cannot cover a
+         screen that refuses to render without one. */
+      'import { ArchivePanel } from "../src/PlannerApp.jsx";\n' +
+      "window.__probeArchive = (session, bucket) => {\n" +
+      '  const host = document.createElement("div");\n' +
+      "  document.body.appendChild(host);\n" +
+      "  createRoot(host).render(\n" +
+      '    <ArchivePanel session={session} bucket={bucket} semesterName="Semester 1"\n' +
+      "      onArchive={async () => ({ ok: false, reason: 'failed' })}\n" +
+      "      onRestore={async () => ({ ok: false, reason: 'failed' })}\n" +
+      "      onDeleteArchive={async () => ({ ok: false })}\n" +
+      "      onFoldLate={async () => ({ ok: false, reason: 'failed' })}\n" +
+      "      onKeepLate={() => {}} onOpenNote={() => {}} />\n" +
+      "  );\n" +
+      "  return host;\n" +
       "};\n"
   );
 
@@ -989,6 +1007,47 @@ for (const [tabName, phrases] of [
       (gated.textContent || "").includes("Summarise this"),
       "the action is offered even before consent has been given"
     );
+
+    /* ---------- the semester archive panel ---------- */
+
+    /* Signed out: the gate SHOWS the tool and says it needs an account. */
+    const archGate = dom.window.__probeArchive(null, { settings: [], pages: [] });
+    await new Promise((r) => setTimeout(r, 100));
+    check((archGate.textContent || "").includes("Archive a semester"), "signed out, the archive gate names the tool");
+    check((archGate.textContent || "").includes("account"), "the gate says an account is what unlocks it");
+
+    /* Signed in, plain bucket. The demo build has no Supabase client, so
+       the list fetch fails -- which must render as UNKNOWN, never as an
+       empty archive list. */
+    const archPanel = dom.window.__probeArchive({ token: "t", user: { id: "u" } }, { settings: [], pages: [] });
+    await new Promise((r) => setTimeout(r, 150));
+    check((archPanel.textContent || "").includes("Archive this semester"), "signed in, the archive action is offered");
+    check(
+      (archPanel.textContent || "").includes("Couldn't load your archives"),
+      "an unreachable archive list reads as unknown"
+    );
+    check(
+      !(archPanel.textContent || "").includes("Nothing archived yet"),
+      "an unreachable list must NEVER render as 'nothing archived yet'"
+    );
+
+    /* Signed in, archived bucket with a late edit and an archived
+       lecture. Shape written by hand, like AI_STUB above, so this
+       breaks if the STORED shape changes rather than only the builders. */
+    const archivedBucket = {
+      settings: [{ id: "s1", rounding: "half-up", archive: { id: "arch-1", label: "2026 · Semester 1", at: "2026-08-16T00:00:00.000Z", items: 412 }, updatedAt: "2026-08-16T00:00:00.000Z" }],
+      pages: [
+        { ...AI_STUB, id: "arch-stub", title: "PHYS1001 — Week 3 lecture", archivedIn: "arch-1" },
+      ],
+      todos: [{ id: "late-1", text: "added on the train", updatedAt: "2026-08-20T00:00:00.000Z" }],
+    };
+    const archState = dom.window.__probeArchive({ token: "t", user: { id: "u" } }, archivedBucket);
+    await new Promise((r) => setTimeout(r, 150));
+    const archText = archState.textContent || "";
+    check(archText.includes("2026 · Semester 1") && archText.includes("412 items"), "the archived line shows the label and count");
+    check(archText.includes("1 item was added or edited"), "late edits are surfaced");
+    check(archText.includes("Add to the archive") && archText.includes("Keep here"), "both late-edit choices are offered, no default");
+    check(archText.includes("PHYS1001 — Week 3 lecture"), "an archived lecture is listed, still readable");
   }
 }
 

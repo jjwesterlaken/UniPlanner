@@ -530,6 +530,14 @@ async function run() {
     }
     seedTwoUsers(db);
     seedNotes(db);
+    // Every user-owned table needs BOTH users' rows, or the
+    // "lost another user's rows" half of this test guards nothing.
+    psqlOrThrow(
+      db,
+      `insert into public.semester_archives (id, user_id, label, summary, data) values
+         ('cccccccc-0000-0000-0000-000000000001', ${USER},  '2026 · Semester 1', '{"items":412}', '{"courses":[]}'),
+         ('dddddddd-0000-0000-0000-000000000002', ${OTHER}, '2026 · Semester 2', '{"items":9}',  '{"courses":[]}');`
+    );
 
     const owned = one(
       db,
@@ -625,6 +633,43 @@ async function run() {
                        values (${USER}, '2026-08', 10, 7);`);
     psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
     assert.equal(count(db, "public.ai_usage", `user_id = ${USER}`), 0);
+  });
+
+  /* ---------- 0007: semester archives ---------- */
+
+  const withArchives = () => {
+    const db = freshDb();
+    for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) applyMigration(db, file);
+    return db;
+  };
+
+  await test("0007 gives semester_archives exactly three policies and RLS", () => {
+    const db = withArchives();
+    assert.equal(
+      one(db, `select count(*)::text from pg_policies where tablename = 'semester_archives';`),
+      "3",
+      "the ai_notes shape is three policies — select, insert, delete — and nothing else"
+    );
+    assert.equal(one(db, `select relrowsecurity::text from pg_class where relname = 'semester_archives';`), "true");
+    // No update path exists to get wrong: no policy, and no grant.
+    assert.equal(
+      one(db, `select count(*)::text from pg_policies where tablename = 'semester_archives' and cmd = 'UPDATE';`),
+      "0"
+    );
+    assert.equal(
+      one(
+        db,
+        `select has_table_privilege('authenticated', 'public.semester_archives', 'update')::text;`
+      ),
+      "false",
+      "update is granted — the late-edit fold is insert-new-then-delete-old precisely so it never is"
+    );
+  });
+
+  await test("0007 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = withArchives();
+    applyMigration(db, "0007_semester_archives.sql");
+    assert.equal(one(db, `select count(*)::text from pg_policies where tablename = 'semester_archives';`), "3");
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
