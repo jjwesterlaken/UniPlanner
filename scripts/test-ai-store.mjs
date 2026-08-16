@@ -84,9 +84,17 @@ const aiPage = (over = {}) => ({
 });
 
 /* A Supabase stand-in that records what was asked of it. */
-function fakeClient({ upsertError, selectError, selectRows, deleteError, single } = {}) {
+function fakeClient({ insertError, upsertError, selectError, selectRows, deleteError, single } = {}) {
   const calls = [];
   const table = (name) => ({
+    /* A PLAIN insert is what migrateNote makes now: an upsert would
+       need the UPDATE privilege PostgREST demands for either flavour,
+       on a table this app never updates. `insertError` carries a `code`
+       so the 23505 branch can be exercised for real. */
+    insert(row) {
+      calls.push(`insert:${name}:${row.id}`);
+      return Promise.resolve({ error: insertError || null });
+    },
     upsert(row, opts) {
       calls.push(`upsert:${name}:${row.id}:${(opts || {}).onConflict || ""}`);
       return Promise.resolve({ error: upsertError || null });
@@ -187,21 +195,49 @@ async function run() {
     const c = fakeClient();
     const out = await migrateNote({ supabaseClient: c, userId: "u1", page: aiPage() });
     assert.equal(out.ok, true);
-    assert.ok(c.calls.some((x) => x.startsWith("upsert:ai_notes:p1")));
+    assert.ok(c.calls.some((x) => x.startsWith("insert:ai_notes:p1")));
     assert.equal(out.stub.aiMeta.remote, true);
   });
 
   await test("a failed insert leaves the blob untouched", async () => {
-    const c = fakeClient({ upsertError: { message: "offline" } });
+    const c = fakeClient({ insertError: { message: "offline" } });
     const out = await migrateNote({ supabaseClient: c, userId: "u1", page: aiPage() });
     assert.equal(out.ok, false);
     assert.equal(out.stub, null, "a stub was produced despite the row never being written");
   });
 
-  await test("migrating twice is a no-op, so an interrupted run is safe to repeat", async () => {
+  await test("a row that is already there reads as already-migrated, so an interrupted run completes", async () => {
+    /* The retry case an upsert used to cover. 23505 is DEFINITIVE — the
+       id is on the server, holding content this same function wrote —
+       so the caller may shrink the blob. This is the migration's half
+       of the missing-vs-failed rule. */
+    const c = fakeClient({ insertError: { code: "23505", message: "duplicate key value violates unique constraint" } });
+    const out = await migrateNote({ supabaseClient: c, userId: "u1", page: aiPage() });
+    assert.equal(out.ok, true, "a retried migration reported failure, so the note never leaves the blob");
+    assert.equal(out.existed, true);
+    assert.equal(out.stub.aiMeta.remote, true);
+  });
+
+  await test("any OTHER error stays a failure, so silence never shrinks the blob", async () => {
+    for (const error of [
+      { code: "42501", message: "permission denied for table ai_notes" },
+      { code: "PGRST204", message: "column not found" },
+      { message: "Failed to fetch" },
+      { code: "23503", message: "foreign key violation" },
+    ]) {
+      const out = await migrateNote({ supabaseClient: fakeClient({ insertError: error }), userId: "u1", page: aiPage() });
+      assert.equal(out.ok, false, `${error.code || "no code"} was treated as already-migrated`);
+      assert.equal(out.stub, null);
+    }
+  });
+
+  await test("migrateNote never upserts — the privilege that breaks is one it must not need", async () => {
+    // The production break: 0008 revoked update on ai_notes and every
+    // write 400'd, because PostgREST requires INSERT and UPDATE for any
+    // upsert. Asking for one verb is what makes the three-verb table work.
     const c = fakeClient();
     await migrateNote({ supabaseClient: c, userId: "u1", page: aiPage() });
-    assert.ok(c.calls.some((x) => x.endsWith(":id")), "the upsert doesn't conflict on id");
+    assert.ok(!c.calls.some((x) => x.startsWith("upsert:")), "migrateNote is upserting again");
   });
 
   /* ---------- reading, and the three distinct outcomes ---------- */

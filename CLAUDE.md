@@ -1193,6 +1193,50 @@ design a boundary, make sure "no" and "nothing" are different
 answers.** A layer that answers both with silence pushes an
 undecidable question onto every caller.
 
+**And it broke AI notes on the way in, which is the other half of the
+lesson.** `migrateNote` upserted (`on_conflict=id`), and **PostgREST
+requires INSERT *and UPDATE* for any upsert — either flavour, whether
+or not a row conflicts.** Revoking update turned every AI-note write
+into a 400, looping once per sync. Nothing was billed (this path calls
+no Edge Function and writes no `ai_usage`) and nothing was duplicated
+(a rejected insert writes nothing, and the stub is only written on
+success, so the note stayed whole in the blob — the ordering rule
+holding exactly as designed).
+
+The fix was to stop upserting rather than to restore the privilege:
+a plain `insert`, with **23505 read as already-migrated**. That is the
+missing-vs-failed split again — a definitive code may be acted on,
+silence may not — and it keeps the row immutable with no fourth
+policy. Worth knowing before reaching for an upsert here again: at the
+SQL level `ON CONFLICT DO NOTHING` needs no update privilege at all,
+so the requirement is PostgREST's, one layer above anything the
+migration tests can reach. That limit is stated in the test rather
+than papered over.
+
+**THE ORDERING RULE THIS ESTABLISHES, because it is the mirror of the
+one already written down:** migrations that WIDEN what the code may do
+(a new table, a new column) go *before* the code that needs them — 0003
+and 0004 taught that. Migrations that NARROW it go *after* the code
+that stopped needing it. 0008 narrowed, and was applied while a client
+that still needed the privilege was live. Same discipline, opposite
+direction, and the direction is decided by which side would break if
+the two arrived out of order.
+
+**What would have caught it, and why my own check didn't.** The audit
+shipped with a test named "the app's own queries still work" that ran
+four live queries — and I enumerated them BY HAND from reading the
+client. That is a restatement of the client, and it drifted at exactly
+the point that mattered: I wrote `planner_data`'s upsert into it
+because I had just read `sync.js`, and left `ai_notes` out entirely.
+A hand-written list of "what the app does" is not evidence about what
+the app does. The guard now DERIVES it: every `.from(X)…upsert(` in
+`src/` must have UPDATE granted on X, and a merge upsert must also
+have an UPDATE policy. Run against the post-0008 database it goes red
+naming the table and the reason — checked by running it before the
+client was fixed. Tenth instance of the restatement rule, and the
+first one where I wrote the restatement *into the test that was
+checking my own change*.
+
 `authenticated` was tightened the same way, to exactly the verbs each
 table has a policy for. A granted verb with no policy is never useful
 — RLS gives it zero rows — and it is how `update` sat open on
@@ -2020,7 +2064,7 @@ nobody clicking a button.
 
 ## A guard that restates its subject will drift
 
-Nine separate times now, a check has been weaker than it looked, always
+Ten separate times now, a check has been weaker than it looked, always
 the same way: it hardcoded the value it was supposed to be guarding.
 
 - The service worker's **cache name** was a hand-edited constant. It was
@@ -2074,7 +2118,16 @@ the same way: it hardcoded the value it was supposed to be guarding.
   updates zero rows without it — the state production was actually in,
   shown to be defence-in-depth and not a hole.
 
-One is an anecdote. Nine is a rule: **derive a guard from its source of
+- The grant audit's own **"the app's own queries still work" test**
+  enumerated those queries by hand, from reading the client. It
+  included `planner_data`'s upsert and omitted `ai_notes`, so 0008
+  shipped revoking a privilege the AI-notes path needed and the test
+  that existed to catch exactly that passed. The restatement was
+  written *into the test checking the change*, which is as close to
+  the blind spot as this pattern has got. Now derived: the upserts are
+  matched out of `src/` and checked against the catalogue.
+
+One is an anecdote. Ten is a rule: **derive a guard from its source of
 truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the

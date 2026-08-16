@@ -836,6 +836,135 @@ async function run() {
     assert.ok(count(db, "public.planner_data", `user_id = ${OTHER}`) > 0);
   });
 
+  await test("the two upsert flavours need different privileges, and only one of them is a SQL-level problem", () => {
+    /* Written after getting this wrong once. supabase-js sends two
+       different things and they are NOT equivalent:
+
+         ai_notes      ignoreDuplicates: true  -> ON CONFLICT DO NOTHING
+         planner_data  (merge, the default)    -> ON CONFLICT DO UPDATE
+
+       DO NOTHING needs no UPDATE privilege at the SQL level — asserted
+       below rather than assumed, because I had claimed otherwise. So
+       0008 did not break ai_notes at the database; PostgREST requires
+       INSERT **and UPDATE** for any upsert request of either flavour,
+       which is one layer above anything reproducible here. That is
+       flagged as the limit of what this test can show.
+
+       The fix does not depend on which layer objects: the client stops
+       upserting, so no privilege beyond `insert` is involved at all. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    const row = (id, course) =>
+      `insert into public.ai_notes (id, user_id, course, week, content) values ('${id}', ${USER}, '${course}', '1', '{}')`;
+    const asAuth = (sql) => psql(db, `set test.uid = ${USER}; set role authenticated; ${sql}`);
+
+    /* WHICH upsert the client sends decides everything, so it is
+       checked rather than assumed: supabase-js sends
+       `Prefer: resolution=ignore-duplicates` for ai_notes (PostgREST
+       emits ON CONFLICT DO NOTHING) and `merge-duplicates` for
+       planner_data (ON CONFLICT DO UPDATE). DO NOTHING needs no UPDATE
+       privilege — asserted here, because if it did not hold, the 400
+       would have another cause and the fix below would be wrong. */
+    const doNothing = asAuth(`${row("bbbbbbbb-0000-4000-8000-000000000009", "PHYS")} on conflict (id) do nothing;`);
+    assert.equal(doNothing.ok, true, "ON CONFLICT DO NOTHING was refused without UPDATE — then the client's 400 is not the privilege");
+
+    // 0008's state: a MERGE upsert is refused outright, conflict or not.
+    const revoked = asAuth(`${row("cccccccc-0000-4000-8000-000000000001", "PHYS")} on conflict (id) do update set course = excluded.course;`);
+    assert.equal(revoked.ok, false, "an upsert succeeded without the update privilege — the 400 has another cause");
+    assert.match(revoked.err, /permission denied/i);
+
+    // A plain insert of the same row is fine: granted, and policied.
+    assert.equal(asAuth(row("cccccccc-0000-4000-8000-000000000001", "PHYS")).ok, true, "a plain insert must still work, or the fix is no fix");
+
+    // Production's pre-0008 state: the grant back, still no policy.
+    psqlOrThrow(db, `grant update on public.ai_notes to authenticated;`);
+    assert.equal(
+      asAuth(`${row("cccccccc-0000-4000-8000-000000000002", "CHEM")} on conflict (id) do update set course = excluded.course;`).ok,
+      true,
+      "restoring the grant does unbreak the ordinary insert path"
+    );
+    // But a REAL conflict is still refused — by RLS this time.
+    const conflict = asAuth(`${row("cccccccc-0000-4000-8000-000000000002", "BIOL")} on conflict (id) do update set course = excluded.course;`);
+    assert.equal(conflict.ok, false, "a conflicting upsert succeeded — then an update policy exists and this reasoning is wrong");
+    assert.match(conflict.err, /row-level security/i);
+  });
+
+  await test("a duplicate insert reports 23505, which the client can read as already-migrated", () => {
+    // The fix's other half: the retry case must be recognisable by a
+    // DEFINITIVE code, so treating it as success cannot swallow a real
+    // failure — the same rule as fetchNote's missing-vs-failed split.
+    const db = withArchives();
+    seedTwoUsers(db);
+    const ins = (id) => `insert into public.ai_notes (id, user_id, course, week, content) values ('${id}', ${USER}, 'PHYS', '1', '{}')`;
+    const asAuth = (sql) => psql(db, `set test.uid = ${USER}; set role authenticated; ${sql}`);
+    assert.equal(asAuth(ins("dddddddd-0000-4000-8000-000000000001")).ok, true);
+    const dup = asAuth(ins("dddddddd-0000-4000-8000-000000000001"));
+    assert.equal(dup.ok, false);
+    assert.match(dup.err, /duplicate key value|23505/i);
+  });
+
+  await test("every table the client upserts has UPDATE granted — derived from src/, not from memory", () => {
+    /* THE GUARD THAT WOULD HAVE CAUGHT THIS. My audit test enumerated
+       "the app's own queries" by hand, from reading the client — a
+       restatement, and it drifted at exactly the point that mattered:
+       I wrote planner_data's upsert into it and left ai_notes out.
+
+       This reads the client instead. Every `.from("X")…upsert(` in src/
+       must have UPDATE granted on X, because PostgREST turns an upsert
+       into ON CONFLICT DO UPDATE, which needs it even to insert. Add an
+       upsert anywhere, or revoke an update anywhere, and this goes red
+       without anyone remembering the connection. */
+    const db = withArchives();
+    const src = fs
+      .readdirSync(path.join(rootDir, "src"))
+      .filter((f) => /\.jsx?$/.test(f))
+      .map((f) => fs.readFileSync(path.join(rootDir, "src", f), "utf8"))
+      .join("\n")
+      // Comments first: this project has tripped that guard three times.
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/\/\/[^\n]*/g, " ");
+
+    const upserts = [];
+    for (const m of src.matchAll(/\.from\(\s*(?:"([^"]+)"|TABLE)\s*\)([\s\S]{0,600}?)\.upsert\(([\s\S]{0,400}?)\)\s*[;,)]/g)) {
+      // `.from(TABLE)` is sync.js's planner_data constant.
+      upserts.push({ table: m[1] || "planner_data", merges: !/ignoreDuplicates:\s*true/.test(m[3]) });
+    }
+    assert.ok(
+      /\.upsert\(/.test(src) === upserts.length > 0,
+      "an upsert exists that this pattern did not match — the guard is blind rather than satisfied"
+    );
+
+    for (const { table, merges } of upserts) {
+      if (one(db, `select to_regclass('public.${table}') is not null;`) !== "t") continue; // created outside the migrations
+      assert.equal(
+        one(db, `select has_table_privilege('authenticated', 'public.${table}', 'update')::text;`),
+        "true",
+        `src/ upserts into public.${table}, but authenticated cannot UPDATE it — PostgREST requires INSERT and UPDATE ` +
+          "for any upsert, of either flavour, so every write to that table will fail even when nothing conflicts"
+      );
+      if (merges) {
+        // A merge upsert really does update on conflict, so it needs the
+        // policy too — a grant without one fails under RLS at exactly
+        // the moment the merge was wanted.
+        assert.ok(
+          one(db, `select count(*)::text from pg_policies where schemaname='public' and tablename='${table}' and cmd='UPDATE';`) !== "0",
+          `public.${table} is merge-upserted by the client but has no UPDATE policy — the conflict path fails under RLS`
+        );
+      }
+    }
+  });
+
+  await test("nothing upserts into ai_notes any more — it inserts, so `insert` is the only verb it needs", () => {
+    /* The fix, pinned where the privilege lives. If someone reaches for
+       an upsert here again to get idempotency back, this says why not:
+       the row is immutable by design and the retry case is 23505. */
+    const store = fs.readFileSync(path.join(rootDir, "src/aiNotesStore.js"), "utf8");
+    const migrate = store.slice(store.indexOf("export async function migrateNote"), store.indexOf("/* ---------- reading"));
+    assert.ok(!/\.upsert\(/.test(migrate), "migrateNote is upserting again — that needs an UPDATE privilege on an immutable table");
+    assert.match(migrate, /\.insert\(/);
+    assert.match(migrate, /DUPLICATE_KEY/, "the already-migrated case is no longer recognised, so a retry reports failure forever");
+  });
+
   await test("0008 is re-runnable (a second apply changes nothing and fails nothing)", () => {
     const db = withArchives();
     applyMigration(db, "0008_grant_audit.sql");
