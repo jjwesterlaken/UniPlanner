@@ -1967,6 +1967,20 @@ question early.
 and expect a round of wording and layout notes; keep user-facing copy easy
 to change.
 
+Flagged for her next sitting, so decisions don't wait on a meeting nobody
+scheduled:
+
+- The navigation mockup (link is with Jared) — rulings 1–4 already
+  folded in; she vetoes in parts.
+- Pen detection starting an ink block automatically — ruled in unless
+  she objects.
+- **The consent-gating decision on the four text features.** Practice
+  questions, explain-it-back, weak spots and summarise-a-note are not
+  consent-gated at the point of use; summarise-a-reading is. The gap
+  predates the readings work and closing it changes four existing
+  screens, so it is a Jared-and-Grace call — parked for weeks, and her
+  sitting is the natural place to close it.
+
 **Say when something can't be done as asked.** The `studyStats` collection
 exists because the original instruction ("a semester gets a stats object,
 don't touch the merge logic") was not possible as written. Finding that
