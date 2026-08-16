@@ -965,6 +965,50 @@ async function run() {
     assert.match(migrate, /DUPLICATE_KEY/, "the already-migrated case is no longer recognised, so a retry reports failure forever");
   });
 
+  await test("ai_notes accepts an id the CLIENT actually mints — derived from src/, not from a guess at its shape", () => {
+    /* The bug 0009 fixes, guarded by generating ids the same way the app
+       does rather than by asserting a column type. `uid()` is lifted out
+       of PlannerApp.jsx and run, so if someone changes the id format the
+       guard follows it instead of pinning yesterday's shape.
+
+       Before 0009 this fails with 22P02 — which is what production did
+       on every AI note since 0005, silently, once per sync forever. */
+    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    const m = /^const uid = (\(\) => `[^`]+`);/m.exec(src);
+    assert.ok(m, "couldn't find the planner's uid() helper — this guard is blind, fix the pattern");
+    // eslint-disable-next-line no-new-func
+    const uidFn = new Function(`return ${m[1]}`)();
+    const sample = uidFn();
+    assert.ok(sample && typeof sample === "string", "uid() produced nothing");
+
+    const db = withArchives();
+    seedTwoUsers(db);
+    const r = psql(
+      db,
+      `set test.uid = ${USER}; set role authenticated;
+       insert into public.ai_notes (id, user_id, course, week, content)
+       values ('${sample}', ${USER}, 'PHYS1001', '3', '{"translations":{}}');`
+    );
+    assert.equal(
+      r.ok,
+      true,
+      `ai_notes rejected a real page id (${sample}). Every AI note migration fails with this, once per sync, forever:\n${(r.err || "").slice(0, 200)}`
+    );
+    assert.equal(count(db, "public.ai_notes", `id = '${sample}'`), 1);
+  });
+
+  await test("a UUID id still works, so notes written before 0009 are unaffected", () => {
+    const db = withArchives();
+    seedTwoUsers(db);
+    const r = psql(
+      db,
+      `set test.uid = ${USER}; set role authenticated;
+       insert into public.ai_notes (id, user_id, course, week, content)
+       values ('aaaaaaaa-0000-4000-8000-00000000ffff', ${USER}, 'C', '1', '{}');`
+    );
+    assert.equal(r.ok, true, "the text column stopped accepting the uuids already stored under it");
+  });
+
   await test("0008 is re-runnable (a second apply changes nothing and fails nothing)", () => {
     const db = withArchives();
     applyMigration(db, "0008_grant_audit.sql");

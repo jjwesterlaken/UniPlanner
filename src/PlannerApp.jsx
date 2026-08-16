@@ -5222,6 +5222,12 @@ export default function PlannerApp() {
   const allAiPages = (d) =>
     Object.values((d || {}).semesters || {}).flatMap((s) => ((s || {}).pages || []).filter(isAiNote));
 
+  /* How many times one note may fail to migrate before this session
+     stops asking. Three covers a flaky connection; a fourth attempt on
+     a note the server has rejected three times is noise. */
+  const MIGRATION_ATTEMPTS = 3;
+  const migrationFailures = useRef(new Map());
+
   /* Move any note still carrying its content in the blob into its own
      row. Runs on every sync because that is when we know we have a
      session and a network, and because it must be safe to run again: an
@@ -5241,14 +5247,36 @@ export default function PlannerApp() {
     if (pending.length === 0) return;
 
     for (const { semester, page } of pending) {
+      /* GIVE UP ON A NOTE THAT KEEPS FAILING, for this session.
+
+         A sync runs a few seconds after every edit, so a note that
+         cannot migrate is retried indefinitely — which is how a typed
+         page id against a uuid column produced a 400 every four
+         seconds for as long as the app was open. Retrying is right for
+         a dropped connection and useless for a rejection the next
+         attempt will earn just as surely.
+
+         Deliberately in a ref rather than the blob: a persistent
+         failure is a property of this build talking to this server,
+         not of the student's data, and writing it down would sync a
+         local verdict to every other device. Reloading retries, which
+         is what makes a deploy or a migration the cure. */
+      const failures = migrationFailures.current.get(page.id) || 0;
+      if (failures >= MIGRATION_ATTEMPTS) continue;
+
       const { ok, stub } = await migrateNote({
         supabaseClient: supabase,
         userId: activeSession.user.id,
         page,
       });
       // A failure leaves the note whole in the blob and readable. Nothing
-      // to report and nothing to undo -- the next sync tries again.
-      if (!ok) continue;
+      // to report and nothing to undo -- the next sync tries again, until
+      // the count above says it is not going to work.
+      if (!ok) {
+        migrationFailures.current.set(page.id, failures + 1);
+        continue;
+      }
+      migrationFailures.current.delete(page.id);
       await noteCache.put(page.id, buildContent(page));
       setData((prev) => ({
         ...prev,
