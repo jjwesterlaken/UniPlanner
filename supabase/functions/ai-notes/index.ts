@@ -29,6 +29,7 @@ import {
   TRANSCRIPTION_PROVIDER,
   PROVIDER_API_KEY_ENV,
   MONTHLY_MINUTES_LIMIT,
+  RESUMMARISE_BILLED_MINUTES,
   MINIMUM_BILLED_MINUTES,
   MAX_REQUEST_SECONDS,
   MAX_BODY_BYTES,
@@ -41,6 +42,8 @@ import {
   SIGNED_URL_TTL_SECONDS,
   REQUEST_RETENTION_DAYS,
   ORPHAN_SWEEP_HOURS,
+  RESUMMARISE_EXPIRED_MESSAGE,
+  RESUMMARISE_FAILED_MESSAGE,
 } from "./config.ts";
 
 // deno-lint-ignore no-explicit-any
@@ -286,6 +289,115 @@ Deno.serve(async (req: Request) => {
         received: String(idempotencyKey).slice(0, 64),
       });
       return rejectIdempotencyKey();
+    }
+
+    /* 4b. RE-SUMMARISE: the retry for a lecture whose transcription
+       succeeded and was billed, and whose summary failed.
+
+       It reads a row BY ID, which is the shape `ai-text` was designed
+       to avoid — so it carries the obligations that come with it, and
+       every one of them is a rule this project has already paid for:
+
+       - SCOPED BY HAND. The service-role client bypasses RLS, so the
+         lookup filters on user_id as well as the key. The
+         `ai_notes_requests.result` payload holds a whole lecture; a
+         lookup by key alone is how one student receives another's.
+       - IDENTICAL REJECTION. Not-found, not-yours and malformed all
+         return the same status, code and body. Told apart in the logs
+         and nowhere else — otherwise the endpoint answers "does this
+         key exist?" for any key someone cares to try.
+       - ALLOWANCE READ BEFORE THE PROVIDER CALL, so a student who
+         cannot afford it is refused before anything is spent.
+       - A FAILED CALL BILLS NOTHING; a call that produced output the
+         parser could not use IS billed, under its own code, because
+         those tokens were generated and charged. */
+    if (body && body.mode === "resummarise") {
+      stage = "resummarise_lookup";
+      logStage(stage);
+      const { data: existing, error: lookupErr } = await supabaseAdmin
+        .from("ai_notes_requests")
+        .select("result, status")
+        .eq("idempotency_key", idempotencyKey)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (lookupErr) {
+        logFailure(stage, lookupErr);
+        return errorResponse(stage, "server_error", "Something went wrong. Please try again.", 500);
+      }
+      if (!existing) {
+        // Not yours and not there are the SAME answer. The log knows
+        // which; the response must not.
+        logFailure(stage, new Error("no row for this key and user"), { key: String(idempotencyKey).slice(0, 64) });
+        return rejectIdempotencyKey();
+      }
+
+      const transcript = (existing.result && (existing.result as Record<string, unknown>).transcript) || "";
+      if (!transcript) {
+        /* Definitively gone rather than unknown: the row is here and
+           holds no transcript, which means the retention sweep has
+           taken it. A distinct code, because the student can act on
+           neither but deserves the true reason — and because "expired"
+           must never be said about a transcript that is merely
+           unreachable. */
+        logStage(stage, { outcome: "transcript_swept" });
+        return errorResponse(stage, "transcript_expired", RESUMMARISE_EXPIRED_MESSAGE, 410);
+      }
+
+      // The allowance read PRECEDES the provider call, so a refusal
+      // costs nothing. Same ordering ai-text's traced fake pins.
+      stage = "allowance";
+      const monthKey = currentMonthKey();
+      const { data: usageRow, error: usageErr } = await supabaseAdmin
+        .from("ai_usage")
+        .select("minutes_used")
+        .eq("user_id", userId)
+        .eq("month", monthKey)
+        .maybeSingle();
+      if (usageErr) {
+        logFailure(stage, usageErr);
+        return errorResponse(stage, "server_error", "Something went wrong. Please try again.", 500);
+      }
+      const usedThisMonth = usageRow?.minutes_used || 0;
+      if (usedThisMonth + RESUMMARISE_BILLED_MINUTES > MONTHLY_MINUTES_LIMIT) {
+        logStage(stage, { outcome: "over_limit" });
+        return errorResponse(stage, "monthly_limit", "You've used your AI minutes for this month.", 429);
+      }
+
+      stage = "resummarise";
+      logStage(stage, { translateTo: normalizeTranslateTo(rawTranslateTo, TRANSLATION_CODES) });
+      const summarizer = SUMMARIZERS[Deno.env.get("AI_NOTES_SUMMARY_PROVIDER") || "openai"] || openaiAdapter;
+      let summary;
+      try {
+        summary = await summarizer.summarize({
+          transcript: String(transcript),
+          translateTo: normalizeTranslateTo(rawTranslateTo, TRANSLATION_CODES),
+          apiKey: Deno.env.get("OPENAI_API_KEY")!,
+        });
+      } catch (err) {
+        /* Nothing usable came back, so nothing is charged. The student
+           keeps the transcript and may try again while it lasts. */
+        logFailure(stage, err);
+        return errorResponse(stage, "summary_failed", RESUMMARISE_FAILED_MESSAGE, 502);
+      }
+
+      stage = "billing";
+      const billed = RESUMMARISE_BILLED_MINUTES;
+      logStage(stage, { minutes: billed, resummarise: true });
+      await supabaseAdmin.from("ai_usage").upsert(
+        { user_id: userId, month: monthKey, minutes_used: usedThisMonth + billed, updated_at: new Date().toISOString() },
+        { onConflict: "user_id,month" }
+      );
+
+      const retried = { ok: true, transcript, summaryFailed: false, original: summary.original, translated: summary.translated };
+      await supabaseAdmin
+        .from("ai_notes_requests")
+        .update({ status: "done", result: retried, summary_failed: false })
+        .eq("idempotency_key", idempotencyKey)
+        .eq("user_id", userId);
+
+      scheduleCleanup();
+      return jsonResponse({ ok: true, result: retried, minutesBilled: billed });
     }
 
     // 5. Race-safe idempotency claim.

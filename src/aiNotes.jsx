@@ -38,6 +38,7 @@ import {
   defaultCardSelection,
   folderForRecording,
   DEFAULT_CARDS_SELECTED,
+  RESUMMARISE_BILLED_MINUTES_HINT,
 } from "./aiNotesLogic.js";
 import {
   describeCapabilities,
@@ -55,7 +56,7 @@ import {
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
 import { noteCache } from "./noteCache.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
-import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes } from "./aiNotesClient.js";
+import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes, callResummarise } from "./aiNotesClient.js";
 import { nowISO, supabase } from "./sync.js";
 import { inputCls, labelCls, btnPrimary, btnGhost, iconBtn, Card, CourseSelect, uid } from "./PlannerApp.jsx";
 
@@ -668,7 +669,26 @@ function downloadTranscript(text) {
   }
 }
 
-function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCards }) {
+function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCards, onRetrySummary }) {
+  /* Declared ABOVE the early return: a hook after a conditional return
+     is the temporal-dead-zone shape that has taken this app down twice. */
+  const [retryState, setRetryState] = useState({ status: "idle", message: "" });
+  const runRetry = async () => {
+    setRetryState({ status: "working", message: "" });
+    try {
+      await onRetrySummary();
+      // On success the parent swaps `result`, so this screen unmounts.
+    } catch (err) {
+      setRetryState({
+        status: "error",
+        message:
+          err && err.code === "transcript_expired"
+            ? AI_NOTES_COPY.summaryFailed.retryExpired()
+            : AI_NOTES_COPY.summaryFailed.retryFailed,
+      });
+    }
+  };
+
   if (result.summaryFailed) {
     const full = result.transcript || "";
     const willTruncate = full.length > TRANSCRIPT_EXCERPT_CHARS;
@@ -695,6 +715,27 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
           <p className="text-xs text-stone-500">
             {AI_NOTES_COPY.transcriptTruncated({ kept: TRANSCRIPT_EXCERPT_CHARS, total: full.length })}
           </p>
+        )}
+        {/* THE RETRY, offered WHERE THE FAILURE IS SHOWN. A student
+            sitting on a failed summary should not have to go looking
+            for it, and this is the screen they are already on. The cost
+            line says what it charges and what it does not, because this
+            lecture has already been paid for once. */}
+        {onRetrySummary && (
+          <div className="space-y-2 rounded-lg border border-stone-200 p-3">
+            <p className="text-xs text-stone-600">
+              {AI_NOTES_COPY.summaryFailed.retryCost(RESUMMARISE_BILLED_MINUTES_HINT)}
+            </p>
+            {retryState.status === "error" && (
+              <p role="status" className="text-xs text-rose-700">
+                {retryState.message}
+              </p>
+            )}
+            <button className={btnGhost} disabled={retryState.status === "working"} onClick={runRetry}>
+              <RefreshCw size={15} />{" "}
+              {retryState.status === "working" ? AI_NOTES_COPY.summaryFailed.retrying : AI_NOTES_COPY.summaryFailed.retry}
+            </button>
+          </div>
         )}
         <div className="flex flex-wrap justify-end gap-2">
           <button className={btnGhost} onClick={onDiscard}>
@@ -966,6 +1007,30 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
     discard();
   };
 
+  /* Retry the SUMMARY only, for a lecture whose transcription already
+     succeeded and was already billed. The transcript is on the server,
+     owner-scoped, so nothing is re-uploaded and nothing is
+     re-transcribed — see the endpoint's own notes.
+
+     On success the result replaces the failed one in place, so the
+     student lands on the ordinary review screen with their cards; the
+     error is re-thrown so the failure screen can say which failure it
+     was, and the transcript stays exactly where it is either way. */
+  const onRetrySummary = async () => {
+    const key = state.idempotencyKey;
+    if (!key) {
+      const err = new Error("This recording can't be retried on this device.");
+      err.code = "bad_idempotency_key";
+      throw err;
+    }
+    const { result } = await callResummarise({ token: session && session.token, idempotencyKey: key, translateTo });
+    /* `processed` is exactly the transition this needs — review, with
+       the new result — so the retry reuses it rather than adding a
+       second way into the same state. */
+    dispatch({ type: "processed", result });
+    return result;
+  };
+
   /* Is there a recording or a result the student would lose track of by
      navigating away? This is what the indicator watches. "done" is
      excluded: the note is saved, there is nothing in flight. */
@@ -992,6 +1057,7 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
     acceptRecovered,
     onSave,
     onDiscard,
+    onRetrySummary,
     active,
     capturing,
   };
@@ -1098,6 +1164,7 @@ function Recorder({ session, courses, recording }) {
     runUpload,
     onSave,
     onDiscard,
+    onRetrySummary,
   } = recording;
 
   /* THE TIER, READ BEFORE THE WORK. The server refuses a free-tier
@@ -1255,6 +1322,7 @@ function Recorder({ session, courses, recording }) {
             onDiscard={onDiscard}
             selectedCards={selectedCards}
             setSelectedCards={setSelectedCards}
+            onRetrySummary={onRetrySummary}
           />
         </>
       )}

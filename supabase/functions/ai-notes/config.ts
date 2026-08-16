@@ -133,6 +133,28 @@ export const TYPICAL_SUMMARY_INPUT_TOKENS = 1600;
    constants, so this table is a description of the arithmetic and not
    the arithmetic itself. */
 export const MINIMUM_BILLED_MINUTES = 3;
+
+/* What a RE-SUMMARISE costs the student, in the same minutes everything
+   else is billed in.
+
+   The student has already paid for the transcription — those minutes
+   were spent on the transcription provider and billed at the time, and
+   the retry does not repeat them: no audio, no transcription call, no
+   new provider minutes. What a retry really spends is one summariser
+   request, so that is what it charges.
+
+   DERIVED, not chosen. A typed number here would be the price of the
+   product set by somebody's guess, which is precisely the mistake
+   TYPICAL_SUMMARY_OUTPUT_TOKENS made at 5.9x reality. Rounded UP to a
+   whole minute because minutes are the unit a student sees. */
+export const USD_PER_SUMMARY_REQUEST =
+  (TYPICAL_SUMMARY_INPUT_TOKENS / 1_000_000) * USD_PER_1M_SUMMARY_INPUT +
+  (TYPICAL_SUMMARY_OUTPUT_TOKENS / 1_000_000) * USD_PER_1M_SUMMARY_OUTPUT;
+
+export const RESUMMARISE_BILLED_MINUTES = Math.max(
+  1,
+  Math.ceil(USD_PER_SUMMARY_REQUEST / USD_PER_TRANSCRIBED_MINUTE)
+);
 export const MAX_REQUEST_SECONDS = 3 * 3600;
 export const PROCESSING_STALE_MINUTES = 10;
 
@@ -220,3 +242,14 @@ export const MAX_COURSE_LENGTH = 80;
    Hitting it is treated as a failure rather than silently returning
    truncated notes; see openai.ts. */
 export const SUMMARY_MAX_TOKENS = 8000;
+
+/* The two sentences the retry can end on, kept beside the constants
+   they describe. Both name what was and was not charged, because a
+   student who has already paid once for this lecture is owed the
+   arithmetic — the same register as the failure screen's billing line.
+   The client mirrors these in src/aiNotesCopy.js for the states it can
+   describe without asking the server. */
+export const RESUMMARISE_EXPIRED_MESSAGE =
+  "We no longer have the transcript for this lecture, so it can't be summarised again. Nothing has been charged for this attempt.";
+export const RESUMMARISE_FAILED_MESSAGE =
+  "We couldn't write the summary this time. Nothing has been charged for this attempt, and your transcript is still here — you can try again.";

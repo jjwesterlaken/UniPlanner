@@ -606,6 +606,13 @@ for (const [tabName, phrases] of [
          controls -- through the REAL Recorder, not a re-implementation. */
       "export const fetchRecordingAccess = async () => globalThis.__recordingAccess || { unknown: true };\n" +
       "export const uploadAudio = async () => ({ path: 'u/k.webm' });\n" +
+      /* The retry endpoint. Steerable so the probe can drive both the
+         success path and the two refusals the failure screen words
+         differently. */
+      "export const callResummarise = async () => {\n" +
+      "  if (globalThis.__resummariseFails) { const e = new Error('nope'); e.code = globalThis.__resummariseFails; throw e; }\n" +
+      "  return { result: { summaryFailed: false, transcript: 't', original: { overview: 'Retried.', keyPoints: [], terms: [], assessable: [], openQuestions: [] }, translated: null }, minutesBilled: 2 };\n" +
+      "};\n" +
       // Records its arguments, so the test can assert the form fields
       // reached the REQUEST rather than inferring it from the output.
       "export const callAiNotes = async (args) => {\n" +

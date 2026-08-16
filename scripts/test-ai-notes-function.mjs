@@ -17,6 +17,15 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import {
+  RESUMMARISE_BILLED_MINUTES,
+  MINIMUM_BILLED_MINUTES,
+  TYPICAL_SUMMARY_INPUT_TOKENS,
+  TYPICAL_SUMMARY_OUTPUT_TOKENS,
+  USD_PER_1M_SUMMARY_INPUT,
+  USD_PER_1M_SUMMARY_OUTPUT,
+  USD_PER_TRANSCRIBED_MINUTE,
+} from "../supabase/functions/ai-notes/config.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -182,7 +191,7 @@ function makeDb(rows, missingObject = false, storedExt = "webm") {
 
 /* ---------- invoke the handler ---------- */
 
-async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath, tier = "ai" } = {}) {
+async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath, tier = "ai", mode, summariserOk = false, usage } = {}) {
   const db = makeDb(rows, missingObject, storedExt);
   db.client.auth.getUser = async () => ({ data: { user: { id: callerId } }, error: null });
   const baseFrom = db.client.from;
@@ -216,6 +225,29 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
   globalThis.fetch = async (url) => {
     providerCalls.push(String(url));
     if (String(url).includes("groq")) return { ok: true, json: async () => ({ text: "a lecture", duration: 60 }) };
+    /* The summariser is left failing by default (the function handles
+       it by returning the transcript with summaryFailed). `summariserOk`
+       flips it, which is what the re-summarise success path needs. */
+    if (summariserOk) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  overview: "An overview.",
+                  keyPoints: ["A point."],
+                  terms: [{ term: "T", content: "M" }],
+                  assessable: [],
+                  openQuestions: [],
+                }),
+              },
+            },
+          ],
+        }),
+      };
+    }
     return { ok: false, status: 500, json: async () => ({}) };
   };
 
@@ -228,11 +260,15 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
     new Request("https://x/ai-notes", {
       method: "POST",
       headers: { authorization: "Bearer token", "content-type": "application/json" },
-      body: JSON.stringify({
-        path: bodyPath !== undefined ? bodyPath : `${callerId}/${key}.webm`,
-        mimeType: "audio/webm",
-        idempotencyKey: key,
-      }),
+      body: JSON.stringify(
+        mode
+          ? { mode, idempotencyKey: key }
+          : {
+              path: bodyPath !== undefined ? bodyPath : `${callerId}/${key}.webm`,
+              mimeType: "audio/webm",
+              idempotencyKey: key,
+            }
+      ),
     })
   );
   const bodyText = await res.text();
@@ -431,6 +467,88 @@ async function run() {
     const destructure = src.match(/const \{[^}]*\} = body \|\| \{\};/);
     assert.ok(destructure, "could not find the request body destructure");
     assert.ok(!/\bpath\b/.test(destructure[0]), `path is still read from the body: ${destructure[0]}`);
+  });
+
+  /* ---------- re-summarise: the retry that reads a row by id ----------
+
+     This is the task ai-text was deliberately designed to avoid: it
+     reads a stored row, so every obligation that comes with reading one
+     applies. The failure it prevents cost a real lecture — transcription
+     billed, summary failed, no way to retry. */
+
+  const failedRow = (uid) => ({
+    _t: "ai_notes_requests",
+    idempotency_key: KEY,
+    user_id: uid,
+    status: "done",
+    summary_failed: true,
+    result: { transcript: "the lecture transcript", summaryFailed: true },
+    created_at: new Date().toISOString(),
+  });
+
+  await test("re-summarising someone else's lecture is refused IDENTICALLY to a malformed key", async () => {
+    /* The row holds a whole lecture, so a lookup by key alone is how one
+       student receives another's. Byte-identical rejection, or the
+       endpoint answers "does this key exist?" for any key tried. */
+    const notOwner = await invoke({ mode: "resummarise", rows: [failedRow(OTHER)] });
+    const malformed = await invoke({ mode: "resummarise", key: "msn0duf5-hk684" });
+    assert.equal(notOwner.status, malformed.status, "status codes differ");
+    assert.equal(notOwner.body.code, malformed.body.code, "codes differ");
+    assert.equal(notOwner.body.error, malformed.body.error, "messages differ");
+    assert.equal(JSON.stringify(notOwner.body), JSON.stringify(malformed.body), "bodies differ");
+  });
+
+  await test("a non-owner's re-summarise never reaches the provider", async () => {
+    const r = await invoke({ mode: "resummarise", rows: [failedRow(OTHER)], summariserOk: true });
+    assert.equal(r.status, 400);
+    assert.ok(
+      !r.providerCalls.some((u) => u.includes("openai")),
+      "a refused request still called the summariser — money spent answering someone else's key"
+    );
+  });
+
+  await test("a swept transcript is 'expired', definitively, and bills nothing", async () => {
+    const row = { ...failedRow(OWNER), result: { summaryFailed: true } }; // sweep took the transcript
+    const r = await invoke({ mode: "resummarise", rows: [row], summariserOk: true });
+    assert.equal(r.body.code, "transcript_expired");
+    assert.ok(!r.providerCalls.some((u) => u.includes("openai")), "it summarised nothing and called the provider anyway");
+    assert.match(r.body.error, /Nothing has been charged/i, "the student must be told this attempt was free");
+  });
+
+  await test("a failed retry bills nothing, and says so", async () => {
+    const r = await invoke({ mode: "resummarise", rows: [failedRow(OWNER)], summariserOk: false });
+    assert.equal(r.body.code, "summary_failed");
+    assert.match(r.body.error, /Nothing has been charged/i);
+    assert.match(r.body.error, /transcript is still here|try again/i, "a retry that failed must not read as the end of the road");
+  });
+
+  await test("a successful retry charges the summary only, and the figure is derived", async () => {
+    const rows = [failedRow(OWNER)];
+    const r = await invoke({ mode: "resummarise", rows, summariserOk: true });
+    assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+    assert.equal(r.body.result.summaryFailed, false);
+    assert.equal(r.body.minutesBilled, RESUMMARISE_BILLED_MINUTES);
+    // Derived from the measured constants, never typed: the same
+    // arithmetic the floor uses, rounded up to a whole minute.
+    const derived = Math.max(
+      1,
+      Math.ceil(
+        ((TYPICAL_SUMMARY_INPUT_TOKENS / 1_000_000) * USD_PER_1M_SUMMARY_INPUT +
+          (TYPICAL_SUMMARY_OUTPUT_TOKENS / 1_000_000) * USD_PER_1M_SUMMARY_OUTPUT) /
+          USD_PER_TRANSCRIBED_MINUTE
+      )
+    );
+    assert.equal(RESUMMARISE_BILLED_MINUTES, derived, "the retry price stopped being derived from the measured cost");
+    assert.ok(
+      RESUMMARISE_BILLED_MINUTES < MINIMUM_BILLED_MINUTES,
+      "a retry must cost less than a fresh recording — the transcription was already paid for"
+    );
+  });
+
+  await test("the retry never re-transcribes: no audio, no transcription call", async () => {
+    const r = await invoke({ mode: "resummarise", rows: [failedRow(OWNER)], summariserOk: true });
+    assert.ok(!r.providerCalls.some((u) => u.includes("groq")), "the retry called the transcription provider");
+    assert.ok(!r.providerCalls.some((u) => u.includes("/storage/")), "the retry went looking for audio that was deleted at step 10");
   });
 
   await test("no query in the source filters on idempotency_key without user_id", async () => {
