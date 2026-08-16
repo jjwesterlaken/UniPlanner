@@ -208,6 +208,12 @@ const SUPABASE_STUBS = `
 
 /* Documented in SUPABASE-SETUP.md §1 rather than created by a migration,
    so it's set up separately — some tests deliberately leave it out. */
+/* Its POLICIES are part of it, and were missing here until the grant
+   audit: without them the stand-in said planner_data had grants no
+   policy backed, which is the very state the audit exists to find.
+   Copied from SUPABASE-SETUP.md §1 — select, insert and update, and
+   deliberately no delete (account deletion runs through the security
+   definer function). */
 const PLANNER_DATA = `
   create table public.planner_data (
     user_id uuid primary key references auth.users(id) on delete cascade,
@@ -215,6 +221,9 @@ const PLANNER_DATA = `
     updated_at timestamptz not null default now()
   );
   alter table public.planner_data enable row level security;
+  create policy "planner_data_select_own" on public.planner_data for select using (auth.uid() = user_id);
+  create policy "planner_data_upsert_own" on public.planner_data for insert with check (auth.uid() = user_id);
+  create policy "planner_data_update_own" on public.planner_data for update using (auth.uid() = user_id);
 `;
 
 let dbCounter = 0;
@@ -724,6 +733,114 @@ async function run() {
     const r = psql(db, `set test.uid = ${USER}; set role authenticated; update public.semester_archives set label = 'CHANGED' where user_id = ${USER};`);
     assert.equal(r.ok, true, "with the grant open the statement itself is allowed");
     assert.equal(count(db, "public.semester_archives", `label = 'CHANGED'`), 0, "RLS let an update through with no update policy — that is a HOLE, not defence-in-depth");
+  });
+
+  /* ---------- 0008: the grant audit ----------
+
+     Both tests DERIVE from the database. A list of tables and verbs
+     typed in here would be the restatement that has now bitten nine
+     times — and this one would go on passing the day someone adds a
+     table with the platform's default grants still on it. */
+
+  const ownedTables = (db) =>
+    one(
+      db,
+      `select string_agg(distinct table_name, ',' order by table_name)
+         from information_schema.columns
+        where table_schema = 'public' and column_name = 'user_id';`
+    )
+      .split(",")
+      .filter(Boolean);
+
+  await test("anon can do NOTHING to any table holding a student's data", () => {
+    /* The whole point: with a grant, an unauthenticated read passes the
+       grant, reaches a policy whose auth.uid() is NULL, matches no rows
+       and returns 200 + []. Silence indistinguishable from "you have no
+       data" — the exact confusion every reader in src/ is written to
+       avoid, and impossible to avoid at the client if the server cannot
+       tell them apart either. Without the grant it is a hard error, and
+       every one of those readers already treats an error as unknown. */
+    const db = withArchives();
+    const tables = ownedTables(db);
+    assert.ok(tables.includes("semester_archives") && tables.includes("planner_data"), `the enumeration missed a table: ${tables.join(", ")}`);
+    for (const table of tables) {
+      for (const verb of ["select", "insert", "update", "delete"]) {
+        assert.equal(
+          one(db, `select has_table_privilege('anon', 'public.${table}', '${verb}')::text;`),
+          "false",
+          `anon can ${verb} public.${table} — an unauthenticated request gets silence instead of a refusal`
+        );
+      }
+    }
+  });
+
+  await test("every verb granted to authenticated is a verb that table has a policy for", () => {
+    /* Derived both sides: the grants come from the catalogue, the
+       policies come from the catalogue, and the invariant is that the
+       first is a subset of the second. A granted verb with no policy is
+       never useful — RLS gives it zero rows — and it is exactly how
+       update sat open on ai_notes from 0005 until it was checked by
+       hand on the real project. */
+    const db = withArchives();
+    for (const table of ownedTables(db)) {
+      const policied = new Set(
+        one(
+          db,
+          `select coalesce(string_agg(distinct cmd, ',' order by cmd), '') from pg_policies where schemaname='public' and tablename='${table}';`
+        )
+          .split(",")
+          .filter(Boolean)
+          .flatMap((cmd) => (cmd === "ALL" ? ["SELECT", "INSERT", "UPDATE", "DELETE"] : [cmd]))
+      );
+      for (const verb of ["select", "insert", "update", "delete"]) {
+        const granted = one(db, `select has_table_privilege('authenticated', 'public.${table}', '${verb}')::text;`) === "true";
+        if (granted) {
+          assert.ok(
+            policied.has(verb.toUpperCase()),
+            `authenticated may ${verb} public.${table} but no policy allows it — the grant is dead weight that returns zero rows instead of refusing`
+          );
+        }
+      }
+    }
+  });
+
+  await test("the app's own queries still work after the audit — sync, tier and archives", () => {
+    /* The audit must not have closed anything the client actually uses:
+       planner_data select+upsert (the whole sync), profiles select (the
+       plan level), ai_usage select (the allowance mirror), and the
+       archive's three verbs. Exercised as the user, not asserted from
+       the grant table. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    const ok = (sql) => {
+      const r = psql(db, `set test.uid = ${USER}; set role authenticated; ${sql}`);
+      assert.equal(r.ok, true, `a query the app makes was refused: ${sql}\n${(r.err || "").slice(0, 200)}`);
+    };
+    ok(`select data from public.planner_data where user_id = ${USER};`);
+    ok(`insert into public.planner_data (user_id, data) values (${USER}, '{"a":1}') on conflict (user_id) do update set data = '{"a":2}';`);
+    ok(`select tier from public.profiles where user_id = ${USER};`);
+    ok(`select minutes_used from public.ai_usage where user_id = ${USER};`);
+    ok(`insert into public.semester_archives (id, user_id, label, summary, data) values ('eeeeeeee-0000-0000-0000-000000000001', ${USER}, 'L', '{}', '{}');`);
+    ok(`select label from public.semester_archives where user_id = ${USER};`);
+    ok(`delete from public.semester_archives where id = 'eeeeeeee-0000-0000-0000-000000000001';`);
+    assert.equal(count(db, "public.semester_archives", `user_id = ${USER}`), 0, "the archive delete silently did nothing");
+  });
+
+  await test("account deletion still works, because it never depended on a grant", () => {
+    // delete_my_account_data() is security definer, so revoking delete
+    // on planner_data from authenticated cannot reach it.
+    const db = withArchives();
+    seedTwoUsers(db);
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
+    assert.equal(count(db, "public.planner_data", `user_id = ${USER}`), 0, "account deletion stopped clearing the planner");
+    assert.ok(count(db, "public.planner_data", `user_id = ${OTHER}`) > 0);
+  });
+
+  await test("0008 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = withArchives();
+    applyMigration(db, "0008_grant_audit.sql");
+    assert.equal(one(db, `select has_table_privilege('anon', 'public.semester_archives', 'select')::text;`), "false");
+    assert.equal(one(db, `select has_table_privilege('authenticated', 'public.semester_archives', 'select')::text;`), "true");
   });
 
   await test("0007 is re-runnable (a second apply changes nothing and fails nothing)", () => {

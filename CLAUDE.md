@@ -1158,6 +1158,50 @@ no tag manager. The check derives "our hosts" from `config.js` and
 `reactjs.org` **by name with a reason** — they are namespace and
 message strings, never fetched.
 
+## A refusal is information. Silence is not.
+
+Migration 0008, and the finding is worth more than the fix.
+
+Supabase's default privileges grant ALL verbs to **both `anon` and
+`authenticated`** on every table the SQL editor creates. Our migrations
+only ever ran `grant`, which adds and never subtracts, so those
+defaults stood. Every policy here is `auth.uid() = user_id`, and
+0001's carry no role clause at all — so they apply to `public`, which
+includes `anon`.
+
+Follow that through for a request that arrives without a session: it
+passes the grant, reaches the policy, evaluates `auth.uid()` to NULL,
+matches nothing, and returns **HTTP 200 with an empty array and no
+error**. Byte-identical to "you have no data".
+
+That is the same confusion `fetchNote`, `fetchArchive` and
+`recoveryFailureKind` are each built to avoid at the client — and it
+**cannot be avoided at the client if the server cannot tell the two
+apart either.** The archive list shipped saying "Nothing archived yet"
+over a real archive for exactly this reason, and no client-side care
+would have prevented it; the response carried no evidence to be
+careful with.
+
+So `anon` now has nothing on any table holding a student's data, which
+turns that silence into a permission error — and every reader already
+treats an error as *unknown, keep what we have*. Nothing signed out
+legitimately reads any of these tables; `test-local-only.mjs` proves
+the signed-out planner makes no outbound calls at all.
+
+The general rule, and it applies well beyond Postgres: **when you
+design a boundary, make sure "no" and "nothing" are different
+answers.** A layer that answers both with silence pushes an
+undecidable question onto every caller.
+
+`authenticated` was tightened the same way, to exactly the verbs each
+table has a policy for. A granted verb with no policy is never useful
+— RLS gives it zero rows — and it is how `update` sat open on
+`ai_notes` from 0005 until it was checked by hand. Both properties are
+tests that **derive from the catalogue on both sides**: the grants and
+the policies are read from the database and compared, so the day
+someone adds a table with the platform's defaults still on it, it goes
+red. A typed list of tables and verbs would have gone on passing.
+
 ## The service-role client bypasses RLS — you are the ownership check
 
 **Any query made with the service-role client must explicitly scope to the
@@ -1617,15 +1661,20 @@ record.
    change quietly does nothing, which is the failure that is hardest to
    notice. Verify by saving one AI note while signed in and checking a
    row appears in `ai_notes`.
-3. **Migration 0007, applied before the archive reaches users.** It
-   creates `semester_archives`, its three policies, and the updated
-   `delete_my_account_data()`. Until it is applied, every archive
-   attempt fails at the insert — the *safe* direction (row first means
-   no row, no strip, nothing lost) — but the panel shows "couldn't
-   store the archive" to anyone who tries. Verify by archiving a test
-   semester and checking one row appears in `semester_archives`, then
-   restoring it and checking the planner comes back whole.
-4. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
+3. **Migration 0008, applied as soon as convenient.** The grant audit:
+   it revokes `anon` on every table holding a student's data, so an
+   unauthenticated read fails loudly instead of returning an empty
+   list, and tightens `authenticated` to the verbs each table's
+   policies actually name. Nothing breaks while it is unapplied — the
+   silence is the status quo — but the archive list's "nothing here"
+   failure mode stays possible until it is. Verify with the anon check
+   in its header.
+4. ~~**Migration 0007**~~ — **applied 16 August 2026**, and verified
+   by hand: three policies, no update, and `update_granted = false` on
+   both three-verb tables after the revoke it carries. Left here
+   because its by-hand privilege check is what found the default-grant
+   trap that 0008 then closed everywhere.
+5. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
    every workflow. Both currently target Node 20, which GitHub has
    deprecated; the runners force them onto Node 24 and they work, so this
    is a warning today and not a failure. It becomes a failure on
@@ -1635,11 +1684,11 @@ record.
    remembered, and deliberately kept out of the native-build fix so a
    packaging change and a runner change can be told apart if either
    misbehaves.
-5. **Resend (or another real SMTP provider)** configured in Supabase
+6. **Resend (or another real SMTP provider)** configured in Supabase
    Auth → SMTP Settings. The built-in sender is rate-limited and lands in
    spam, so password reset does not work for real users without it. See
    the section above.
-6. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+7. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
    Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states
    are aspirational rather than enforced. 0004 raises a notice saying so
