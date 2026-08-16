@@ -148,3 +148,45 @@ export async function callAiNotes(
   }
   return json.result;
 }
+
+/**
+ * Re-summarise a lecture whose transcription succeeded and whose
+ * summary failed.
+ *
+ * Sends nothing but the key: the transcript is already on the server,
+ * scoped to its owner, so a retry needs no audio, no upload and no
+ * transcription. The server charges only the summarising cost.
+ *
+ * The gate is at the boundary for the same reason as `callAiNotes` —
+ * a UI-only check is one refactor from leaking.
+ */
+export async function callResummarise({ token, idempotencyKey, translateTo }, fetchImpl = fetch) {
+  if (!token) {
+    const err = new Error("Please sign in again to use AI notes.");
+    err.code = "unauthenticated";
+    throw err;
+  }
+  const res = await fetchImpl(`${SUPABASE_URL}/functions/v1/ai-notes`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify({ mode: "resummarise", idempotencyKey, translateTo }),
+  });
+  let json = null;
+  try {
+    json = await res.json();
+  } catch (e) {
+    /* non-JSON error body */
+  }
+  if (!res.ok || !json || json.ok === false) {
+    const err = new Error((json && json.error) || `Request failed (${res.status})`);
+    err.code = json && json.code;
+    err.status = res.status;
+    err.body = json;
+    throw err;
+  }
+  return { result: json.result, minutesBilled: json.minutesBilled };
+}

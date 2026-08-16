@@ -35,6 +35,7 @@ import {
   TRANSLATION_LANGUAGES,
   MONTHLY_MINUTES_LIMIT_HINT,
   MINIMUM_BILLED_MINUTES_HINT,
+  RESUMMARISE_BILLED_MINUTES_HINT,
   recoveryFailureKind,
   RECOVERY_MISSING_CODES,
 } from "../src/aiNotesLogic.js";
@@ -89,6 +90,7 @@ import {
   SUMMARY_MAX_TOKENS,
   MONTHLY_MINUTES_LIMIT,
   MINIMUM_BILLED_MINUTES,
+  RESUMMARISE_BILLED_MINUTES,
   USD_PER_TRANSCRIBED_MINUTE,
   USD_PER_1M_SUMMARY_INPUT,
   USD_PER_1M_SUMMARY_OUTPUT,
@@ -665,6 +667,16 @@ async function run() {
        allowance move by, so a drift makes the number on screen disagree
        with the number being charged. */
     assert.equal(MINIMUM_BILLED_MINUTES_HINT, MINIMUM_BILLED_MINUTES);
+    /* The retry's price is shown before the student commits, so a drift
+       here means the screen promises one figure and the server charges
+       another. A browser bundle cannot import from supabase/functions,
+       so the mirror is allowed — the equality is what makes it a guard
+       rather than a comment. */
+    assert.equal(
+      RESUMMARISE_BILLED_MINUTES_HINT,
+      RESUMMARISE_BILLED_MINUTES,
+      "the retry cost on screen disagrees with the retry cost charged"
+    );
     assert.equal(MONTHLY_MINUTES_LIMIT_HINT, MONTHLY_MINUTES_LIMIT);
   });
 
