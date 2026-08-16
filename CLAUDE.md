@@ -1213,6 +1213,27 @@ so the requirement is PostgREST's, one layer above anything the
 migration tests can reach. That limit is stated in the test rather
 than papered over.
 
+**AND THE STORAGE MOVE HAD NEVER RUN, WHICH THE 400s WERE SAYING ALL
+ALONG.** `migrateNote` sends `id: page.id`, a page id comes from the
+planner's own `uid()` ("msn0duf5-hk684", base36), and `ai_notes.id`
+was typed `uuid` — so Postgres rejected EVERY insert with 22P02 and
+PostgREST returned 400, once per sync, since 0005 shipped. The table
+is empty on every account for that reason alone, independent of any
+summary failing.
+
+`aiNotesLogic.js` documents this exact trap for
+`ai_notes_requests.idempotency_key` — which is why
+`newIdempotencyKey()` exists, and its comment says why: ids in the
+blob may be any shape, ids crossing into a typed column may not. The
+page id crossed the same boundary one table over and kept the blob's
+format. **A rule written down next to one caller is not a guard.**
+0009 moves the column to `text` rather than the client to UUIDs,
+because real devices already hold base36 page ids and those ids are
+the join between stub and row — minting UUIDs for new notes would
+strand every existing one. The guard now generates ids with the app's
+own `uid()`, lifted out of the source, so a change of format follows
+rather than pins.
+
 **THE ORDERING RULE THIS ESTABLISHES, because it is the mirror of the
 one already written down:** migrations that WIDEN what the code may do
 (a new table, a new column) go *before* the code that needs them — 0003

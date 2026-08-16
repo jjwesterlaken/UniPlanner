@@ -880,6 +880,21 @@ async function run() {
     assert.doesNotMatch(ARCHIVE_COPY.restoreMissingButMarked, /\bgone\b/i);
   });
 
+  await test("a note that keeps failing to migrate is dropped for the session, not retried forever", () => {
+    /* A sync runs seconds after every edit, so an unmigratable note was
+       retried indefinitely — one rejected request every few seconds for
+       as long as the app was open. The cap lives in a ref on purpose: a
+       persistent failure is a fact about this build talking to this
+       server, not about the student's data, so it must not sync. */
+    const start = appSrc.indexOf("const migrateAiNotes");
+    const body = appSrc.slice(start, appSrc.indexOf("const handleSignIn", start));
+    assert.ok(body.length > 0, "couldn't find migrateAiNotes");
+    assert.match(body, /migrationFailures\.current\.get\(page\.id\)/, "failures are no longer counted per note");
+    assert.match(body, /if \(failures >= MIGRATION_ATTEMPTS\) continue/, "there is no cap, so a rejection retries forever");
+    assert.match(body, /migrationFailures\.current\.delete\(page\.id\)/, "a success must clear the count, or a flaky note stays banned");
+    assert.match(appSrc, /const migrationFailures = useRef\(new Map\(\)\)/, "the count is not in a ref — a local verdict must never sync");
+  });
+
   await test("archiving clears the parked study timer for that semester", () => {
     const body = appSrc.slice(appSrc.indexOf("const archiveCurrentSemester"), appSrc.indexOf("const restoreArchive"));
     assert.match(body, /writeTimer\(name, null\)/, "year one's parked timer would commit its minutes to year two");
