@@ -1048,6 +1048,30 @@ for (const [tabName, phrases] of [
     check(archText.includes("1 item was added or edited"), "late edits are surfaced");
     check(archText.includes("Add to the archive") && archText.includes("Keep here"), "both late-edit choices are offered, no default");
     check(archText.includes("PHYS1001 — Week 3 lecture"), "an archived lecture is listed, still readable");
+
+    /* THE BUG THAT REACHED PRODUCTION: the list came back empty (an
+       RLS-filtered query is 200 + [] + no error, byte-identical to
+       having no archives) and the panel said "Nothing archived yet"
+       over a real archive — with restore reachable only from that
+       list, so there was no way back at all. */
+    check(
+      !archText.includes("Nothing archived yet"),
+      "an empty list NEVER reads as 'nothing archived yet' while this device holds a marker"
+    );
+    /* What this probe CAN see is the failed branch: demo mode has no
+       Supabase client, so the list reports failed rather than empty.
+       Both take the same block — the unknown sentence, a retry, and
+       the marker's own restore — so the structure below is asserted
+       live and only the CHOICE of sentence between failed and
+       contradicted is left to a source-level check in
+       test-archive.mjs. Naming the hole rather than implying the
+       probe covers it. */
+    check(archText.includes("Couldn't load your archives"), "an unreachable list reads as unknown");
+    check(archText.includes("Try again"), "an unknown list offers a retry rather than a dead end");
+    check(
+      archText.includes("Restore this semester"),
+      "restore hangs off the marker, so it survives the list failing entirely"
+    );
   }
 }
 
