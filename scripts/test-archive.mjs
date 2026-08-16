@@ -28,10 +28,12 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { JSDOM } from "jsdom";
+import { createClient } from "@supabase/supabase-js";
 
 import {
   ARCHIVE_STEADY_RESIDUE_BYTES,
@@ -616,6 +618,137 @@ async function run() {
   });
 
   /* ================================================================
+     THE REAL CLIENT, not a fake of it
+     ================================================================
+
+     Everything above drives a hand-written stand-in whose call shape I
+     wrote to match my own code — a restatement of the implementation,
+     not of the platform, and therefore blind to the class of bug where
+     the request is wrong or the response is read wrongly. The list
+     shipped broken past a green suite for exactly that reason.
+
+     These run the ACTUAL @supabase/supabase-js against a local server
+     speaking PostgREST's wire shape, so the request that goes out and
+     the response that comes back are the real ones. */
+
+  const withServer = async (handler, fn) => {
+    const seen = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        seen.push({ method: req.method, url: decodeURIComponent(req.url), body });
+        handler(req, res, body);
+      });
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const client = createClient(`http://127.0.0.1:${server.address().port}`, "anon-key-for-test");
+    try {
+      return await fn(client, seen);
+    } finally {
+      server.close();
+    }
+  };
+  const json = (res, code, payload) => {
+    res.writeHead(code, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(payload));
+  };
+  const USER_ID = "11111111-1111-1111-1111-111111111111";
+  const ROW = { id: "aaaaaaaa-0000-4000-8000-000000000001", label: "2026 · Semester 1", summary: { items: 24 }, created_at: "2026-08-16T09:00:00Z" };
+
+  await test("listArchives sends the query it means to and reads the rows back (real client)", async () => {
+    const { res, seen } = await withServer(
+      (req, r) => json(r, 200, [ROW]),
+      async (client, seen) => ({ res: await listArchives({ supabaseClient: client, userId: USER_ID }), seen })
+    );
+    assert.deepEqual(res.archives, [ROW], "the rows came back but were not read");
+    const q = seen[0].url;
+    assert.match(q, /\/rest\/v1\/semester_archives\?/, "the request went to the wrong path");
+    assert.match(q, new RegExp(`user_id=eq\\.${USER_ID}`), "the query is not scoped to this user");
+    assert.match(q, /select=id,label,summary,created_at/);
+    assert.match(q, /order=created_at\.desc/);
+  });
+
+  await test("an RLS-filtered list is 200 + [] with no error — which is why absence needs a second opinion", async () => {
+    /* THE PRODUCTION SYMPTOM, reproduced at the wire: a row the query
+       cannot see is not an error and is not distinguishable, here,
+       from having no archives. So `listArchives` reporting an empty
+       list is CORRECT, and the caller is what must not conclude
+       "nothing archived" from it — see the marker contradiction in
+       ArchivePanel, covered by the smoke probe. */
+    const { res } = await withServer(
+      (req, r) => json(r, 200, []),
+      async (client) => ({ res: await listArchives({ supabaseClient: client, userId: USER_ID }) })
+    );
+    assert.deepEqual(res.archives, [], "an empty result must be reported as empty, not as failed");
+    assert.equal(res.failed, undefined);
+  });
+
+  await test("a 401, a 500 and a dropped connection all read as FAILED, never as empty (real client)", async () => {
+    for (const [code, payload] of [[401, { message: "JWT expired" }], [500, { message: "boom" }]]) {
+      const { res } = await withServer(
+        (req, r) => json(r, code, payload),
+        async (client) => ({ res: await listArchives({ supabaseClient: client, userId: USER_ID }) })
+      );
+      assert.equal(res.failed, true, `HTTP ${code} did not read as failed`);
+      assert.equal(res.archives, undefined);
+    }
+    // Nothing listening at all: the fetch rejects rather than resolving.
+    const dead = await listArchives({
+      supabaseClient: createClient("http://127.0.0.1:9", "anon-key-for-test"),
+      userId: USER_ID,
+    });
+    assert.equal(dead.failed, true, "an unreachable server did not read as failed");
+  });
+
+  await test("fetchArchive keeps its three outcomes distinct against the real client", async () => {
+    const got = await withServer(
+      (req, r) => json(r, 200, [{ label: ROW.label, data: { courses: [] } }]),
+      async (client) => fetchArchive({ supabaseClient: client, id: ROW.id })
+    );
+    assert.ok(got.data, "a present row was not read");
+    // maybeSingle over zero rows: definitively nothing there.
+    const missing = await withServer(
+      (req, r) => json(r, 200, []),
+      async (client) => fetchArchive({ supabaseClient: client, id: ROW.id })
+    );
+    assert.equal(missing.missing, true);
+    const failed = await withServer(
+      (req, r) => json(r, 500, { message: "boom" }),
+      async (client) => fetchArchive({ supabaseClient: client, id: ROW.id })
+    );
+    assert.equal(failed.failed, true);
+    assert.ok(!failed.missing, "a 500 read as absence — the confusion the three outcomes exist to prevent");
+  });
+
+  await test("archiveSemester puts THIS user's id in the row it inserts (real client)", async () => {
+    const { seen, res } = await withServer(
+      (req, r) => json(r, 201, []),
+      async (client, seen) => ({
+        seen,
+        res: await archiveSemester({
+          supabaseClient: client,
+          userId: USER_ID,
+          semesterName: "Semester 1",
+          bucket: realisticBucket(),
+          label: "2026 · Semester 1",
+          uid,
+          now: AT,
+          pendingStore: memoryPending(),
+        }),
+      })
+    );
+    assert.equal(res.ok, true);
+    const post = seen.find((s) => s.method === "POST");
+    const del = seen.find((s) => s.method === "DELETE");
+    assert.ok(del && seen.indexOf(del) < seen.indexOf(post), "delete-then-insert ordering was lost");
+    const body = JSON.parse(post.body);
+    assert.equal(body.user_id, USER_ID, "the inserted row would be invisible to its owner's own RLS select");
+    assert.equal(body.id, res.archiveId);
+    assert.ok(body.data && body.summary, "the archive row must carry both the verbatim bucket and its summary");
+  });
+
+  /* ================================================================
      the residue, derived — never typed from a model
      ================================================================ */
 
@@ -701,6 +834,50 @@ async function run() {
   await test("addItem clears the marker, so the student's own new term never reads as late edits", () => {
     const body = appSrc.slice(appSrc.indexOf("const addItem ="), appSrc.indexOf("const patchItem ="));
     assert.match(body, /markerClearedOnCreate/, "addItem no longer clears the marker on creation");
+  });
+
+  await test("archiving refuses when the confirm named a different semester than is selected", () => {
+    /* Shipped bug: the confirm's pre-filled name was derived once, on
+       open, from the then-current semester, while the archive read the
+       CURRENT semester at click time. Switching the header dropdown in
+       between archived one semester under the other's name. The panel
+       now closes the confirm on a switch; this is the boundary half,
+       which a race cannot get around. */
+    const body = appSrc.slice(appSrc.indexOf("const archiveCurrentSemester"), appSrc.indexOf("const restoreArchive"));
+    assert.match(body, /expectedSemester/, "the handler no longer takes the semester the confirm named");
+    assert.match(
+      body,
+      /if \(expectedSemester && expectedSemester !== name\) return \{ ok: false, reason: "changed" \}/,
+      "the mismatch is no longer refused"
+    );
+    assert.match(appSrc, /onArchive\(label\.trim\(\), semesterName\)/, "the panel no longer tells the handler which semester it named");
+    // And the confirm must not survive a semester switch at all.
+    assert.match(appSrc, /setConfirming\(false\);\s*setLabel\(""\);\s*setStatus\(""\);\s*\}, \[semesterName\]\)/, "the confirm no longer resets when the semester changes");
+  });
+
+  await test("restore is reachable from the marker, so a failed list cannot strand a student", () => {
+    /* The serious half of the shipped bug: restore existed only inside
+       the archive list, so a list that came back empty (RLS filters to
+       200 + [] with no error) left a just-archived semester with no way
+       back on screen at all. The marker holds the archive id; the way
+       back now hangs off that. */
+    const panel = appSrc.slice(appSrc.indexOf("export function ArchivePanel"), appSrc.indexOf("function BackupPanel"));
+    const markerBlock = panel.slice(panel.indexOf("{marker && ("), panel.indexOf("{marker && late.length > 0"));
+    assert.match(markerBlock, /onRestore\(marker\.id\)/, "the marker no longer offers a restore");
+    assert.match(markerBlock, /ARCHIVE_COPY\.restoreThis/);
+    // "Nothing archived yet" must be unreachable while a marker exists.
+    assert.match(panel, /archives\.list\.length === 0 && !marker/, "the empty-list message no longer checks the marker");
+    assert.match(panel, /ARCHIVE_COPY\.listContradicted/, "the contradiction has no wording");
+  });
+
+  await test("the contradiction copy claims nothing about the cause and says the archive is untouched", () => {
+    // It is a dropped read, an expired token or an RLS filter — the
+    // student cannot act on which, and telling them it is gone would be
+    // a claim we have evidence against.
+    assert.doesNotMatch(ARCHIVE_COPY.listContradicted, /deleted|gone|lost/i);
+    assert.match(ARCHIVE_COPY.listContradicted, /hasn't been touched/i);
+    assert.match(ARCHIVE_COPY.restoreMissingButMarked, /Nothing has been changed here/i);
+    assert.doesNotMatch(ARCHIVE_COPY.restoreMissingButMarked, /\bgone\b/i);
   });
 
   await test("archiving clears the parked study timer for that semester", () => {

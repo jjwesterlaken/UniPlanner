@@ -3834,15 +3834,37 @@ export function ArchivePanel({ session, bucket, semesterName, onArchive, onResto
 
   const refresh = async () => {
     if (!session || !session.user) return;
+    setArchives(null);
     const res = await listArchives({ supabaseClient: supabase, userId: session.user.id });
     /* A failed list is UNKNOWN, never empty — rendering "nothing
        archived yet" off a dropped connection tells a student their
-       archives are gone. */
+       archives are gone.
+
+       AN EMPTY LIST IS ALSO UNKNOWN WHEN THIS DEVICE HOLDS A MARKER.
+       A query filtered by RLS returns 200 with an empty array and no
+       error, which is byte-identical to "you have no archives" — so
+       absence of rows is not evidence of absence when we are holding
+       positive evidence that one exists. Shipped saying "Nothing
+       archived yet" over a real archive; that sentence must never
+       appear while the semester in front of us says otherwise. */
     setArchives(res.failed ? { failed: true } : { list: res.archives });
   };
   useEffect(() => {
     refresh();
   }, [session && session.user && session.user.id]);
+
+  /* The confirm box is TIED TO THE SEMESTER IT WAS OPENED FOR. Opening
+     it on one semester and switching the header dropdown to another
+     left the pre-filled name naming the semester that would NOT be
+     archived — the name said one thing and the action did another.
+     Closing it on a switch makes that state unreachable rather than
+     merely unlikely; the boundary check in archiveCurrentSemester is
+     the second half. */
+  useEffect(() => {
+    setConfirming(false);
+    setLabel("");
+    setStatus("");
+  }, [semesterName]);
 
   /* The gate SHOWS the tool to a signed-out student — a feature nobody
      can see is not consent or a gate, it is absence. */
@@ -3876,10 +3898,34 @@ export function ArchivePanel({ session, bucket, semesterName, onArchive, onResto
         </div>
       </div>
 
+      {/* RESTORE HANGS OFF THE MARKER, NOT OFF THE LIST. The marker
+          holds the archive id, so the way back does not depend on a
+          query succeeding — and the list failing (or being filtered to
+          empty) used to leave a student who had just archived with no
+          restore path at all, which is the failure that matters most
+          in this panel. */}
       {marker && (
-        <p className="mt-3 rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600">
-          {ARCHIVE_COPY.archivedLine({ label: marker.label, items: marker.items || 0 })}
-        </p>
+        <div className="mt-3 rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600">
+          <p>{ARCHIVE_COPY.archivedLine({ label: marker.label, items: marker.items || 0 })}</p>
+          <button
+            className={`${btnGhost} mt-2`}
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setStatus("");
+              const res = await onRestore(marker.id);
+              setBusy(false);
+              if (res.ok) {
+                setStatus(ARCHIVE_COPY.restored);
+                refresh();
+              } else if (res.reason === "occupied") setStatus(ARCHIVE_COPY.restoreOccupied);
+              else if (res.reason === "missing") setStatus(ARCHIVE_COPY.restoreMissingButMarked);
+              else setStatus(ARCHIVE_COPY.restoreFailed);
+            }}
+          >
+            <Upload size={13} /> {ARCHIVE_COPY.restoreThis}
+          </button>
+        </div>
       )}
 
       {marker && late.length > 0 && (
@@ -3924,7 +3970,7 @@ export function ArchivePanel({ session, bucket, semesterName, onArchive, onResto
                 onClick={async () => {
                   setBusy(true);
                   setStatus("");
-                  const res = await onArchive(label.trim());
+                  const res = await onArchive(label.trim(), semesterName);
                   setBusy(false);
                   if (res.ok) {
                     setConfirming(false);
@@ -3964,8 +4010,17 @@ export function ArchivePanel({ session, bucket, semesterName, onArchive, onResto
       <div className="mt-4 border-t border-stone-100 pt-3">
         <p className="text-xs font-medium text-stone-500">Your archives</p>
         {archives === null && <p className="mt-2 text-xs text-stone-400">Loading…</p>}
-        {archives && archives.failed && <p className="mt-2 text-xs text-stone-500">{ARCHIVE_COPY.listFailed}</p>}
-        {archives && archives.list && archives.list.length === 0 && (
+        {archives && (archives.failed || (archives.list && archives.list.length === 0 && marker)) && (
+          <div className="mt-2">
+            <p className="text-xs text-stone-500">
+              {archives.failed ? ARCHIVE_COPY.listFailed : ARCHIVE_COPY.listContradicted}
+            </p>
+            <button className={`${btnGhost} mt-2`} onClick={refresh}>
+              <RefreshCw size={13} /> Try again
+            </button>
+          </div>
+        )}
+        {archives && archives.list && archives.list.length === 0 && !marker && (
           <p className="mt-2 text-xs text-stone-400">{ARCHIVE_COPY.listEmpty}</p>
         )}
         {archives && archives.list && archives.list.length > 0 && (
@@ -5644,8 +5699,15 @@ export default function PlannerApp() {
 
   const archiveClient = () => (session && supabase ? supabase : null);
 
-  const archiveCurrentSemester = async (label) => {
+  const archiveCurrentSemester = async (label, expectedSemester) => {
     const name = dataRef.current.semester;
+    /* The confirm box named a semester; archive THAT one or nothing.
+       Without this, opening the confirm on one semester and switching
+       the header dropdown before confirming archived the new selection
+       under the old name — the label said one thing and the action did
+       another. The panel also closes the confirm on a switch; this is
+       the half that cannot be got around by a race. */
+    if (expectedSemester && expectedSemester !== name) return { ok: false, reason: "changed" };
     const bucket = dataRef.current.semesters[name];
     const res = await archiveSemester({
       supabaseClient: archiveClient(),

@@ -56,9 +56,18 @@ export const ARCHIVE_COPY = {
     "That archive isn't in your account any more, so there's nowhere to add these. They'll stay here.",
 
   restore: "Restore",
+  /* The way back from the marker itself, so restoring never depends on
+     the archive list having loaded. */
+  restoreThis: "Restore this semester",
   restoreOccupied:
     "This semester has new content in it. Archive the current semester first, then restore.",
   restoreMissing: "That archive isn't in your account any more.",
+  /* Said when THIS DEVICE still holds the marker: the archive should
+     exist, so "it's gone" is a claim we have evidence against. Names
+     what to do instead of guessing at the cause. */
+  restoreMissingButMarked:
+    "This semester says it was archived, but the archive can't be found in your account. " +
+    "Nothing has been changed here. Sign out and back in, then try again — and don't clear this device's data in the meantime.",
   restoreFailed: "Couldn't reach your archives. Check your connection and try again.",
   restored: "Semester restored.",
 
@@ -66,6 +75,13 @@ export const ARCHIVE_COPY = {
   deleteFailed: "Couldn't delete that archive, so it hasn't been deleted. Try again.",
 
   listFailed: "Couldn't load your archives. Check your connection and try again.",
+  /* An empty list while this device holds a marker is a CONTRADICTION,
+     not an empty account — an RLS-filtered query returns 200 with no
+     rows and no error, which is byte-identical to having none. Never
+     render "nothing archived yet" over an archive we know exists. */
+  listContradicted:
+    "Your archive list came back empty, but this semester is archived — so the list didn't load properly. " +
+    "Your archive hasn't been touched; use “Restore this semester” above, or try again.",
   listEmpty: "Nothing archived yet. When a semester ends, box it up here.",
   lecturesHeading: "Archived lectures",
   lecturesHint: "Saved AI lecture notes from archived semesters — still readable, off your semester lists.",
