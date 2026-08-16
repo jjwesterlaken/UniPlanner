@@ -1096,6 +1096,59 @@ claim step 4 rests on.
   test's header as a named hole, because a guard that says what it
   cannot see is worth more than one that looks thorough.
 
+## Light and dark: an axis, and the paper that does not flip
+
+`src/input.css` (the ground tokens), `themeVarsFor` in PlannerApp.jsx
+(the derived dark accents), the pre-paint script in `index.html`, and
+`scripts/test-dark-mode.mjs`.
+
+**The mode is an AXIS crossed with the palette, not a ninth theme.**
+The old theme mechanism set four accent variables and nothing else —
+every ground colour was a hardcoded Tailwind class, 557 of them. The
+sweep happened at the THEME LAYER: Tailwind's `stone` ramp now resolves
+to `--tone-*` variables, so `text-stone-500` still means "muted text"
+in the source and only the value behind it moves. The one source
+substitution was `bg-white` → `bg-surface` (surfaces flip) with
+`bg-paper` for note paper (which does not). The differential in
+`test-dark-mode.mjs` proves light mode is BYTE-IDENTICAL to the
+pre-token build, with the permitted substitutions enumerated in the
+test rather than waved at — that enumeration is what turned a 557-class
+sweep into a checked refactor.
+
+**Dark accents are DERIVED from each palette, never hand-picked**: the
+accent lifts toward white, `soft` becomes a low-alpha wash, `deepText`
+lightens further. Eight palettes × two modes hand-written would be 64
+values to keep in step. Plain rgb()/rgba(), because iOS 15 — the
+deployment floor — has no `color-mix()`.
+
+**THE PAPER DOES NOT FLIP, and this is the decision to read before
+reaching for inversion.** Handwriting is stored with its own colour
+per stroke — black, blue, red, chosen by the student. A dark sheet
+needs either rewriting stored colours (an edit to their work, the same
+refusal as the two-notions-of-week rule) or a render-time mapping that
+lies about what they drew (their red becomes cyan). The sheet staying
+light costs nothing: no stored colour touched, no second highlighter
+set, and dark paper stays available later as an explicit per-note
+choice — which is how the ink apps do it. A test pins `--paper` equal
+in both modes and `src/ink.js` free of any theme awareness.
+
+**The mode is device-local and unsynced** (`uni-planner-mode`), like
+the last tab and the audio input: a phone in bed and a laptop in a
+library want different answers. "System" is the default, stored as an
+absence, and stays live via `prefers-color-scheme`.
+
+**First paint is handled by an inline script in `index.html`**, before
+the stylesheet, because React effects run after paint and the service
+worker makes the flash worse (a cached shell paints immediately). It
+reads the SAME key the app writes; the equality is a test, since an
+inline script cannot import from the bundle — the billing-hint
+arrangement again. `index.html` now carries TWO marked blocks: the
+sw-register block (stripped by prepare-native) and the prepaint block
+(kept by every shell). They are independent by construction, and a
+test runs the real prepare-native and asserts the worker goes while
+the pre-paint survives — dark mode must not be a casualty of
+packaging, or vice versa.
+
 ## Two notions of "week", deliberately not reconciled
 
 The app has two independent ideas of what week something is in, and they

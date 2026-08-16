@@ -26,7 +26,7 @@ const acceptButtonCls =
 export function ConsentGate({ onAccept }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/60 p-4">
-      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-stone-200 bg-white p-5 shadow-lg">
+      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-stone-200 bg-surface p-5 shadow-lg">
         <h2 className="font-serif text-lg font-semibold text-stone-800">{CONSENT_TEXT.title}</h2>
         <ul className="mt-3 space-y-2.5 text-sm text-stone-600">
           {CONSENT_TEXT.bullets.map((b, i) => (

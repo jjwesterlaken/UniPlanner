@@ -532,7 +532,7 @@ export function AudioSourcePicker({ caps, source, setSource, deviceId, setDevice
       active
         ? "u-accent-bg border-transparent text-white"
         : enabled
-          ? "border-stone-200 bg-white text-stone-600 hover:bg-stone-50"
+          ? "border-stone-200 bg-surface text-stone-600 hover:bg-stone-50"
           : "cursor-not-allowed border-stone-100 bg-stone-50 text-stone-300"
     }`;
 
@@ -1098,7 +1098,7 @@ export function RecordingIndicator({ recording, onOpen, liftedForNav = false }) 
       className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-3 pointer-events-none"
       style={liftedForNav ? { paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 4.25rem)" } : undefined}
     >
-      <div className="pointer-events-auto flex w-full max-w-md items-center gap-2 rounded-xl border border-stone-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+      <div className="pointer-events-auto flex w-full max-w-md items-center gap-2 rounded-xl border border-stone-200 bg-surface/95 px-3 py-2 shadow-lg backdrop-blur">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onOpen}>
           {capturing ? (
             <>

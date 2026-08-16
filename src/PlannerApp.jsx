@@ -360,6 +360,81 @@ const THEMES = {
   rose: { label: "Rose", accent: "#db2777", accentDeep: "#be185d", accentSoft: "#fce7f3", accentDeepText: "#be185d" },
 };
 
+/* ---------- light / dark, an axis across every palette ----------
+
+   MODE_KEY is device-local and unsynced, deliberately: a phone in bed
+   and a laptop in a library want different answers, so syncing the
+   choice would have two devices overruling each other. "system" is
+   the default and means "whatever the OS says, and follow it when it
+   changes" -- an override is only stored once the student picks one.
+
+   The pre-paint script in index.html reads this SAME key and stamps
+   the same attribute before the first frame; this module then takes
+   over. Both must agree, so the key and the values live here and the
+   test asserts index.html uses them. */
+const MODE_KEY = "uni-planner-mode";
+const MODES = ["system", "light", "dark"];
+
+const readMode = () => {
+  try {
+    const saved = localStorage.getItem(MODE_KEY);
+    return MODES.includes(saved) ? saved : "system";
+  } catch (e) {
+    return "system";
+  }
+};
+
+const systemPrefersDark = () => {
+  try {
+    return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  } catch (e) {
+    return false;
+  }
+};
+
+/** Which mode is actually in force, resolving "system" against the OS. */
+const resolveMode = (mode) => (mode === "system" ? (systemPrefersDark() ? "dark" : "light") : mode);
+
+/* The eight palettes were picked for a light ground, so their `soft`
+   tint (a pale wash) and `deepText` (a dark shade) are both wrong on a
+   dark one. DERIVED rather than hand-picked: a translucent accent
+   reads as a tint over any ground, and lightening the accent toward
+   white gives readable accented text. Eight more hand-chosen palettes
+   would be sixteen sets of four to keep in step, which is the kind of
+   duplication this codebase has been bitten by.
+
+   Plain rgb()/rgba() rather than color-mix(), which iOS 15 -- our
+   deployment floor -- does not support. */
+const hexToRgb = (hex) => {
+  const h = String(hex || "").replace("#", "");
+  const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
+  return Number.isFinite(n) ? [(n >> 16) & 255, (n >> 8) & 255, n & 255] : [0, 0, 0];
+};
+const mixToWhite = ([r, g, b], amount) =>
+  `rgb(${Math.round(r + (255 - r) * amount)}, ${Math.round(g + (255 - g) * amount)}, ${Math.round(b + (255 - b) * amount)})`;
+
+function themeVarsFor(theme, resolved) {
+  if (resolved !== "dark") {
+    return {
+      "--accent": theme.accent,
+      "--accent-deep": theme.accentDeep,
+      "--accent-soft": theme.accentSoft,
+      "--accent-deep-text": theme.accentDeepText,
+    };
+  }
+  const rgb = hexToRgb(theme.accent);
+  return {
+    // Lifted, because a mid-tone accent that reads well on white is
+    // muddy on near-black.
+    "--accent": mixToWhite(rgb, 0.18),
+    "--accent-deep": theme.accent,
+    // A wash rather than a pastel: alpha keeps it a tint of whatever
+    // is behind it instead of a pale block on a dark page.
+    "--accent-soft": `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.22)`,
+    "--accent-deep-text": mixToWhite(rgb, 0.55),
+  };
+}
+
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -433,12 +508,12 @@ const folderColor = (key) => FOLDER_COLORS[key] || FOLDER_COLORS.slate;
 
 /* Shared class strings */
 const inputCls =
-  "w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-800 placeholder-stone-400 u-field";
+  "w-full rounded-lg border border-stone-300 bg-surface px-3 py-2 text-sm text-stone-800 placeholder-stone-400 u-field";
 const labelCls = "block text-xs font-medium text-stone-500 mb-1";
 const btnPrimary =
   "inline-flex items-center justify-center gap-1.5 rounded-lg u-accent-bg px-3.5 py-2 text-sm font-medium text-white u-focus disabled:opacity-40 disabled:cursor-not-allowed transition-colors";
 const btnGhost =
-  "inline-flex items-center justify-center gap-1.5 rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50 u-focus transition-colors";
+  "inline-flex items-center justify-center gap-1.5 rounded-lg border border-stone-300 bg-surface px-3 py-2 text-sm font-medium text-stone-700 hover:bg-stone-50 u-focus transition-colors";
 const iconBtn =
   "inline-flex items-center justify-center rounded-md p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700 u-focus transition-colors";
 const editBox = "rounded-xl border border-stone-300 bg-stone-50 p-3";
@@ -466,7 +541,7 @@ function Section({ icon: Icon, title, subtitle, children }) {
 
 function Card({ children, className = "" }) {
   return (
-    <div className={`rounded-2xl border border-stone-200 bg-white p-4 shadow-sm ${className}`}>{children}</div>
+    <div className={`rounded-2xl border border-stone-200 bg-surface p-4 shadow-sm ${className}`}>{children}</div>
   );
 }
 
@@ -598,7 +673,7 @@ function Todos({ todos, addItem, patchItem, removeItem, assignments = [] }) {
                     })
                   }
                   className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded border ${
-                    t.done ? "u-accent-bg u-accent-border text-white" : "border-stone-300 bg-white u-hover-border"
+                    t.done ? "u-accent-bg u-accent-border text-white" : "border-stone-300 bg-surface u-hover-border"
                   }`}
                   aria-label={t.done ? "Mark not done" : "Mark done"}
                 >
@@ -1235,7 +1310,7 @@ function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) 
               {evs.length > 0 && (
                 <span className="mt-0.5 flex gap-0.5">
                   {evs.slice(0, 3).map((_, k) => (
-                    <span key={k} className={`h-1 w-1 rounded-full ${isSel ? "bg-white" : "u-accent-bg"}`} />
+                    <span key={k} className={`h-1 w-1 rounded-full ${isSel ? "bg-surface" : "u-accent-bg"}`} />
                   ))}
                 </span>
               )}
@@ -1430,7 +1505,7 @@ function PageTypeChooser({ onCreate, onCancel, sheetsFull = false }) {
         <Option
           active={style === "blank"}
           onClick={() => setStyle("blank")}
-          preview={<div className="mb-2 h-16 rounded-md border border-stone-200 bg-white" />}
+          preview={<div className="mb-2 h-16 rounded-md border border-stone-200 bg-surface" />}
           label="Blank page"
         />
       </div>
@@ -1452,7 +1527,7 @@ function PageTypeChooser({ onCreate, onCancel, sheetsFull = false }) {
           active={kind !== FORMULA_KIND}
           onClick={() => setKind("text")}
           preview={
-            <div className="mb-2 flex h-16 items-center justify-center gap-1 rounded-md border border-stone-200 bg-white text-stone-400">
+            <div className="mb-2 flex h-16 items-center justify-center gap-1 rounded-md border border-stone-200 bg-surface text-stone-400">
               <Type size={20} />
               <PenLine size={20} />
             </div>
@@ -1464,7 +1539,7 @@ function PageTypeChooser({ onCreate, onCancel, sheetsFull = false }) {
           active={kind === FORMULA_KIND}
           onClick={() => setKind(FORMULA_KIND)}
           preview={
-            <div className="mb-2 flex h-16 items-center justify-center rounded-md border border-stone-200 bg-white text-stone-400">
+            <div className="mb-2 flex h-16 items-center justify-center rounded-md border border-stone-200 bg-surface text-stone-400">
               <ListTodo size={22} />
             </div>
           }
@@ -1610,7 +1685,7 @@ function TextTools({ font, setFont, getArea, afterCommand, hint, setHint }) {
     <div className="flex flex-wrap items-center gap-2">
       {/* Font — applies to the whole note, and is saved with it */}
       <select
-        className="rounded-md border border-stone-300 bg-white px-2 py-1 text-sm text-stone-700 u-field"
+        className="rounded-md border border-stone-300 bg-surface px-2 py-1 text-sm text-stone-700 u-field"
         value={font || "sans"}
         onChange={(e) => setFont(e.target.value)}
         style={{ fontFamily: fontCss }}
@@ -1744,7 +1819,7 @@ function TextBlockEditor({ block, onChange, style, font, registerArea, onFocusBl
       onFocus={() => onFocusBlock(block.id)}
       data-placeholder="Start writing..."
       className={`min-h-[120px] w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 u-field ${
-        style === "lined" ? "lined-paper" : "bg-white"
+        style === "lined" ? "lined-paper" : "bg-paper"
       }`}
       style={{ fontFamily: fontCss, outline: "none" }}
     />
@@ -2029,7 +2104,7 @@ function InkBlockEditor({ block, onChange, style, notePenUsed, tools, focused, o
           onPointerUp={endStroke}
           onPointerCancel={endStroke}
           onPointerLeave={endStroke}
-          className={style === "lined" ? "lined-paper" : "bg-white"}
+          className={style === "lined" ? "lined-paper" : "bg-paper"}
           style={{
             width: "100%",
             aspectRatio: `${CANVAS_W} / ${h}`,
@@ -2304,7 +2379,7 @@ function StrokeCanvas({ strokes = [], style, h = CANVAS_H }) {
   return (
     <canvas
       ref={ref}
-      className={`w-full rounded-lg border border-stone-200 ${style === "lined" ? "lined-paper" : "bg-white"}`}
+      className={`w-full rounded-lg border border-stone-200 ${style === "lined" ? "lined-paper" : "bg-paper"}`}
       style={{ aspectRatio: `${CANVAS_W} / ${h}`, touchAction: "none" }}
     />
   );
@@ -2321,7 +2396,7 @@ function NoteMenu({ page, folders, onMove }) {
         <MoreVertical size={15} />
       </button>
       {menu && (
-        <div className="absolute right-0 top-9 z-20 w-52 rounded-xl border border-stone-200 bg-white p-2 shadow-lg">
+        <div className="absolute right-0 top-9 z-20 w-52 rounded-xl border border-stone-200 bg-surface p-2 shadow-lg">
           <p className="px-2 pb-1 pt-0.5 text-xs font-medium text-stone-500">Move to folder</p>
           {folders.length === 0 && <p className="px-2 py-1 text-xs text-stone-400">No folders yet. Create one in the Folders tab.</p>}
           <div className="max-h-48 overflow-y-auto">
@@ -4473,7 +4548,7 @@ function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onS
             key={id}
             onClick={() => { setMode(id); setError(""); }}
             className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium u-focus ${
-              mode === id ? "bg-white text-stone-800 shadow-sm" : "text-stone-500"
+              mode === id ? "bg-surface text-stone-800 shadow-sm" : "text-stone-500"
             }`}
           >
             {label}
@@ -4681,7 +4756,7 @@ function SemesterSetup({ settings, rounding, patchSettings }) {
               key={r.id}
               onClick={() => patchSettings({ rounding: r.id })}
               className={`rounded-full px-3 py-1.5 text-xs font-medium u-focus ${
-                r.id === rule ? "u-accent-bg text-white" : "border border-stone-200 bg-white text-stone-600 hover:bg-stone-50"
+                r.id === rule ? "u-accent-bg text-white" : "border border-stone-200 bg-surface text-stone-600 hover:bg-stone-50"
               }`}
             >
               {r.label} <span className="opacity-70">({r.hint})</span>
@@ -4871,7 +4946,7 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
               key={b.code}
               onClick={() => onTarget(b.code)}
               className={`rounded-full px-2.5 py-1 text-xs font-medium u-focus ${
-                b.code === bandCode ? "u-accent-bg text-white" : "bg-white text-stone-600 hover:bg-stone-50"
+                b.code === bandCode ? "u-accent-bg text-white" : "bg-surface text-stone-600 hover:bg-stone-50"
               }`}
             >
               {b.code} {b.min}+
@@ -5141,7 +5216,7 @@ function TabButton({ t, active, onClick, stacked }) {
    has to learn a new word. */
 function SegmentRow({ items, current, onPick }) {
   return (
-    <div className="mb-4 flex gap-1 rounded-xl border border-stone-200 bg-white p-1">
+    <div className="mb-4 flex gap-1 rounded-xl border border-stone-200 bg-surface p-1">
       {items.map((it) => {
         const active = current === it.id;
         return (
@@ -5217,6 +5292,37 @@ export default function PlannerApp() {
     writeLastTab(tab);
   }, [tab]);
   const bottomBar = useBottomBar();
+
+  /* The mode, and the one effect that publishes it to the document.
+     The pre-paint script in index.html has already stamped the same
+     attribute from the same key, so this is a no-op on load and a
+     live update afterwards -- which is what makes the first frame
+     correct and the toggle instant. */
+  const [mode, setMode] = useState(readMode);
+  const [systemDark, setSystemDark] = useState(systemPrefersDark);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => setSystemDark(mq.matches);
+    if (mq.addEventListener) mq.addEventListener("change", apply);
+    else if (mq.addListener) mq.addListener(apply);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", apply);
+      else if (mq.removeListener) mq.removeListener(apply);
+    };
+  }, []);
+  const resolvedMode = mode === "system" ? (systemDark ? "dark" : "light") : mode;
+  useEffect(() => {
+    try {
+      document.documentElement.setAttribute("data-theme", resolvedMode);
+      /* "system" is stored as an absence: a student who has never
+         chosen keeps following the OS, on this device, forever. */
+      if (mode === "system") localStorage.removeItem(MODE_KEY);
+      else localStorage.setItem(MODE_KEY, mode);
+    } catch (e) {
+      /* a lost preference costs one tap */
+    }
+  }, [mode, resolvedMode]);
   const [themeOpen, setThemeOpen] = useState(false);
   const [focusedCourse, setFocusedCourse] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -6002,12 +6108,7 @@ export default function PlannerApp() {
 
   const theme = THEMES[data.theme] || THEMES.teal;
   const focused = focusedCourse && sem.courses.some((c) => c.name === focusedCourse) ? focusedCourse : null;
-  const themeVars = {
-    "--accent": theme.accent,
-    "--accent-deep": theme.accentDeep,
-    "--accent-soft": theme.accentSoft,
-    "--accent-deep-text": theme.accentDeepText,
-  };
+  const themeVars = themeVarsFor(theme, resolvedMode);
 
   return (
     <div style={themeVars} className="min-h-screen bg-stone-100 text-stone-800">
@@ -6023,7 +6124,7 @@ export default function PlannerApp() {
         .u-focus:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
         .u-field:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
         .u-highlight{box-shadow:0 0 0 2px var(--accent);}
-        .lined-paper{background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 27px,#d6d3d1 27px,#d6d3d1 28px);line-height:28px;background-attachment:local;}
+        .lined-paper{background-color:rgb(var(--paper));background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 27px,var(--paper-line) 27px,var(--paper-line) 28px);line-height:28px;background-attachment:local;}
         .no-scrollbar{scrollbar-width:none;}
         .no-scrollbar::-webkit-scrollbar{display:none;}
       `}</style>
@@ -6048,7 +6149,7 @@ export default function PlannerApp() {
               </p>
             </div>
             <select
-              className="rounded-lg border border-stone-300 bg-white px-2 py-1.5 text-sm text-stone-700 u-field"
+              className="rounded-lg border border-stone-300 bg-surface px-2 py-1.5 text-sm text-stone-700 u-field"
               value={data.semester}
               onChange={(e) => { setData((d) => ({ ...d, semester: e.target.value })); setFocusedCourse(null); }}
             >
@@ -6061,7 +6162,30 @@ export default function PlannerApp() {
           </div>
 
           {themeOpen && (
-            <div className="absolute right-3 top-16 z-20 rounded-xl border border-stone-200 bg-white p-3 shadow-lg">
+            <div className="absolute right-3 top-16 z-20 rounded-xl border border-stone-200 bg-surface p-3 shadow-lg">
+              {/* The AXIS, above the palettes: a mode and a colour are
+                  two independent choices, and stacking dark in with
+                  the eight hues would make one control mean two
+                  things. "System" is the default and stays live. */}
+              <p className="mb-2 text-xs font-medium text-stone-500">Appearance</p>
+              <div className="mb-3 flex gap-1 rounded-lg border border-stone-200 p-1">
+                {[
+                  { id: "system", label: "System" },
+                  { id: "light", label: "Light" },
+                  { id: "dark", label: "Dark" },
+                ].map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setMode(m.id)}
+                    aria-current={mode === m.id ? "true" : undefined}
+                    className={`flex-1 rounded-md px-2 py-1 text-xs font-medium u-focus ${
+                      mode === m.id ? "u-accent-soft u-accent-deeptext" : "text-stone-500 hover:bg-stone-100"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
               <p className="mb-2 text-xs font-medium text-stone-500">Colour theme</p>
               <div className="grid grid-cols-4 gap-2">
                 {Object.entries(THEMES).map(([key, t]) => (
@@ -6319,7 +6443,7 @@ export default function PlannerApp() {
 
         <div className="mt-6 flex justify-center">
           {confirmReset ? (
-            <div className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2">
+            <div className="flex items-center gap-2 rounded-xl border border-stone-200 bg-surface px-3 py-2">
               <span className="text-xs text-stone-500">Clear everything? This can't be undone.</span>
               <button className={btnGhost} onClick={() => setConfirmReset(false)}>Cancel</button>
               <button className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 u-focus" onClick={reset}>
