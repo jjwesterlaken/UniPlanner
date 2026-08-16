@@ -297,6 +297,51 @@ access with our wording, not Apple's generic text.
 
 ---
 
+## THE FIRST MIGRATION — do this first, and deliberately
+
+**Six code paths have never run in production.** `ai_notes.id` was
+typed `uuid` while page ids come from the planner's own base36 helper,
+so every insert was rejected with 22P02 from migration 0005 until 0009
+moved the column. The feature failed *safely* every time — the note
+stayed whole and readable in the blob — which is exactly why nobody
+noticed for eleven days.
+
+So the first successful migration fires five things at once, none with
+any production evidence behind it. Run these in order, once 0009 is
+applied and both functions are deployed. **Everything here works in
+the web app** — the phone only matters where it says so.
+
+Do them in order: each one leaves the state the next needs.
+
+| # | Check | Where | What it exercises |
+|---|---|---|---|
+| 1 | Save an AI note while signed in, wait ~5s for a sync, then look for a row in `ai_notes` with a **base36 id** (`msn0duf5-hk684`, not a UUID) | web | the insert — 0009 itself |
+| 2 | The note still renders, and the Backup panel's size drops. The stub is ~517 bytes where the note was several KB | web | `buildStub`, and the blob actually shrinking |
+| 3 | Open the same note in a **private window or a second browser signed into the same account** | web | **`fetchNote`'s content branch** |
+| 4 | Back in the original window: go offline (devtools → Network → Offline, or real aeroplane mode) and open the note | web, then phone | `noteCache` serving a note for the first time |
+| 5 | Delete an AI note, then confirm the `ai_notes` row is gone | web | `deleteNote`'s remote half, and the row-first ordering |
+| 6 | Archive a semester holding an AI note: it leaves the Notes list, stays listed under "Archived lectures", and still opens | web | `archivedIn`, and that archiving never tombstones a stub |
+
+**Step 3 is the one that is easy to get wrong, and I nearly wrote it
+wrongly.** "Close and reopen the app" does NOT exercise `fetchNote`:
+the viewer is **cache-first**, and a successful migration writes the
+cache on the way past — so on the device that migrated, the note comes
+from IndexedDB and the network path never runs. It needs a profile
+with the synced blob and an empty cache, which is what a private
+window or a second browser gives you. A second device does too.
+
+**Step 4 needs the opposite** — a WARM cache — so it belongs on the
+device that did the migration, and it must come after step 1 rather
+than after a fresh sign-in. On the phone it is also verification-list
+item 1 (IndexedDB existing at all); doing it in a desktop browser
+first tells you the code is right, and doing it on the phone tells you
+the platform cooperates. Both are worth having, in that order.
+
+**If a step fails, the failure is contained to its own path** rather
+than being a mystery — which is the whole reason for running them
+deliberately instead of waiting to notice. Note what failed and stop;
+the paths below it depend on the ones above.
+
 ## The verification list — do this on real hardware
 
 The build succeeding proves almost nothing. These are the behaviours that
