@@ -179,6 +179,14 @@ export const MONTHLY_MINUTES_LIMIT_HINT = 300;
    screen disagree with the number being charged. */
 export const MINIMUM_BILLED_MINUTES_HINT = 3;
 
+/* What a re-summarise costs, mirrored for the copy that has to state it
+   before the student commits. A browser bundle cannot import from
+   supabase/functions, so this is the allowed kind of restatement — and
+   the EQUALITY is the guard: test-ai-notes.mjs asserts it against the
+   server's derived constant, because a figure on screen that disagrees
+   with the figure charged is the failure this pattern exists to stop. */
+export const RESUMMARISE_BILLED_MINUTES_HINT = 2;
+
 const CANDIDATE_MIME_TYPES = [
   { mimeType: "audio/webm;codecs=opus", extension: "webm" },
   { mimeType: "audio/webm", extension: "webm" },

@@ -1267,6 +1267,91 @@ the policies are read from the database and compared, so the day
 someone adds a table with the platform's defaults still on it, it goes
 red. A typed list of tables and verbs would have gone on passing.
 
+## The re-summarise retry, and why it is a different threat model
+
+`ai-text` was built to touch no stored user content, which is what let
+it skip the "exists but isn't yours" question entirely. The retry
+cannot: it reads `ai_notes_requests` BY ID, and that row holds a whole
+lecture. So it carries every obligation that comes with reading one,
+and each is a rule already paid for elsewhere — scoped by hand on the
+service-role client, byte-identical rejection for malformed and
+not-yours (told apart in the logs, never in the response), the
+allowance read before the provider call, and a failed call billing
+nothing.
+
+**It exists because the failure path finally ran.** Transcription
+succeeds and is billed, summarising fails, the audio was deleted at
+step 10 — so a student had paid for a lecture they could not get. The
+gap was parked on "the success path has never run"; it has now failed
+in production and cost a real one.
+
+**What it charges is derived, not chosen.** The transcription minutes
+were really spent and are not repeated, so the retry charges one
+summariser request: `RESUMMARISE_BILLED_MINUTES` is
+`ceil(USD_PER_SUMMARY_REQUEST / USD_PER_TRANSCRIBED_MINUTE)` from the
+measured constants, which is 2 against a fresh recording's floor of 3.
+The copy states both halves — what it charges and what it does not —
+because this lecture has been paid for once already, and the client
+mirrors the figure with an equality test, since a screen promising one
+number while the server charges another is the drift that pattern
+exists to stop.
+
+**Three outcomes, kept distinct, as everywhere else.** A summariser
+that fails bills nothing and says the transcript is still there; a row
+whose transcript the sweep has taken is `transcript_expired` — a
+definitive answer, not a guess — and also bills nothing. The retry is
+offered ON the failure screen, because a student sitting on a failed
+summary should not have to go looking for the remedy.
+
+## Rotating a credential means auditing where it is configured
+
+Grace had a screenshotted OpenAI key revoked — correctly. What nobody
+checked was **where else that key was configured**, and the Edge
+Function's `OPENAI_API_KEY` secret was one of those places. The
+signature is worth memorising because it reads like a code bug:
+transcription succeeded and was billed, summarising failed and was
+not. Two stages, two providers, two secrets — `GROQ_API_KEY` for the
+transcript, `OPENAI_API_KEY` for the summary — so a dead OpenAI key
+looks exactly like "the summariser is broken".
+
+**Function secrets are configured outside the repository and no test
+can see them.** Nothing in `npm test`, CI, or a deploy will tell you a
+secret is dead; the only evidence is the function's own logs. So the
+rule is procedural rather than technical: before revoking any
+credential, enumerate every place it is configured — Supabase function
+secrets, the deploy workflow, any local `.env`, any dashboard — and
+rotate rather than revoke where something depends on it.
+
+The places a secret lives, as of now: Supabase → Edge Functions →
+Secrets holds `OPENAI_API_KEY`, `GROQ_API_KEY`, `DEEPGRAM_API_KEY`,
+`AI_NOTES_SWEEP_SECRET` and the service role key. None of them appear
+in this repository, which is why the list has to be written down.
+
+## A client-minted id crossing into a typed column
+
+`ai_notes.id` was `uuid`; page ids come from the planner's own `uid()`
+("msn0duf5-hk684"). Every insert was rejected with 22P02, PostgREST
+returned 400, and the client retried on the next sync — so **the AI
+notes storage move never ran in production at all, on any account,
+from 0005 until 0009 moved the column to `text`.**
+
+The general shape: a value minted in the browser and kept in the blob
+may be any format; the same value crossing into a typed column may
+not. Neither side can see the boundary — the client sees a string it
+made up, the column sees a string that arrives.
+
+`aiNotesLogic.js` had already learned this for
+`ai_notes_requests.idempotency_key`, which is why `newIdempotencyKey()`
+exists, and its comment says exactly why. That rule sat next to one
+caller and did not generalise. **A rule written beside one caller is
+not a guard.**
+
+The guard now enumerates every id column from the database and
+requires each to be either mapped to a named client generator — whose
+REAL output is then inserted into the REAL column — or excused with a
+written reason. A new id column fails until somebody decides which it
+is.
+
 ## The service-role client bypasses RLS — you are the ownership check
 
 **Any query made with the service-role client must explicitly scope to the

@@ -31,6 +31,7 @@
    Run via `npm run test:migrations`, or as part of `npm test`. */
 
 import assert from "node:assert/strict";
+import { newIdempotencyKey } from "../src/aiNotesLogic.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -965,36 +966,103 @@ async function run() {
     assert.match(migrate, /DUPLICATE_KEY/, "the already-migrated case is no longer recognised, so a retry reports failure forever");
   });
 
-  await test("ai_notes accepts an id the CLIENT actually mints — derived from src/, not from a guess at its shape", () => {
-    /* The bug 0009 fixes, guarded by generating ids the same way the app
-       does rather than by asserting a column type. `uid()` is lifted out
-       of PlannerApp.jsx and run, so if someone changes the id format the
-       guard follows it instead of pinning yesterday's shape.
+  /* ---------- client-generated ids vs typed columns ----------
 
-       Before 0009 this fails with 22P02 — which is what production did
-       on every AI note since 0005, silently, once per sync forever. */
-    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
-    const m = /^const uid = (\(\) => `[^`]+`);/m.exec(src);
-    assert.ok(m, "couldn't find the planner's uid() helper — this guard is blind, fix the pattern");
-    // eslint-disable-next-line no-new-func
-    const uidFn = new Function(`return ${m[1]}`)();
-    const sample = uidFn();
-    assert.ok(sample && typeof sample === "string", "uid() produced nothing");
+     GENERALISED after ai_notes.id: a value minted in the browser and
+     stored in the blob may be any shape, and the same value crossing
+     into a typed column may not. That boundary is invisible from
+     either side — the client sees a string it made up, the column sees
+     a string that arrives — so it gets a guard that runs the REAL
+     generator against the REAL column.
 
+     The mapping below is the part a human decides; the enumeration
+     underneath is what forces them to. A new id column fails here
+     until someone says which generator feeds it, or writes down that
+     nothing client-side does. */
+
+  const GENERATED_IDS = {
+    // The planner's own short id, straight out of the blob. This is the
+    // one that was wrong: a uuid column rejected every AI note from
+    // 0005 until 0009 moved it to text.
+    "ai_notes.id": () => {
+      const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+      const m = /^const uid = (\(\) => `[^`]+`);/m.exec(src);
+      assert.ok(m, "couldn't find the planner's uid() helper — this guard is blind, fix the pattern");
+      return new Function(`return ${m[1]}`)()();
+    },
+    // Minted by newIdempotencyKey() precisely because it crosses into a
+    // uuid column; the Edge Function validates it again before insert.
+    "ai_notes_requests.idempotency_key": () => newIdempotencyKey(),
+    // Same generator, for the same reason.
+    "semester_archives.id": () => newIdempotencyKey(),
+  };
+
+  /* Columns no client value ever reaches. Each needs a reason, because
+     "nothing writes this" is a decision and silence is not. */
+  const SERVER_ONLY_IDS = {
+    "ai_usage.id": "written by the Edge Functions under service role; the client only ever reads it",
+    "profiles.id": "created by the signup trigger; the client only ever reads tier",
+    "planner_data.user_id": "the auth user id, minted by Supabase rather than by anything in this repo",
+    "ai_notes.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
+    "ai_notes_requests.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
+    "ai_usage.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
+    "profiles.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
+    "semester_archives.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
+  };
+
+  await test("every id column is either fed by a named client generator or excused with a reason", () => {
+    const db = withArchives();
+    const cols = one(
+      db,
+      `select string_agg(table_name || '.' || column_name, ',' order by table_name, column_name)
+         from information_schema.columns
+        where table_schema = 'public'
+          and (column_name = 'id' or column_name like '%\\_id' or column_name like '%\\_key');`
+    )
+      .split(",")
+      .filter(Boolean);
+    assert.ok(cols.length >= 6, `the enumeration found only ${cols.length} id columns — the pattern is wrong`);
+    for (const col of cols) {
+      assert.ok(
+        GENERATED_IDS[col] || SERVER_ONLY_IDS[col],
+        `public.${col} is an id column and nothing says where its value comes from. ` +
+          "If a client mints it, add it to GENERATED_IDS so its real format is checked against this column; " +
+          "if not, say so in SERVER_ONLY_IDS."
+      );
+      if (SERVER_ONLY_IDS[col]) assert.ok(SERVER_ONLY_IDS[col].length > 20, `public.${col} is excused without a reason`);
+    }
+  });
+
+  await test("every column a client mints ids for accepts the ids that client actually mints", () => {
+    /* Values are GENERATED, never typed: a literal here would pin
+       today's format and pass the day the generator changed — which is
+       the shape of every restatement bug in this project. */
     const db = withArchives();
     seedTwoUsers(db);
-    const r = psql(
-      db,
-      `set test.uid = ${USER}; set role authenticated;
-       insert into public.ai_notes (id, user_id, course, week, content)
-       values ('${sample}', ${USER}, 'PHYS1001', '3', '{"translations":{}}');`
-    );
-    assert.equal(
-      r.ok,
-      true,
-      `ai_notes rejected a real page id (${sample}). Every AI note migration fails with this, once per sync, forever:\n${(r.err || "").slice(0, 200)}`
-    );
-    assert.equal(count(db, "public.ai_notes", `id = '${sample}'`), 1);
+    const insertFor = {
+      "ai_notes.id": (v) =>
+        `insert into public.ai_notes (id, user_id, course, week, content) values ('${v}', ${USER}, 'PHYS1001', '3', '{}')`,
+      "ai_notes_requests.idempotency_key": (v) =>
+        `insert into public.ai_notes_requests (idempotency_key, user_id, status) values ('${v}', ${USER}, 'pending')`,
+      "semester_archives.id": (v) =>
+        `insert into public.semester_archives (id, user_id, label, summary, data) values ('${v}', ${USER}, 'L', '{}', '{}')`,
+    };
+    for (const [col, gen] of Object.entries(GENERATED_IDS)) {
+      const value = gen();
+      assert.ok(value && typeof value === "string", `${col}'s generator produced nothing`);
+      assert.ok(insertFor[col], `${col} has a generator but no insert to exercise it with`);
+      /* As the OWNER for the service-role-only table: 0008 revoked
+         insert on ai_notes_requests from authenticated, and that is
+         correct — only the Edge Function writes it. The question here
+         is the column's TYPE, not who may write it. */
+      const asOwner = col.startsWith("ai_notes_requests.");
+      const r = psql(db, asOwner ? `${insertFor[col](value)};` : `set test.uid = ${USER}; set role authenticated; ${insertFor[col](value)};`);
+      assert.equal(
+        r.ok,
+        true,
+        `public.${col} rejected a value its own client mints (${value}). Every write down that path fails:\n${(r.err || "").slice(0, 160)}`
+      );
+    }
   });
 
   await test("a UUID id still works, so notes written before 0009 are unaffected", () => {

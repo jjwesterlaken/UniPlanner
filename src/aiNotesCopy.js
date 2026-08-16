@@ -71,6 +71,25 @@ export const AI_NOTES_COPY = {
     recoverable: (days = FAILED_RESULT_RETENTION_DAYS) =>
       `Your transcript is saved to your account for ${days} days, so you can get it back from any of your devices if you need it.`,
     action: "Save transcript as a note",
+
+    /* THE RETRY, offered where the failure is shown — a student sitting
+       on a failed summary should not have to go looking for it.
+
+       The cost sentence says what it charges AND what it does not,
+       because this lecture has already been paid for once: the
+       transcription minutes were really spent and really billed, and
+       the retry does not repeat them. Same register as the billing
+       line above, which is what keeps a support ticket from becoming a
+       chargeback. */
+    retry: "Try the summary again",
+    retryCost: (minutes) =>
+      `Trying again writes the summary from the transcript we already have — no re-recording and no re-transcribing, so you're only charged for the summary: ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+    retrying: "Writing your summary…",
+    retryFailed:
+      "That didn't work either. Nothing has been charged for the attempt, and your transcript is still here.",
+    retryExpired: (days = FAILED_RESULT_RETENTION_DAYS) =>
+      `We no longer have the transcript for this lecture — we keep it for ${days} days. Nothing has been charged for this attempt.`,
+    retryDone: "Summary written. It's saved with your notes.",
   },
 
   /* Shown when only part of a long transcript is kept in the note. */
