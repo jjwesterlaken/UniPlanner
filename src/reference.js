@@ -228,7 +228,8 @@ export const hasRubric = (assignment) =>
 /* ---------- reference sheets ----------
 
    A `pages` item with kind "formula". `pages` is already a union of note
-   types discriminated by `kind` ("text" / "drawing"), and AI notes
+   types discriminated by `kind` (now just "text" — "drawing" died with
+   the handwriting removal, and the strip rewrites it), and AI notes
    already established the precedent of a subtype with extra fields and
    its own viewer. Using it means folders, tombstone deletion and the
    notes list all come free, with no COLLECTIONS change. */
@@ -280,7 +281,7 @@ export function canAddRubric(assignments = []) {
   };
 }
 
-/** A short preview for the notes list, the way a drawing shows its stroke count. */
+/** A short preview for the notes list, the way a text note shows its opening line. */
 export function sheetSummary(page) {
   const live = ((page && page.entries) || []).filter((e) => e && !e.deletedAt);
   if (live.length === 0) return "No entries yet";

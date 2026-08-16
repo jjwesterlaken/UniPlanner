@@ -639,175 +639,58 @@ on iOS the `audio` background mode and an App Store review that asks why
 a study app records in the background. Different product, different
 submission risk.
 
-### Handwriting is a live storage problem, and compression probably solves it
+### Handwriting was REMOVED — feature and data, 16 August 2026
 
-A stroke serialises to **~1,420 bytes** today, so a 200-stroke page is
-**~278 KB — a quarter of the entire 1 MB budget in one note.** That is
-not a consequence of the planned unified note; it is true right now, and
-anyone taking handwritten notes on an iPad is heading toward breaking
-their own sync with nothing warning them.
+Grace and Jared's decision, and it was explicitly both halves: not a
+hidden feature over dormant data, **a full removal**. The drawing
+tools, `src/ink.js`, the compression chain, the canvas renderers and
+the stored strokes are all gone. What remains is the strip that keeps
+old data honest, in `src/noteBlocks.js`:
 
-The cause is visible in one line of `PlannerApp.jsx`: a point is
-`[((e.clientX - rect.left) / rect.width) * CANVAS_W, ...]` — an unrounded
-division, serialised at full float precision (`123.45678901234567`) for a
-coordinate on a 1000-unit canvas where nothing past the decimal point can
-be seen.
+- **`removeHandwriting` runs at the end of `normalizeData`**, so every
+  load AND every backup restore is covered by the same line. It is
+  flag-guarded (`meta.inkRemoved`) and bumps `updatedAt` only on pages
+  that really carried ink — the removal is a real edit and must WIN
+  merges, or a stale device brings the strokes back for good.
+- **The flag is best-effort, convergence is the guarantee.**
+  `mergeData` spreads `{...local.meta, ...newerSide.meta}`, so a flag
+  living only on a non-newer remote is dropped — and that is fine,
+  because re-running the pass on already-stripped data returns every
+  page BY REFERENCE with no bumps. Nothing propagates, nothing fights.
+  Do not "fix" the flag loss in `mergeData`; the test named "the flag
+  is best-effort across merges" pins both halves.
+- **Archive restore is the second resurrection door.** Archive rows
+  hold the bucket VERBATIM, so a semester archived before the removal
+  carries every stroke — Jared has a live one. `restoreTransform`
+  strips pages on the way back in, and `test-archive.mjs` proves it
+  over both stored shapes (raw `strokes`, and ink blocks inside
+  `blocks`).
+- **Remove ink, never remove notes.** An ink-only note becomes an
+  empty text note KEEPING ITS TITLE and its folder; its list row reads
+  "Empty note" rather than a blank or a stroke count (asserted in a
+  real mount by `test-blocks-neutral.mjs`). Deleting whole notes would
+  be a bigger destructive act than the one that was ordered; the
+  affected users can delete the husks themselves.
+- **Tombstones and AI stubs are untouched** — the same absolute rule
+  the archive established. A `LEGACY_INK` block from a pre-removal
+  device renders as nothing, crashes nothing, and is stripped by
+  `noteFields` on that note's next save.
 
-`scripts/measure-ink.mjs` prices three transformations. On synthetic
-strokes, a 200-stroke page goes 278 KB → **20 KB, a 93% reduction**:
+Cancelled with the feature, so nobody resurrects the plans: the
+**annotation layer** (nothing left to annotate with) and **pen
+detection starting an ink block** (never built). The compression
+work — capture rounding, simplification, delta encoding, and the
+measurement discipline around Grace's stylus sample — shipped, worked,
+and went down with the feature; the lesson that outlives it
+("re-derive a constant before building on it; a synthetic benchmark is
+not a promise") is recorded in the measurement and remedy sections
+below, which are kept as history.
 
-| | page | note |
-|---|---|---|
-| now | 278 KB | |
-| rounded to whole canvas units | 79 KB | **−72%, and shape-independent** |
-| + drop near-collinear points | 28 KB | −90%, depends on real handwriting |
-| + delta-encode along the stroke | 20 KB | −93% |
-
-**The first step is the one to trust without a real sample.** Rounding
-removes float digits, which is pure waste regardless of how anyone
-writes; the figure is a floor, not an estimate. The other two depend on
-stroke shape and sampling rate, so they need a real export before anyone
-promises them.
-
-**Round to a TENTH of a canvas unit, not to whole units.** The obvious
-choice is wrong: the canvas backing store is sized
-`CANVAS_W * devicePixelRatio` with the ratio capped at 3, so on a 3x
-display one canvas unit is **three physical pixels** — and the drawing
-code's own comment promises strokes "stay sharp at any zoom". Whole-unit
-quantisation would be visible on exactly the hardware the feature exists
-for, and worst on small handwriting. A tenth of a unit is below one
-physical pixel at the largest ratio the app ever uses, so it cannot
-produce a step. It costs one digit per coordinate: 66% instead of 72%
-for rounding alone, 92% instead of 93% for the whole chain. There is no
-zoom control and no image export today, but neither is what makes whole
-units unsafe — the device pixel ratio already does.
-
-**Pressure quantises safely, and it is worth saying why rather than
-assuming.** It feeds exactly one thing:
-`lineWidth = max(0.5, width * (0.4 + pressure * 1.6))`. At a typical
-width of 3 the whole pressure range spans 1.2px to 6px, so 100 levels
-move the line by 0.048px per step. Two decimal places is invisible; a
-single byte would be too.
-
-**SHIPPED: all three stages are in.** Rounding at capture and on load
-(below); simplification at stroke end and on save; delta encoding on
-save. The shipped chain measures **73% on the stylus page against the
-instrument's priced 74%** — the shipped figure is the measured figure.
-The encoded stroke is `{color, width, erase, v:2, o, d}`; every
-renderer reads through `pointsOf`, the dual-shape accessor, and the
-differential render asserts an encoded note draws identical ink.
-Encoding happens ONLY on save (lazy, per the shape-change rule — a test
-forbids the load migration from encoding), and the round trip is
-bit-exact because the input is grid-aligned, which is what makes
-re-encoding on every save safe. Simplification's tolerance (0.8 canvas
-units) is argued from the render: under half the thinnest line's own
-width, so the ink moves within its own stroke.
-
-**SHIPPED: rounding is in.** `src/ink.js` rounds at capture *and* in
-`normalizeData` on load. Capture-time matters as much as the migration —
-without it every new stroke arrives at full float precision and the
-migration is forever cleaning up after the drawing code, which means the
-first load after every drawing session rewrites the note. The two
-further stages are **not** built and wait on a real export.
-
-**The first real export has now been measured, and it corrected the
-conclusion above.** 8 strokes, 553 points, 69.1 points per stroke.
-Rounding **57%**, + simplification **80%**, + delta **88%** — every
-figure below the synthetic ones, which is the direction to expect and
-the reason a synthetic benchmark is not a promise.
-
-What that changes: *"rounding alone is enough"* was too generous. At 57%
-a dense 200-stroke page is still **~93 KB**, so ten of them are ~930 KB
-against a 1 MB budget — one student's handwriting filling the whole
-planner. The later stages are needed, not merely nice.
-
-What it does **not** settle: every pressure value in the sample was
-exactly `0.5`, so it was drawn with a finger or a mouse. Simplification
-and delta encoding are both sensitive to sampling rate and stroke shape,
-and a stylus samples far denser than a finger. **The 80% and 88% still
-wait on a stylus sample** — Grace's iPad page, verification item 11.
-
-**THE STYLUS SAMPLE HAS NOW LANDED, and it unblocks the delta work.**
-Grace's iPad export, 15 August 2026: three handwritten pages, 61
-strokes, 2,071 points, with **43 distinct pressure values** — the first
-real Apple Pencil data.
-
-Read the figures carefully, because they are **not** comparable to the
-finger sample's without adjusting for what had already shipped. That
-export predated capture-time rounding; this one is post-rounding, so
-`measure-ink.mjs` reports **rounding at 0%** — there is nothing left to
-round. That zero is the finding: **capture-side rounding is confirmed
-working in the field**, at 19.5 B/point against 43.5 B/point before it.
-
-Gains available *on top of* what is already shipped, on the 48-stroke
-stylus page:
-
-| | | |
-|---|---|---|
-| stored today | 26.4 KB | 19.5 B/point |
-| + drop near-collinear points | 10.2 KB | **−61%** |
-| + delta-encode along the stroke | 7.0 KB | **−74%** |
-
-Simplification does **better** on stylus than on finger writing (61% vs
-an equivalent ~53%), which is the expected direction: a denser sampling
-rate means more collinear points to drop.
-
-What this means for the budget: a 200-stroke stylus page at the observed
-28.9 points/stroke costs **~113 KB today** and **~29 KB** with the full
-chain. That is the difference between ten dense pages filling the
-planner and ten dense pages costing a quarter of it.
-
-**ASSUMPTIONS THE ENCODER MUST HOLD TO, recorded before the code exists
-because the samples are what revealed them:**
-
-- **Coordinates are NOT bounded by `CANVAS_W`/`CANVAS_H`, are not
-  non-negative, and overrun on BOTH axes.** The finger sample ran to
-  x = −99; the stylus sample runs to **y = −39.7** and **x = 1004.1**,
-  with 14 points outside the canvas box. The pointer handlers use
-  pointer capture, so events keep arriving after the pointer leaves the
-  element, and the coordinate is a plain division by the element's rect
-  — nothing clamps it. Sizing a field from `CANVAS_W` was already
-  unsafe; sizing one from `CANVAS_H` is now demonstrably unsafe too.
-  Clamping at encode time is not the fix either: it would move ink that
-  currently renders.
-- **A point may be missing its pressure**, and the neutral value is
-  `0.5`, not `0`. `roundPoint` already does this; an encoder that
-  defaults a missing third element to zero renders hairlines.
-- **Observed pressure is [0, 0.5]. ENCODE OVER [0, 1] ANYWAY.** Every
-  value in the stylus sample sits at or below 0.5, and it is tempting to
-  size the field to what was seen. Don't: that is one hand on one device
-  through one browser's mapping, and a byte covers [0, 1] at the same
-  cost. Narrowing to the observation saves nothing and silently clips
-  any device that reports full range.
-- **Width varies WITHIN a page**, not just between notes — 3, 9, 14 and
-  42 on one page, because the eraser is a width. An encoder that hoists
-  one width per note corrupts the eraser strokes.
-- **Single-point strokes exist** (three in the sample), so nothing may
-  assume a stroke has two points to interpolate between. Real
-  distribution: 28.9 points/stroke average, 124 maximum, **1 minimum**.
-- **Rounding is already applied**, at capture and on load, so the
-  encoder's input is grid-aligned and its own gain is measured on top of
-  it, never on top of raw floats.
-
-**The migration must NOT bump `updatedAt`.** A lossless representation
-change is not an edit, and if it looked like one, two devices each
-loading the app would rewrite the same notes and fight through
-last-write-wins forever. `mergeList` breaks a tie with `t2 > t1`, strictly
-greater, so equal timestamps keep the existing item and the merge is
-stable — which is what makes a silent rewrite safe. There is a test for
-that stability, because the migration depends on it and nothing else
-asserts it.
-
-If that holds on real handwriting, ink does **not** need the `ai_notes`
-treatment — a table of its own, fetched on open — and the unified
-typing-and-ink note becomes a much smaller decision. Migration is
-correspondingly cheap: rounding is idempotent and lossless at display
-resolution, so it can run in `normalizeData` on load with no schema
-change, no server involvement, and no migration ordering to get wrong.
-
-**The semester archive has since been built** — see its own section
-below. Two fixed buckets that nothing ever cleared was the growth that
-mattered most, and no amount of per-feature capping addressed it.
+One consequence worth naming: the storage problem this section used to
+describe (a dense stylus page at ~113 KB) no longer exists, which
+removes the biggest uncapped growth inside a semester. The semester
+archive bounds the years; this removed the heaviest thing a year could
+hold.
 
 ### The semester archive: the lifecycle that bounds time
 
@@ -1006,11 +889,18 @@ neither the page nor the notes items.
 Two migrations, two answers, and the difference is worth stating as a
 rule because it will come up again.
 
-**The ink rounding runs on every load, over everything.** That is safe
-precisely because it is *invisible*: no reader can tell a rounded stroke
-from an unrounded one, it is idempotent, and it returns the same array
-reference when nothing changed, so a load that alters nothing writes
-nothing. Bulk costs nothing when the result is indistinguishable.
+**The ink rounding ran on every load, over everything.** (The feature
+is gone; the example stands.) That was safe precisely because it was
+*invisible*: no reader could tell a rounded stroke from an unrounded
+one, it was idempotent, and it returned the same array reference when
+nothing changed, so a load that altered nothing wrote nothing. Bulk
+costs nothing when the result is indistinguishable.
+
+There is now a third answer between the two: `removeHandwriting` is a
+**bulk-ONCE** pass — visible (so it must not run on every load) but
+flag-guarded, with convergence as the backstop when the flag loses a
+merge. See the handwriting-removal section for why that combination
+holds.
 
 **A change to the shape readers branch on must convert lazily**, on
 first edit, one note at a time. Doing it in bulk on load rewrites the
@@ -1025,10 +915,19 @@ edit with readers handling both forms indefinitely.
 
 ### The unified note: `blocks`, and how "neutral" was demonstrated
 
-`src/noteBlocks.js` is the block view of a note — a stack of
+**Post-removal status:** blocks are now a stack of `{type:"text"}`
+only. `LEGACY_INK` survives as a recognition constant so pre-removal
+data renders (as nothing) and strips on save; `inkOf` and the canvas
+renderers are gone, and `test-blocks-neutral.mjs` was rewritten around
+the removal — it now proves a pre-removal note renders identically in
+both shapes *as the same stripped note*, and that no reader mounts a
+canvas. The history below is kept because its lessons are load-bearing
+elsewhere.
+
+`src/noteBlocks.js` is the block view of a note — originally a stack of
 `{type:"text", html, body}` and `{type:"ink", strokes}` — and step 3
-introduced it as **readers only**. Nothing in that file writes, nothing
-converts, and no screen changed. A note is `blocks` if it has them and
+introduced it as **readers only**. Nothing in that file wrote, nothing
+converted, and no screen changed. A note is `blocks` if it has them and
 is *derived* into blocks if it doesn't, which is the lazy half of the
 rule above: the editor (step 4) is what starts writing them, one note at
 a time on first edit.
@@ -1084,12 +983,11 @@ claim step 4 rests on.
   paths start with, so the comparison sees the last complete picture and
   is insensitive to how many times it was drawn. **The general form: a
   fake that returns nothing makes everything downstream of it agree.**
-- **Reference identity is part of `inkOf`'s contract.** Both canvases
-  redraw from `useEffect(..., [strokes])`, so an accessor that builds a
-  fresh array on every render redraws a 200-stroke page on every render,
-  *during handwriting*. It is invisible in the DOM, so the differential
-  render structurally cannot see it — one unit test is the only thing
-  asserting it.
+- **Reference identity was part of `inkOf`'s contract** (gone with the
+  feature, kept as the general form): an accessor feeding a
+  `useEffect(..., [value])` that builds a fresh value on every render
+  re-fires the effect on every render, invisibly to any DOM diff — one
+  unit test is the only kind of thing that can assert it.
 - **Block order is not observable today.** Reversing `blocksOf` to emit
   text-first always leaves every screen byte-identical, because readers
   concatenate by type. It becomes observable in step 4. Recorded in the
@@ -1121,16 +1019,15 @@ lightens further. Eight palettes × two modes hand-written would be 64
 values to keep in step. Plain rgb()/rgba(), because iOS 15 — the
 deployment floor — has no `color-mix()`.
 
-**THE PAPER DOES NOT FLIP, and this is the decision to read before
-reaching for inversion.** Handwriting is stored with its own colour
-per stroke — black, blue, red, chosen by the student. A dark sheet
-needs either rewriting stored colours (an edit to their work, the same
-refusal as the two-notions-of-week rule) or a render-time mapping that
-lies about what they drew (their red becomes cyan). The sheet staying
-light costs nothing: no stored colour touched, no second highlighter
-set, and dark paper stays available later as an explicit per-note
-choice — which is how the ink apps do it. A test pins `--paper` equal
-in both modes and `src/ink.js` free of any theme awareness.
+**THE PAPER DOES NOT FLIP — and the reason has since changed, which
+matters.** The original constraint was handwriting: strokes carried
+their own stored colour, so a dark sheet meant rewriting a student's
+work or lying about it at render time. **Handwriting was removed on 16
+August 2026, so that constraint is gone.** Dark note paper is now a
+pure look-and-feel decision, which makes it Grace's — it is on her
+agenda below, and until she rules, the paper stays light and the test
+pins `--paper` equal in both modes so flipping it arrives as a choice
+(update the test in the same commit), never as an accident.
 
 **The mode is device-local and unsynced** (`uni-planner-mode`), like
 the last tab and the audio input: a phone in bed and a laptop in a
@@ -2330,14 +2227,16 @@ no framework, matching the style of the build scripts.
   backup case and "an error reads as failed, NOT as missing"
 - `scripts/test-storage.mjs` — save failures are reported, transcripts
   aren't stored whole; both cover things that used to fail invisibly
-- `scripts/test-note-blocks.mjs` — the block view: the inverse theorem
-  over every shape a page is stored in, block ordering, and `inkOf`'s
-  reference-identity contract, which nothing else can see
-- `scripts/test-blocks-neutral.mjs` — the differential render: this
-  commit's bundle against the previous one's, and a legacy note against
-  the same note stored as blocks, HTML compared byte for byte. **Skips**
-  without git history, which is why CI sets `REQUIRE_BASELINE=1` and
-  `fetch-depth: 0`
+- `scripts/test-note-blocks.mjs` — the block view post-removal: the
+  text inverse theorem, and the strip's contract (remove ink, never
+  remove notes; tombstones and stubs untouched; flag best-effort with
+  convergence as the guarantee)
+- `scripts/test-blocks-neutral.mjs` — the differential render: a
+  pre-removal note against the same note stored as blocks, through the
+  current bundle, plus the no-canvas guard and the husk's "Empty note"
+  row asserted in a real mount. (The git baseline now belongs to
+  `test-dark-mode.mjs`, which is why CI sets `REQUIRE_BASELINE=1` and
+  `fetch-depth: 0`)
 - `scripts/test-app-smoke.mjs` — the app mounts and renders in demo mode
 - `scripts/test-migrations.mjs` — SQL against a real postgres; **skips**
   without one locally, which is why CI forces it
@@ -2371,10 +2270,12 @@ to change.
 Flagged for her next sitting, so decisions don't wait on a meeting nobody
 scheduled:
 
-- The navigation mockup (link is with Jared) — rulings 1–4 already
-  folded in; she vetoes in parts.
-- Pen detection starting an ink block automatically — ruled in unless
-  she objects.
+- The navigation restructure **shipped** (#45) from her mockup with
+  rulings 1–4 folded in; she vetoes in parts, on the live app now.
+- **Dark note paper** — newly unblocked: the handwriting removal took
+  away the only technical reason the paper stays light in dark mode,
+  so it is a pure look-and-feel call. The test pinning `--paper` equal
+  in both modes changes in the same commit as her ruling.
 - **The consent-gating decision on the four text features.** Practice
   questions, explain-it-back, weak spots and summarise-a-note are not
   consent-gated at the point of use; summarise-a-reading is. The gap

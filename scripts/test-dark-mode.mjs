@@ -268,19 +268,21 @@ async function run() {
     assert.match(block(':root[data-theme="dark"] {'), /color-scheme: dark/);
   });
 
-  await test("PAPER DOES NOT FLIP, so no stored stroke colour ever needs touching", () => {
-    /* The decision to read before reaching for inversion: handwriting
-       carries its own colour per stroke, chosen by the student. A dark
-       sheet would need either rewriting those (an edit to their work)
-       or a render-time lie about what they drew. */
+  await test("PAPER DOES NOT FLIP — a decision, now an open one", () => {
+    /* The original reason was handwriting: strokes carried their own
+       stored colour, so a dark sheet meant rewriting a student's work
+       or lying about it at render time. Handwriting was REMOVED on 16
+       August 2026, so that constraint is gone — dark paper is now a
+       pure look-and-feel call, which makes it Grace's, not a test's.
+       Until she rules, the paper stays light and this pins the current
+       decision rather than an accident: flipping it is a one-token
+       change that should arrive as a choice, with this assertion
+       updated in the same commit. */
     const css = fs.readFileSync(path.join(rootDir, "src/input.css"), "utf8");
     const lightPaper = /--paper: ([^;]+);/.exec(css.slice(css.indexOf(":root {")));
     const darkPaper = /--paper: ([^;]+);/.exec(css.slice(css.indexOf(':root[data-theme="dark"] {')));
     assert.ok(lightPaper && darkPaper, "the paper token is missing from one of the modes");
-    assert.equal(darkPaper[1].trim(), lightPaper[1].trim(), "the note paper flipped — existing handwriting is now near-black on near-black");
-    // And nothing may rewrite what is stored.
-    const ink = fs.readFileSync(path.join(rootDir, "src/ink.js"), "utf8");
-    assert.ok(!/invert|data-theme|dark/i.test(ink), "src/ink.js has learned about themes — stroke colour is stored data, not a view concern");
+    assert.equal(darkPaper[1].trim(), lightPaper[1].trim(), "the note paper flipped — if that is Grace's ruling, update this test in the same commit");
   });
 
   await test("the dark accents are DERIVED from each palette, not a second hand-picked set", () => {

@@ -5,8 +5,8 @@
    OpenAI calls. Nothing in `npm test` may do that, and nothing in CI
    can: a suite that spends money on every push is a suite people turn
    off. So this is an instrument, run by hand by someone holding a key,
-   in the same shape as scripts/measure-ink.mjs — which exists for the
-   same reason, that synthetic input cannot answer the question.
+   in the same shape as the late measure-ink.mjs — an instrument built
+   for the same reason, that synthetic input cannot answer the question.
 
    WHAT IT IS FOR. TYPICAL_SUMMARY_OUTPUT_TOKENS in the Edge Function's
    config.ts is currently a MODELLED figure (~1.3x the pre-depth 2,800),

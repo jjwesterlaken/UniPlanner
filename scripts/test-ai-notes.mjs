@@ -1988,15 +1988,18 @@ async function run() {
 
   await test("CI forces the differential render to run rather than skip", () => {
     /* Same arrangement, same reason, and it lives HERE rather than in
-       test-blocks-neutral.mjs for the same reason the migration guard
-       does: a check inside a file that skips itself would skip in
-       exactly the situation it exists to catch.
+       the differential's own file for the same reason the migration
+       guard does: a check inside a file that skips itself would skip
+       in exactly the situation it exists to catch.
 
-       fetch-depth matters as much as the flag. The differential builds
-       the PREVIOUS commit's bundle, and actions/checkout's default
-       shallow clone has no previous commit -- so without it the test
-       would skip, REQUIRE_BASELINE would turn that into a failure, and
-       the fix would look like "drop the flag". */
+       The baseline differential is test-dark-mode.mjs these days (it
+       builds origin/main's bundle; test-blocks-neutral.mjs stopped
+       using git when the handwriting removal made it a two-shapes
+       comparison through the current bundle). fetch-depth matters as
+       much as the flag: actions/checkout's default shallow clone has
+       no baseline commit — without it the test would skip,
+       REQUIRE_BASELINE would turn that into a failure, and the fix
+       would look like "drop the flag". */
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     assert.match(pkg.scripts.test, /test-blocks-neutral\.mjs/, "the differential render was dropped from `npm test`");
     assert.match(pkg.scripts.test, /test-note-blocks\.mjs/, "the block-view tests were dropped from `npm test`");

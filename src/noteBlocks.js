@@ -10,7 +10,12 @@
    THE SHAPE
 
      text block   { id, type: "text", html, body }
-     ink block    { id, type: "ink",  strokes }
+
+   There USED to be an ink block ({ type: "ink", strokes }). Handwriting
+   was removed entirely -- feature and data -- on Grace and Jared's
+   decision, 16 August 2026. Stored ink is stripped by
+   removeHandwriting() below; the type string survives only as the
+   LEGACY_INK constant the strip recognises old data by.
 
    A note is `blocks` if it has them, and is DERIVED into blocks if it
    doesn't. Readers never branch on which — that is the whole point of
@@ -34,19 +39,12 @@
    ================================================================== */
 
 import { isReferenceSheet } from "./reference.js";
-import { encodeStrokes } from "./ink.js";
 
 export const TEXT = "text";
-export const INK = "ink";
-
-/* The canvas a stroke's coordinates live in. Here rather than in
-   PlannerApp because the CONVERSION needs them: a note written before
-   blocks existed was drawn on a full 1000x1400 page, so its derived ink
-   block must say so. Give it the new-block default instead and the
-   bottom half of every existing drawing is cut off -- which is exactly
-   what happened, and what the conversion test caught. */
-export const CANVAS_W = 1000;
-export const CANVAS_H = 1400;
+/* The stored type string of the removed ink block. Kept ONLY so the
+   strip and the derivation can recognise pre-removal data; nothing
+   creates blocks of this type any more. */
+export const LEGACY_INK = "ink";
 
 const asArray = (v) => (Array.isArray(v) ? v : []);
 const asString = (v) => (typeof v === "string" ? v : "");
@@ -72,7 +70,6 @@ export function isBlockNote(page) {
    the eventual conversion non-deterministic, so two devices converting
    the same note would produce different ids for identical content. */
 const textId = (page, i) => `${page.id || "new"}:t${i}`;
-const inkId = (page, i) => `${page.id || "new"}:i${i}`;
 
 /**
  * The blocks of a note, whichever shape it is stored in.
@@ -91,19 +88,11 @@ export function blocksOf(page) {
 
   const html = asString(page.html);
   const body = asString(page.body);
-  const strokes = asArray(page.strokes);
 
-  const text = html || body ? [{ id: textId(page, 0), type: TEXT, html, body }] : [];
-  /* h is the page height these coordinates were captured in, NOT the
-     default for a new block. See CANVAS_H above. */
-  const ink = strokes.length ? [{ id: inkId(page, 0), type: INK, strokes, h: CANVAS_H }] : [];
-
-  /* Order follows what the note was: a handwritten note that also
-     carries stray html (fieldsOf writes both keys onto every page) reads
-     ink-first, which is how it looked before. A typed note reads
-     text-first. Getting this backwards would reorder a note on screen,
-     which is exactly the visible change step 3 must not make. */
-  return page.kind === "drawing" ? [...ink, ...text] : [...text, ...ink];
+  /* Legacy strokes are IGNORED, not derived: handwriting is removed,
+     and a note that still carries some (an old backup, a stale device)
+     renders as its text until removeHandwriting strips it for good. */
+  return html || body ? [{ id: textId(page, 0), type: TEXT, html, body }] : [];
 }
 
 /**
@@ -124,7 +113,6 @@ export function fieldsFromBlocks(blocks) {
       .filter((b) => b && b.type === TEXT)
       .map((b) => asString(b.body))
       .join(""),
-    strokes: list.filter((b) => b && b.type === INK).flatMap((b) => asArray(b.strokes)),
   };
 }
 
@@ -137,36 +125,6 @@ export function fieldsFromBlocks(blocks) {
    rather than by inspection. They tolerate a non-block note by falling
    back to the raw field, because the list renders AI notes and
    reference sheets through the same component. */
-
-/* Nothing to return, returned as the SAME array every time. See below
-   for why identity matters here and not for the strings. */
-const NO_INK = Object.freeze([]);
-
-/**
- * Every stroke in the note, in block order.
- *
- * REFERENCE IDENTITY IS PART OF THE CONTRACT, which is not obvious and
- * is why this isn't a one-line flatMap. Both canvases redraw from
- * `useEffect(..., [strokes])`, so a reader handed a freshly-built array
- * on every render redraws the whole page on every render — for a
- * 200-stroke note, during handwriting. That is invisible in the DOM, so
- * the differential render cannot see it; it would have been a silent
- * performance regression dressed as a neutral change.
- *
- * A legacy note derives to exactly one ink block holding the page's own
- * array, so returning it unwrapped hands back the identical reference
- * the reader had before. htmlOf and bodyOf need no equivalent: strings
- * compare by value.
- */
-export function inkOf(page) {
-  const same = (v) => (Array.isArray(v) ? v : NO_INK);
-  const blocks = blocksOf(page);
-  if (!blocks) return same(page && page.strokes);
-  const ink = blocks.filter((b) => b && b.type === INK);
-  if (ink.length === 0) return NO_INK;
-  if (ink.length === 1) return same(ink[0].strokes);
-  return ink.flatMap((b) => asArray(b.strokes));
-}
 
 /** The note's rich text, in block order. */
 export function htmlOf(page) {
@@ -185,13 +143,6 @@ export function bodyOf(page) {
 /* ================================================================== */
 /*  Editing — step 4. Pure, so the awkward cases are testable.        */
 /* ================================================================== */
-
-/* An ink block's canvas is CANVAS_W wide and `h` tall. Half a page by
-   default: a note that is a paragraph and a diagram should not be two
-   screens tall. Stored per block rather than derived, so "always full
-   page" is a change to this constant and nothing else -- which is what
-   makes the schema safe to fix before the UX question is settled. */
-export const INK_DEFAULT_H = 700;
 
 /* Ids stay derived from the page, never minted, for the reason in
    blocksOf. A counter keeps them unique within the note without
@@ -213,14 +164,6 @@ export const newTextBlock = (blocks, pageId) => ({
   body: "",
 });
 
-export const newInkBlock = (blocks, pageId, h = INK_DEFAULT_H) => ({
-  id: nextId(blocks, pageId, "i"),
-  type: INK,
-  strokes: [],
-  h,
-  usedPen: false,
-});
-
 export const indexOfBlock = (blocks, id) => asArray(blocks).findIndex((b) => b && b.id === id);
 
 /** Replace one block, leaving every other reference untouched. */
@@ -234,37 +177,11 @@ export function withBlock(blocks, id, patch) {
 }
 
 /**
- * Insert an ink block after `afterId`.
- *
- * A note must never END in ink: there would be nowhere to type, and the
- * only way back to typing would be to add a block from the toolbar --
- * which is exactly the "where did my cursor go" problem the editor
- * exists to avoid. So a trailing text block comes with it.
- */
-export function insertInkAfter(blocks, afterId, pageId) {
-  const list = asArray(blocks).slice();
-  const at = indexOfBlock(list, afterId);
-  const ink = newInkBlock(list, pageId);
-  const head = at < 0 ? list.length : at + 1;
-  list.splice(head, 0, ink);
-  if (head === list.length - 1) list.push(newTextBlock(list, pageId));
-  return { blocks: list, focusId: ink.id };
-}
-
-/**
- * THE BACKSPACE RULE.
- *
- * Backspace at offset 0 of a text block merges it into the previous
- * TEXT block. If the previous block is ink, it does NOTHING -- deleting
- * handwriting needs the explicit control, with the block selected.
- *
- * This is the data-loss case in the whole editor. A student typing under
- * a diagram, holding backspace to clear a line, must not silently take
- * the diagram with it: strokes are not recoverable from anywhere, and
- * nothing about holding a key says "and now the drawing".
- *
- * Returns null when the merge is refused, so the caller can leave the
- * keystroke alone rather than swallowing it.
+ * THE BACKSPACE RULE. Backspace at offset 0 of a text block merges it
+ * into the previous TEXT block. The non-text guard survives the ink
+ * removal because a note not yet stripped can still hold a legacy ink
+ * block, and merging "into" one would corrupt the stack. Returns null
+ * when the merge is refused.
  */
 export function mergeTextBack(blocks, id) {
   const list = asArray(blocks);
@@ -274,8 +191,7 @@ export function mergeTextBack(blocks, id) {
   const here = list[i];
   if (!prev || !here || here.type !== TEXT) return null;
 
-  // THE REFUSAL. Ink before text is a wall, not a thing to merge into.
-  if (prev.type !== TEXT) return null;
+  if (prev.type !== TEXT) return null; // a legacy ink block, until stripped
 
   const next = list.slice();
   next[i - 1] = {
@@ -294,19 +210,6 @@ export function removeBlock(blocks, id) {
 }
 
 /**
- * THE LATCH IS NOTE-LEVEL, AND THIS IS THE FUNCTION THAT MAKES IT SO.
- *
- * `usedPen` is stored per ink block, but the question a canvas asks is
- * "has a pen ever been used on THIS NOTE" -- because a block that
- * consulted only itself would start unprotected the moment a student
- * added a second one, which is precisely the per-canvas regression the
- * note-level latch exists to kill.
- */
-export function noteUsedPen(blocks) {
-  return asArray(blocks).some((b) => b && b.type === INK && b.usedPen);
-}
-
-/**
  * What a note STORES — the single save path, shared by every screen
  * that can edit one.
  *
@@ -316,18 +219,13 @@ export function noteUsedPen(blocks) {
  * One save path, several entry points.
  */
 export function noteFields(d) {
+  /* Ink blocks are dropped ON EVERY SAVE, which is the strip's second
+     half: the one-time removeHandwriting pass handles the collection,
+     and this handles any note a pre-removal device resurrects later --
+     the next edit anywhere near it re-removes the ink, inside a write
+     that bumps updatedAt anyway. */
   const derived = blocksOf(d);
-  /* THE COMPRESSION HAPPENS HERE, on save — lazy across the collection
-     (only the note being saved), inside a write that bumps updatedAt
-     anyway, so there is no silent-rewrite problem to reason about.
-     encodeStrokes returns the same references when nothing changed. */
-  const blocks =
-    derived &&
-    derived.map((b) => {
-      if (!b || b.type !== INK) return b;
-      const strokes = encodeStrokes(b.strokes);
-      return strokes === b.strokes ? b : { ...b, strokes };
-    });
+  const blocks = derived && derived.filter((b) => b && b.type !== LEGACY_INK);
   /* STEP 4B: the legacy fields are no longer written alongside `blocks`.
      They were kept for one release so a device still on the pre-blocks
      build could read a note this one saved; that release has shipped.
@@ -341,9 +239,12 @@ export function noteFields(d) {
      Readers stay dual-shape indefinitely. Nothing converts on load, and
      an unconverted note still reads from its own fields; this only
      stops NEW writes duplicating. */
+  /* `strokes: []` is written UNCONDITIONALLY: a pre-removal build on
+     another device still reads the field, and an empty array is the
+     shape every text note has always had there. */
   const legacy = blocks
     ? { html: "", body: "", strokes: [] }
-    : { html: d.html || "", body: d.body || "", strokes: d.strokes || [] };
+    : { html: d.html || "", body: d.body || "", strokes: [] };
   return {
     title: d.title,
     ...legacy,
@@ -355,4 +256,81 @@ export function noteFields(d) {
     // key absent rather than an empty array it never reads.
     ...(isReferenceSheet(d) ? { entries: d.entries || [] } : {}),
   };
+}
+
+/* ================================================================== */
+/*  The removal of handwriting — feature AND data                     */
+/* ================================================================== */
+
+/* Grace and Jared both confirmed: existing handwritten content goes
+   too, not just the tools. The escape hatch is the backup file — a
+   pre-removal export preserves every stroke byte-for-byte, forever;
+   the app stops rendering them but never mangles the file.
+
+   THE PRINCIPLE: remove ink, never remove notes. A note that was only
+   handwriting becomes an EMPTY TEXT NOTE KEEPING ITS TITLE — the title
+   is user-typed content and the note's place in a folder is
+   information; deleting whole notes is a bigger destructive act than
+   the one that was ordered, and the affected users can delete the
+   husks themselves.
+
+   BULK-ONCE, NOT BULK-EVERY-LOAD. The pass bumps updatedAt (this is a
+   real edit and must WIN merges, or a stale device's copy brings the
+   ink back for good), so running it on every load would have two
+   devices fighting through last-write-wins forever — the exact loop
+   the old ink-rounding migration was built to avoid. `meta.inkRemoved`
+   guards it — but the flag is BEST-EFFORT, not the guarantee:
+   mergeData spreads {...local.meta, ...newerSide.meta}, so a flag
+   that lives only on a non-newer remote is dropped. What makes that
+   harmless is CONVERGENCE: on already-stripped data the pass returns
+   every page by reference and bumps nothing, so a re-run's only
+   effect is re-setting the flag — no edit propagates, no fight. The
+   updatedAt bump only ever happens on a page that really has ink,
+   and stripping the same ink twice produces the same result. The
+   test named "the flag is best-effort across merges" pins both
+   halves. noteFields' per-save strip catches any note a pre-removal
+   device resurrects afterwards.
+
+   Tombstones are left ENTIRELY alone: their payload is unread (the
+   archive's differential mount proved that a contract), the 60-day
+   purge clears them on its own schedule, and restamping a dead item
+   only extends its life. AI-note stubs never carry ink (their strokes
+   field has always been []) and fall through pageHasInk untouched. */
+
+/** Whether a live page still carries any handwriting. */
+export function pageHasInk(page) {
+  if (!page || page.deletedAt) return false;
+  if (page.aiMeta) return false;
+  if (Array.isArray(page.strokes) && page.strokes.length > 0) return true;
+  if (Array.isArray(page.blocks) && page.blocks.some((b) => b && b.type === LEGACY_INK)) return true;
+  return page.kind === "drawing";
+}
+
+/**
+ * One page, handwriting removed. Same reference when there is nothing
+ * to remove, so callers can tell whether anything happened — and so a
+ * pass over a clean collection writes nothing.
+ */
+export function stripInkFromPage(page, at) {
+  if (!pageHasInk(page)) return page;
+  const out = { ...page, strokes: [], updatedAt: at || page.updatedAt };
+  if (Array.isArray(page.blocks)) out.blocks = page.blocks.filter((b) => b && b.type !== LEGACY_INK);
+  if (page.kind === "drawing") out.kind = "text";
+  return out;
+}
+
+/**
+ * The one-time pass over the whole planner. Returns the same data
+ * object when the flag says it has already run.
+ */
+export function removeHandwriting(data, at) {
+  if (!data) return data;
+  if (data.meta && data.meta.inkRemoved) return data;
+  const semesters = {};
+  for (const [name, sem] of Object.entries(data.semesters || {})) {
+    const pages = (sem && sem.pages) || [];
+    const stripped = pages.map((p) => stripInkFromPage(p, at));
+    semesters[name] = stripped.some((p, i) => p !== pages[i]) ? { ...sem, pages: stripped } : sem;
+  }
+  return { ...data, semesters, meta: { ...(data.meta || {}), inkRemoved: true } };
 }
