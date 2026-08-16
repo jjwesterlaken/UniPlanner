@@ -1158,6 +1158,94 @@ no tag manager. The check derives "our hosts" from `config.js` and
 `reactjs.org` **by name with a reason** — they are namespace and
 message strings, never fetched.
 
+## A refusal is information. Silence is not.
+
+Migration 0008, and the finding is worth more than the fix.
+
+Supabase's default privileges grant ALL verbs to **both `anon` and
+`authenticated`** on every table the SQL editor creates. Our migrations
+only ever ran `grant`, which adds and never subtracts, so those
+defaults stood. Every policy here is `auth.uid() = user_id`, and
+0001's carry no role clause at all — so they apply to `public`, which
+includes `anon`.
+
+Follow that through for a request that arrives without a session: it
+passes the grant, reaches the policy, evaluates `auth.uid()` to NULL,
+matches nothing, and returns **HTTP 200 with an empty array and no
+error**. Byte-identical to "you have no data".
+
+That is the same confusion `fetchNote`, `fetchArchive` and
+`recoveryFailureKind` are each built to avoid at the client — and it
+**cannot be avoided at the client if the server cannot tell the two
+apart either.** The archive list shipped saying "Nothing archived yet"
+over a real archive for exactly this reason, and no client-side care
+would have prevented it; the response carried no evidence to be
+careful with.
+
+So `anon` now has nothing on any table holding a student's data, which
+turns that silence into a permission error — and every reader already
+treats an error as *unknown, keep what we have*. Nothing signed out
+legitimately reads any of these tables; `test-local-only.mjs` proves
+the signed-out planner makes no outbound calls at all.
+
+The general rule, and it applies well beyond Postgres: **when you
+design a boundary, make sure "no" and "nothing" are different
+answers.** A layer that answers both with silence pushes an
+undecidable question onto every caller.
+
+**And it broke AI notes on the way in, which is the other half of the
+lesson.** `migrateNote` upserted (`on_conflict=id`), and **PostgREST
+requires INSERT *and UPDATE* for any upsert — either flavour, whether
+or not a row conflicts.** Revoking update turned every AI-note write
+into a 400, looping once per sync. Nothing was billed (this path calls
+no Edge Function and writes no `ai_usage`) and nothing was duplicated
+(a rejected insert writes nothing, and the stub is only written on
+success, so the note stayed whole in the blob — the ordering rule
+holding exactly as designed).
+
+The fix was to stop upserting rather than to restore the privilege:
+a plain `insert`, with **23505 read as already-migrated**. That is the
+missing-vs-failed split again — a definitive code may be acted on,
+silence may not — and it keeps the row immutable with no fourth
+policy. Worth knowing before reaching for an upsert here again: at the
+SQL level `ON CONFLICT DO NOTHING` needs no update privilege at all,
+so the requirement is PostgREST's, one layer above anything the
+migration tests can reach. That limit is stated in the test rather
+than papered over.
+
+**THE ORDERING RULE THIS ESTABLISHES, because it is the mirror of the
+one already written down:** migrations that WIDEN what the code may do
+(a new table, a new column) go *before* the code that needs them — 0003
+and 0004 taught that. Migrations that NARROW it go *after* the code
+that stopped needing it. 0008 narrowed, and was applied while a client
+that still needed the privilege was live. Same discipline, opposite
+direction, and the direction is decided by which side would break if
+the two arrived out of order.
+
+**What would have caught it, and why my own check didn't.** The audit
+shipped with a test named "the app's own queries still work" that ran
+four live queries — and I enumerated them BY HAND from reading the
+client. That is a restatement of the client, and it drifted at exactly
+the point that mattered: I wrote `planner_data`'s upsert into it
+because I had just read `sync.js`, and left `ai_notes` out entirely.
+A hand-written list of "what the app does" is not evidence about what
+the app does. The guard now DERIVES it: every `.from(X)…upsert(` in
+`src/` must have UPDATE granted on X, and a merge upsert must also
+have an UPDATE policy. Run against the post-0008 database it goes red
+naming the table and the reason — checked by running it before the
+client was fixed. Tenth instance of the restatement rule, and the
+first one where I wrote the restatement *into the test that was
+checking my own change*.
+
+`authenticated` was tightened the same way, to exactly the verbs each
+table has a policy for. A granted verb with no policy is never useful
+— RLS gives it zero rows — and it is how `update` sat open on
+`ai_notes` from 0005 until it was checked by hand. Both properties are
+tests that **derive from the catalogue on both sides**: the grants and
+the policies are read from the database and compared, so the day
+someone adds a table with the platform's defaults still on it, it goes
+red. A typed list of tables and verbs would have gone on passing.
+
 ## The service-role client bypasses RLS — you are the ownership check
 
 **Any query made with the service-role client must explicitly scope to the
@@ -1617,15 +1705,20 @@ record.
    change quietly does nothing, which is the failure that is hardest to
    notice. Verify by saving one AI note while signed in and checking a
    row appears in `ai_notes`.
-3. **Migration 0007, applied before the archive reaches users.** It
-   creates `semester_archives`, its three policies, and the updated
-   `delete_my_account_data()`. Until it is applied, every archive
-   attempt fails at the insert — the *safe* direction (row first means
-   no row, no strip, nothing lost) — but the panel shows "couldn't
-   store the archive" to anyone who tries. Verify by archiving a test
-   semester and checking one row appears in `semester_archives`, then
-   restoring it and checking the planner comes back whole.
-4. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
+3. **Migration 0008, applied as soon as convenient.** The grant audit:
+   it revokes `anon` on every table holding a student's data, so an
+   unauthenticated read fails loudly instead of returning an empty
+   list, and tightens `authenticated` to the verbs each table's
+   policies actually name. Nothing breaks while it is unapplied — the
+   silence is the status quo — but the archive list's "nothing here"
+   failure mode stays possible until it is. Verify with the anon check
+   in its header.
+4. ~~**Migration 0007**~~ — **applied 16 August 2026**, and verified
+   by hand: three policies, no update, and `update_granted = false` on
+   both three-verb tables after the revoke it carries. Left here
+   because its by-hand privilege check is what found the default-grant
+   trap that 0008 then closed everywhere.
+5. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
    every workflow. Both currently target Node 20, which GitHub has
    deprecated; the runners force them onto Node 24 and they work, so this
    is a warning today and not a failure. It becomes a failure on
@@ -1635,11 +1728,11 @@ record.
    remembered, and deliberately kept out of the native-build fix so a
    packaging change and a runner change can be told apart if either
    misbehaves.
-5. **Resend (or another real SMTP provider)** configured in Supabase
+6. **Resend (or another real SMTP provider)** configured in Supabase
    Auth → SMTP Settings. The built-in sender is rate-limited and lands in
    spam, so password reset does not work for real users without it. See
    the section above.
-6. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+7. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
    Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states
    are aspirational rather than enforced. 0004 raises a notice saying so
@@ -1971,7 +2064,7 @@ nobody clicking a button.
 
 ## A guard that restates its subject will drift
 
-Nine separate times now, a check has been weaker than it looked, always
+Ten separate times now, a check has been weaker than it looked, always
 the same way: it hardcoded the value it was supposed to be guarding.
 
 - The service worker's **cache name** was a hand-edited constant. It was
@@ -2025,7 +2118,16 @@ the same way: it hardcoded the value it was supposed to be guarding.
   updates zero rows without it — the state production was actually in,
   shown to be defence-in-depth and not a hole.
 
-One is an anecdote. Nine is a rule: **derive a guard from its source of
+- The grant audit's own **"the app's own queries still work" test**
+  enumerated those queries by hand, from reading the client. It
+  included `planner_data`'s upsert and omitted `ai_notes`, so 0008
+  shipped revoking a privilege the AI-notes path needed and the test
+  that existed to catch exactly that passed. The restatement was
+  written *into the test checking the change*, which is as close to
+  the blind spot as this pattern has got. Now derived: the upserts are
+  matched out of `src/` and checked against the catalogue.
+
+One is an anecdote. Ten is a rule: **derive a guard from its source of
 truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the

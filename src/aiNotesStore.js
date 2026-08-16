@@ -101,31 +101,47 @@ export function previewFor(page) {
 export const pagesNeedingMigration = (pages = []) =>
   (pages || []).filter((p) => p && !p.deletedAt && isAiNote(p) && !isRemote(p));
 
+/** Postgres' unique-violation code: this id is already on the server. */
+export const DUPLICATE_KEY = "23505";
+
 /**
  * Move one note's content to its own row.
  *
- * REMOTE FIRST. Returns the stub to write only when the insert has
- * succeeded, so a failure anywhere leaves the blob untouched and the
- * note fully readable. `onConflict: id` makes a retry a no-op rather
- * than a duplicate, which is what makes an interrupted migration safe
- * to simply run again.
+ * REMOTE FIRST. Returns the stub to write only when the row is known to
+ * be on the server, so a failure anywhere leaves the blob untouched and
+ * the note fully readable.
+ *
+ * A PLAIN INSERT, not an upsert, and the distinction is load-bearing.
+ * PostgREST requires INSERT **and UPDATE** privileges for any upsert —
+ * either flavour, whether or not a row actually conflicts — so an
+ * upsert here means holding an update privilege on a table this app
+ * deliberately never updates. That privilege is what the grant audit
+ * (0008) removed, and its absence turned every AI-note write into a
+ * 400. Asking for exactly the one verb we use costs nothing and needs
+ * no fourth policy on an immutable row.
+ *
+ * The retry case an upsert used to cover is handled explicitly:
+ * an interrupted migration re-inserts the same id, and Postgres says
+ * so with 23505. That is a DEFINITIVE code — the row is there, with
+ * content this same function wrote — so it means already-migrated, and
+ * the caller may shrink the blob. Every other error stays a failure,
+ * which is the same missing-vs-failed split `fetchNote` makes: a code
+ * that names the condition may be acted on, silence may not.
  */
 export async function migrateNote({ supabaseClient, userId, page }) {
   if (!supabaseClient || !userId || !page) return { ok: false, stub: null };
-  const { error } = await supabaseClient
-    .from("ai_notes")
-    .upsert(
-      {
-        id: page.id,
-        user_id: userId,
-        course: (page.aiMeta && page.aiMeta.course) || "",
-        week: (page.aiMeta && page.aiMeta.week) || "",
-        content: buildContent(page),
-        generated_at: (page.aiMeta && page.aiMeta.generatedAt) || new Date().toISOString(),
-      },
-      { onConflict: "id", ignoreDuplicates: true }
-    );
-  if (error) return { ok: false, stub: null };
+  const { error } = await supabaseClient.from("ai_notes").insert({
+    id: page.id,
+    user_id: userId,
+    course: (page.aiMeta && page.aiMeta.course) || "",
+    week: (page.aiMeta && page.aiMeta.week) || "",
+    content: buildContent(page),
+    generated_at: (page.aiMeta && page.aiMeta.generatedAt) || new Date().toISOString(),
+  });
+  if (error) {
+    if (error.code === DUPLICATE_KEY) return { ok: true, stub: buildStub(page), existed: true };
+    return { ok: false, stub: null };
+  }
   return { ok: true, stub: buildStub(page) };
 }
 
