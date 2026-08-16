@@ -243,13 +243,37 @@ async function walk(label, isConfigured) {
   const doc = w.document;
   const named = (t) => [...doc.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === t);
 
-  // Every tab, because a leak on one screen is a leak.
-  for (const tab of ["Courses", "Planner", "Study", "Notes", "To-do", "AI Notes", "Account"]) {
-    const b = named(tab);
+  /* Every screen, because a leak on one screen is a leak. Calendar,
+     To-do and Planner are segments inside Plan now, and Folders is a
+     view toggle inside Notes, so reaching them means clicking the
+     parent first — the same two-step the smoke walk does. */
+  const visit = async (name, parent) => {
+    if (parent) {
+      const p = named(parent);
+      if (p) {
+        p.click();
+        await new Promise((r) => setTimeout(r, 120));
+      }
+    }
+    const b = named(name);
     if (b) {
       b.click();
       await new Promise((r) => setTimeout(r, 120));
     }
+    return b;
+  };
+  for (const [name, parent] of [
+    ["Courses", null],
+    ["Calendar", "Plan"],
+    ["Planner", "Plan"],
+    ["To-do", "Plan"],
+    ["Study", null],
+    ["Notes", null],
+    ["Folders", "Notes"],
+    ["AI", null],
+    ["Settings", null],
+  ]) {
+    await visit(name, parent);
   }
 
   /* Then an EDIT, and a wait past the push debounce. Merely rendering
@@ -257,7 +281,7 @@ async function walk(label, isConfigured) {
      4000ms timer after `data.meta.updatedAt` changes, which is exactly
      the moment a signed-out planner would go up if the guard were
      missing. */
-  named("To-do") && named("To-do").click();
+  await visit("To-do", "Plan");
   await new Promise((r) => setTimeout(r, 150));
   const input = doc.querySelector('input[type="text"], input:not([type])');
   if (input) {

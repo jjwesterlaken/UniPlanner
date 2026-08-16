@@ -384,6 +384,38 @@ them:
 The renderer-recovery hardening below is also still open: the crash that
 triggered it is fixed, the *response* to the next one is not.
 
+### The bottom tab bar — phone widths
+
+**What the suite covers and what it cannot.** jsdom has no layout, so
+`test-app-smoke.mjs` mounts the app twice — once with no `matchMedia`
+(the top bar) and once with it stubbed to a phone width (the bottom
+bar) — and asserts both offer the same six destinations, in the same
+order, with exactly one nav in the DOM. That is the contract every
+deep link and walk assertion rests on. **Placement is not covered at
+all**, because nothing in jsdom has a position. These are the items
+only a device can answer:
+
+12. **The bar clears the home indicator (iOS) and the gesture bar
+    (Android).** `env(safe-area-inset-bottom)` plus `viewport-fit=cover`
+    should handle it; the failure looks like the labels sitting under
+    the gesture pill, or a dead strip you have to tap twice.
+12a. **The recording indicator sits ABOVE the bar, not under it.**
+    Start a recording, leave the AI tab, and check both the timer and
+    its Stop button are fully tappable. "I can't stop the recording" is
+    a privacy problem before it is a usability one, and this is the one
+    existing element that competes for the same space.
+12b. **Rotating to landscape**, where a phone can cross the 640px
+    breakpoint mid-session: the bar should move to the top and back
+    without losing the current tab.
+12c. **The last tab survives a force-quit** — reopen and land where you
+    left off, not on Plan. On a first-ever install it lands on Plan.
+
+The breakpoint is **viewport width, not shell detection** (640px,
+Tailwind's `sm`): all three shells run the same React, so a Capacitor
+phone and a narrow browser window are the same situation and behave
+identically. A 380px desktop window therefore gets the phone bar, which
+is intended.
+
 ### Storage and offline
 
 1. **IndexedDB exists at all.** Open an AI lecture note, then check the

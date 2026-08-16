@@ -1082,13 +1082,22 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
  * component, so Grace can restyle this without going near the state
  * machine that decides when it appears.
  */
-export function RecordingIndicator({ recording, onOpen }) {
+export function RecordingIndicator({ recording, onOpen, liftedForNav = false }) {
   if (!recording || !recording.active) return null;
   const copy = AI_NOTES_COPY.indicator;
   const { state, elapsedSeconds, capturing, stop } = recording;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-3 pointer-events-none">
+    /* It floats at the bottom, which is exactly where the phone's tab
+       bar now lives — so when that bar is rendered the indicator sits
+       ABOVE it rather than over it. Stopping a recording must never
+       require guessing which of two overlapping controls is on top,
+       and "I can't stop it" is a privacy problem before it is a
+       usability one. */
+    <div
+      className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-3 pointer-events-none"
+      style={liftedForNav ? { paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 4.25rem)" } : undefined}
+    >
       <div className="pointer-events-auto flex w-full max-w-md items-center gap-2 rounded-xl border border-stone-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onOpen}>
           {capturing ? (

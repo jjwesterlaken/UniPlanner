@@ -432,6 +432,10 @@ async function run() {
         "which microphone to record from, by the browser's own device id and its label. Device-local by design — it is never synced and never uploaded — and holds none of the student's work; nothing recorded, transcribed or written passes through it",
     },
     "uni-planner-__BUILD_ID__": { noUserContent: "the service worker's asset cache: the app's own files, none of the user's" },
+    "uni-planner-tab": {
+      noUserContent:
+        "which of six tabs this device was last on, so reopening lands where you left off. One short id, device-local and deliberately unsynced; it holds none of the student's work and reveals nothing about it beyond which screen was open",
+    },
     "uni-planner-archive-pending": {
       noUserContent:
         "the id a half-finished semester archive was parked under, so a retry lands on the same row instead of forking a duplicate. An id and a bucket name, device-local, cleared on success; none of the semester's content passes through it — the content goes to the archive row the documents already describe",

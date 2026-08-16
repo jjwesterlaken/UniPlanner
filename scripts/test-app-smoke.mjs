@@ -193,6 +193,36 @@ check((doc.body.textContent || "").length > 0, "it renders something rather than
 const findButton = (label) =>
   [...doc.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === label);
 
+/* ---------- navigating the restructured nav ----------
+
+   Nine top-level tabs became five plus a gear. The screens did not
+   move — `tab` still takes the same nine ids — but Calendar, To-do and
+   Planner are now SEGMENTS inside Plan, and Folders is a view toggle
+   inside Notes, so reaching them is two clicks rather than one.
+
+   `goTo` does whichever it is, from wherever the walk happens to be,
+   which is the self-navigating rule: a block must not depend on the
+   block above it having left the app somewhere convenient. */
+const PARENT_OF = { Calendar: "Plan", "To-do": "Plan", Planner: "Plan", Folders: "Notes" };
+
+async function goTo(name) {
+  const parent = PARENT_OF[name];
+  if (parent) {
+    const p = findButton(parent);
+    if (p) {
+      p.click();
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+  const target = findButton(name);
+  if (target) {
+    target.click();
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return target;
+}
+
+
 const studyTab = findButton("Study");
 check(!!studyTab, "the Study tab is reachable");
 if (studyTab) {
@@ -230,11 +260,9 @@ if (studyTab) {
     ["Study", ["Exams"]],
     ["To-do", ["Nothing on the list yet"]],
   ]) {
-    const tabButton = findButton(tabName);
+    const tabButton = await goTo(tabName);
     check(!!tabButton, `the ${tabName} tab is reachable`);
     if (tabButton) {
-      tabButton.click();
-      await new Promise((r) => setTimeout(r, 150));
       const text = doc.body.textContent || "";
       for (const phrase of phrases) {
         check(text.includes(phrase), `${tabName} renders "${phrase}" from an empty semester`);
@@ -262,11 +290,9 @@ for (const [tabName, phrases] of [
   ["Planner", ["Weekly reading planner", "No reading planned yet", "Assignments"]],
   ["Notes", ["New note"]],
 ]) {
-  const tabButton = findButton(tabName);
+  const tabButton = await goTo(tabName);
   check(!!tabButton, `the ${tabName} tab is reachable`);
   if (tabButton) {
-    tabButton.click();
-    await new Promise((r) => setTimeout(r, 150));
     const text = doc.body.textContent || "";
     for (const phrase of phrases) {
       check(text.includes(phrase), `${tabName} renders "${phrase}" from an empty semester`);
@@ -321,7 +347,7 @@ for (const [tabName, phrases] of [
    fault would be in how the screen is assembled, which is the one thing
    testing functions in isolation cannot see. */
 {
-  const folders = findButton("Folders");
+  const folders = await goTo("Folders");
   check(!!folders, "the Folders tab is reachable");
   if (folders) {
     folders.click();
@@ -509,8 +535,8 @@ for (const [tabName, phrases] of [
      a bare needs-account line -- a feature nobody can see is absence.
      The demo walk is exactly the state that sees this screen. */
   {
-    const aiTab = findButton("AI Notes");
-    check(!!aiTab, "the AI Notes tab is reachable");
+    const aiTab = findButton("AI");
+    check(!!aiTab, "the AI tab is reachable");
     if (aiTab) {
       aiTab.click();
       await new Promise((r) => setTimeout(r, 200));
@@ -569,8 +595,8 @@ for (const [tabName, phrases] of [
 // any stale-cache bug. It reads "development" when unstamped, which is
 // what this jsdom page is.
 {
-  const accountTab = findButton("Account");
-  check(!!accountTab, "the Account tab is reachable");
+  const accountTab = findButton("Settings");
+  check(!!accountTab, "the Settings tab is reachable");
   if (accountTab) {
     accountTab.click();
     await new Promise((r) => setTimeout(r, 150));
@@ -1080,6 +1106,79 @@ for (const [tabName, phrases] of [
       "restore hangs off the marker, so it survives the list failing entirely"
     );
   }
+}
+
+/* ---------- the two presentations render the same navigation ----------
+
+   jsdom has no matchMedia, so everything above walks the TOP bar —
+   which is the desktop presentation and the one a narrow window does
+   not get. This block mounts a second app with matchMedia stubbed to
+   report a phone width, and asserts the bottom bar offers THE SAME
+   destinations with the same labels.
+
+   What this does and does not cover, stated plainly rather than
+   implied: it covers the contract every deep link and walk assertion
+   depends on — same buttons, same labels, same ids, one nav at a time.
+   It does NOT cover placement, safe-area insets, or whether the bar
+   sits above the home indicator, because jsdom has no layout. Those
+   are hardware items, and they are on the MOBILE-BUILD.md list. */
+{
+  const phoneDom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+    runScripts: "outside-only",
+    url: "https://example.test/",
+    pretendToBeVisual: true,
+  });
+  const listeners = [];
+  phoneDom.window.matchMedia = (q) => ({
+    matches: /max-width/.test(q),
+    media: q,
+    addEventListener: (_, fn) => listeners.push(fn),
+    removeEventListener: () => {},
+    addListener: (fn) => listeners.push(fn),
+    removeListener: () => {},
+  });
+  const phoneComplaints = [];
+  phoneDom.window.console.error = (...a) => phoneComplaints.push(a.join(" "));
+  phoneDom.window.localStorage.setItem("uni-planner-v1", JSON.stringify({ semester: "Semester 1", semesters: {}, meta: {} }));
+
+  let phoneThrew = null;
+  try {
+    phoneDom.window.eval(bundle.outputFiles[0].text);
+  } catch (err) {
+    phoneThrew = err;
+  }
+  check(!phoneThrew, "the app mounts at phone width", phoneThrew && phoneThrew.message);
+  await new Promise((r) => setTimeout(r, 300));
+
+  const phoneDoc = phoneDom.window.document;
+  const labels = (root) =>
+    [...root.querySelectorAll("nav button")].map((b) => (b.textContent || "").trim()).filter(Boolean);
+  const phoneNavs = phoneDoc.querySelectorAll("nav");
+  const desktopNavs = doc.querySelectorAll("nav");
+
+  check(phoneNavs.length === 1, `exactly one nav is rendered at phone width, not two overlapping ones (found ${phoneNavs.length})`);
+  check(desktopNavs.length === 1, `exactly one nav is rendered at desktop width (found ${desktopNavs.length})`);
+
+  const wanted = ["Plan", "Notes", "Study", "AI", "Courses", "Settings"];
+  for (const label of wanted) {
+    check(labels(phoneDoc).includes(label), `the phone bar offers "${label}"`);
+  }
+  check(
+    JSON.stringify(labels(phoneDoc)) === JSON.stringify(wanted),
+    `the phone bar offers the same destinations in the same order: ${JSON.stringify(labels(phoneDoc))}`
+  );
+
+  // Tapping through works from the bottom bar too — the ids are the
+  // same, so this is really asserting that nothing about the second
+  // presentation is special-cased.
+  const notes = [...phoneDoc.querySelectorAll("nav button")].find((b) => (b.textContent || "").trim() === "Notes");
+  if (notes) {
+    notes.click();
+    await new Promise((r) => setTimeout(r, 150));
+    check((phoneDoc.body.textContent || "").includes("New note"), "tapping the phone bar navigates");
+  }
+  check(phoneComplaints.length === 0, "the phone presentation logs no React error", phoneComplaints.slice(0, 2).join(" | ").slice(0, 300));
+  phoneDom.window.close();
 }
 
 check(complaints.length === 0, "nothing logged a React error or warning", complaints.slice(0, 3).join(" | ").slice(0, 400));
