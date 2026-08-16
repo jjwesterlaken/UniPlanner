@@ -1352,6 +1352,16 @@ REAL output is then inserted into the REAL column — or excused with a
 written reason. A new id column fails until somebody decides which it
 is.
 
+**And the same rule seen from the side where it WORKED, which is the
+half worth keeping.** `ai_notes_requests.idempotency_key` is also
+`uuid`, also client-minted, and never broke — for two independent
+reasons: `newIdempotencyKey()` produces a real UUID, and the Edge
+Function validates the shape and rejects a bad one as a malformed
+request before it ever reaches Postgres. What saved it was a NAMED
+GENERATOR and a check, not the comment explaining why they exist —
+and that comment sat a few lines from the code that ignored it. A
+rule becomes a guard when something executes it.
+
 ## The service-role client bypasses RLS — you are the ownership check
 
 **Any query made with the service-role client must explicitly scope to the
