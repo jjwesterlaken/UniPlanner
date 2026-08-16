@@ -1971,7 +1971,7 @@ nobody clicking a button.
 
 ## A guard that restates its subject will drift
 
-Five separate times now, a check has been weaker than it looked, always
+Nine separate times now, a check has been weaker than it looked, always
 the same way: it hardcoded the value it was supposed to be guarding.
 
 - The service worker's **cache name** was a hand-edited constant. It was
@@ -2012,7 +2012,20 @@ the same way: it hardcoded the value it was supposed to be guarding.
   count was **5.9× reality**, and two proposed user-visible increases
   evaporated with it.
 
-One is an anecdote. Eight is a rule: **derive a guard from its source of
+- The migration tests' **Supabase stand-in** restated the platform
+  minus its default privileges — real projects grant ALL verbs to
+  `anon` and `authenticated` on every table the SQL editor creates. So
+  a test asserting "update is not granted" passed locally and **failed
+  on the real project**, caught only because Jared ran the check by
+  hand rather than trusting the green suite. First instance where the
+  restated thing was an *environment*: a stand-in that is weaker than
+  production makes every check that runs inside it weaker too. The
+  shim now models the defaults, 0007 revokes update on both
+  three-verb tables, and a test re-opens the grant to demonstrate RLS
+  updates zero rows without it — the state production was actually in,
+  shown to be defence-in-depth and not a hole.
+
+One is an anecdote. Nine is a rule: **derive a guard from its source of
 truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the

@@ -49,9 +49,28 @@ $$;
 
 -- Granted explicitly rather than left to default privileges, for the
 -- reason 0005 gives: the failure if defaults didn't apply is the whole
--- feature dead on arrival, and granting exactly the three verbs that
--- have policies means `update` is refused twice over.
+-- feature dead on arrival.
 grant select, insert, delete on public.semester_archives to authenticated;
+
+-- ---------------------------------------------------------------------
+-- The grant above ADDS and never subtracts, and that mattered: Supabase
+-- configures default privileges so every table created in the SQL
+-- editor arrives with ALL verbs — update included — already granted to
+-- anon and authenticated. So 0005's "update is refused twice over: no
+-- grant, and no policy" was half right the whole time: the missing
+-- UPDATE policy really did block every update (RLS with no policy for a
+-- command updates zero rows), but the "no grant" half was never true,
+-- on ai_notes since 0005 or on this table as first applied. Found by
+-- checking has_table_privilege on the real project rather than trusting
+-- the file; the local test shim now models the default privileges so
+-- the same check fails there too.
+--
+-- Defence-in-depth, not a hole: nothing was ever writable. The revoke
+-- makes the second layer real, on BOTH tables built to this shape.
+-- service_role is untouched — the platform relies on it.
+-- ---------------------------------------------------------------------
+revoke update on public.semester_archives from anon, authenticated;
+revoke update on public.ai_notes from anon, authenticated;
 
 -- The archive list is one query per visit to the panel.
 create index if not exists semester_archives_user_idx on public.semester_archives (user_id);

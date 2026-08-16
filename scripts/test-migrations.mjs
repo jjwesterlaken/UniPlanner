@@ -170,12 +170,24 @@ function applyMigration(db, file) {
 
 /* Just enough of what Supabase's platform provides for the migrations to
    have something to bind to. auth.uid() reads a GUC so a test can act as
-   any user — that's the whole mechanism these functions are built on. */
+   any user — that's the whole mechanism these functions are built on.
+
+   THE DEFAULT PRIVILEGES ARE PART OF THE ENVIRONMENT, learned the hard
+   way: a real Supabase project runs ALTER DEFAULT PRIVILEGES so every
+   table created in the SQL editor arrives with ALL verbs — UPDATE
+   included — already granted to anon and authenticated. This shim used
+   to omit that, so a check asserting "update is not granted" passed
+   here and failed on the real project (found by Jared re-checking 0007
+   by hand). A stand-in that restates the environment more weakly than
+   production is the restatement drift in one more costume. */
 const SUPABASE_STUBS = `
   do $$ begin
     if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
     if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
   end $$;
+
+  alter default privileges in schema public grant all on tables to anon, authenticated;
+  grant usage on schema public to anon, authenticated;
 
   create schema if not exists auth;
   create table auth.users (id uuid primary key default gen_random_uuid(), email text);
@@ -492,14 +504,23 @@ async function run() {
   });
 
   await test("there is no update path at all, not even for the owner", () => {
-    // The row is immutable by design: activeLanguage — the one thing a
-    // reader changes — lives in the blob stub instead. Refused twice, by
-    // the missing grant and the missing policy, so removing one still
-    // leaves the other.
+    /* The row is immutable by design: activeLanguage — the one thing a
+       reader changes — lives in the blob stub instead.
+
+       "Refused twice over" turned out to be half true at 0005: RLS with
+       no update policy really does update zero rows, but Supabase's
+       default privileges had granted UPDATE all along, so the STATEMENT
+       was allowed. This test used to assert it errored, and passed only
+       because the shim omitted those defaults. Now it asserts each
+       layer at the migration that provides it: zero rows at 0005, and
+       the statement refused outright once 0007's revoke lands. */
     const db = withNotes();
     seedNotes(db);
+    asUser(db, USER, `update public.ai_notes set course = 'CHANGED' where user_id = ${USER};`);
+    assert.equal(count(db, "public.ai_notes", `course = 'CHANGED'`), 0, "an update with no update policy changed a row — a hole, not a missing belt");
+    applyMigration(db, "0007_semester_archives.sql");
     const r = asUser(db, USER, `update public.ai_notes set course = 'CHANGED' where user_id = ${USER};`);
-    assert.equal(r.ok, false, "an owner was able to update a row that has no update policy");
+    assert.equal(r.ok, false, "0007's revoke no longer closes the grant on ai_notes");
     assert.equal(count(db, "public.ai_notes", `course = 'CHANGED'`), 0);
   });
 
@@ -666,10 +687,52 @@ async function run() {
     );
   });
 
+  await test("0007 revokes the update Supabase's defaults had granted — on ai_notes too", () => {
+    /* Supabase's default privileges grant ALL verbs to anon and
+       authenticated on every table the SQL editor creates, so the
+       explicit three-verb grants in 0005 and 0007 never subtracted
+       anything: UPDATE was granted on ai_notes from the day it shipped.
+       Found on the real project by re-checking by hand; the shim now
+       models the defaults, so omitting the revoke fails HERE too. */
+    const db = withArchives();
+    for (const table of ["semester_archives", "ai_notes"]) {
+      for (const role of ["authenticated", "anon"]) {
+        assert.equal(
+          one(db, `select has_table_privilege('${role}', 'public.${table}', 'update')::text;`),
+          "false",
+          `${role} can update public.${table} — the 0007 revoke is gone`
+        );
+      }
+    }
+  });
+
+  await test("RLS alone blocked updates even while the grant was open (the state production was in)", () => {
+    /* The defence-in-depth question answered by demonstration rather
+       than doctrine: re-open the grant (recreating production between
+       0005 and the 0007 revoke), attempt an update as the row's OWNER,
+       and the statement succeeds while changing NOTHING — with RLS on
+       and no UPDATE policy, zero rows are updatable. The revoke is the
+       belt; this is the braces holding on their own. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    psqlOrThrow(
+      db,
+      `insert into public.semester_archives (id, user_id, label, summary, data) values
+         ('cccccccc-0000-0000-0000-000000000001', ${USER}, '2026 · Semester 1', '{"items":1}', '{}');
+       grant update on public.semester_archives to authenticated;`
+    );
+    const r = psql(db, `set test.uid = ${USER}; set role authenticated; update public.semester_archives set label = 'CHANGED' where user_id = ${USER};`);
+    assert.equal(r.ok, true, "with the grant open the statement itself is allowed");
+    assert.equal(count(db, "public.semester_archives", `label = 'CHANGED'`), 0, "RLS let an update through with no update policy — that is a HOLE, not defence-in-depth");
+  });
+
   await test("0007 is re-runnable (a second apply changes nothing and fails nothing)", () => {
     const db = withArchives();
     applyMigration(db, "0007_semester_archives.sql");
     assert.equal(one(db, `select count(*)::text from pg_policies where tablename = 'semester_archives';`), "3");
+    // The re-run must also re-close the grant the test above re-opened
+    // in its own db; here it simply asserts revoke is idempotent.
+    assert.equal(one(db, `select has_table_privilege('authenticated', 'public.semester_archives', 'update')::text;`), "false");
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
