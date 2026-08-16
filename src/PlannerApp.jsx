@@ -113,6 +113,7 @@ import {
   TriangleAlert,
   Mic,
   Archive,
+  Settings,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView, useRecordingSession, RecordingIndicator } from "./aiNotes.jsx";
 import {
@@ -5013,17 +5014,152 @@ function ExamPlanner({ assessments, notes, addItem }) {
   );
 }
 
+/* ---------------------------------------------------------------
+   Navigation: five destinations and a gear.
+
+   THE IDS DO NOT CHANGE. Nine screens became five entries by
+   GROUPING them, not by renaming them: `tab` still takes the same
+   nine values it always did, so every deep link (the recording
+   indicator's tap-through, "Summarised" on a reading row, the notes
+   opener), every stored last-tab, and every walk assertion keeps
+   working without a mapping table to get wrong.
+
+   `members` is what makes a tab look selected: Plan is lit for
+   calendar/todo/planner, Notes for notes/folders. `id` is where a
+   tap on the tab itself lands. --------------------------------- */
 const TABS = [
-  { id: "courses", label: "Courses", icon: BookOpen },
-  { id: "calendar", label: "Calendar", icon: CalendarDays },
-  { id: "planner", label: "Planner", icon: ClipboardList },
-  { id: "todo", label: "To-do", icon: ListTodo },
-  { id: "notes", label: "Notes", icon: StickyNote },
-  { id: "folders", label: "Folders", icon: Folder },
-  { id: "study", label: "Study", icon: Brain },
-  { id: "ai-notes", label: "AI Notes", icon: Mic },
-  { id: "account", label: "Account", icon: UserRound },
+  { id: "planner", label: "Plan", icon: ClipboardList, members: ["planner", "calendar", "todo"] },
+  { id: "notes", label: "Notes", icon: StickyNote, members: ["notes", "folders"] },
+  { id: "study", label: "Study", icon: Brain, members: ["study"] },
+  { id: "ai-notes", label: "AI", icon: Mic, members: ["ai-notes"] },
+  { id: "courses", label: "Courses", icon: BookOpen, members: ["courses"] },
 ];
+
+/* Settings is the gear, not a sixth tab: it holds the account, sync,
+   backup, the semester archive and the theme -- things you visit
+   deliberately and rarely, which is exactly what a gear means. */
+const SETTINGS_TAB = { id: "account", label: "Settings", icon: Settings };
+
+/* The segments inside Plan, and the toggle inside Notes. Both carry
+   the ORIGINAL labels, so a walk that clicks "To-do" or "Folders"
+   still finds a button with that text -- it has moved, not gone. */
+const PLAN_SEGMENTS = [
+  { id: "calendar", label: "Calendar" },
+  { id: "todo", label: "To-do" },
+  { id: "planner", label: "Planner" },
+];
+const NOTES_VIEWS = [
+  { id: "notes", label: "Notes" },
+  { id: "folders", label: "Folders" },
+];
+
+const ALL_TAB_IDS = [...TABS.flatMap((t) => t.members), SETTINGS_TAB.id];
+
+/* Which tab this device was last on. DEVICE-LOCAL AND UNSYNCED, like
+   the audio input and the study timer: "where I was" is a fact about
+   this screen in this hand, and syncing it would have two devices
+   fighting over one another's place. A first-ever load lands on Plan,
+   which is the only screen that answers "what do I have to do". */
+const TAB_KEY = "uni-planner-tab";
+const readLastTab = () => {
+  try {
+    const saved = localStorage.getItem(TAB_KEY);
+    return ALL_TAB_IDS.includes(saved) ? saved : "planner";
+  } catch (e) {
+    return "planner";
+  }
+};
+const writeLastTab = (id) => {
+  try {
+    localStorage.setItem(TAB_KEY, id);
+  } catch (e) {
+    /* a lost tab memory costs one tap */
+  }
+};
+
+/* Which bar to render. ONE nav, two positions -- never two navs with
+   one hidden: duplicate buttons would make every "find the button
+   labelled X" ambiguous, in the tests and for a screen reader.
+
+   Decided by VIEWPORT WIDTH, not by shell detection, and deliberately:
+   all three shells run the same React, so a Capacitor phone and a
+   narrow browser window are the same situation and must behave the
+   same way. Detecting Capacitor would make a 380px desktop window
+   behave differently from a 380px phone for no reason a user could
+   name, and would leave the phone-shaped case untestable in jsdom.
+
+   640px is Tailwind's `sm`, which every other breakpoint in this file
+   already uses. jsdom has no matchMedia, so it falls to the top bar --
+   see the note in MOBILE-BUILD.md about what that does and does not
+   cover. */
+const PHONE_MAX_WIDTH = 640;
+function useBottomBar() {
+  const [bottom, setBottom] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH - 1}px)`);
+    const apply = () => setBottom(mq.matches);
+    apply();
+    // addListener is the old spelling; Safari needed it until 14.
+    if (mq.addEventListener) mq.addEventListener("change", apply);
+    else if (mq.addListener) mq.addListener(apply);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", apply);
+      else if (mq.removeListener) mq.removeListener(apply);
+    };
+  }, []);
+  return bottom;
+}
+
+/** One tab button, identical in both bars so nothing can drift apart. */
+function TabButton({ t, active, onClick, stacked }) {
+  const Icon = t.icon;
+  return (
+    <button
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      className={
+        stacked
+          ? `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 text-[11px] font-medium u-focus ${
+              active ? "u-accent-deeptext" : "text-stone-500"
+            }`
+          : `flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium u-focus transition-colors ${
+              active ? "u-accent-soft u-accent-deeptext" : "text-stone-500 hover:bg-stone-100"
+            }`
+      }
+    >
+      <Icon size={stacked ? 19 : 15} /> {t.label}
+    </button>
+  );
+}
+
+
+/* The segmented control inside Plan, and the view toggle inside Notes.
+   One component for both: they are the same interaction, and two
+   would be two things to keep in step. The buttons carry the screens'
+   ORIGINAL labels, so nothing that looked for "To-do" or "Folders"
+   has to learn a new word. */
+function SegmentRow({ items, current, onPick }) {
+  return (
+    <div className="mb-4 flex gap-1 rounded-xl border border-stone-200 bg-white p-1">
+      {items.map((it) => {
+        const active = current === it.id;
+        return (
+          <button
+            key={it.id}
+            onClick={() => onPick(it.id)}
+            aria-current={active ? "page" : undefined}
+            className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-medium u-focus transition-colors ${
+              active ? "u-accent-soft u-accent-deeptext" : "text-stone-500 hover:bg-stone-100"
+            }`}
+          >
+            {it.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 /* Shown when the planner could not be written to this device.
    Deliberately not dismissible: the whole failure mode this exists to
@@ -5074,7 +5210,13 @@ export default function PlannerApp() {
   const [data, setData] = useState(DEFAULT);
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState("idle");
-  const [tab, setTab] = useState("courses");
+  /* Restored from this device, not from the blob. Lazy initialiser so
+     the read happens once rather than on every render. */
+  const [tab, setTab] = useState(readLastTab);
+  useEffect(() => {
+    writeLastTab(tab);
+  }, [tab]);
+  const bottomBar = useBottomBar();
   const [themeOpen, setThemeOpen] = useState(false);
   const [focusedCourse, setFocusedCourse] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -5937,40 +6079,35 @@ export default function PlannerApp() {
             </div>
           )}
 
-          {/* Tab navigation with scroll controls */}
-          <div className="relative">
-            {navScroll.left && (
-              <button onClick={() => scrollNav(-180)} aria-label="Scroll tabs left" className="absolute left-0 top-1 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-stone-200 bg-stone-50 text-stone-600 shadow-sm u-focus">
-                <ChevronLeft size={16} />
-              </button>
-            )}
-            <nav ref={navRef} onScroll={updateNavScroll} className="no-scrollbar -mx-1 flex gap-1 overflow-x-auto px-1 pb-2">
-              {TABS.map((t) => {
-                const Icon = t.icon;
-                const active = tab === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => setTab(t.id)}
-                    className={`flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-sm font-medium u-focus transition-colors ${
-                      active ? "u-accent-soft u-accent-deeptext" : "text-stone-500 hover:bg-stone-100"
-                    }`}
-                  >
-                    <Icon size={15} /> {t.label}
-                  </button>
-                );
-              })}
-            </nav>
-            {navScroll.right && (
-              <button onClick={() => scrollNav(180)} aria-label="Scroll tabs right" className="absolute right-0 top-1 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-stone-200 bg-stone-50 text-stone-600 shadow-sm u-focus">
-                <ChevronRight size={16} />
-              </button>
-            )}
-          </div>
+          {/* THE TOP BAR — desktop and tablet. Same position and same
+              behaviour as before; five entries where there were nine,
+              plus the gear. The phone gets the same buttons at the
+              bottom instead (below), never both at once. */}
+          {!bottomBar && (
+            <div className="relative">
+              <nav ref={navRef} onScroll={updateNavScroll} className="no-scrollbar -mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-2">
+                {TABS.map((t) => (
+                  <TabButton key={t.id} t={t} active={t.members.includes(tab)} onClick={() => setTab(t.id)} />
+                ))}
+                <span className="ml-auto flex-shrink-0 pl-1">
+                  <TabButton
+                    t={SETTINGS_TAB}
+                    active={tab === SETTINGS_TAB.id}
+                    onClick={() => setTab(SETTINGS_TAB.id)}
+                  />
+                </span>
+              </nav>
+            </div>
+          )}
         </div>
       </header>
 
-      <main className="mx-auto max-w-2xl px-4 py-5">
+      <main
+        className="mx-auto max-w-2xl px-4 py-5"
+        /* The fixed bar would otherwise cover the last card on the
+           page -- including the archive panel's own buttons. */
+        style={bottomBar ? { paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 5rem)" } : undefined}
+      >
         {/* A failed local save is invisible by nature, so it gets the most
             prominent spot in the app and stays until a save succeeds. */}
         {saveError && <SaveFailureBanner reason={saveError.reason} bytes={saveError.bytes} signedIn={!!session} />}
@@ -6007,6 +6144,13 @@ export default function PlannerApp() {
               />
             </Section>
           </>
+        )}
+
+        {PLAN_SEGMENTS.some((x) => x.id === tab) && (
+          <SegmentRow items={PLAN_SEGMENTS} current={tab} onPick={setTab} />
+        )}
+        {NOTES_VIEWS.some((x) => x.id === tab) && (
+          <SegmentRow items={NOTES_VIEWS} current={tab} onPick={setTab} />
         )}
 
         {tab === "calendar" && (
@@ -6171,7 +6315,7 @@ export default function PlannerApp() {
         {/* OUTSIDE the tab conditional, on purpose: it is the whole
             point. A recording is visible, and stoppable, from wherever
             the student happens to be. */}
-        <RecordingIndicator recording={recording} onOpen={() => setTab("ai-notes")} />
+        <RecordingIndicator recording={recording} onOpen={() => setTab("ai-notes")} liftedForNav={bottomBar} />
 
         <div className="mt-6 flex justify-center">
           {confirmReset ? (
@@ -6189,6 +6333,33 @@ export default function PlannerApp() {
           )}
         </div>
       </main>
+
+      {/* THE BOTTOM BAR — phone widths only.
+          `env(safe-area-inset-bottom)` is what keeps it clear of the
+          iOS home indicator and the Android gesture bar; index.html
+          already ships `viewport-fit=cover`, without which the inset
+          is always zero and the bar sits under the gesture area on
+          exactly the two devices this goes to first. The extra 0.5rem
+          is for the phones that report an inset of 0 and still have a
+          chin. */}
+      {bottomBar && (
+        <nav
+          className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-stone-50/95 backdrop-blur"
+          style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)" }}
+        >
+          <div className="mx-auto flex max-w-2xl items-stretch gap-0.5 px-2 pt-1.5">
+            {TABS.map((t) => (
+              <TabButton key={t.id} t={t} active={t.members.includes(tab)} onClick={() => setTab(t.id)} stacked />
+            ))}
+            <TabButton
+              t={SETTINGS_TAB}
+              active={tab === SETTINGS_TAB.id}
+              onClick={() => setTab(SETTINGS_TAB.id)}
+              stacked
+            />
+          </div>
+        </nav>
+      )}
     </div>
   );
 }

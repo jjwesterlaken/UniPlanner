@@ -895,6 +895,50 @@ async function run() {
     assert.match(appSrc, /const migrationFailures = useRef\(new Map\(\)\)/, "the count is not in a ref — a local verdict must never sync");
   });
 
+  await test("the last tab is remembered per DEVICE and never enters the blob", () => {
+    /* Same rule as the audio input and the study timer: "where I was"
+       is a fact about this screen in this hand. In the blob it would
+       sync, and two devices would fight over one another's place. */
+    assert.match(appSrc, /const TAB_KEY = "uni-planner-tab"/, "the last tab is no longer stored");
+    assert.match(appSrc, /useState\(readLastTab\)/, "the tab no longer restores on load");
+    assert.match(appSrc, /writeLastTab\(tab\)/, "the tab is restored but never saved");
+    // It must not be reachable from the synced document.
+    const collections = appSrc.slice(appSrc.indexOf("const makeSemester"), appSrc.indexOf("const DEFAULT"));
+    assert.ok(!/tab/i.test(collections), "a tab field appeared in the semester shape — it would sync");
+    assert.match(appSrc, /return ALL_TAB_IDS\.includes\(saved\) \? saved : "planner"/, "a first-ever load no longer lands on Plan, or an unknown id is no longer rejected");
+  });
+
+  await test("every screen keeps its id under the new labels, so deep links still land", () => {
+    /* Nine screens became five entries by GROUPING, not renaming. If an
+       id moved, every deep link (the recording indicator, the reading
+       row's "Summarised" link, the notes opener) would need a mapping
+       table — which is the thing that drifts. */
+    for (const id of ["planner", "calendar", "todo", "notes", "folders", "study", "ai-notes", "courses", "account"]) {
+      assert.ok(appSrc.includes(`tab === "${id}"`) || appSrc.includes(`"${id}"`), `the ${id} screen id has gone`);
+    }
+    assert.match(appSrc, /setTab\("ai-notes"\)/, "the recording indicator's tap-through no longer names a live id");
+    assert.match(appSrc, /setTab\("notes"\)/, "the note deep link no longer names a live id");
+    // One nav at a time: two would make "the button labelled X" ambiguous.
+    assert.match(appSrc, /\{!bottomBar && \(/, "the top bar is no longer conditional");
+    assert.match(appSrc, /\{bottomBar && \(/, "the bottom bar is no longer conditional");
+  });
+
+  await test("the bottom bar and the recording indicator do not fight for the same space", () => {
+    // The indicator floats at the bottom, which is where the phone's
+    // tab bar now lives. "I can't stop the recording" is a privacy
+    // problem before it is a usability one.
+    assert.match(appSrc, /liftedForNav=\{bottomBar\}/, "the indicator is no longer told the bar is there");
+    const ind = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    assert.match(ind, /liftedForNav/, "RecordingIndicator ignores the bottom bar and will sit under it");
+    assert.match(ind, /safe-area-inset-bottom/, "the lift ignores the home indicator");
+  });
+
+  await test("the bottom bar clears the home indicator and the gesture bar", () => {
+    assert.match(appSrc, /paddingBottom: "calc\(env\(safe-area-inset-bottom, 0px\) \+ 0\.5rem\)"/, "the bar no longer pads for the safe area");
+    const html = fs.readFileSync(path.join(rootDir, "public/index.html"), "utf8");
+    assert.match(html, /viewport-fit=cover/, "without viewport-fit=cover every safe-area inset is zero and the padding above does nothing");
+  });
+
   await test("archiving clears the parked study timer for that semester", () => {
     const body = appSrc.slice(appSrc.indexOf("const archiveCurrentSemester"), appSrc.indexOf("const restoreArchive"));
     assert.match(body, /writeTimer\(name, null\)/, "year one's parked timer would commit its minutes to year two");
