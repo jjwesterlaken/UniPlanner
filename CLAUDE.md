@@ -1547,13 +1547,17 @@ re-uploaded without inventing a new version), gives the same commit a
 higher number tomorrow, and has ~4,000 years of headroom before Android's
 signed 32-bit `versionCode` overflows.
 
-**DEADLINE: 31 August 2026 — Google Play requires new apps to target
-API 36 from that date, and nothing has been submitted yet.**
-Being below it blocks submission outright rather than failing the build.
-Capacitor's template already sets 36, but `stamp-native.mjs` checks the
-*generated* `variables.gradle` and warns, because the template is not the
-thing that ships. Our minimum is 26 (Capacitor defaults to 24); iOS
-deploys at 15 (default 14).
+**API 36 is a SATISFIED requirement, not a live deadline.** Google
+Play requires new apps to target API 36 from 31 August 2026;
+`stamp-native.mjs` verifies the *generated* `variables.gradle` (the
+template is not the thing that ships) and it **passed on Jared's real
+build, 16 August 2026**. The date only matters again if the target
+regresses, and the check catches that. Do not re-panic about it: the
+clock that actually binds is the closed test below — 12 testers, 14
+continuous days, then up to a week for production access — which
+starts the day the first AAB is uploaded and cannot be compressed.
+Our minimum is 26 (Capacitor defaults to 24); iOS deploys at 15
+(default 14).
 
 **The longest lead item is the Play account, and it is RECRUITMENT, not
 code.** Personal developer accounts have needed a closed test before
@@ -2209,6 +2213,32 @@ The test for whether a guard is real is to break the thing it protects
 and watch it go red — restating a value gives you two copies to keep in
 step and a test that only checks one.
 
+## A source grep must strip comments first
+
+Five separate times, a grep-based guard has tripped on the comment
+explaining the very code it checks — because good comments name the
+forbidden thing while saying why it is forbidden:
+
+- the readings wording rule caught **its own documentation** on its
+  first run;
+- the device-store guard hit the comment excusing a store, and strips
+  comments for that reason;
+- the UNMEASURED deploy marker blocked a deploy from **the comment
+  explaining the marker** (resolved differently: prose says
+  "unverified", the marker stays reserved for the thing it marks);
+- the color-mix guard in `test-dark-mode.mjs` tripped on the comment
+  explaining why color-mix is banned;
+- the husk's no-stroke-count check matched the two comments recording
+  why the husk copy exists.
+
+The rule: **a guard that greps source must strip comments before
+matching, or reserve a marker that never appears in prose.** The
+failure mode is not a false alarm once — it is that the fix under time
+pressure is to weaken the pattern or delete the explanation, and both
+make the codebase worse. Strip first (`/\*…\*/` and `//…`, the way
+`test-readings.mjs` and `test-note-blocks.mjs` do), and the comment
+and the guard stop competing.
+
 ## Testing
 
 `npm test` builds the web bundle, then runs the app tests, the demo-mode
@@ -2272,10 +2302,13 @@ scheduled:
 
 - The navigation restructure **shipped** (#45) from her mockup with
   rulings 1–4 folded in; she vetoes in parts, on the live app now.
-- **Dark note paper** — newly unblocked: the handwriting removal took
-  away the only technical reason the paper stays light in dark mode,
-  so it is a pure look-and-feel call. The test pinning `--paper` equal
-  in both modes changes in the same commit as her ruling.
+- **Dark note paper is POST-LAUNCH, not for her next sitting.** The
+  handwriting removal took away the only technical reason the paper
+  stays light in dark mode, so it is a pure look-and-feel call and it
+  is hers — but feature work is stopped until the closed test is
+  running, and it stays parked with Grace's palette until after
+  launch. When she does rule, the test pinning `--paper` equal in
+  both modes changes in the same commit.
 - **The consent-gating decision on the four text features.** Practice
   questions, explain-it-back, weak spots and summarise-a-note are not
   consent-gated at the point of use; summarise-a-reading is. The gap
