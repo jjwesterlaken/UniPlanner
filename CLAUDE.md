@@ -89,11 +89,14 @@ semesters" looks like a one-line change to `SEMESTER_NAMES` and isn't:
 the two functions disagree about what a semester is, and only one of them
 is on the path that loses data.
 
-The corollary is that the planner has **no semester lifecycle at all** —
-nothing archives, prunes or clears. A student in second year is reusing
-"Semester 1" with first year's content still in it, so the blob grows
-without bound inside two fixed buckets rather than by accumulating new
-ones. See the budget section below.
+The corollary used to be that the planner had **no semester lifecycle
+at all** — a student in second year reused "Semester 1" with first
+year's content still in it, so the blob grew without bound inside two
+fixed buckets. The semester archive (its own section below) is the
+lifecycle now: deliberate, account-only, and built entirely out of
+stripped tombstones and one marker so that neither of the two
+functions above changed. Archiving adds no semester key — the trap in
+this paragraph is sidestepped, not resolved.
 
 ## What the blob costs, and the ceiling that actually binds
 
@@ -802,9 +805,115 @@ correspondingly cheap: rounding is idempotent and lossless at display
 resolution, so it can run in `normalizeData` on load with no schema
 change, no server involvement, and no migration ordering to get wrong.
 
-**Still outstanding, and unchanged by this work:** the semester archive.
-Two fixed buckets that nothing ever clears is still the growth that
-matters most, and no amount of per-feature capping addresses it.
+**The semester archive has since been built** — see its own section
+below. Two fixed buckets that nothing ever cleared was the growth that
+mattered most, and no amount of per-feature capping addressed it.
+
+### The semester archive: the lifecycle that bounds time
+
+`src/semesterArchive.js`, migration 0007, `scripts/test-archive.mjs`.
+The caps bound features; this bounds years. A student reusing
+"Semester 1" across years breached the 1 MB budget on reuse alone
+(583 KB × 2), which `test-reference.mjs` still asserts — archiving is
+deliberate, never automatic, so the fact stands and is what justifies
+the nudge on the Backup panel's size warning.
+
+**The shape.** Archiving stores the bucket VERBATIM in its own row
+(`semester_archives` — jsonb, ~600 KB a semester, two rows a year;
+the server is where growth is cheap). In the blob, every live item is
+stripped to a bare tombstone `{id, deletedAt, updatedAt}` — the shape
+`pruneStats` already writes — and the settings row stays live carrying
+the marker (label, item count, the rounding rule kept, the calendar
+dropped). Stripped tombstones are the only representation that both
+PROPAGATES (per-item last-write-wins carries the deletion to every
+device, old builds included, with zero merge changes) and actually
+SHRINKS the blob — a full-payload tombstone keeps the 583 KB for the
+whole 60-day purge window, and hard removal is the one thing union-
+by-id merge resurrects forever. `SEMESTER_NAMES`, `COLLECTIONS`,
+`mergeSemester` and `mergeData` are all untouched; no third semester
+key ever exists, so the normalizeData/mergeData disagreement recorded
+above is never approached.
+
+**THE ABSOLUTE RULE: archiving never writes `deletedAt` on an AI-note
+stub, and never removes one.** `reconcilePlan` deletes the `ai_notes`
+row for any tombstoned stub, that behaviour is already shipped, and no
+flag a new build adds will stop an OLD build on a second device from
+syncing the tombstones and destroying every archived lecture's content
+permanently. Live stubs instead gain `archivedIn` (an ordinary field
+riding the per-item merge; previews emptied — the row keeps the full
+copy), which new builds filter from the term's lists and old builds
+harmlessly show. A stub that is already a tombstone — a delete still
+pending reconciliation — is left ENTIRELY untouched: stripping it
+would erase the `aiMeta` that reconciliation recognises it by, and the
+row it points at would leak on the server forever. The bonus falls out
+free: archived lectures stay readable (their content was never in the
+blob), listed in the archive panel and opened through the ordinary
+notes deep link.
+
+**Ordering is the aiNotesStore table, extended.** Archiving: row
+FIRST, then strip — an interruption leaves the semester in both
+places, resolved by retry. The archive id is parked on the device
+(`uni-planner-archive-pending`, scoped to the bucket) so a retry lands
+on the SAME id, and the retry deletes any half-landed row before
+re-inserting — so a row can never hold an older snapshot than the blob
+that was stripped. `stillCurrent` re-checks the bucket reference after
+the insert, because a recording can save itself mid-flight and
+stripping a bucket the snapshot no longer matches loses the difference
+from both places. Restoring: blob first, and the archive row is NOT
+deleted — it stays until the student deletes it, so a crash
+mid-restore leaves content in two places, never zero.
+
+**Late edits are surfaced, never swept.** An edit from a
+not-yet-synced device survives the archive tombstones by its newer
+`updatedAt` and shows up live in a marked bucket. Two buttons, no
+default: "Add to the archive" folds it in as insert-new-row-then-
+delete-old (the table has no update policy — the ai_notes shape, so
+there is no client update path to get wrong), "Keep here" clears the
+marker. The copy is device-neutral by test, because on the device that
+made the edits "another device" would be false. The student's own
+first item of the new term never reads as a late edit: `addItem`
+clears the marker on creation, and merge-arrived items don't pass
+through `addItem`, which is exactly what keeps real late edits
+surfaced.
+
+**Restore is a union with re-stamping rules.** Live items are
+restamped (so they beat their own archive-time tombstones on every
+device); items that were tombstones AT archive time keep their old
+stamps and stay dead — restore must not resurrect what the student
+deleted before archiving. Newer tombstones in the bucket survive the
+union. An occupied bucket refuses the restore ("archive the current
+semester first"); archive residue and flagged stubs don't count as
+occupied. The streak carries (`cur`/`max`/`last` seeded into the fresh
+totals row) and the minutes reset — a streak is about the student,
+minutes are about the courses.
+
+**The residue constants are ceilings proved by measurement.**
+`ARCHIVE_TRANSITIONAL_RESIDUE_BYTES` (120 KB, the stripped tombstones'
+60 days) and `ARCHIVE_STEADY_RESIDUE_BYTES` (16 KB forever: marker +
+preview-stripped stubs) are asserted by running the real transform
+over a ~290 KB fixture whose realism is itself asserted. The budget
+sentence the feature exists to make true: measured post-Batch-3
+account + six archived buckets + one transitional ≤ 1 MB. The old
+tripwire in `test-reference.mjs` did not invert — reuse without
+archiving still breaches — it split, and its other half lives beside
+the transform it measures.
+
+**"Nothing reads a tombstone's content" is a differential mount, not
+an assertion.** The same planner with full and stripped tombstones
+must render byte-identical HTML on every tab (frozen clock, frozen
+`Math.random`, save-state settled). The ONE permitted consumer is
+masked by name: the Backup panel's size line measures the whole
+serialised blob, and a stripped tombstone really being smaller is the
+feature. Breaking `live()`'s filter goes red through this test —
+checked by mutation.
+
+**Account-only, gated visible.** The gate names the tool to a
+signed-out student (a feature nobody can see is absence, not a gate),
+and the boundary refuses on its own — `archiveSemester` returns
+`unauthenticated` with no client, so the UI gate is not the only
+thing between a signed-out student and a strip with no row behind it.
+A failed archive list renders as UNKNOWN ("couldn't load"), never as
+"nothing archived yet" — a dropped connection must not read as gone.
 
 ### Depth is bought with instructions, and the billing did NOT move
 
@@ -1508,7 +1617,15 @@ record.
    change quietly does nothing, which is the failure that is hardest to
    notice. Verify by saving one AI note while signed in and checking a
    row appears in `ai_notes`.
-3. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
+3. **Migration 0007, applied before the archive reaches users.** It
+   creates `semester_archives`, its three policies, and the updated
+   `delete_my_account_data()`. Until it is applied, every archive
+   attempt fails at the insert — the *safe* direction (row first means
+   no row, no strip, nothing lost) — but the panel shows "couldn't
+   store the archive" to anyone who tries. Verify by archiving a test
+   semester and checking one row appears in `semester_archives`, then
+   restoring it and checking the planner comes back whole.
+4. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
    every workflow. Both currently target Node 20, which GitHub has
    deprecated; the runners force them onto Node 24 and they work, so this
    is a warning today and not a failure. It becomes a failure on
@@ -1518,11 +1635,11 @@ record.
    remembered, and deliberately kept out of the native-build fix so a
    packaging change and a runner change can be told apart if either
    misbehaves.
-4. **Resend (or another real SMTP provider)** configured in Supabase
+5. **Resend (or another real SMTP provider)** configured in Supabase
    Auth → SMTP Settings. The built-in sender is rate-limited and lands in
    spam, so password reset does not work for real users without it. See
    the section above.
-5. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+6. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
    Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states
    are aspirational rather than enforced. 0004 raises a notice saying so
@@ -1854,7 +1971,7 @@ nobody clicking a button.
 
 ## A guard that restates its subject will drift
 
-Five separate times now, a check has been weaker than it looked, always
+Nine separate times now, a check has been weaker than it looked, always
 the same way: it hardcoded the value it was supposed to be guarding.
 
 - The service worker's **cache name** was a hand-edited constant. It was
@@ -1895,7 +2012,20 @@ the same way: it hardcoded the value it was supposed to be guarding.
   count was **5.9× reality**, and two proposed user-visible increases
   evaporated with it.
 
-One is an anecdote. Eight is a rule: **derive a guard from its source of
+- The migration tests' **Supabase stand-in** restated the platform
+  minus its default privileges — real projects grant ALL verbs to
+  `anon` and `authenticated` on every table the SQL editor creates. So
+  a test asserting "update is not granted" passed locally and **failed
+  on the real project**, caught only because Jared ran the check by
+  hand rather than trusting the green suite. First instance where the
+  restated thing was an *environment*: a stand-in that is weaker than
+  production makes every check that runs inside it weaker too. The
+  shim now models the defaults, 0007 revokes update on both
+  three-verb tables, and a test re-opens the grant to demonstrate RLS
+  updates zero rows without it — the state production was actually in,
+  shown to be defence-in-depth and not a hole.
+
+One is an anecdote. Nine is a rule: **derive a guard from its source of
 truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the

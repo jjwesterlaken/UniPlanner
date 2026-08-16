@@ -96,19 +96,31 @@ async function run() {
     assert.ok(margin > 64 * 1024, `only ${(margin / 1024).toFixed(0)} KB of reuse margin is left`);
   });
 
-  await test("semester reuse alone breaches the budget, which the caps cannot fix", () => {
-    /* Recorded as a test rather than a comment because it is the reason
-       the allowance is a share rather than the whole headroom -- and
-       because if someone ever adds a semester lifecycle, this is the
-       assertion that should start failing and prompt a re-think.
+  await test("semester reuse without archiving still breaches the budget, which is why the nudge exists", () => {
+    /* This test used to be the tripwire waiting for a semester
+       lifecycle ("this is the assertion that should start failing and
+       prompt a re-think"). The lifecycle now exists — semesterArchive.js
+       — and the re-think happened, but the FACT stands: a student who
+       never archives still breaches, because archiving is deliberate,
+       never automatic. So the assertion stays, and what it justifies
+       changed: this figure is why the Backup panel's size warning
+       carries the archive nudge, and why archiving exists at all.
 
-       Nothing about Batch 3 causes this and nothing about Batch 3 can
-       fix it; the answer is the semester-archive work. */
+       The other half of the split — that archiving actually fixes the
+       growth, measured by running the real transform over a realistic
+       fixture — lives in test-archive.mjs, beside the code it measures. */
     assert.ok(
       REUSE_PROJECTION_BYTES > BLOB_BUDGET_BYTES,
-      "reuse no longer breaches the budget — re-derive the allowance, it may now be too conservative"
+      "reuse no longer breaches the budget — re-derive the allowance and the archive arithmetic together"
     );
     assert.equal(REUSE_PROJECTION_BYTES, MEASURED_EXISTING_BYTES * SEMESTER_REUSE_FACTOR);
+
+    // The nudge wiring: the fact above is only mitigated if the student
+    // whose planner is growing is actually pointed at the archive.
+    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    assert.match(src, /ARCHIVE_COPY\.nudge/, "the size warning no longer carries the archive nudge");
+    const copy = fs.readFileSync(path.join(rootDir, "src/archiveCopy.js"), "utf8");
+    assert.match(copy, /nudge:.*free/i, "the nudge no longer says archiving frees space");
   });
 
   /* ---------- reading progress ---------- */

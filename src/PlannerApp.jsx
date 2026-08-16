@@ -112,6 +112,7 @@ import {
   CloudCheck,
   TriangleAlert,
   Mic,
+  Archive,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView, useRecordingSession, RecordingIndicator } from "./aiNotes.jsx";
 import {
@@ -131,7 +132,24 @@ import {
   buildConsentPatch,
   folderForRecording,
   AI_CONSENT_VERSION,
+  newIdempotencyKey,
 } from "./aiNotesLogic.js";
+import {
+  archiveMarkerOf,
+  isArchivedStub,
+  defaultArchiveLabel,
+  bucketOccupied,
+  lateEdits,
+  clearArchiveMarker,
+  markerClearedOnCreate,
+  restoreTransform,
+  archiveSemester,
+  listArchives,
+  fetchArchive,
+  deleteArchive,
+  foldLateEditsIntoArchive,
+} from "./semesterArchive.js";
+import { ARCHIVE_COPY } from "./archiveCopy.js";
 import { ConsentGate } from "./aiNotesConsent.jsx";
 import {
   isAiNote,
@@ -2657,6 +2675,13 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
 
   const room = canAddSheet(pages);
 
+  /* Lectures belonging to an archived semester stay off the term's
+     list — that is the archive's promise: the working clutter goes,
+     the notes stay readable in the archive view. Whichever one is
+     OPEN stays visible while it is open, so the archive panel's deep
+     link has a row to expand. */
+  const visiblePages = pages.filter((p) => !p.archivedIn || p.id === expandedId);
+
   const startNew = ({ style, kind }) => {
     /* A new note is BORN as blocks -- one empty text block, because
        "always somewhere to type" is the editor's rule and an empty
@@ -2836,10 +2861,10 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
           />
         </>
       )}
-      {showList && pages.length === 0 && <Empty>No notes yet. Tap "New note" to add one.</Empty>}
-      {showList && pages.length > 0 && (
+      {showList && visiblePages.length === 0 && <Empty>No notes yet. Tap "New note" to add one.</Empty>}
+      {showList && visiblePages.length > 0 && (
         <ul className="mt-3 space-y-2">
-          {pages.map((p) => (
+          {visiblePages.map((p) => (
               <NoteRow
                 key={p.id}
                 p={p}
@@ -3789,6 +3814,255 @@ function Stat({ label, value }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Semester archive: box up a finished semester                      */
+/* ------------------------------------------------------------------ */
+
+/* Exported for the smoke test's signed-in probe: this panel refuses to
+   do anything real without an account, so the demo-mode walk can never
+   render its working state — same arrangement as AiNotesPanel. */
+export function ArchivePanel({ session, bucket, semesterName, onArchive, onRestore, onDeleteArchive, onFoldLate, onKeepLate, onOpenNote }) {
+  const [archives, setArchives] = useState(null); // null = loading; {failed} | {list}
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [label, setLabel] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  const marker = archiveMarkerOf(bucket);
+  const late = lateEdits(bucket);
+  const lectures = ((bucket && bucket.pages) || []).filter(isArchivedStub);
+
+  const refresh = async () => {
+    if (!session || !session.user) return;
+    const res = await listArchives({ supabaseClient: supabase, userId: session.user.id });
+    /* A failed list is UNKNOWN, never empty — rendering "nothing
+       archived yet" off a dropped connection tells a student their
+       archives are gone. */
+    setArchives(res.failed ? { failed: true } : { list: res.archives });
+  };
+  useEffect(() => {
+    refresh();
+  }, [session && session.user && session.user.id]);
+
+  /* The gate SHOWS the tool to a signed-out student — a feature nobody
+     can see is not consent or a gate, it is absence. */
+  if (!session) {
+    return (
+      <Card className="mb-5">
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full u-accent-soft u-accent-deeptext">
+            <Archive size={19} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="font-medium text-stone-800">{ARCHIVE_COPY.gate.title}</p>
+            <p className="text-xs text-stone-500">{ARCHIVE_COPY.gate.body}</p>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="mb-5">
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full u-accent-soft u-accent-deeptext">
+          <Archive size={19} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-stone-800">Semester archive</p>
+          <p className="text-xs text-stone-500">
+            Box up a finished semester. An archive restores into the semester you're viewing.
+          </p>
+        </div>
+      </div>
+
+      {marker && (
+        <p className="mt-3 rounded-lg bg-stone-50 px-3 py-2 text-xs text-stone-600">
+          {ARCHIVE_COPY.archivedLine({ label: marker.label, items: marker.items || 0 })}
+        </p>
+      )}
+
+      {marker && late.length > 0 && (
+        <div role="status" className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <p>{ARCHIVE_COPY.lateEdits(late.length)}</p>
+          {/* Two buttons and NO default action: moving someone's edit on
+              an inference about their intent is the remedy this project
+              refuses everywhere else. */}
+          <div className="mt-2 flex gap-2">
+            <button
+              className={btnGhost}
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                setStatus("");
+                const res = await onFoldLate();
+                setBusy(false);
+                if (res.ok) refresh();
+                else setStatus(res.reason === "missing" ? ARCHIVE_COPY.lateFoldMissing : ARCHIVE_COPY.lateFoldFailed);
+              }}
+            >
+              {ARCHIVE_COPY.lateFold}
+            </button>
+            <button className={btnGhost} disabled={busy} onClick={() => onKeepLate()}>
+              {ARCHIVE_COPY.lateKeep}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!marker &&
+        (confirming ? (
+          <div className={`mt-4 ${editBox}`}>
+            <p className="text-sm font-medium text-stone-800">{ARCHIVE_COPY.confirm.title}</p>
+            <p className="mt-1 text-xs text-stone-600">{ARCHIVE_COPY.confirm.body}</p>
+            <label className={labelCls}>Archive name</label>
+            <input className={inputCls} value={label} onChange={(e) => setLabel(e.target.value)} />
+            <div className="mt-3 flex gap-2">
+              <button
+                className={btnPrimary}
+                disabled={busy || !label.trim()}
+                onClick={async () => {
+                  setBusy(true);
+                  setStatus("");
+                  const res = await onArchive(label.trim());
+                  setBusy(false);
+                  if (res.ok) {
+                    setConfirming(false);
+                    refresh();
+                  } else {
+                    setStatus(res.reason === "changed" ? ARCHIVE_COPY.changed : ARCHIVE_COPY.offline);
+                  }
+                }}
+              >
+                <Archive size={15} /> {ARCHIVE_COPY.confirm.action}
+              </button>
+              <button className={btnGhost} onClick={() => setConfirming(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4">
+            <button
+              className={btnGhost}
+              onClick={() => {
+                setLabel(defaultArchiveLabel(semesterName));
+                setConfirming(true);
+              }}
+            >
+              <Archive size={15} /> Archive this semester…
+            </button>
+          </div>
+        ))}
+
+      {status && (
+        <p role="status" className="mt-3 text-xs text-stone-600">
+          {status}
+        </p>
+      )}
+
+      <div className="mt-4 border-t border-stone-100 pt-3">
+        <p className="text-xs font-medium text-stone-500">Your archives</p>
+        {archives === null && <p className="mt-2 text-xs text-stone-400">Loading…</p>}
+        {archives && archives.failed && <p className="mt-2 text-xs text-stone-500">{ARCHIVE_COPY.listFailed}</p>}
+        {archives && archives.list && archives.list.length === 0 && (
+          <p className="mt-2 text-xs text-stone-400">{ARCHIVE_COPY.listEmpty}</p>
+        )}
+        {archives && archives.list && archives.list.length > 0 && (
+          <ul className="mt-2 space-y-2">
+            {archives.list.map((a) => (
+              <li key={a.id} className="rounded-xl border border-stone-200 p-3">
+                <p className="text-sm font-medium text-stone-800">{a.label}</p>
+                <p className="text-xs text-stone-500">
+                  {(a.summary && a.summary.items) || 0} item{(a.summary && a.summary.items) === 1 ? "" : "s"} ·{" "}
+                  {new Date(a.created_at).toLocaleDateString()}
+                </p>
+                {a.summary && (a.summary.courses || []).length > 0 && (
+                  <ul className="mt-1.5 space-y-0.5 text-xs text-stone-600">
+                    {a.summary.courses.map((c) => (
+                      <li key={c.name} className="flex justify-between gap-3">
+                        <span className="truncate">{c.name}</span>
+                        <span className="flex-shrink-0 text-stone-500">
+                          {c.average == null ? "—" : `${displayMark(c.average)}%`}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {confirmDelete === a.id ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-stone-500">{ARCHIVE_COPY.deleteConfirm}</span>
+                    <button className={btnGhost} onClick={() => setConfirmDelete(null)}>
+                      Cancel
+                    </button>
+                    <button
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 u-focus"
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        setStatus("");
+                        const res = await onDeleteArchive(a.id);
+                        setBusy(false);
+                        setConfirmDelete(null);
+                        if (res.ok) refresh();
+                        else setStatus(ARCHIVE_COPY.deleteFailed);
+                      }}
+                    >
+                      <Trash2 size={13} /> Delete
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      className={btnGhost}
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        setStatus("");
+                        const res = await onRestore(a.id);
+                        setBusy(false);
+                        if (res.ok) setStatus(ARCHIVE_COPY.restored);
+                        else if (res.reason === "occupied") setStatus(ARCHIVE_COPY.restoreOccupied);
+                        else if (res.reason === "missing") setStatus(ARCHIVE_COPY.restoreMissing);
+                        else setStatus(ARCHIVE_COPY.restoreFailed);
+                      }}
+                    >
+                      <Upload size={13} /> {ARCHIVE_COPY.restore}
+                    </button>
+                    <button className={btnGhost} onClick={() => setConfirmDelete(a.id)}>
+                      <Trash2 size={13} /> Delete
+                    </button>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {lectures.length > 0 && (
+        <div className="mt-4 border-t border-stone-100 pt-3">
+          <p className="text-xs font-medium text-stone-500">{ARCHIVE_COPY.lecturesHeading}</p>
+          <p className="mt-0.5 text-xs text-stone-400">{ARCHIVE_COPY.lecturesHint}</p>
+          <ul className="mt-2 space-y-1">
+            {lectures.map((p) => (
+              <li key={p.id}>
+                <button
+                  className="text-left text-sm u-accent-text hover:underline u-focus"
+                  onClick={() => onOpenNote(p.id)}
+                >
+                  {p.title || "Untitled note"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Backup: save everything to a file, and restore from one           */
 /* ------------------------------------------------------------------ */
 
@@ -3801,6 +4075,17 @@ function BackupPanel({ data, onRestore, session }) {
     let items = 0;
     for (const sem of Object.values(data.semesters || {})) {
       for (const key of COUNTABLE) items += live(sem[key]).length;
+    }
+    return items;
+  }, [data]);
+
+  /* Archiving drops the live count by hundreds at once. Said out loud
+     here so the drop reads as the archive it is, not as data loss. */
+  const archivedCount = useMemo(() => {
+    let items = 0;
+    for (const sem of Object.values(data.semesters || {})) {
+      const m = archiveMarkerOf(sem);
+      if (m) items += m.items || 0;
     }
     return items;
   }, [data]);
@@ -3871,7 +4156,8 @@ function BackupPanel({ data, onRestore, session }) {
         <div className="min-w-0 flex-1">
           <p className="font-medium text-stone-800">Backup</p>
           <p className="text-xs text-stone-500">
-            {counts} item{counts === 1 ? "" : "s"} across your semesters · {size.line.replace("Your planner is ", "").replace(".", "")}
+            {counts} item{counts === 1 ? "" : "s"} across your semesters
+            {archivedCount > 0 ? ` · ${archivedCount} archived` : ""} · {size.line.replace("Your planner is ", "").replace(".", "")}
           </p>
         </div>
       </div>
@@ -3883,7 +4169,7 @@ function BackupPanel({ data, onRestore, session }) {
         <p role="status" className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
           <TriangleAlert size={14} className="mt-0.5 flex-shrink-0" />
           <span>
-            <strong>{size.line}</strong> {size.detail}
+            <strong>{size.line}</strong> {size.detail} {ARCHIVE_COPY.nudge}
           </span>
         </p>
       )}
@@ -5058,8 +5344,15 @@ export default function PlannerApp() {
       semesters: { ...d.semesters, [d.semester]: updater(d.semesters[d.semester]) },
       meta: { ...(d.meta || {}), updatedAt: nowISO() },
     }));
+  /* Creating content in an archived bucket is starting the new term,
+     so the archive marker comes off with it (semesterArchive.js) —
+     without this, the student's own first course of the year would be
+     surfaced back at them as a "late edit". Merge-arrived items never
+     pass through here, which is what keeps real late edits surfaced. */
   const addItem = (key, item) =>
-    updateSem((s) => ({ ...s, [key]: [...s[key], { ...item, updatedAt: nowISO() }] }));
+    updateSem((s) =>
+      markerClearedOnCreate({ ...s, [key]: [...s[key], { ...item, updatedAt: nowISO() }] }, key, nowISO())
+    );
   const patchItem = (key, id, patch) =>
     updateSem((s) => ({
       ...s,
@@ -5340,6 +5633,82 @@ export default function PlannerApp() {
       ),
     }));
 
+  /* ---------- the semester archive (src/semesterArchive.js) ----------
+
+     Row FIRST, then the blob — the aiNotesStore ordering rule. Every
+     handler re-reads through dataRef so a sync landing between render
+     and click can't archive a stale picture, and `stillCurrent` guards
+     the window the insert itself takes: a recording can save itself
+     mid-flight, and stripping a bucket the snapshot no longer matches
+     would lose the difference from both places. */
+
+  const archiveClient = () => (session && supabase ? supabase : null);
+
+  const archiveCurrentSemester = async (label) => {
+    const name = dataRef.current.semester;
+    const bucket = dataRef.current.semesters[name];
+    const res = await archiveSemester({
+      supabaseClient: archiveClient(),
+      userId: session && session.user ? session.user.id : null,
+      semesterName: name,
+      bucket,
+      label,
+      uid: newIdempotencyKey,
+      now: nowISO(),
+      stillCurrent: () => dataRef.current.semesters[name] === bucket,
+    });
+    if (res.ok) {
+      // A parked timer must not commit year one's minutes to year two.
+      writeTimer(name, null);
+      setData((d) => ({
+        ...d,
+        semesters: { ...d.semesters, [name]: res.bucket },
+        meta: { ...(d.meta || {}), updatedAt: nowISO() },
+      }));
+    }
+    return res;
+  };
+
+  const restoreArchive = async (id) => {
+    const name = dataRef.current.semester;
+    if (bucketOccupied(dataRef.current.semesters[name])) return { ok: false, reason: "occupied" };
+    const res = await fetchArchive({ supabaseClient: archiveClient(), id });
+    if (res.failed) return { ok: false, reason: "failed" };
+    if (res.missing) return { ok: false, reason: "missing" };
+    /* The archive row is NOT deleted by a restore. A crash mid-restore
+       then leaves the semester in both places — resolved by the student
+       deleting the archive when they're done with it, never lost. */
+    setData((d) => ({
+      ...d,
+      semesters: { ...d.semesters, [name]: restoreTransform(d.semesters[name], res.data, { at: nowISO() }) },
+      meta: { ...(d.meta || {}), updatedAt: nowISO() },
+    }));
+    return { ok: true };
+  };
+
+  const foldLateArchive = async () => {
+    const name = dataRef.current.semester;
+    const bucket = dataRef.current.semesters[name];
+    const res = await foldLateEditsIntoArchive({
+      supabaseClient: archiveClient(),
+      userId: session && session.user ? session.user.id : null,
+      bucket,
+      uid: newIdempotencyKey,
+      now: nowISO(),
+      stillCurrent: () => dataRef.current.semesters[name] === bucket,
+    });
+    if (res.ok) {
+      setData((d) => ({
+        ...d,
+        semesters: { ...d.semesters, [name]: res.bucket },
+        meta: { ...(d.meta || {}), updatedAt: nowISO() },
+      }));
+    }
+    return res;
+  };
+
+  const keepLateEdits = () => updateSem((s) => clearArchiveMarker(s, nowISO()));
+
   const restoreBackup = (incoming, mode) => {
     setData((current) => {
       const next =
@@ -5609,7 +5978,9 @@ export default function PlannerApp() {
 
         {tab === "folders" && (
           <Section icon={Folder} title="Folders" subtitle="Create colour-coded folders and browse their notes">
-            <Folders pages={sem.pages} folders={sem.folders} addItem={addItem} patchItem={patchItem} removeItem={removeItem} onDeleteFolder={deleteFolder} />
+            {/* Archived lecture stubs stay out of folder counts and
+                lists — they belong to the archive view. */}
+            <Folders pages={sem.pages.filter((p) => !p.archivedIn)} folders={sem.folders} addItem={addItem} patchItem={patchItem} removeItem={removeItem} onDeleteFolder={deleteFolder} />
           </Section>
         )}
 
@@ -5680,6 +6051,17 @@ export default function PlannerApp() {
         {tab === "account" && (
           <Section icon={UserRound} title="Account" subtitle="Sync your planner across your devices">
             <BackupPanel data={data} onRestore={restoreBackup} session={session} />
+            <ArchivePanel
+              session={session}
+              bucket={rawSem}
+              semesterName={data.semester}
+              onArchive={archiveCurrentSemester}
+              onRestore={restoreArchive}
+              onDeleteArchive={(id) => deleteArchive({ supabaseClient: archiveClient(), id })}
+              onFoldLate={foldLateArchive}
+              onKeepLate={keepLateEdits}
+              onOpenNote={openSummaryNote}
+            />
             <AccountPanel
               session={session}
               syncing={syncing}

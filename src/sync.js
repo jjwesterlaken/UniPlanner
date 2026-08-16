@@ -113,7 +113,9 @@ export const COUNTABLE_COLLECTIONS = COLLECTIONS.filter((k) => !BOOKKEEPING_COLL
    have it reappear the next time your laptop synced.
 ------------------------------------------------------ */
 
-function mergeList(a = [], b = []) {
+// Exported for semesterArchive.js, which restores and folds by the
+// same per-item rule rather than reimplementing it.
+export function mergeList(a = [], b = []) {
   const byId = new Map();
   for (const item of [...a, ...b]) {
     if (!item || !item.id) continue;

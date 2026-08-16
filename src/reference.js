@@ -46,6 +46,12 @@ export const BLOB_BUDGET_BYTES = 1024 * 1024;
    before Batch 3. */
 export const MEASURED_EXISTING_BYTES = 583 * 1024;
 
+/* The same account measured again after Batch 3 landed (CLAUDE.md,
+   migration 0005's header). Used by the archive budget arithmetic in
+   test-archive.mjs: the year a student is LIVING in costs this much,
+   and archived years must fit in what remains. */
+export const MEASURED_POST_BATCH3_BYTES = 672 * 1024;
+
 /* The planner has no semester lifecycle — nothing archives, prunes or
    clears — so a student in second year fills the same two buckets again
    with first year's content still in them.
