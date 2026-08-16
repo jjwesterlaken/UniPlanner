@@ -153,6 +153,14 @@ async function render(js, { mode } = {}) {
   w.console.error = (...a) => errors.push(a.join(" "));
   w.eval(js);
   await new Promise((r) => setTimeout(r, 350));
+  /* The header's save indicator is TIMING, not content: two mounts can
+     land on opposite sides of a save on a slow runner, which is the
+     flake the archive differential already met. Settle it before
+     snapshotting — the comparison is about what the DATA renders. */
+  for (let i = 0; i < 60; i++) {
+    if (!(w.document.body.textContent || "").includes("Saving")) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
   return { dom, html: w.document.body.innerHTML, root: w.document.documentElement, errors };
 }
 
