@@ -19,9 +19,71 @@
   src: url("./fonts/comfortaa-700.woff2") format("woff2");
 }
 
+
+/* ---------- the ground: one neutral ramp, two sets of values ----------
+
+   Dark mode is an AXIS, not a ninth palette: any of the eight accent
+   palettes can be light or dark, because the accent tokens and these
+   ground tokens are independent. Nothing in src/ names a hex for the
+   ground -- `text-stone-500` still means "muted text", and only the
+   value behind it moves.
+
+   The dark ramp is the light one INVERTED, not a new design: 50 is
+   the page, 800 is strong text, and every component keeps the
+   relationship it was written with. Values are RGB channels so
+   Tailwind's opacity modifiers keep working.
+
+   PAPER DOES NOT FLIP, and this is the decision to read before
+   reaching for inversion later. A note's paper stays light in both
+   modes because handwriting is stored with its own colour -- black,
+   blue, red, per stroke, chosen by the student. Rendering that on a
+   dark sheet would need either inverting stored colours (which turns
+   someone's red into cyan, and is an edit to their work rather than a
+   view of it) or a render-time mapping that lies about what they
+   drew. Keeping the sheet light costs nothing: no stored colour is
+   touched, no second highlighter set is needed, and dark paper stays
+   available later as an explicit per-note choice, which is how the
+   ink apps do it. */
+:root {
+  --tone-50: 250 250 249;
+  --tone-100: 245 245 244;
+  --tone-200: 231 229 228;
+  --tone-300: 214 211 209;
+  --tone-400: 168 162 158;
+  --tone-500: 120 113 108;
+  --tone-600: 87 83 78;
+  --tone-700: 68 64 60;
+  --tone-800: 41 37 36;
+  --tone-900: 28 25 23;
+  --surface: 255 255 255;
+  --paper: 255 255 255;
+  --page: 245 245 244;
+  --paper-line: #d6d3d1;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --tone-50: 28 25 23;
+  --tone-100: 41 37 36;
+  --tone-200: 60 56 53;
+  --tone-300: 87 83 78;
+  --tone-400: 150 144 140;
+  --tone-500: 186 181 177;
+  --tone-600: 214 211 209;
+  --tone-700: 231 229 228;
+  --tone-800: 245 245 244;
+  --tone-900: 250 250 249;
+  --surface: 38 35 33;
+  /* Unchanged on purpose -- see the note above. */
+  --paper: 255 255 255;
+  --page: 24 22 20;
+  --paper-line: #d6d3d1;
+  color-scheme: dark;
+}
+
 html, body { height: 100%; }
 body {
-  background-color: #f5f5f4;
+  background-color: rgb(var(--page));
   -webkit-text-size-adjust: 100%;
   overscroll-behavior-y: none;
 }
@@ -30,6 +92,6 @@ body {
    has no native placeholder attribute). */
 [contenteditable][data-placeholder]:empty::before {
   content: attr(data-placeholder);
-  color: #a8a29e;
+  color: rgb(var(--tone-400));
   pointer-events: none;
 }

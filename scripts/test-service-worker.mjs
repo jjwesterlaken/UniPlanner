@@ -265,6 +265,56 @@ async function run() {
     assert.match(pkg.scripts.test, /test-service-worker\.mjs/, "the update-delivery tests were dropped from `npm test`");
   });
 
+  /* ---------- the pre-paint script and the strip must not collide ----------
+
+     index.html carries TWO marked blocks now: the service-worker
+     registration in <body>, which prepare-native removes for the
+     packaged shells, and the dark-mode pre-paint script in <head>,
+     which every shell needs. Independent by construction -- separate
+     markers, separate elements, different halves of the document --
+     and this is what keeps a packaging change from silently taking
+     dark mode out of the phone builds. */
+
+  await test("the pre-paint script survives prepare-native, and the worker registration does not", () => {
+    const shells = ["desktop/app/index.html", "mobile/www/index.html"]
+      .map((rel) => path.join(rootDir, rel))
+      .filter((f) => fs.existsSync(f));
+    assert.ok(shells.length > 0, "no native shell was prepared, so this asserts nothing");
+    for (const file of shells) {
+      const html = fs.readFileSync(file, "utf8");
+      assert.ok(!/serviceWorker/.test(html), `${file} still registers a service worker`);
+      assert.match(html, /prepaint:start/, `${file} lost the pre-paint script — a dark-mode user gets a light flash on every launch`);
+      assert.match(html, /uni-planner-mode/, `${file}'s pre-paint script no longer reads the stored mode`);
+      assert.match(html, /prefers-color-scheme/, `${file}'s pre-paint script no longer follows the system`);
+      assert.match(html, /app\.js/, `${file} lost its bundle`);
+    }
+  });
+
+  await test("the pre-paint script runs BEFORE the stylesheet, or it is not pre-paint", () => {
+    const html = fs.readFileSync(path.join(rootDir, "public/index.html"), "utf8");
+    const prepaint = html.indexOf("prepaint:start");
+    const css = html.indexOf('href="app.css"');
+    const body = html.indexOf("<body");
+    assert.ok(prepaint > -1 && css > -1, "one of the two is missing");
+    assert.ok(prepaint < css, "the pre-paint script sits after the stylesheet, so the first frame can still be light");
+    assert.ok(prepaint < body, "the pre-paint script is in the body — the shell paints before it runs");
+    assert.match(html, /<meta name="color-scheme" content="light dark"/, "the browser's own UI will not follow the mode");
+  });
+
+  await test("the pre-paint script and the app agree on the key and the values", () => {
+    /* Two copies of one contract -- an inline script cannot import
+       from the bundle -- so the EQUALITY is the guard, the same
+       arrangement as the billing hints. Drift means the first frame
+       renders one mode and the app switches to the other. */
+    const html = fs.readFileSync(path.join(rootDir, "public/index.html"), "utf8");
+    const app = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    const key = /const MODE_KEY = "([^"]+)"/.exec(app);
+    assert.ok(key, "the app no longer names a mode key");
+    assert.ok(html.includes(`"${key[1]}"`), `the pre-paint script reads a different key than the app writes (${key[1]})`);
+    assert.match(app, /setAttribute\("data-theme", resolvedMode\)/, "the app no longer stamps data-theme");
+    assert.match(html, /setAttribute\("data-theme"/, "the pre-paint script no longer stamps data-theme");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 }

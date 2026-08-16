@@ -21,6 +21,49 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Planner" />
 
+    <!-- The browser's own UI (form controls, scrollbars, the address
+         bar on mobile) follows this. "light dark" says the page
+         handles both; the pre-paint script below narrows it to the
+         one actually in force. -->
+    <meta name="color-scheme" content="light dark" />
+
+    <!-- prepaint:start — DO NOT MOVE THIS BELOW THE STYLESHEET.
+
+         The mode has to be on <html> before the first frame, or a
+         dark-mode student gets a flash of the light shell. React
+         cannot do it: effects run after paint. The service worker
+         makes it sharper still, since the shell is served from cache
+         and paints immediately.
+
+         Synchronous, inline, and deliberately tiny. It reads the SAME
+         key src/PlannerApp.jsx writes (uni-planner-mode) and falls
+         back to the OS when there is no stored override, which is what
+         makes "System" the default.
+
+         Its markers are its own. prepare-native.mjs strips the
+         sw-register block in <body> by ITS markers and never touches
+         this one — a test asserts both facts, because the two blocks
+         being independent is the only thing keeping a packaging change
+         from silently taking dark mode out. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("uni-planner-mode");
+          var dark =
+            saved === "dark" ||
+            (saved !== "light" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+        } catch (e) {
+          /* Private browsing can refuse localStorage. Light is the
+             right answer when we cannot know. */
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
+    <!-- prepaint:end -->
+
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
