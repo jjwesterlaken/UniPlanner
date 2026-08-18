@@ -2029,6 +2029,10 @@ async function run() {
     assert.match(workflow, /npm run test:e2e/, "the e2e job no longer runs the journeys");
     assert.match(workflow, /secrets\.TEST_ACCOUNT_EMAIL/, "the test-account email secret is no longer wired in");
     assert.match(workflow, /secrets\.TEST_ACCOUNT_PASSWORD/, "the test-account password secret is no longer wired in");
+    /* One shared test account: overlapping runs corrupt each other's
+       data (a concurrent reset deleted an archive row mid-poll on the
+       first real run). The concurrency group is what serialises them. */
+    assert.match(workflow, /group:\s*e2e-shared-test-account/, "the e2e concurrency group is gone — concurrent runs will race on the one test account");
   });
 
   await test("the deploy workflow ships BOTH functions", () => {

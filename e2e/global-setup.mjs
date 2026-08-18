@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { haveCreds, REQUIRED, resetAccount } from "./helpers.mjs";
+import { haveCreds, REQUIRED, signedInClient } from "./helpers.mjs";
 
 const stateFile = path.join(path.dirname(fileURLToPath(import.meta.url)), ".state.json");
 
@@ -26,6 +26,14 @@ export default async function globalSetup() {
     fs.writeFileSync(stateFile, JSON.stringify({ skip: "no test-account credentials; set TEST_ACCOUNT_EMAIL / TEST_ACCOUNT_PASSWORD" }));
     return;
   }
-  const { seed, userId } = await resetAccount();
-  fs.writeFileSync(stateFile, JSON.stringify({ seed, userId }));
+  /* Credentials are proven here so a dead account fails in one line
+     before a browser ever launches. The RESET happens in the spec's
+     beforeAll instead — a serial-mode retry restarts the whole suite
+     in a fresh worker, and the first run showed why the retry must
+     also restart the DATA: journey 3 had archived the semester, so
+     journey 1's retry signed in to a planner that no longer matched
+     the seed. */
+  const { client } = await signedInClient();
+  await client.auth.signOut();
+  fs.writeFileSync(stateFile, JSON.stringify({ ok: true }));
 }

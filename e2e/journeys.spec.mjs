@@ -34,6 +34,7 @@ import {
   AI_NOTE_TITLE,
   AI_OVERVIEW,
   signedInClient,
+  resetAccount,
   pollDb,
 } from "./helpers.mjs";
 
@@ -44,7 +45,18 @@ const state = JSON.parse(
 test.describe.configure({ mode: "serial" });
 test.skip(!!state.skip, state.skip || "");
 
-const aiNoteId = state.seed && state.seed.aiNoteId;
+/* The reset lives HERE, not in global setup: a serial retry restarts
+   the suite in a fresh worker and re-runs beforeAll, so every attempt
+   — first or retry — starts from the seed. Journey 3 mutates the
+   account (that is its job), so an attempt that begins mid-history
+   fails on the previous attempt's leftovers, which the first CI run
+   demonstrated. */
+let aiNoteId = null;
+test.beforeAll(async () => {
+  if (state.skip) return;
+  const { seed } = await resetAccount();
+  aiNoteId = seed.aiNoteId;
+});
 
 /** Sign in through the app's real form and wait until the pulled
     planner is on screen — journeys must not start before sync has
@@ -134,13 +146,17 @@ test("journey 2: the AI note migrates to its row, and a fresh device renders its
     const page = await context.newPage();
     await signIn(page);
     await page.locator(`[data-note-row="${aiNoteId}"]`).getByRole("button", { name: "Expand note" }).click();
-    /* NOT the overview: the row's PREVIEW carries the overview's first
-       characters from the stub, fetch or no fetch — the first CI run
-       proved it, matching twice. The KEY POINTS exist only in the
-       fetched content, so they are the thing whose visibility proves
-       the row came back. */
-    await expect(page.getByText("succinate to fumarate", { exact: false })).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText("releases two carbons", { exact: false })).toBeVisible();
+    /* Scoped to data-ai-note-body — the FETCHED content's container.
+       The row's PREVIEW carries the overview's first characters from
+       the stub, fetch or no fetch (the first CI run proved it,
+       matching twice), so an assertion that can match the preview
+       proves nothing about the fetch. The preview staying visible
+       above the expanded body is the accordion's design, not a bug —
+       every note type keeps its row header while expanded. */
+    const body = page.locator("[data-ai-note-body]");
+    await expect(body).toBeVisible({ timeout: 20_000 });
+    await expect(body.getByText("Krebs cycle step by step", { exact: false })).toBeVisible();
+    await expect(body.getByText("succinate to fumarate", { exact: false })).toBeVisible();
     await context.close();
   });
 });
