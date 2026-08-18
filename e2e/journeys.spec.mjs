@@ -134,8 +134,13 @@ test("journey 2: the AI note migrates to its row, and a fresh device renders its
     const page = await context.newPage();
     await signIn(page);
     await page.locator(`[data-note-row="${aiNoteId}"]`).getByRole("button", { name: "Expand note" }).click();
-    await expect(page.getByText("Krebs cycle step by step", { exact: false })).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText("succinate to fumarate", { exact: false })).toBeVisible();
+    /* NOT the overview: the row's PREVIEW carries the overview's first
+       characters from the stub, fetch or no fetch — the first CI run
+       proved it, matching twice. The KEY POINTS exist only in the
+       fetched content, so they are the thing whose visibility proves
+       the row came back. */
+    await expect(page.getByText("succinate to fumarate", { exact: false })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("releases two carbons", { exact: false })).toBeVisible();
     await context.close();
   });
 });
