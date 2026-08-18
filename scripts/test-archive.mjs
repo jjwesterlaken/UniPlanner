@@ -457,6 +457,49 @@ async function run() {
     assert.equal(archiveMarkerOf(sem), null);
   });
 
+  await test("restoring a PRE-REMOVAL archive resurrects NO ink — the second resurrection door", () => {
+    /* Archive rows hold the bucket VERBATIM, so a semester archived
+       before the handwriting removal carries every stroke — Jared has
+       a live one, so this is not hypothetical. The backup-restore door
+       is covered by normalizeData's strip; this asserts the archive
+       door strips too, over BOTH shapes ink was ever stored in. */
+    const bucket = realisticBucket();
+    // The fixture already carries ink BLOCKS (page-0, -3, -6…); add the
+    // older shape too — raw strokes on the page itself.
+    bucket.pages.push({
+      id: "raw-ink-page",
+      title: "Whiteboard photo redraw",
+      body: "",
+      html: "",
+      strokes: [{ color: "#1c1917", width: 3, points: [[10, 20, 0.5], [14, 21, 0.5]] }],
+      kind: "drawing",
+      style: "grid",
+      font: "sans",
+      folderId: null,
+      updatedAt: EARLIER,
+    });
+    const archived = archiveTransform(bucket, { archiveId: "arch-ink", label: "L", at: AT, uid });
+    const out = restoreTransform(archived, bucket, { at: LATER });
+
+    for (const p of out.pages) {
+      if (p.deletedAt) continue;
+      assert.equal((p.strokes || []).length, 0, `${p.id} came back with raw strokes`);
+      assert.ok(!(p.blocks || []).some((b) => b && b.type === "ink"), `${p.id} came back with an ink block`);
+    }
+    const husk = out.pages.find((p) => p.id === "raw-ink-page");
+    assert.ok(husk && !husk.deletedAt, "the ink-only note was deleted rather than stripped — remove ink, never remove notes");
+    assert.equal(husk.title, "Whiteboard photo redraw", "the husk lost its title");
+    assert.equal(husk.kind, "text", "the drawing kind survived with nothing behind it");
+    const mixed = out.pages.find((p) => p.id === "page-0");
+    assert.ok(
+      (mixed.blocks || []).some((b) => b.type === "text" && b.body.includes("page 0")),
+      "stripping the ink block took the text block with it"
+    );
+    // The pre-archive tombstone is not the strip's business.
+    const dead = out.pages.find((p) => p.id === "deleted-page");
+    assert.equal(dead.updatedAt, EARLIER, "the strip restamped a tombstone");
+  });
+
   await test("restore is a UNION: newer tombstones in the bucket survive it", () => {
     // Deleted after archiving (on the restored copy elsewhere, say) —
     // a wholesale replace would resurrect it; the union must not.

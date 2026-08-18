@@ -1,56 +1,52 @@
-/* CONVERTING A NOTE MUST NOT CHANGE HOW IT LOOKS.
+/* CONVERTING A NOTE MUST NOT CHANGE HOW IT LOOKS — POST-HANDWRITING.
 
    Step 4 converts lazily: the first time a student edits an existing
-   note, it is rewritten from html/body/strokes into `blocks`. That
-   conversion happens without asking and without telling them, so the
-   only acceptable outcome is that they cannot tell. This file renders
-   the same note both ways through the same bundle and compares what a
+   note, it is rewritten from html/body into `blocks`. That conversion
+   happens without asking and without telling them, so the only
+   acceptable outcome is that they cannot tell. This file renders the
+   same note both ways through the same bundle and compares what a
    student can actually see.
+
+   WHAT CHANGED WHEN HANDWRITING WAS REMOVED (16 August 2026). Ink was
+   half of what this file measured: the recording canvas context, the
+   encoded-note comparison, and the ink block in the ordering corpus
+   all existed because strokes drew pixels no HTML diff could see.
+   The strokes are gone — from the feature and from the data, stripped
+   at load by removeHandwriting — so those claims died. What replaced
+   them is their negative, which is now a guard on the removal itself:
+
+   - a pre-removal note carrying strokes renders IDENTICALLY in its
+     legacy shape and its blocks shape — as the same stripped note
+   - NO reader mounts a canvas any more, on any screen this walks
+   - an ink-only note renders as the "Empty note" husk, not a blank
+   - a LEGACY_INK block inside a blocks note renders nothing and
+     crashes nothing
+
+   The corpus deliberately KEEPS its stroke-carrying fixtures. They are
+   exactly the data a real pre-removal account still holds, and the
+   walk proves the app renders them without a canvas, without a crash,
+   and without a stroke count.
 
    WHY NOT BYTE-IDENTICAL HTML. That was the bar in step 3 and it was
    the right one there, because the claim was that NOTHING changed. It
    is the wrong bar here: a converted note is rendered by the stack
    renderer, so it legitimately gains a wrapper element even when it
-   holds a single block. Insisting on byte-identity would mean
-   contorting the renderer to satisfy a test rather than a user.
+   holds a single block. The comparison is over the things a student
+   can point at — the VISIBLE TEXT and the TYPEFACE classes.
 
-   So the comparison is over the things a student can point at -- the
-   VISIBLE TEXT, the INK actually drawn, and the TYPEFACE classes -- and
-   dropping the stronger check is recorded here rather than quietly
-   loosened. What it still catches: a dropped block, reordered content,
-   lost strokes, a note that renders empty after conversion, a font that
-   stops being applied. What it no longer catches: pure markup churn,
-   which is what it was asked to stop catching.
-
-   WHAT THIS FILE USED TO BE, and why it changed. In step 3 it also
-   built the bundle from the PREVIOUS COMMIT and compared the whole app
-   against it, which is what demonstrated that introducing `blocksOf`
-   changed nothing anyone could see. That comparison has now expired,
-   exactly as its header said it would: step 4 changes the editor on
-   purpose, and the faint-writing fix changes how every stroke is drawn
-   on purpose. A guard that has to be suppressed to let intended changes
-   through is not a guard. It is deleted rather than pinned to a moving
-   baseline, and this is the claim that replaced it.
-
-   THE ORDERING CLAIM IS NEW AND ONLY MEANINGFUL NOW. In step 3, block
-   order was unobservable -- readers concatenated all text then all ink,
-   so reversing blocksOf changed nothing. NoteView now renders the stack
-   in order, so order is a visible property and is asserted directly.
-
-   A stub that swallows the canvas calls would make half of this blind
-   -- found by mutation in step 3, when reverting a reader to
-   page.strokes left every byte identical. The context RECORDS, and the
-   log is part of the snapshot. */
+   The canvas context still RECORDS (a stub that swallows calls made
+   half of step 3's test blind — found by mutation), so if a canvas
+   ever mounts again its drawing lands in the snapshot and the
+   no-canvas check goes red with evidence rather than silence. */
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
 import { build } from "esbuild";
 import { JSDOM } from "jsdom";
-import { blocksOf, isBlockNote } from "../src/noteBlocks.js";
+import { blocksOf, isBlockNote, stripInkFromPage } from "../src/noteBlocks.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -67,17 +63,18 @@ const check = (ok, name, detail) => {
   }
 };
 
-const git = (args) => execFileSync("git", args, { cwd: rootDir, encoding: "utf8" }).trim();
-
 /* ------------------------------------------------------------------ */
 /*  The planner both sides render                                     */
 /* ------------------------------------------------------------------ */
 
-/* Every shape a page is stored in, including the two awkward ones that
-   only exist because fieldsOf writes html/body onto every page —
-   a handwritten note carrying stray html, and a typed note carrying
-   stray strokes. Those are where a derivation that reordered blocks
-   would show up on screen. */
+/* The clock every mount runs on. The load-time strip bumps updatedAt
+   on any page it touches, so the blocks-side corpus below is stripped
+   with the SAME instant — otherwise the comparison would be measuring
+   the fixture, not the renderer. */
+const FROZEN_NOW = "2026-08-14T09:00:00.000Z";
+
+/* Pre-removal stroke shapes, kept verbatim: this is what a real
+   account that drew before the removal still syncs today. */
 const stroke = (n, erase = false) => ({
   color: "#1c1917",
   width: 3,
@@ -98,18 +95,16 @@ const PAGES = [
 /* An AI stub is deliberately NOT seeded. Opening one reaches fetchNote
    and the note cache, whose timing is not something two separate jsdom
    runs agree on to the millisecond — and it is covered by the smoke
-   test anyway. This file is about the readers step 3 moved. */
+   test anyway. */
 
-/* A page whose legacy fields flatten to more than one block -- those
-   are the shapes where conversion is NOT expected to be invisible,
-   because the stack now renders in order and the flattened form never
-   could. They are covered by the ordering section instead. */
-const isMulti = (p) => (p.html || p.body) && (p.strokes || []).length > 0;
-
-const asBlocks = (page) =>
-  isBlockNote(page)
-    ? { ...page, blocks: blocksOf(page), html: "", body: "", strokes: [] }
-    : page;
+/* The blocks form only ever exists POST-strip: conversion happens on
+   save, and every save runs noteFields, which drops ink. So the blocks
+   variant is derived from the stripped page — the same page the legacy
+   side becomes at load. */
+const asBlocks = (page) => {
+  const p = stripInkFromPage(page, FROZEN_NOW);
+  return isBlockNote(p) ? { ...p, blocks: blocksOf(p), html: "", body: "", strokes: [] } : p;
+};
 
 const seedFor = (pages) => ({
   semester: "Semester 1",
@@ -137,8 +132,6 @@ async function bundleFrom(treeDir) {
     format: "iife",
     jsx: "automatic",
     write: false,
-    // Both trees resolve react from the one real install, so a version
-    // difference can never be what the comparison is measuring.
     nodePaths: [path.join(rootDir, "node_modules")],
     define: { "process.env.NODE_ENV": '"production"' },
     plugins: [
@@ -170,7 +163,7 @@ function boot(js, pages) {
   w.console.error = () => {};
   w.console.warn = () => {};
 
-  const FIXED = Date.parse("2026-08-14T09:00:00.000Z");
+  const FIXED = Date.parse(FROZEN_NOW);
   const RealDate = w.Date;
   class FrozenDate extends RealDate {
     constructor(...args) {
@@ -185,23 +178,10 @@ function boot(js, pages) {
   w.Math.random = () => 0.42;
   Object.defineProperty(w, "devicePixelRatio", { value: 2, configurable: true });
 
-  /* jsdom has no 2D context, and A STUB THAT SWALLOWS THE CALLS MAKES
-     THIS TEST BLIND TO INK. Found by mutation: reverting the note
-     viewer to `page.strokes` — the exact "reader left behind" this file
-     exists to catch — left every byte of HTML identical, because a
-     canvas with six strokes and a canvas with none are the same
-     element. Handwriting is half of what step 3 touched, so half the
-     test was decorative.
-
-     So the context RECORDS instead. Every call and every property set
-     goes into a per-canvas log, which the snapshot carries alongside
-     the HTML — the drawing becomes comparable bytes.
-
-     The log resets on clearRect, which is the first thing both redraw
-     paths do. That is what makes it insensitive to HOW MANY times the
-     canvas was redrawn: only the last complete redraw survives, so an
-     extra render changes nothing while a different PICTURE changes
-     everything. */
+  /* The recording canvas context, kept from step 3. Nothing should
+     mount a canvas any more — but if a reader regresses to one, this
+     is what makes its drawing part of the snapshot instead of an
+     invisible rectangle two runs would agree about. */
   const traces = new WeakMap();
   const fmt = (v) => (typeof v === "number" ? String(Math.round(v * 1000) / 1000) : String(v));
   w.__traceOf = (el) => traces.get(el) || [];
@@ -246,8 +226,8 @@ function boot(js, pages) {
 
 const settle = (ms = 160) => new Promise((r) => setTimeout(r, ms));
 
-/* The HTML, plus what was drawn on every canvas in it. Without the
-   second half a handwritten note is an empty rectangle to this test. */
+/* The HTML, plus what was drawn on any canvas in it (there should be
+   none — see checkNoCanvas). */
 const snap = (dom) => {
   const root = dom.window.document.getElementById("root");
   const ink = [...root.querySelectorAll("canvas")]
@@ -275,9 +255,6 @@ async function captureReading(js, pages) {
   await openNotes(dom);
 
   const shots = { list: snap(dom) };
-  /* The accordion: rows expand in place via the chevron, one at a time,
-     and collapse via the same control. Uniform across every note type,
-     which retired the old sheet-closes-differently special case. */
   const rows = buttons(dom, "Expand note");
   if (rows.length !== pages.length) throw new Error(`expected ${pages.length} note rows, saw ${rows.length}`);
 
@@ -299,10 +276,7 @@ async function captureReading(js, pages) {
    Separate because opening the editor arms the 1200ms autosave, and a
    commit part-way through a walk would change what every later capture
    sees. Capturing at ~160ms and then discarding the window means no
-   commit ever runs — which also keeps this test off step 4's territory:
-   `fieldsOf` still reads the legacy fields, so a Done click on a
-   block-shape note would empty it today. That is the editor's job to
-   fix, and it is why nothing here clicks Done. */
+   commit ever runs. */
 async function captureEditor(js, pages, index) {
   const dom = boot(js, pages);
   await settle(300);
@@ -318,9 +292,9 @@ async function captureEditor(js, pages, index) {
   return shot;
 }
 
-/* A typed note and a handwritten one: RichTextEditor reads htmlOf, and
-   DrawingCanvas reads inkOf, so one of each is what covers the two
-   editor readers step 3 moved. */
+/* A typed note and an ink-only husk: RichTextEditor reads htmlOf for
+   the first, and the second proves the husk opens in the TEXT editor
+   — there is no other editor left for it to open in. */
 const EDITOR_INDEXES = [0, 2];
 
 async function captureAll(js, pages) {
@@ -329,26 +303,28 @@ async function captureAll(js, pages) {
   return shots;
 }
 
-/* The comparison is only as good as what got captured. A snapshot of a
-   handwritten note that carries no drawing calls means the recording
-   context has stopped working, and every "byte-identical" above it is
-   two empty rectangles agreeing. */
-function checkInkWasCaptured(label, shots, id) {
-  const shot = shots[`view:${id}`] || "";
+/* The removal's own guard: NO screen this file walks may mount a
+   canvas. The recording context guarantees that if one ever does, its
+   drawing is in the snapshot — so this check failing comes with the
+   evidence attached. */
+function checkNoCanvas(label, shots) {
+  const offenders = Object.entries(shots)
+    .filter(([, s]) => String(s).includes("<canvas"))
+    .map(([k]) => k);
   check(
-    shot.includes("lineTo(") && shot.includes("strokeStyle="),
-    `${label}: the handwritten note's drawing was actually captured`,
-    "no drawing calls in the snapshot — the canvas half of this test is not measuring anything"
+    offenders.length === 0,
+    `${label}: no reader mounts a canvas any more`,
+    offenders.length ? `canvas found in: ${offenders.join(", ")}` : null
   );
 }
 
-/* What a student can point at: the words, the drawing, the typeface.
-   Everything else in the markup is the renderer's business. */
+/* What a student can point at: the words and the typeface. Everything
+   else in the markup is the renderer's business. */
 function visibleOf(snapshot) {
   const [html, ink = ""] = String(snapshot).split("\n<!-- ink -->\n");
   const text = html
-    .replace(/<[^>]*>/g, "\u0001")
-    .split("\u0001")
+    .replace(/<[^>]*>/g, "")
+    .split("")
     .map((t) => t.trim())
     .filter(Boolean)
     .join(" | ");
@@ -376,27 +352,42 @@ function compare(label, before, after) {
   }
 }
 
-console.log("\nblocks: behaviour-neutral");
+console.log("\nblocks: behaviour-neutral (post-handwriting)");
 
 const current = await bundleFrom(rootDir);
 
 /* ---------- the same note, converted ---------- */
 
 {
-  /* A SIMPLE note -- one text block, or one ink block -- is what almost
-     every existing note converts to, so this is the case that decides
-     whether the conversion is invisible to real users. */
-  const simple = PAGES.filter((p) => !isMulti(p));
-  const legacyShots = await captureAll(current, simple);
-  const blockShots = await captureAll(current, simple.map(asBlocks));
+  /* The legacy side seeds the PRE-REMOVAL shapes — strokes and all —
+     and relies on the load-time strip. The blocks side seeds what the
+     first post-removal save produces. A student whose note was
+     converted must not be able to tell which they are looking at. */
+  const legacyShots = await captureAll(current, PAGES);
+  const blockShots = await captureAll(current, PAGES.map(asBlocks));
   compare("converted", legacyShots, blockShots);
-  checkInkWasCaptured("converted", blockShots, "n3");
+  checkNoCanvas("legacy", legacyShots);
+  checkNoCanvas("blocks", blockShots);
 
-  const converted = simple.map(asBlocks).filter((p) => Array.isArray(p.blocks));
+  /* The husk, as ordered: an ink-only note's list preview must read
+     sensibly — not a stroke count, not a blank row. Asserted in the
+     real mount, not by grepping the source. */
   check(
-    converted.length === simple.length - 1,
+    String(legacyShots.list).includes("Empty note"),
+    "the ink-only husk previews as 'Empty note' in the real list",
+    "n3 lost its strokes and its row now shows nothing at all"
+  );
+  check(
+    String(legacyShots.list).includes("Lecture sketch"),
+    "the husk KEPT ITS TITLE in the list",
+    "the ink-only note's title is gone from the list"
+  );
+
+  const converted = PAGES.map(asBlocks).filter((p) => Array.isArray(p.blocks));
+  check(
+    converted.length === PAGES.length - 1,
     "every note but the reference sheet was really stored as blocks",
-    `${converted.length} of ${simple.length - 1}`
+    `${converted.length} of ${PAGES.length - 1}`
   );
   check(
     converted.every((p) => !p.html && !p.body && !p.strokes.length),
@@ -405,49 +396,9 @@ const current = await bundleFrom(rootDir);
   );
 }
 
-/* ---------- an encoded note draws the same ink ---------- */
+/* ---------- order is a visible property, and legacy ink renders nothing ---------- */
 
 {
-  /* Ink compression stores strokes delta-encoded, and every renderer
-     reads through pointsOf. This renders the same handwriting raw and
-     encoded and compares what was DRAWN — the canvas trace — because a
-     renderer still reading stroke.points would draw an encoded note as
-     an empty rectangle while every byte of HTML stayed identical. */
-  /* encodeStroke alone, NOT encodeStrokes: the save chain also
-     simplifies, which deliberately drops points within its tolerance —
-     and the corpus strokes are straight lines that collapse to their
-     endpoints, so comparing against the save chain measured the lossy
-     stage, not the encoding. First run of this test failed exactly
-     there, correctly. Encoding must be render-invisible; simplification
-     is bounded instead, by its own test. */
-  const { encodeStroke } = await import("../src/ink.js");
-  const raw = PAGES.find((p) => p.id === "n3");
-  const encoded = {
-    ...raw,
-    blocks: [{ id: "n3:i0", type: "ink", strokes: raw.strokes.map(encodeStroke), h: 1400 }],
-    html: "", body: "", strokes: [],
-  };
-  const a = await captureReading(current, [raw]);
-  const b = await captureReading(current, [encoded]);
-  const inkOfShot = (shot) => String(shot).split("\n<!-- ink -->\n")[1] || "";
-  check(
-    inkOfShot(a["view:n3"]).length > 100,
-    "the raw side actually drew something, so the comparison is not two blanks"
-  );
-  check(
-    inkOfShot(a["view:n3"]) === inkOfShot(b["view:n3"]),
-    "AN ENCODED NOTE DRAWS THE SAME INK as its raw self",
-    "the drawn strokes differ — a renderer is reading .points directly and seeing nothing"
-  );
-}
-
-/* ---------- order is now a visible property ---------- */
-
-{
-  /* Reversing blocksOf was undetectable in step 3, because readers
-     concatenated by type. NoteView renders the stack, so it is
-     detectable now -- and this is the assertion that says so, rather
-     than the file continuing to claim a coverage it does not have. */
   const id = "m1";
   const textFirst = {
     id,
@@ -459,20 +410,34 @@ const current = await bundleFrom(rootDir);
     updatedAt: "2026-08-01T00:00:00.000Z",
     blocks: [
       { id: `${id}:t0`, type: "text", html: "<p>ALPHA</p>", body: "ALPHA" },
-      { id: `${id}:i0`, type: "ink", strokes: [stroke(6)], h: 700 },
       { id: `${id}:t1`, type: "text", html: "<p>OMEGA</p>", body: "OMEGA" },
     ],
   };
-  const inkFirst = { ...textFirst, blocks: [textFirst.blocks[1], textFirst.blocks[0], textFirst.blocks[2]] };
+  const reversed = { ...textFirst, blocks: [textFirst.blocks[1], textFirst.blocks[0]] };
 
   const a = await captureReading(current, [textFirst]);
-  const b = await captureReading(current, [inkFirst]);
+  const b = await captureReading(current, [reversed]);
   check(a[`view:${id}`] !== b[`view:${id}`], "block ORDER is visible in the rendered note", "reordering the blocks changed nothing — the stack is not being rendered in order");
 
   const html = a[`view:${id}`];
   check(html.indexOf("ALPHA") < html.indexOf("OMEGA"), "text blocks render in stack order");
   check(html.includes("ALPHA") && html.includes("OMEGA"), "a note with two text blocks renders BOTH", "the second text block was dropped");
-  check((html.match(/<canvas/g) || []).length === 1, "the ink block between them renders as its own canvas");
+
+  /* A blocks note a pre-removal device wrote can still hold a
+     LEGACY_INK block until its next save strips it. It must render as
+     if absent: no canvas, no crash, both text blocks intact. */
+  const withLegacyInk = {
+    ...textFirst,
+    blocks: [textFirst.blocks[0], { id: `${id}:i0`, type: "ink", strokes: [stroke(6)], h: 700 }, textFirst.blocks[1]],
+  };
+  const c = await captureReading(current, [withLegacyInk]);
+  const inkHtml = c[`view:${id}`];
+  check(!String(inkHtml).includes("<canvas"), "a legacy ink block renders NO canvas", "the ink renderer is back");
+  check(
+    inkHtml.includes("ALPHA") && inkHtml.includes("OMEGA"),
+    "text on both sides of a legacy ink block still renders",
+    "a legacy ink block took its neighbours down with it"
+  );
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

@@ -44,6 +44,7 @@
    ================================================================== */
 
 import { COLLECTIONS, COUNTABLE_COLLECTIONS, mergeList } from "./sync.js";
+import { stripInkFromPage } from "./noteBlocks.js";
 import { isAiNote } from "./aiNotesStore.js";
 import { summarise } from "./grades.js";
 import { TOTALS_ID } from "./srs.js";
@@ -265,7 +266,15 @@ export function restoreTransform(currentBucket, archivedBucket, { at }) {
     const restored = ((archivedBucket && archivedBucket[key]) || []).filter(Boolean).map((it) => {
       if (it.deletedAt) return it;
       const { archivedIn, ...rest } = it;
-      return { ...rest, updatedAt: at };
+      const live = { ...rest, updatedAt: at };
+      /* ARCHIVE RESTORE IS A RESURRECTION PATH FOR HANDWRITING, and the
+         second one: archive rows hold the bucket VERBATIM, so a
+         semester archived before the removal carries every stroke. The
+         backup restore is covered by normalizeData's strip; this path
+         writes straight into the bucket, so it strips here — same
+         decision, second door. Jared has a live archived semester
+         containing ink, so this is not hypothetical. */
+      return key === "pages" ? stripInkFromPage(live, at) : live;
     });
     out[key] = mergeList((currentBucket && currentBucket[key]) || [], restored);
   }

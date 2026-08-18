@@ -104,8 +104,8 @@ Gradle plugin and dependencies. Wait for the status bar to go quiet.
 
 **To run on the emulator instead:** pick any Pixel image from the same
 dropdown. Good enough for a first look, but **the emulator cannot test
-the microphone properly and has no stylus**, so the verification list
-below needs a real device.
+the microphone properly**, so the verification list below needs a real
+device.
 
 ### What success looks like
 
@@ -378,7 +378,6 @@ them:
 | Sync across devices (5–6) | **not run** |
 | No service worker on either platform (7) | **not run** — Android is the live risk |
 | "Record from" wording and the Bluetooth-headset case (10–11) | **not run** |
-| Handwriting on the iPad, and the stylus sample | **not run** — and the ink-compression work is blocked on it |
 | **iOS, all of it** | **not run** — nothing has been compiled to an Apple device |
 
 The renderer-recovery hardening below is also still open: the crash that
@@ -395,19 +394,19 @@ deep link and walk assertion rests on. **Placement is not covered at
 all**, because nothing in jsdom has a position. These are the items
 only a device can answer:
 
-12. **The bar clears the home indicator (iOS) and the gesture bar
+13. **The bar clears the home indicator (iOS) and the gesture bar
     (Android).** `env(safe-area-inset-bottom)` plus `viewport-fit=cover`
     should handle it; the failure looks like the labels sitting under
     the gesture pill, or a dead strip you have to tap twice.
-12a. **The recording indicator sits ABOVE the bar, not under it.**
+13a. **The recording indicator sits ABOVE the bar, not under it.**
     Start a recording, leave the AI tab, and check both the timer and
     its Stop button are fully tappable. "I can't stop the recording" is
     a privacy problem before it is a usability one, and this is the one
     existing element that competes for the same space.
-12b. **Rotating to landscape**, where a phone can cross the 640px
+13b. **Rotating to landscape**, where a phone can cross the 640px
     breakpoint mid-session: the bar should move to the top and back
     without losing the current tab.
-12c. **The last tab survives a force-quit** — reopen and land where you
+13c. **The last tab survives a force-quit** — reopen and land where you
     left off, not on Plan. On a first-ever install it lands on Plan.
 
 The breakpoint is **viewport width, not shell detection** (640px,
@@ -508,14 +507,14 @@ is intended.
     following an instruction rather than code enforcing a rule, so it is
     exactly the behaviour that needs a real run.
 
-### Handwriting — for Grace on the iPad
+### Handwriting — removed
 
-10. **Apple Pencil pressure works**: pressing harder gives a thicker
-    line. A finger should draw a constant width.
-11. **Please send one page of real handwriting**, then export a backup
-    from the Account tab and send the file. It is needed to finish the
-    ink-compression work, and synthetic strokes cannot answer the
-    question.
+The two iPad items that used to sit here (Apple Pencil pressure, and a
+real handwriting sample) are void: **handwriting was removed entirely
+on 16 August 2026** — the feature and the stored ink both. The sample
+Grace sent on 15 August did its work before the decision; nothing on
+this list tests ink any more, and a pre-removal note now opens as a
+titled empty text note ("Empty note" in the list).
 
 ---
 

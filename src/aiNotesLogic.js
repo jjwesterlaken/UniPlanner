@@ -317,7 +317,7 @@ export const TRANSLATION_LANGUAGES = [
 /* ---------- mapping AI output onto the app's existing data shapes ----------
 
    AI notes are stored as a normal `pages` item (the same collection as
-   handwritten notebook pages, so folders/future search already cover
+   typed notebook pages, so folders/future search already cover
    it) plus one `notes` item per term/definition pair (the collection
    the Study cards game already reads). Both collections live inside
    the single `planner_data` JSON blob that syncs in full on every
