@@ -2014,6 +2014,23 @@ async function run() {
     assert.match(workflow, /fetch-depth:\s*0/, "CI checks out shallow, so the differential render has no baseline to build");
   });
 
+  await test("CI runs the three e2e journeys, and forces them rather than letting them skip", () => {
+    /* The journeys are the only automation that puts a real browser in
+       front of the real backend — the class of check every shipped
+       production bug would have failed. They are not in `npm test`
+       (they need account secrets and a browser), so the workflow is
+       the ONLY thing running them, and a workflow list drifts exactly
+       the way any other restatement does. Pinned here for the same
+       reason the migration guard is. */
+    const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    assert.match(pkg.scripts["test:e2e"] || "", /playwright test/, "the e2e script is gone from package.json");
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
+    assert.match(workflow, /REQUIRE_E2E:\s*"1"/, "CI no longer forces the journeys — missing secrets would skip them silently");
+    assert.match(workflow, /npm run test:e2e/, "the e2e job no longer runs the journeys");
+    assert.match(workflow, /secrets\.TEST_ACCOUNT_EMAIL/, "the test-account email secret is no longer wired in");
+    assert.match(workflow, /secrets\.TEST_ACCOUNT_PASSWORD/, "the test-account password secret is no longer wired in");
+  });
+
   await test("the deploy workflow ships BOTH functions", () => {
     /* It deployed only ai-notes for as long as ai-text existed, so
        every ai-text change needed a by-hand deploy nobody's checklist

@@ -16,3 +16,6 @@ mobile/android/
 *.keystore
 key.properties
 .archive-test-tmp/
+# e2e journey artifacts (per-run)
+e2e/.state.json
+e2e/test-results/
