@@ -121,6 +121,7 @@ import {
 } from "./aiText.jsx";
 import { buildAttempt, pruneAttempts, weakTopics } from "./practice.js";
 import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
+import { createReporter, installGlobalHandlers } from "./errorReport.js";
 import {
   aiNotePreview,
   mapAiResultToItems,
@@ -4817,6 +4818,30 @@ export default function PlannerApp() {
   const [focusedCourse, setFocusedCourse] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [session, setSession] = useState(null);
+
+  /* Error reporting into our own client_errors table — see
+     errorReport.js for the rules (six fields, capped, deduped, fire
+     and forget, never user content). The transport is a no-op without
+     a configured backend: demo mode has no server to reach, and
+     nothing may leave the device. Session id is read through a ref at
+     report time so a sign-in mid-session is reflected without
+     re-installing the handlers. */
+  const sessionUserRef = useRef(null);
+  const reportErrorRef = useRef(() => false);
+  useEffect(() => {
+    sessionUserRef.current = session && session.user ? session.user.id : null;
+  }, [session]);
+  useEffect(() => {
+    const send = supabase ? (row) => supabase.from("client_errors").insert(row) : async () => {};
+    reportErrorRef.current = createReporter({
+      send,
+      buildId: buildId(),
+      getUserId: () => sessionUserRef.current,
+      getPath: () => (typeof location === "undefined" ? null : location.pathname),
+      getUserAgent: () => (typeof navigator === "undefined" ? null : navigator.userAgent),
+    });
+    return installGlobalHandlers((e) => reportErrorRef.current(e), typeof window === "undefined" ? null : window);
+  }, []);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
   // { reason, bytes } while the last local save failed, null once one succeeds.
@@ -4948,6 +4973,10 @@ export default function PlannerApp() {
       }).catch(() => {});
     } catch (e) {
       setSyncError(e.message || "Couldn't sync. Please try again.");
+      // The cheap explicit report: sync failures are the breakage a
+      // tester hits most and describes worst. Deduped and capped by
+      // the reporter, so a flaky connection cannot flood the table.
+      reportErrorRef.current(e);
     } finally {
       setSyncing(false);
     }

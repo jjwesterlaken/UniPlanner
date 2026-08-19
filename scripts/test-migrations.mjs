@@ -569,6 +569,13 @@ async function run() {
          ('cccccccc-0000-0000-0000-000000000001', ${USER},  '2026 · Semester 1', '{"items":412}', '{"courses":[]}'),
          ('dddddddd-0000-0000-0000-000000000002', ${OTHER}, '2026 · Semester 2', '{"items":9}',  '{"courses":[]}');`
     );
+    psqlOrThrow(
+      db,
+      `insert into public.client_errors (user_id, message) values
+         (${USER}, 'boom on the deleted account'),
+         (${OTHER}, 'boom on the survivor'),
+         (null, 'boom from nobody');`
+    );
 
     const owned = one(
       db,
@@ -590,7 +597,13 @@ async function run() {
       );
       assert.ok(count(db, `public.${table}`, `user_id = ${OTHER}`) > 0, `public.${table} lost another user's rows`);
     }
+    /* Anonymous error reports belong to nobody: account deletion
+       removes every row TIED TO THE ACCOUNT, and the deletion page
+       says exactly that. Sweeping null rows here would delete other
+       signed-out users' diagnostics on every account deletion. */
+    assert.equal(count(db, "public.client_errors", "user_id is null"), 1, "account deletion swept the anonymous error reports");
   });
+
 
   await test("0005 is re-runnable (a second apply changes nothing and fails nothing)", () => {
     const db = withNotes();
@@ -764,16 +777,79 @@ async function run() {
     const db = withArchives();
     const tables = ownedTables(db);
     assert.ok(tables.includes("semester_archives") && tables.includes("planner_data"), `the enumeration missed a table: ${tables.join(", ")}`);
+
+    /* THE ONE EXCUSED TABLE, with its reason written down: 0010's
+       client_errors holds OUR diagnostics — message, stack, build id,
+       page path, browser — never a student's content (the field list
+       is pinned by test-error-report). Signed-out crashes matter as
+       much as signed-in ones, and signed-out IS anon on the real
+       backend, so anon may INSERT — and the excuse is exactly that
+       shape: insert only, forced to user_id null by policy, and
+       silence-on-read still impossible because no read verb exists to
+       answer with silence. Any widening goes red here. */
     for (const table of tables) {
       for (const verb of ["select", "insert", "update", "delete"]) {
+        const allowed = table === "client_errors" && verb === "insert";
         assert.equal(
           one(db, `select has_table_privilege('anon', 'public.${table}', '${verb}')::text;`),
-          "false",
-          `anon can ${verb} public.${table} — an unauthenticated request gets silence instead of a refusal`
+          allowed ? "true" : "false",
+          allowed
+            ? "anon can no longer report a signed-out crash — client_errors lost its insert"
+            : `anon can ${verb} public.${table} — an unauthenticated request gets silence instead of a refusal`
         );
       }
     }
+    assert.equal(
+      one(db, `select count(*)::text from pg_policies where schemaname='public' and tablename='client_errors' and 'anon' = any(roles) and cmd = 'INSERT' and with_check like '%user_id IS NULL%';`),
+      "1",
+      "the anon insert on client_errors is no longer forced to user_id null"
+    );
   });
+
+  /* ---------- 0010: client_errors, write-only by construction ---------- */
+
+  await test("0010: a signed-in client can report its own crash and nobody else's", () => {
+    const db = withArchives();
+    seedTwoUsers(db);
+    assert.equal(asUser(db, USER, `insert into public.client_errors (user_id, message) values (${USER}, 'boom');`).ok, true, "a signed-in client can no longer report");
+    const forged = asUser(db, USER, `insert into public.client_errors (user_id, message) values (${OTHER}, 'forged');`);
+    assert.equal(forged.ok, false, "a client attributed a report to ANOTHER user");
+  });
+
+  await test("0010: anon can report only as nobody, and a null-user report really lands", () => {
+    const db = withArchives();
+    assert.equal(psql(db, `set role anon; insert into public.client_errors (user_id, message) values (null, 'signed-out boom');`).ok, true, "a signed-out crash can no longer be reported");
+    const claimed = psql(db, `set role anon; insert into public.client_errors (user_id, message) values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'claimed');`);
+    assert.equal(claimed.ok, false, "anon attributed a report to a user id");
+  });
+
+  await test("0010: NOBODY reads back — not even the reporter's own rows", () => {
+    /* The inverse of the 0008 rule, on purpose: 'no vs nothing'
+       matters for reads, and here no read verb exists to answer with
+       silence. A client can report and can never read; Jared reads
+       from the dashboard. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    psqlOrThrow(db, `insert into public.client_errors (user_id, message) values (${USER}, 'boom');`);
+    assert.equal(asUser(db, USER, `select message from public.client_errors;`).ok, false, "a client can read error reports back");
+    assert.equal(psql(db, `set role anon; select message from public.client_errors;`).ok, false, "anon can read error reports");
+    assert.equal(asUser(db, USER, `delete from public.client_errors where user_id = ${USER};`).ok, false, "a client can delete reports");
+    assert.equal(asUser(db, USER, `update public.client_errors set message = 'x';`).ok, false, "a client can rewrite reports");
+  });
+
+  await test("0010: the column caps hold, so a runaway client cannot store megabytes a row", () => {
+    const db = withArchives();
+    const oversize = psql(db, `set role anon; insert into public.client_errors (user_id, message) values (null, repeat('x', 2001));`);
+    assert.equal(oversize.ok, false, "a 2001-char message was accepted — the length check is gone");
+    assert.match(oversize.err, /check/i);
+  });
+
+  await test("0010 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = withArchives();
+    applyMigration(db, "0010_client_errors.sql");
+    assert.equal(one(db, `select count(*)::text from pg_policies where tablename = 'client_errors';`), "2", "re-applying duplicated or dropped a policy");
+  });
+
 
   await test("every verb granted to authenticated is a verb that table has a policy for", () => {
     /* Derived both sides: the grants come from the catalogue, the
@@ -995,6 +1071,13 @@ async function run() {
     "ai_notes_requests.idempotency_key": () => newIdempotencyKey(),
     // Same generator, for the same reason.
     "semester_archives.id": () => newIdempotencyKey(),
+    // Not an identifier but client-minted text crossing into a typed
+    // column all the same: buildId() in PlannerApp.jsx returns the
+    // 12-hex build stamp from the meta tag, or the literal
+    // "development" when unstamped — which is its real output in any
+    // DOM-less run, so that is what gets inserted against the column
+    // and its 64-char cap.
+    "client_errors.build_id": () => "development",
   };
 
   /* Columns no client value ever reaches. Each needs a reason, because
@@ -1003,6 +1086,8 @@ async function run() {
     "ai_usage.id": "written by the Edge Functions under service role; the client only ever reads it",
     "profiles.id": "created by the signup trigger; the client only ever reads tier",
     "planner_data.user_id": "the auth user id, minted by Supabase rather than by anything in this repo",
+    "client_errors.id": "gen_random_uuid() default on the column; the client never supplies one",
+    "client_errors.user_id": "the auth user id when signed in, null when not — only ever copied from the session",
     "ai_notes.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
     "ai_notes_requests.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
     "ai_usage.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
@@ -1046,6 +1131,8 @@ async function run() {
         `insert into public.ai_notes_requests (idempotency_key, user_id, status) values ('${v}', ${USER}, 'pending')`,
       "semester_archives.id": (v) =>
         `insert into public.semester_archives (id, user_id, label, summary, data) values ('${v}', ${USER}, 'L', '{}', '{}')`,
+      "client_errors.build_id": (v) =>
+        `insert into public.client_errors (user_id, message, build_id) values (${USER}, 'boom', '${v}')`,
     };
     for (const [col, gen] of Object.entries(GENERATED_IDS)) {
       const value = gen();

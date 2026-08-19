@@ -2239,6 +2239,77 @@ make the codebase worse. Strip first (`/\*…\*/` and `//…`, the way
 `test-readings.mjs` and `test-note-blocks.mjs` do), and the comment
 and the guard stop competing.
 
+## Pre-market hardening: the shape of it, and what was deliberately not built
+
+Built ahead of the closed test, in sequence, each its own PR. What
+exists and why it looks the way it does:
+
+**The three e2e journeys** (`e2e/`, the `e2e journeys` CI job) put a
+real Chromium in front of the built bundle and the live Supabase
+project with a dedicated test account — the only automation on the
+class of failure every shipped production bug belonged to. Three
+rules keep them trustworthy: runs SERIALIZE on a concurrency group
+(one shared account; the twin push/pull_request runs corrupted each
+other's data before it existed), the account resets in `beforeAll`
+(a serial retry restarts the suite in a fresh worker, and the data
+must restart with it), and journey 2 asserts inside
+`data-ai-note-body` (the stub's preview can render without the fetch,
+so an assertion that can match the preview proves nothing). For the
+ledger: the suite's first week found two real concurrency bugs in its
+own harness before finding any in the app — not wasted motion, since
+a harness that races is a harness whose failures can't be believed.
+The one-time setup (test account + two repo secrets) is in PR #48.
+
+**The coverage gate** (`.c8rc.json`, `npm run test:coverage` in CI) is
+today's measured branch figure rounded down — 82 — ratcheted up-only
+by a test that reads origin/main's copy of the threshold. The figure
+covers what Node can attribute: the pure `src/**/*.js` modules. The
+JSX layer runs only as a bundle inside jsdom and is covered by the
+differential mounts, the smoke walks and the journeys, which no
+percentage represents. Local `npm test` stays ungated (no postgres =
+fewer branches, and a gate that fails for that reason gets ignored).
+
+**Error reports go into our own `client_errors` table** (migration
+0010, `src/errorReport.js`) — never a third party. Write-only by
+construction: insert is the only verb, nobody has select, Jared reads
+from the dashboard. A row is six fields pinned by name — message,
+stack, build id, page PATH (never query or hash: the hash is where
+recovery tokens ride), browser, user_id — and never user content. The
+reporter is bounded the migration-backoff way: capped per session,
+deduped, one attempt, no retry, cannot throw. The ANON EXCEPTION is
+written down where 0008 lives: anon may insert with user_id forced
+null (signed-out crashes matter, and signed-out IS anon), and the
+grant-audit guard asserts exactly that shape. `test-local-only.mjs`
+was updated DELIBERATELY: the quiet walk still proves zero outbound,
+then throws an error on purpose and proves the report goes only to
+our own `client_errors` endpoint — and in demo mode goes nowhere.
+Account deletion clears the account's reports; anonymous rows stay
+(they belong to nobody, and sweeping them would delete other
+signed-out users' diagnostics).
+
+**Deliberately NOT built, each with the condition that would change
+the answer** — deferred decisions, not forgotten ones:
+
+- **A second Supabase project (dev/prod split).** At two users the
+  cost is a duplicated backend and a doubled migration ritual; the
+  cheap version is the promote-on-release branch instead. Revisit
+  when a migration mistake would cost real users' data — around the
+  closed test's end.
+- **PostHog, Sentry, or any third-party telemetry.** The app proved
+  zero third-party requests, says so in the privacy policy, and pins
+  it with a test; a US processor would undo all three and cost a
+  consent bump. Revisit only if error volume outgrows the dashboard —
+  and then the answer is a bigger own-backend pipeline, not a
+  processor.
+- **A 95% coverage gate.** Unachievable gates get disabled, and a
+  disabled gate is worse than none. The ratchet may reach 95 honestly
+  one day; the condition is the JSX layer becoming attributable, not
+  a decision to demand the number.
+- **A full OWASP audit now.** A broad audit proposing broad changes
+  without end-to-end coverage is how business logic gets mangled.
+  Condition: after launch, with the journeys in place to catch what
+  the audit's changes break.
+
 ## Testing
 
 `npm test` builds the web bundle, then runs the app tests, the demo-mode
