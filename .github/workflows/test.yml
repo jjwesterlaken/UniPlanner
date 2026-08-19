@@ -80,10 +80,15 @@ jobs:
           psql --version
 
       # Builds the web bundle, then runs the app tests and the migration
-      # tests. REQUIRE_POSTGRES (above) means the migration half can't
-      # silently skip.
+      # tests under c8. REQUIRE_POSTGRES (above) means the migration half
+      # can't silently skip, and --check-coverage enforces the branch
+      # threshold in .c8rc.json — today's measured figure rounded down,
+      # ratcheted up-only by a test that compares against origin/main's
+      # copy. Locally `npm test` stays ungated: a machine without
+      # postgres legitimately exercises fewer branches, and a gate that
+      # fails for that reason teaches people to ignore it.
       - name: Run the tests
-        run: npm test
+        run: npm run test:coverage
 
   e2e:
     name: e2e journeys

@@ -1,0 +1,7 @@
+{
+  "include": ["src/**/*.js"],
+  "exclude": ["src/main.jsx"],
+  "reporter": ["text"],
+  "branches": 82,
+  "all": true
+}

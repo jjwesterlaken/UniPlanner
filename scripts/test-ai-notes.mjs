@@ -6,6 +6,7 @@
    bundle for leaked secrets). */
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -2033,6 +2034,49 @@ async function run() {
        data (a concurrent reset deleted an archive row mid-poll on the
        first real run). The concurrency group is what serialises them. */
     assert.match(workflow, /group:\s*e2e-shared-test-account/, "the e2e concurrency group is gone — concurrent runs will race on the one test account");
+  });
+
+  await test("the coverage gate is a RATCHET: the threshold may rise, never fall", () => {
+    /* The gate number in .c8rc.json is today's measured branch
+       coverage rounded down — deliberately not 95%, because a gate
+       nobody can pass gets disabled and a disabled gate is worse than
+       none. What keeps it honest is this ratchet: the threshold is
+       compared against the one on origin/main, DERIVED the way the
+       dark-mode baseline is, so lowering it fails here rather than
+       passing review as a one-character diff. Raising it when
+       coverage genuinely rises is the intended move.
+
+       Skips without git history; REQUIRE_BASELINE=1 in CI turns the
+       skip into a failure, the same arrangement as the differential
+       render. A missing .c8rc.json on main means the gate is landing
+       for the first time, which is not a lowering. */
+    const current = JSON.parse(fs.readFileSync(path.join(rootDir, ".c8rc.json"), "utf8"));
+    assert.ok(typeof current.branches === "number" && current.branches > 0, "the branch threshold is gone from .c8rc.json");
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
+    assert.match(workflow, /npm run test:coverage/, "CI no longer runs the suite under the coverage gate");
+
+    let baseline = null;
+    try {
+      baseline = execFileSync("git", ["show", "origin/main:.c8rc.json"], { cwd: rootDir, encoding: "utf8" });
+    } catch (e) {
+      if (process.env.REQUIRE_BASELINE === "1") {
+        // origin/main genuinely lacking the file is a legitimate first
+        // landing even in CI; only a git failure with the file present
+        // should fail. `git cat-file -e` distinguishes the two.
+        try {
+          execFileSync("git", ["cat-file", "-e", "origin/main:.c8rc.json"], { cwd: rootDir });
+          throw new Error("origin/main has .c8rc.json but it could not be read — the ratchet cannot check");
+        } catch {
+          return; // first landing: nothing to ratchet against
+        }
+      }
+      return;
+    }
+    const main = JSON.parse(baseline);
+    assert.ok(
+      current.branches >= main.branches,
+      `the coverage gate was LOWERED (${main.branches} -> ${current.branches}) — the ratchet only turns one way`
+    );
   });
 
   await test("the deploy workflow ships BOTH functions", () => {

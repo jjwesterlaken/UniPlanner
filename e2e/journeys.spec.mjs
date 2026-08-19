@@ -118,8 +118,19 @@ test("journey 1: create a note, and it survives a completely fresh device", asyn
   });
 });
 
-test("journey 2: the AI note migrates to its row, and a fresh device renders its content", async ({ browser }) => {
+test("journey 2: the AI note migrates to its row, and a fresh device renders its content", async ({ page, browser }) => {
   test.skip(!aiNoteId, "no seed");
+
+  /* The journey drives its OWN session. It used to poll with no
+     browser open, relying on journey 1's pages having migrated AND
+     pushed the stub before they closed — but the stub write rides
+     the 4s debounce, so that was a race on how fast a context shuts
+     (it lost in CI). With this page open, sign-in triggers runSync:
+     the insert either lands or hits 23505 (journey 1 got there
+     first), which reads as already-migrated — the exact
+     duplicate-key design 0008 forced — and the stub write pushes
+     while we poll. */
+  await signIn(page);
 
   await test.step("the app's own sync moved the note into ai_notes (the eleven-day path)", async () => {
     const { client, userId } = await signedInClient();
@@ -172,7 +183,37 @@ test("journey 3: archive the semester, see the row, restore, and the planner is 
     label = await nameInput.inputValue();
     expect(label.trim().length).toBeGreaterThan(0);
     await page.getByRole("button", { name: "Archive", exact: true }).click();
-    await expect(page.getByText(/Archived as/)).toBeVisible({ timeout: 30_000 });
+    try {
+      await expect(page.getByText(/Archived as/)).toBeVisible({ timeout: 30_000 });
+    } catch (e) {
+      /* Fail with the app's OWN words and a decisive probe, because
+         "Archived as never appeared" cannot distinguish a UI fault
+         from a server refusal. The probe inserts a row directly with
+         the same client credentials: if it is refused, the error code
+         names the server-side cause (a grant, a policy, a column); if
+         it succeeds, the fault is in the app's archive path. */
+      const shown = await page.locator('[role="status"]').textContent().catch(() => null);
+      let probe = "probe not run";
+      const { client, userId } = await signedInClient();
+      try {
+        const probeId = crypto.randomUUID();
+        const { error } = await client.from("semester_archives").insert({
+          id: probeId,
+          user_id: userId,
+          label: "e2e-probe",
+          summary: { items: 0, courses: [] },
+          data: {},
+        });
+        if (error) probe = `direct insert REFUSED: ${error.code || "?"} ${error.message}`;
+        else {
+          probe = "direct insert SUCCEEDED — the refusal is in the app's archive path, not the server";
+          await client.from("semester_archives").delete().eq("id", probeId);
+        }
+      } finally {
+        await client.auth.signOut();
+      }
+      throw new Error(`the archive never reported success; on-screen status: ${JSON.stringify(shown)}; ${probe}`);
+    }
   });
 
   await test.step("the row really exists, queried directly", async () => {
