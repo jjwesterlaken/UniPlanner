@@ -118,8 +118,19 @@ test("journey 1: create a note, and it survives a completely fresh device", asyn
   });
 });
 
-test("journey 2: the AI note migrates to its row, and a fresh device renders its content", async ({ browser }) => {
+test("journey 2: the AI note migrates to its row, and a fresh device renders its content", async ({ page, browser }) => {
   test.skip(!aiNoteId, "no seed");
+
+  /* The journey drives its OWN session. It used to poll with no
+     browser open, relying on journey 1's pages having migrated AND
+     pushed the stub before they closed — but the stub write rides
+     the 4s debounce, so that was a race on how fast a context shuts
+     (it lost in CI). With this page open, sign-in triggers runSync:
+     the insert either lands or hits 23505 (journey 1 got there
+     first), which reads as already-migrated — the exact
+     duplicate-key design 0008 forced — and the stub write pushes
+     while we poll. */
+  await signIn(page);
 
   await test.step("the app's own sync moved the note into ai_notes (the eleven-day path)", async () => {
     const { client, userId } = await signedInClient();
