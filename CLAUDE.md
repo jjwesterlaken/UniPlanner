@@ -739,10 +739,15 @@ places, resolved by retry. The archive id is parked on the device
 (`uni-planner-archive-pending`, scoped to the bucket) so a retry lands
 on the SAME id, and the retry deletes any half-landed row before
 re-inserting — so a row can never hold an older snapshot than the blob
-that was stripped. `stillCurrent` re-checks the bucket reference after
-the insert, because a recording can save itself mid-flight and
-stripping a bucket the snapshot no longer matches loses the difference
-from both places. Restoring: blob first, and the archive row is NOT
+that was stripped. `stillCurrent` re-checks the bucket CONTENT after
+the insert (serialized snapshot, reference equality as the fast path),
+because a recording can save itself mid-flight and stripping a bucket
+the snapshot no longer matches loses the difference from both places.
+Content and not reference, because every completed sync rebuilds the
+semester objects without changing them — a reference check refused
+with "changed" over an unchanged semester whenever a focus-triggered
+sync landed mid-archive, which journey 3 caught in CI (the e2e
+suite's first real app bug). Restoring: blob first, and the archive row is NOT
 deleted — it stays until the student deletes it, so a crash
 mid-restore leaves content in two places, never zero.
 
@@ -2256,9 +2261,12 @@ must restart with it), and journey 2 asserts inside
 `data-ai-note-body` (the stub's preview can render without the fetch,
 so an assertion that can match the preview proves nothing). For the
 ledger: the suite's first week found two real concurrency bugs in its
-own harness before finding any in the app — not wasted motion, since
-a harness that races is a harness whose failures can't be believed.
-The one-time setup (test account + two repo secrets) is in PR #48.
+own harness — not wasted motion, since a harness that races is a
+harness whose failures can't be believed — and then its first real
+app bug: `stillCurrent`'s reference check refusing an archive over an
+unchanged semester whenever a sync landed mid-flight (now a content
+comparison; see the archive section). The one-time setup (test
+account + two repo secrets) is in PR #48.
 
 **The coverage gate** (`.c8rc.json`, `npm run test:coverage` in CI) is
 today's measured branch figure rounded down — 82 — ratcheted up-only

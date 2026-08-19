@@ -5504,6 +5504,16 @@ export default function PlannerApp() {
        the half that cannot be got around by a race. */
     if (expectedSemester && expectedSemester !== name) return { ok: false, reason: "changed" };
     const bucket = dataRef.current.semesters[name];
+    /* stillCurrent compares CONTENT, not reference. Every completed
+       sync rebuilds the semester objects even when nothing in them
+       differs (mergeData constructs new arrays, the pull restamps
+       meta), so a focus-triggered sync landing during the ~1s archive
+       used to fail a reference check and refuse with "changed" over
+       an unchanged semester — journey 3 caught it in CI, the first
+       real app bug the e2e suite found. The reference check stays as
+       the fast path; the serialized snapshot is the truth. A real
+       mid-archive edit still differs in content and still refuses. */
+    const snapshot = JSON.stringify(bucket);
     const res = await archiveSemester({
       supabaseClient: archiveClient(),
       userId: session && session.user ? session.user.id : null,
@@ -5512,7 +5522,8 @@ export default function PlannerApp() {
       label,
       uid: newIdempotencyKey,
       now: nowISO(),
-      stillCurrent: () => dataRef.current.semesters[name] === bucket,
+      stillCurrent: () =>
+        dataRef.current.semesters[name] === bucket || JSON.stringify(dataRef.current.semesters[name]) === snapshot,
     });
     if (res.ok) {
       // A parked timer must not commit year one's minutes to year two.
@@ -5546,13 +5557,17 @@ export default function PlannerApp() {
   const foldLateArchive = async () => {
     const name = dataRef.current.semester;
     const bucket = dataRef.current.semesters[name];
+    // Content, not reference — the same over-refusal the archive path
+    // had; see the comment on archiveCurrentSemester's stillCurrent.
+    const snapshot = JSON.stringify(bucket);
     const res = await foldLateEditsIntoArchive({
       supabaseClient: archiveClient(),
       userId: session && session.user ? session.user.id : null,
       bucket,
       uid: newIdempotencyKey,
       now: nowISO(),
-      stillCurrent: () => dataRef.current.semesters[name] === bucket,
+      stillCurrent: () =>
+        dataRef.current.semesters[name] === bucket || JSON.stringify(dataRef.current.semesters[name]) === snapshot,
     });
     if (res.ok) {
       setData((d) => ({
