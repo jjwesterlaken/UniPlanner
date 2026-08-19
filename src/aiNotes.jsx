@@ -1644,7 +1644,12 @@ export function AiLectureNoteView({ page, patchItem, onClose, onMissing }) {
       )}
 
       {content ? (
-        <div className="mt-3 space-y-3 text-sm text-stone-600">
+        /* data-ai-note-body marks the FETCHED content — as opposed to
+           the row's preview, which comes from the stub in the blob and
+           shows whether or not the fetch worked. The e2e journey scopes
+           to this attribute for exactly that reason; renaming it breaks
+           the journey by design. */
+        <div className="mt-3 space-y-3 text-sm text-stone-600" data-ai-note-body>
           <p>{content.overview}</p>
           {content.keyPoints && content.keyPoints.length > 0 && (
             <ul className="list-disc space-y-1 pl-5">
