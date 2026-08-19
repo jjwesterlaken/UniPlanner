@@ -951,6 +951,24 @@ async function run() {
     assert.match(appSrc, /return ALL_TAB_IDS\.includes\(saved\) \? saved : "planner"/, "a first-ever load no longer lands on Plan, or an unknown id is no longer rejected");
   });
 
+  await test("stillCurrent compares CONTENT, not reference — a mid-archive sync must not refuse an unchanged semester", () => {
+    /* Journey 3 caught this in CI, the e2e suite's first real app
+       bug: every completed sync rebuilds the semester objects without
+       changing them (mergeData constructs new arrays), so a
+       reference-only check refused with "changed" whenever a
+       focus-triggered sync landed during the ~1s archive. Both
+       closures must carry the serialized-snapshot fallback; the
+       reference check may stay as the fast path. Comments stripped
+       before matching, per the ledger. */
+    const raw = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    const code = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    const closures = [...code.matchAll(/stillCurrent:\s*\(\)\s*=>[\s\S]{0,200}?,\n/g)].map((m) => m[0]);
+    assert.equal(closures.length, 2, `expected the two stillCurrent closures, found ${closures.length}`);
+    for (const c of closures) {
+      assert.match(c, /JSON\.stringify\(dataRef\.current\.semesters\[name\]\)\s*===\s*snapshot/, "a stillCurrent closure is back to reference-only — the mid-archive sync refusal returns");
+    }
+  });
+
   await test("every screen keeps its id under the new labels, so deep links still land", () => {
     /* Nine screens became five entries by GROUPING, not renaming. If an
        id moved, every deep link (the recording indicator, the reading

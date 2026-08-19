@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { JSDOM } from "jsdom";
 import { callAiText } from "../src/aiTextClient.js";
+import { SUPABASE_URL } from "../src/config.js";
 import { callAiNotes, uploadAudio } from "../src/aiNotesClient.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -310,6 +311,29 @@ async function walk(label, isConfigured) {
   const stored = w.localStorage.getItem("uni-planner-v1") || "";
   check(stored.includes("a private thing to do") || stored.includes("Osmosis"), `${label}: the planner is saved locally`);
   check(complaints.length === 0, `${label}: nothing logged a React error`, complaints[0]);
+
+  /* THE ONE PERMITTED DESTINATION, added deliberately: when the app
+     itself BREAKS it may report the breakage — message, stack, build,
+     path, browser, never content (test-error-report pins the fields)
+     — to OUR OWN backend's client_errors table (migration 0010,
+     insert-only) and nowhere else. The quiet walk above stays at
+     zero, because reporting happens only on an error; here one is
+     thrown on purpose. In demo mode even the error produces NOTHING:
+     there is no configured backend to reach. The allowed prefix is
+     derived from config.js, not typed here. */
+  const before = calls.length;
+  w.dispatchEvent(new w.ErrorEvent("error", { message: "deliberate audit error", error: new Error("deliberate audit error") }));
+  await new Promise((r) => setTimeout(r, 400));
+  const errorCalls = calls.slice(before);
+  const listCalls = (cs) => cs.map((c) => `${c.channel} -> ${c.target}`).join("\n          ");
+  if (isConfigured) {
+    check(errorCalls.length >= 1, `${label}: the deliberate error really was reported, so the permission below is not vacuous`);
+    const allowed = `${SUPABASE_URL}/rest/v1/client_errors`;
+    const strays = errorCalls.filter((c) => !String(c.target).startsWith(allowed));
+    check(strays.length === 0, `${label}: an error report goes ONLY to our own client_errors endpoint`, strays.length ? listCalls(strays) : null);
+  } else {
+    check(errorCalls.length === 0, `${label}: demo mode reports nowhere — there is no backend to reach`, errorCalls.length ? listCalls(errorCalls) : null);
+  }
 
   w.close();
 }

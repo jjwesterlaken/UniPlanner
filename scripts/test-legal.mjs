@@ -356,6 +356,14 @@ async function run() {
       privacy: /archived semester.*stays until you\s+restore it or delete it/is,
       deletion: /archived semesters/i,
     },
+    /* Error reports hold OUR diagnostics, never the student's content
+       — the reporter pins the field list (test-error-report) and the
+       documents must say both halves: what a report contains, and
+       that it never contains what they wrote. */
+    client_errors: {
+      privacy: /error report never\s+contains what you have written/i,
+      deletion: /Error reports linked to your account/i,
+    },
   };
 
   await test("every table in the schema is accounted for in both published documents", () => {

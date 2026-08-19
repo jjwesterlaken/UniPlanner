@@ -121,6 +121,7 @@ import {
 } from "./aiText.jsx";
 import { buildAttempt, pruneAttempts, weakTopics } from "./practice.js";
 import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
+import { createReporter, installGlobalHandlers } from "./errorReport.js";
 import {
   aiNotePreview,
   mapAiResultToItems,
@@ -4817,6 +4818,30 @@ export default function PlannerApp() {
   const [focusedCourse, setFocusedCourse] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [session, setSession] = useState(null);
+
+  /* Error reporting into our own client_errors table — see
+     errorReport.js for the rules (six fields, capped, deduped, fire
+     and forget, never user content). The transport is a no-op without
+     a configured backend: demo mode has no server to reach, and
+     nothing may leave the device. Session id is read through a ref at
+     report time so a sign-in mid-session is reflected without
+     re-installing the handlers. */
+  const sessionUserRef = useRef(null);
+  const reportErrorRef = useRef(() => false);
+  useEffect(() => {
+    sessionUserRef.current = session && session.user ? session.user.id : null;
+  }, [session]);
+  useEffect(() => {
+    const send = supabase ? (row) => supabase.from("client_errors").insert(row) : async () => {};
+    reportErrorRef.current = createReporter({
+      send,
+      buildId: buildId(),
+      getUserId: () => sessionUserRef.current,
+      getPath: () => (typeof location === "undefined" ? null : location.pathname),
+      getUserAgent: () => (typeof navigator === "undefined" ? null : navigator.userAgent),
+    });
+    return installGlobalHandlers((e) => reportErrorRef.current(e), typeof window === "undefined" ? null : window);
+  }, []);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
   // { reason, bytes } while the last local save failed, null once one succeeds.
@@ -4948,6 +4973,10 @@ export default function PlannerApp() {
       }).catch(() => {});
     } catch (e) {
       setSyncError(e.message || "Couldn't sync. Please try again.");
+      // The cheap explicit report: sync failures are the breakage a
+      // tester hits most and describes worst. Deduped and capped by
+      // the reporter, so a flaky connection cannot flood the table.
+      reportErrorRef.current(e);
     } finally {
       setSyncing(false);
     }
@@ -5475,6 +5504,16 @@ export default function PlannerApp() {
        the half that cannot be got around by a race. */
     if (expectedSemester && expectedSemester !== name) return { ok: false, reason: "changed" };
     const bucket = dataRef.current.semesters[name];
+    /* stillCurrent compares CONTENT, not reference. Every completed
+       sync rebuilds the semester objects even when nothing in them
+       differs (mergeData constructs new arrays, the pull restamps
+       meta), so a focus-triggered sync landing during the ~1s archive
+       used to fail a reference check and refuse with "changed" over
+       an unchanged semester — journey 3 caught it in CI, the first
+       real app bug the e2e suite found. The reference check stays as
+       the fast path; the serialized snapshot is the truth. A real
+       mid-archive edit still differs in content and still refuses. */
+    const snapshot = JSON.stringify(bucket);
     const res = await archiveSemester({
       supabaseClient: archiveClient(),
       userId: session && session.user ? session.user.id : null,
@@ -5483,7 +5522,8 @@ export default function PlannerApp() {
       label,
       uid: newIdempotencyKey,
       now: nowISO(),
-      stillCurrent: () => dataRef.current.semesters[name] === bucket,
+      stillCurrent: () =>
+        dataRef.current.semesters[name] === bucket || JSON.stringify(dataRef.current.semesters[name]) === snapshot,
     });
     if (res.ok) {
       // A parked timer must not commit year one's minutes to year two.
@@ -5517,13 +5557,17 @@ export default function PlannerApp() {
   const foldLateArchive = async () => {
     const name = dataRef.current.semester;
     const bucket = dataRef.current.semesters[name];
+    // Content, not reference — the same over-refusal the archive path
+    // had; see the comment on archiveCurrentSemester's stillCurrent.
+    const snapshot = JSON.stringify(bucket);
     const res = await foldLateEditsIntoArchive({
       supabaseClient: archiveClient(),
       userId: session && session.user ? session.user.id : null,
       bucket,
       uid: newIdempotencyKey,
       now: nowISO(),
-      stillCurrent: () => dataRef.current.semesters[name] === bucket,
+      stillCurrent: () =>
+        dataRef.current.semesters[name] === bucket || JSON.stringify(dataRef.current.semesters[name]) === snapshot,
     });
     if (res.ok) {
       setData((d) => ({
