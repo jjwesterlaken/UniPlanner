@@ -24,6 +24,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { HELP_TOPICS, HELP_TOPIC_IDS } from "../src/helpText.js";
 import { requiredForBand, summarise } from "../src/grades.js";
+import { schedule, MAX_SESSION_MINUTES, WINDOW_DAYS } from "../src/srs.js";
+import { weakTopics } from "../src/practice.js";
+import { TASK_UNITS, limitForTier } from "../src/aiTextLimits.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appSrc = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
@@ -60,7 +63,13 @@ test("a worked example is CONCRETE: it carries real numbers or a real before/aft
      digit is a crude proxy for concreteness, but a topic with no
      figure and no quoted before/after is almost certainly abstract. */
   for (const [id, t] of Object.entries(HELP_TOPICS)) {
-    const concrete = /\d/.test(t.example) || /“[^”]+”/.test(t.example);
+    /* Digits, a quoted before/after, OR a spelled-out numeral. The
+       study-cards ladder is written in words on purpose — the
+       derivation test matches those word forms against what the
+       scheduler computes — so a digits-only proxy would have pushed
+       the copy to be worse to satisfy the check. */
+    const NUMERALS = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|forty-two)\b/i;
+    const concrete = /\d/.test(t.example) || /“[^”]+”/.test(t.example) || NUMERALS.test(t.example);
     assert.ok(concrete, `${id}'s example has no numbers and no quoted before/after — it reads as an explanation`);
   }
 });
@@ -120,6 +129,131 @@ test("the archive help says it needs an account and what happens to the device c
   assert.ok(/device/.test(cost), "it does not say what happens to the copy on the device");
 });
 
+test("THE SRS LADDER IS WHAT THE SCHEDULER ACTUALLY DOES", () => {
+  /* Re-derived from srs.js, the grades discipline applied to the
+     hardest topic in the app. Writing this caught two things a draft
+     had wrong: "Again" does NOT come back tomorrow — it returns in the
+     SAME session (interval 0), because a card you just missed is not
+     one to leave overnight; and the Good ladder is 1/3/8 days, not a
+     vague "few days". Help that disagrees with the scheduler is worse
+     than no help. */
+  const today = "2026-08-20";
+  const ladder = (rating, times) => {
+    let card = {};
+    const out = [];
+    for (let i = 0; i < times; i++) {
+      const srs = schedule(card, rating, today);
+      card = { srs };
+      out.push(srs.i);
+    }
+    return out;
+  };
+  const again = schedule({}, "again", today);
+  assert.equal(again.i, 0, "Again no longer returns in the same session — the copy says it does");
+  assert.equal(again.d, today, "Again is no longer due today");
+
+  const good = ladder("good", 3);
+  const easy = ladder("easy", 3);
+  const ex = HELP_TOPICS.studyCards.example;
+  for (const [label, value] of [
+    ["Good step 1", good[0]], ["Good step 2", good[1]], ["Good step 3", good[2]],
+    ["Easy step 1", easy[0]], ["Easy step 2", easy[1]], ["Easy step 3", easy[2]],
+  ]) {
+    const words = { 1: "tomorrow", 3: "three", 8: "eight", 11: "eleven", 42: "forty-two" }[value];
+    assert.ok(words, `no word form for ${label} = ${value} days — the ladder moved and the copy needs rewriting`);
+    assert.ok(
+      ex.includes(words),
+      `the study-cards help no longer quotes ${label} (${value} days, written "${words}") — the help and the scheduler disagree`
+    );
+  }
+  assert.match(HELP_TOPICS.studyCards.example, /same session/i, "the Again behaviour is no longer stated");
+});
+
+test("the study-cards help justifies interleaving and explains practice mode's whole point", () => {
+  const all = [HELP_TOPICS.studyCards.example, ...[].concat(HELP_TOPICS.studyCards.detail || [])].join(" ");
+  assert.match(all, /mixes cards from all your courses|interleave/i, "interleaving is not justified — students think it is a bug");
+  assert.match(all, /feels harder/i, "it does not acknowledge that interleaving feels worse, which is why it needs justifying");
+  assert.match(all, /night before an exam/i, "practice mode's reason to exist is not stated");
+  assert.match(all, /does NOT change when those cards next come up/i, "practice mode does not say it is free of consequence — that reassurance IS the point");
+});
+
+test("weak spots quotes the real miss threshold and list size", () => {
+  /* Derived from practice.js's defaults rather than typed: "a few
+     misses" is exactly two, and the list is capped at eight. */
+  const src = fs.readFileSync(path.join(rootDir, "src/practice.js"), "utf8");
+  const m = /weakTopics\(\{[^}]*limit = (\d+), minMisses = (\d+)/s.exec(src);
+  assert.ok(m, "could not read weakTopics' defaults — this guard is blind");
+  const [, limit, misses] = m;
+  const words = { 2: "two", 8: "eight" };
+  const text = HELP_TOPICS.weakSpots.example;
+  assert.ok(text.includes(words[Number(misses)]), `the miss threshold is ${misses} and the copy does not say so`);
+  assert.ok(text.includes(words[Number(limit)]), `the list shows ${limit} topics and the copy does not say so`);
+  assert.equal(typeof weakTopics, "function");
+});
+
+test("the AI costs are in the currency the SCREENS use, never in units", () => {
+  /* THE BOUNDARY RULE: students never see the word "units" — the
+     endpoint returns a fraction and aiTextCopy turns it into words.
+     Help that leaked the internal unit count would be the first place
+     it reached a screen. What it may say is how many actions a plan
+     buys, which is derived from the same constants. */
+  const free = limitForTier("free");
+  const perExplain = free / TASK_UNITS.explain;
+  const perPractice = free / TASK_UNITS.practice;
+  const words = { 5: "five", 10: "ten" };
+  for (const id of ["studyCards", "weakSpots", "practiceQuestions"]) {
+    const all = [HELP_TOPICS[id].what, HELP_TOPICS[id].example, HELP_TOPICS[id].cost, ...[].concat(HELP_TOPICS[id].detail || [])].join(" ");
+    assert.ok(!/\bunits?\b/i.test(all), `${id}'s help says "units" — that word never reaches a student`);
+  }
+  assert.ok(
+    HELP_TOPICS.practiceQuestions.cost.includes(words[perPractice]),
+    `the free plan buys ${perPractice} question sets a month and the copy does not say so`
+  );
+  for (const id of ["studyCards", "weakSpots"]) {
+    assert.ok(
+      HELP_TOPICS[id].cost.includes(words[perExplain]),
+      `the free plan buys ${perExplain} explanations a month and ${id}'s copy does not say so`
+    );
+  }
+});
+
+test("practice questions and weak spots both state their precondition", () => {
+  assert.match(HELP_TOPICS.practiceQuestions.cost, /does nothing at all until you have study cards/i,
+    "it does not say it is inert without cards, which reads as broken");
+  assert.match(HELP_TOPICS.weakSpots.example, /One bad session does not/i,
+    "it does not say why a single miss is not enough");
+});
+
+test("the timer help says a few seconds is not recorded, and names the runaway cap", () => {
+  /* Silently discarding a session looks like a bug, which is exactly
+     why srs.js keeps the timer's state and reports it instead. The cap
+     is derived. */
+  const hours = MAX_SESSION_MINUTES / 60;
+  assert.equal(hours, 4, "the runaway cap moved; the copy says four hours");
+  assert.match(HELP_TOPICS.studyTimer.example, /four hours/i, "the copy no longer names the runaway cap");
+  assert.match(HELP_TOPICS.studyTimer.cost, /few seconds is not recorded/i, "it does not say short runs are dropped");
+  assert.match(HELP_TOPICS.studyTimer.cost, /tells you|rather than silently/i,
+    "it does not say the timer SAYS so — the whole reason this is worth documenting");
+});
+
+test("the streak help explains the archive reset, which otherwise reads as data loss", () => {
+  const all = [HELP_TOPICS.yourStudying.example, ...[].concat(HELP_TOPICS.yourStudying.detail || []), HELP_TOPICS.yourStudying.cost].join(" ");
+  assert.match(all, /archive/i, "it does not mention archiving at all");
+  assert.match(all, /streak carries|STREAK carries/i, "it does not say the streak survives an archive");
+  assert.match(all, /minutes and card counts reset|minutes.*reset/i, "it does not say what resets");
+  // The six-week detail window is derived, not typed.
+  assert.equal(WINDOW_DAYS, 42, "the daily-detail window moved; the copy says six weeks");
+  assert.match(all, /six weeks/i, "the copy no longer names the detail window");
+});
+
+test("the exam help states its two preconditions and the no-review-day rule", () => {
+  const all = [HELP_TOPICS.exams.example, HELP_TOPICS.exams.cost].join(" ");
+  assert.match(all, /needs the exam entered with a date/i, "it does not say a date is required");
+  assert.match(all, /study cards for that course/i, "it does not say the topics come from cards");
+  assert.match(HELP_TOPICS.exams.example, /NO review day|no review day/i,
+    "the deliberate no-review-day behaviour is unexplained, so it reads as a bug");
+});
+
 /* ---------- the wiring, derived from the app rather than typed ---------- */
 
 const usedTopics = new Set([...appSrc.matchAll(/(?:help|topic)="([A-Za-z]+)"/g)].map((m) => m[1]));
@@ -145,8 +279,7 @@ test("a NEW screen without help fails here rather than passing silently", () => 
      silent partial coverage is not. */
   const NOT_YET_COVERED = [ "Courses", "Calendar", "What's coming",
     "Weekly reading planner", "Assignments", "To-do list", "Notes",
-    "Folders", "Your studying", "Study timer", "Class notes",
-    "Study cards", "Weak spots", "Practice questions", "Exams", "Account"
+    "Folders", "Account"
   ];
   /* `\stitle="` and not `title="`: the string `subtitle="` CONTAINS
      `title="`, so an unanchored pattern captures subtitles instead of
