@@ -1272,6 +1272,60 @@ definitive answer, not a guess — and also bills nothing. The retry is
 offered ON the failure screen, because a student sitting on a failed
 summary should not have to go looking for the remedy.
 
+## What the AI features cost, and the two numbers that were wrong
+
+`COST-MODEL.md` is the document; `scripts/measure-cost-model.mjs` prints
+every figure in it from the real prompt strings and a real tokenizer, so
+a prompt change can be re-costed rather than re-argued. It needs
+`npm i --no-save gpt-tokenizer` and is deliberately outside `npm test`.
+
+Three things worth carrying without opening it:
+
+**A photographed reading is the most expensive action in the app, and
+the code believes the opposite.** `ai-text/config.ts` justifies pricing a
+batch of four photos the same as a 20,000-character text chunk by
+quoting gpt-4o's image tokenisation — 85 base + 170 a tile. We call
+**gpt-4o-mini**, which bills images at **2,833 + 5,667** because its text
+tokens are so cheap that OpenAI charges images at a token multiple; an
+image on the mini model costs about twice what it costs on gpt-4o. So a
+batch costs ~12x a text chunk, not slightly less, and a 16-page reading
+costs **2.2x an entire hour of recorded, transcribed, summarised and
+translated lecture** while billing 8.7% of a month's text units. The
+finding rests on a figure OpenAI's own pages could not be reached to
+confirm, so section 11 of the document is built to falsify it with one
+unmistakable number: ~590,000 input tokens on the dashboard confirms it,
+~20,000 refutes it.
+
+**Sending smaller photos is not a lever.** The tiler normalises the
+shortest side to 768px in both directions, so a portrait page is 6 tiles
+whatever it was downscaled to. The levers are the weight and the model.
+
+**The re-summarise retry has no failure precondition.** Step 4b of
+`ai-notes/index.ts` checks that the row exists, is yours, and holds a
+transcript — never that the summary failed. A successful three-hour
+lecture can therefore be re-summarised for the whole retention window at
+a flat 2 billed minutes against a real cost of $0.0072, which is
+$0.0036 a billed minute against the $0.0007 every real recording costs.
+It is the most expensive legal way to spend the allowance, and at a
+3,000-minute cap it is $10 of provider spend from one recording.
+`RESUMMARISE_BILLED_MINUTES` is derived correctly and is not the
+problem: it is derived for a *typical short* summary, and a three-hour
+transcript is 21x that input. **The fix is the precondition, not the
+price.**
+
+Two smaller ones recorded there and not repeated here: the allowance
+read/write is not atomic in either function (two overlapping requests
+both read N and both write N+cost), and the pre-flight guard uses the
+client's estimated duration, so a cap can be overshot by exactly one
+recording. Billing itself is honest — the billed figure comes from the
+provider, never from the client.
+
+**And the brief that commissioned it had two constants wrong.** It
+authorised switching Groq to Turbo (already Turbo) and raising
+`MONTHLY_MINUTES_LIMIT` from 30 to 200 (it is 300, so that would have
+cut the closed test's allowance by a third). Neither change was made.
+Enter the tier table against the code.
+
 ## Rotating a credential means auditing where it is configured
 
 Grace had a screenshotted OpenAI key revoked — correctly. What nobody
@@ -2296,7 +2350,23 @@ the same way: it hardcoded the value it was supposed to be guarding.
   `requiredForBand` in the test, so a change to the bands or the
   rounding targets goes red naming the figure that moved.
 
-One is an anecdote. Eleven is a rule: **derive a guard from its source
+- The **image-token comment** in `ai-text/config.ts` restated a
+  published rate — for **the wrong model**. It shows its arithmetic,
+  which is what makes it look like a derivation, and every step is
+  right except the two constants at the top: they are gpt-4o's, and we
+  call gpt-4o-mini. Thirteenth instance, and the first where the
+  restated value belonged to something we do not use. A guard would
+  have had nothing to read: the rate lives at the provider, not in this
+  repository. What is available instead is the *consequence* — the
+  document's section 11 predicts a token count so far from the
+  alternative that one dashboard reading settles it.
+
+- The **model string** `gpt-4o-mini` appears in both Edge Function
+  adapters and in a measurement script. Twelfth instance, and unlike
+  the browser/Deno mirrors this one is avoidable: both functions are
+  Deno, in the same repository, and `ai-notes/_shared/` already exists.
+
+One is an anecdote. Thirteen is a rule: **derive a guard from its source
 of truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the
