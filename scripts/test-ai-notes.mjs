@@ -111,6 +111,9 @@ import {
 } from "../supabase/functions/ai-notes/diagnostics.js";
 import {
   patchInfoPlist,
+  applyNativePermissions,
+  CAMERA_USAGE_DESCRIPTION,
+  IOS_CAMERA_PLIST_KEY,
   patchAndroidManifest,
   MIC_USAGE_DESCRIPTION,
   IOS_PLIST_KEY,
@@ -943,6 +946,51 @@ async function run() {
     assert.equal(value.textContent, MIC_USAGE_DESCRIPTION);
     // Everything Capacitor generated is still there.
     assert.ok(rootDictKeys(doc).includes("CFBundleDisplayName"));
+  });
+
+  await test("the plist gets the CAMERA usage string too, or Take Photo terminates the app", () => {
+    /* The reading summariser's photo input reaches three routes on iOS.
+       Library and Files need no declaration; TAKE PHOTO without
+       NSCameraUsageDescription is an OS-level termination, not a
+       graceful refusal — the MODIFY_AUDIO_SETTINGS lesson in a second
+       costume, and equally invisible to every environment this suite
+       runs in. */
+    const mic = patchInfoPlist(CAP_INFO_PLIST);
+    const cam = patchInfoPlist(mic.xml, CAMERA_USAGE_DESCRIPTION, IOS_CAMERA_PLIST_KEY);
+    assert.equal(cam.changed, true, "the camera usage string was not added");
+    assert.match(cam.xml, new RegExp(`<key>${IOS_CAMERA_PLIST_KEY}</key>`), "the camera key is missing");
+    assert.ok(cam.xml.includes("photograph pages"), "the camera string no longer says what the camera is for");
+    // Both keys survive together, in the ROOT dict.
+    assert.match(cam.xml, /<key>NSMicrophoneUsageDescription<\/key>/, "adding the camera key dropped the microphone one");
+    const rootDict = cam.xml.slice(cam.xml.indexOf("<dict>"), cam.xml.lastIndexOf("</dict>"));
+    assert.ok(rootDict.includes(IOS_CAMERA_PLIST_KEY), "the camera key landed in a nested dict, where iOS will not read it");
+  });
+
+  await test("applyNativePermissions reports both usage strings in one pass", () => {
+    /* Two patches over one file: a second pass that read the ORIGINAL
+       xml would silently drop the first key. */
+    const src = fs.readFileSync(path.join(rootDir, "mobile/scripts/native-permissions.mjs"), "utf8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    assert.match(code, /patchInfoPlist\(mic\.xml, CAMERA_USAGE_DESCRIPTION, IOS_CAMERA_PLIST_KEY\)/,
+      "the camera patch no longer chains off the microphone patch's output — one of the two keys will be lost");
+    assert.equal(typeof applyNativePermissions, "function");
+  });
+
+  await test("the reading photo input offers the library and files, not only the camera", () => {
+    /* `capture` does not mean "offer the camera", it means "use the
+       camera and nothing else" — with it set, the photo library and
+       the files app are unreachable on every phone. */
+    /* Matched on the ELEMENT rather than on comment-stripped source.
+       Stripping bit back here: `accept="image/*"` contains a literal
+       `/*`, so a comment stripper runs from it to the next `*​/` and
+       eats the very attribute being asserted — the comment-strip trap
+       in a new costume, where the corrupted thing is code, not prose.
+       Reading the one element is both narrower and immune. */
+    const src = fs.readFileSync(path.join(rootDir, "src/aiText.jsx"), "utf8");
+    const input = /<input\b[^>]*type="file"[^>]*>/s.exec(src);
+    assert.ok(input, "the photo file input is gone from the reading summariser");
+    assert.ok(!/capture=/.test(input[0]), "capture is back on the photo input — the gallery and files are hidden again");
+    assert.ok(input[0].includes('accept="image/*"'), "the photo input no longer restricts to images");
   });
 
   await test("patchInfoPlist is idempotent and never overwrites a reworded description", () => {

@@ -440,6 +440,72 @@ const current = await bundleFrom(rootDir);
   );
 }
 
+/* ---------- formatting reaches the reader, and hostile html never does ---------- */
+
+{
+  /* THE BUG THIS SECTION EXISTS FOR: the read-only view rendered
+     `body` — PLAIN TEXT — so every format a student applied vanished
+     the moment they pressed Done. Bold, colour, highlight and font
+     were all editor-only, which is why "the font applies to the whole
+     note" was the complaint: the note-level font was the only
+     formatting that appeared to survive, because it was the only one
+     the viewer applied.
+
+     The viewer now renders the SANITISED html. That makes the second
+     half mandatory rather than optional: the same test proves a
+     hostile note cannot execute, because the blob is syncable and
+     restorable and a note's html is not something only this editor
+     ever writes. */
+  const p = (over) => ({
+    id: "x", title: "T", kind: "text", style: "lined", font: "times", folderId: null,
+    strokes: [], updatedAt: "2026-08-01T00:00:00.000Z", html: "", body: "", ...over,
+  });
+  const pages = [
+    p({ id: "fmt", title: "Formatted", body: "BOLDWORD REDWORD TIMESWORD",
+        html: '<p><b>BOLDWORD</b> <span style="color: #dc2626">REDWORD</span> <span style="font-family: &quot;Times New Roman&quot;, Times, serif">TIMESWORD</span></p>' }),
+    p({ id: "legacy", title: "Legacy plain", body: "1 < 2 & <script>alert(1)</script> plain" }),
+    p({ id: "evil", title: "Hostile", body: "SAFEWORD",
+        html: '<p>SAFEWORD<script>alert(1)</script><img src=x onerror=alert(2)></p>' }),
+  ];
+  const shots = await captureReading(current, pages);
+
+  const fmt = shots["view:fmt"];
+  check(/<b>BOLDWORD<\/b>|<strong>BOLDWORD/.test(fmt), "BOLD survives to the read-only view", "formatting is editor-only again");
+  check(/color:\s*(#dc2626|rgb\(220)/.test(fmt), "TEXT COLOUR survives to the read-only view");
+  check(/Times New Roman/.test(fmt), "a SELECTION-LEVEL font span survives to the read-only view",
+    "this is the whole point of item 1: a font applied to some words must be visible when the note is read");
+
+  const legacy = shots["view:legacy"];
+  check(!/<script/.test(legacy) && /1 &lt; 2 &amp;/.test(legacy),
+    "a note whose only content is PLAIN TEXT is escaped, never injected",
+    "body is not html and must never be treated as html");
+  check(/plain/.test(legacy), "the plain-text note's words still reach the screen");
+
+  const evil = shots["view:evil"];
+  check(!/<script/.test(evil), "a stored <script> is stripped before it reaches the DOM");
+  check(!/onerror/.test(evil), "a stored event handler is stripped before it reaches the DOM");
+  check(/SAFEWORD/.test(evil), "the safe words of a hostile note are kept", "sanitising must not blank the note");
+}
+
+/* ---------- the font picker is a selection tool, not a note property ---------- */
+
+{
+  const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  check(/onChange=\{\(e\) => applyFont\(e\.target\.value\)\}/.test(code),
+    "the font select applies to the selection", "it is setting a note-level property again");
+  check(/run\("fontName", chosen\.css\)/.test(code),
+    "font goes through the same execCommand path as bold and colour");
+  check(/DEFAULT_NOTE_FONT = "times"/.test(code), "a new note opens in Times");
+  check(/font: DEFAULT_NOTE_FONT/.test(code), "the new-note draft uses that default rather than a literal");
+  check(!/label: "Default"/.test(code), 'the "Default" entry is gone from the font picker');
+  /* The migration guard: "sans" must still EXIST as a font, because
+     every note written before this change stored it and mapping it to
+     Times would restyle their writing. */
+  check(/id: "sans"/.test(code), "the sans font still exists for the notes that stored it",
+    "removing it silently restyles every note written before this change");
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log(`\n${passed} passed, ${failed} failed`);

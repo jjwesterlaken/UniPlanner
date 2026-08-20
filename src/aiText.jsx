@@ -747,10 +747,17 @@ export function SummariseReading({
           {photos.length < MAX_READING_PHOTOS && (
             <label className={`${btnGhost} cursor-pointer`}>
               <Camera size={15} /> {photos.length ? "Add more pages" : "Add photos of the pages"}
+              {/* NO `capture` ATTRIBUTE, deliberately. `capture` does not
+                  mean "offer the camera" — it means "use the camera and
+                  nothing else", so it HID the photo library and the
+                  files app on every phone. Without it the same input
+                  offers all three routes (library, camera, files) and
+                  desktop is unaffected either way. The accept list is
+                  images only; a PDF is a different feature and is
+                  deliberately not smuggled in here. */}
               <input
                 type="file"
                 accept="image/*"
-                capture="environment"
                 multiple
                 className="hidden"
                 onChange={(e) => {

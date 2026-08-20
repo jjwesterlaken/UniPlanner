@@ -2307,7 +2307,14 @@ forbidden thing while saying why it is forbidden:
 - the color-mix guard in `test-dark-mode.mjs` tripped on the comment
   explaining why color-mix is banned;
 - the husk's no-stroke-count check matched the two comments recording
-  why the husk copy exists.
+  why the husk copy exists;
+- and the sixth, in a new costume: a strip pattern ate CODE rather
+  than prose. `accept="image/*"` contains a literal `/*`, so stripping
+  `/*…*/` ran from that attribute to the next comment terminator and
+  removed the very line being asserted. The fix was to stop stripping
+  and match the one `<input>` element instead — **narrower beats
+  cleverer**, and a guard that reads exactly the thing it is about
+  cannot be confused by what surrounds it.
 
 The rule: **a guard that greps source must strip comments before
 matching, or reserve a marker that never appears in prose.** The

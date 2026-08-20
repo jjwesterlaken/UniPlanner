@@ -47,6 +47,25 @@ export const MIC_USAGE_DESCRIPTION =
 
 export const IOS_PLIST_KEY = "NSMicrophoneUsageDescription";
 
+/* THE CAMERA STRING IS NOT OPTIONAL ONCE A FILE INPUT CAN REACH THE
+   CAMERA, and this is the MODIFY_AUDIO_SETTINGS lesson in its second
+   costume. The reading summariser's photo input offers three routes on
+   iOS — Photo Library, Take Photo, Choose File. Library and Files need
+   no declaration at all (WKWebView uses PHPicker, which hands back only
+   what the user picked). **Take Photo without NSCameraUsageDescription
+   does not fail politely: iOS terminates the app**, and it does so on
+   the one route a student is most likely to take when told to
+   photograph a page.
+
+   Nothing in the suite can see this: desktop browsers have no plist,
+   and jsdom has no file picker. It took reading what the WebView
+   actually presents, exactly as the audio permission did. */
+export const CAMERA_USAGE_DESCRIPTION =
+  "University Planner uses your camera so you can photograph pages of a " +
+  "reading to summarise. Photos are sent for summarising and are not stored by us.";
+
+export const IOS_CAMERA_PLIST_KEY = "NSCameraUsageDescription";
+
 /* BOTH are required, and the second one is the whole reason this list
    is a list.
 
@@ -88,8 +107,8 @@ function escapeXmlText(value) {
  * it, and silently reverting that on the next `cap sync` would be worse
  * than leaving it alone.
  */
-export function patchInfoPlist(xml, description = MIC_USAGE_DESCRIPTION) {
-  if (new RegExp(`<key>\\s*${IOS_PLIST_KEY}\\s*</key>`).test(xml)) {
+export function patchInfoPlist(xml, description = MIC_USAGE_DESCRIPTION, key = IOS_PLIST_KEY) {
+  if (new RegExp(`<key>\\s*${key}\\s*</key>`).test(xml)) {
     return { xml, changed: false, reason: "already present" };
   }
 
@@ -105,7 +124,7 @@ export function patchInfoPlist(xml, description = MIC_USAGE_DESCRIPTION) {
   const indent = match[1] || "";
   const entryIndent = indent + "\t";
   const entry =
-    `${entryIndent}<key>${IOS_PLIST_KEY}</key>\n` +
+    `${entryIndent}<key>${key}</key>\n` +
     `${entryIndent}<string>${escapeXmlText(description)}</string>\n`;
 
   return {
@@ -182,7 +201,19 @@ function applyToFile(absPath, patch) {
  */
 export function applyNativePermissions(mobileDir) {
   return {
-    ios: applyToFile(path.join(mobileDir, IOS_PLIST_PATH), (xml) => patchInfoPlist(xml)),
+    /* BOTH usage strings, in one pass over the file. The camera one is
+       load-bearing since the reading summariser's photo input can reach
+       the camera — see CAMERA_USAGE_DESCRIPTION for why its absence
+       terminates the app rather than degrading. */
+    ios: applyToFile(path.join(mobileDir, IOS_PLIST_PATH), (xml) => {
+      const mic = patchInfoPlist(xml);
+      const cam = patchInfoPlist(mic.xml, CAMERA_USAGE_DESCRIPTION, IOS_CAMERA_PLIST_KEY);
+      return {
+        xml: cam.xml,
+        changed: mic.changed || cam.changed,
+        reason: mic.changed || cam.changed ? "added" : "already present",
+      };
+    }),
     android: applyToFile(path.join(mobileDir, ANDROID_MANIFEST_PATH), patchAndroidManifest),
   };
 }
@@ -192,9 +223,9 @@ function describe(platform, file, result) {
     case "skipped":
       return `${platform}: skipped (no ${file} — run "npx cap add ${platform}" first)`;
     case "patched":
-      return `${platform}: microphone declarations ${result.reason} in ${file}`;
+      return `${platform}: microphone and camera declarations ${result.reason} in ${file}`;
     default:
-      return `${platform}: microphone declarations ${result.reason} in ${file}`;
+      return `${platform}: microphone and camera declarations ${result.reason} in ${file}`;
   }
 }
 
