@@ -4,11 +4,26 @@ A measurement and planning document, 20 August 2026. It exists to unblock the
 website pricing copy: nothing here is a feature, and only the two changes in
 section 10 were on the table.
 
-**One flag before anything else.** The brief said to run this *after the exposure
-sweep*. No exposure sweep has been commissioned in this session or appears in the
-repository, so either it is somewhere I cannot see or it has not happened. This
-document does not depend on one — it is self-contained — but if a sweep was meant
-to precede it, its findings have not been folded in.
+**Reviewed and corrected, 20 August 2026.** Jared checked the two figures this
+document could not reach from inside the build container. Both corrections are
+folded in below and marked where they land:
+
+- **The image tokenisation is confirmed exact.** OpenAI's vision guide lists
+  `gpt-4o-mini` at 2,833 base / 5,667 per tile against `gpt-4o` at 85/170. Section
+  11's photo reading is now confirmation rather than a gate — nothing waits on it.
+- **The tiler scales the shortest side to 768px in BOTH directions**, so the
+  possible 31% saving from a smaller `maxEdge` does not exist. The caveat is
+  closed.
+- **The deprecation premise in the brief was wrong**, and section 7 is withdrawn
+  to a short correction. `gpt-4o-mini` appears nowhere on the deprecations page.
+- **A live lever this document could not see** — patch-based image tokenisation on
+  the newer mini and nano models — plausibly inverts finding 1. Pricing it is its
+  own piece of work; see the note under finding 1.
+
+**One flag, unresolved.** The brief said to run this *after the exposure sweep*.
+No exposure sweep has been commissioned in this session or appears in the
+repository. This document does not depend on one — it is self-contained — but if
+a sweep was meant to precede it, its findings have not been folded in.
 
 **Every number came from the source code plus published rates plus arithmetic.**
 This container cannot reach Supabase, OpenAI or Groq, so nothing below is a
@@ -43,9 +58,23 @@ tokenisation (85 base + 170/tile). gpt-4o-**mini** bills images at **2,833 base 
 5,667/tile** — 33× higher — because its text tokens are so cheap that OpenAI
 charges images at a token multiple. The conclusion in that comment ("a full batch
 of photos costs slightly LESS input than a full text chunk") is inverted: it costs
-**12× more**. This is the one finding that rests on a number I could not verify at
-the source; section 11's second reading is designed to falsify it with a single
-unmistakable figure.
+**12× more**.
+
+**CONFIRMED at the source, 20 August 2026** — this was the one figure I could not
+reach from the build container, and it is exact.
+
+**And there is a lever that plausibly inverts it.** The newer mini and nano models
+do not tile at all: they cover the image in 32×32 patches, cap it at a patch budget
+(1,536 on the mini tier), and apply a per-model multiplier. Our page comes out at
+about **2,385 tokens instead of 36,835 — fifteen times fewer**. Even at three times
+the per-token price, photos land roughly five times cheaper than today, which would
+make them cheaper than lectures rather than 2.2× dearer. So **do not re-weight the
+photo batch against the current model**: pricing the candidates and setting the
+weight is one decision, taken together, and it is the next piece of work rather
+than part of this document. The `detail` setting points the same way — the docs
+recommend `original` for OCR and small text and warn that `low` and `high` may
+resize and obscure fine detail, so today's `high` is not the OCR-optimal choice on
+a modern model either.
 
 **2. Both of the changes I was permitted to make are already done, and one of them
 would have been a downgrade.** The Groq model is already
@@ -230,12 +259,12 @@ is a real and well-documented quirk: the mini model's text tokens are ~17× chea
 so OpenAI charges images at a token multiple that lands above the big model's
 price. The config comment's error is 33×.
 
-**This is the number I am least able to stand behind, and I am saying so.** OpenAI's
-own pages are blocked by this container's egress proxy. The 2,833 / 5,667 figures
-are corroborated by three independent write-ups of the vision docs, including a
-maintained open-source vision cost calculator that cites them and a widely-read
-post whose entire subject is this exact quirk. That is strong, and it is not the
-source. Section 11 is built to settle it.
+**CONFIRMED AT THE SOURCE, 20 August 2026.** This was written as the number I was
+least able to stand behind — OpenAI's own pages are blocked by this container's
+egress proxy, and the figures came from three independent write-ups rather than
+from the guide itself. Jared checked the vision guide: 2,833 / 5,667 for
+`gpt-4o-mini`, 85 / 170 for `gpt-4o`, exact. Section 11's photo reading is now a
+confirmation rather than a gate.
 
 ### What the whole feature costs
 
@@ -251,37 +280,36 @@ transcribed, summarised and translated — costs **$0.0437**. A 16-page photogra
 reading costs **$0.0948**, which is **2.2×** it. A single batch of four photos
 ($0.0233) costs more than half an hour of lecture, and bills 3 units.
 
-### The levers, and the one that looks obvious is not a lever at all
+### The levers, and the one that looks obvious is not one
 
-**Sending smaller photos saves nothing.** This is worth spelling out because
-"downscale harder" is the first thing anyone will reach for. Step 2 of the tiling
-rule normalises the **shortest side to 768px** — in both directions, scaling small
-images up as well as large ones down. A portrait A4 page therefore arrives at the
-tiler as 768 × 1086 whatever it was sent at, which is always 2 × 3 = **6 tiles**.
-Dropping `maxEdge` from 1536 to 1024, or to 768, changes the picture quality and
-not the bill.
+**Sending smaller photos saves nothing. This is settled, not suspected.** It is
+worth spelling out because "downscale harder" is the first thing anyone will reach
+for. Step 2 of the tiling rule scales the image *so that the shortest side is
+768px* — up as well as down — so a portrait A4 page arrives at the tiler as
+768 × 1086 whatever it was sent at, which is always 2 × 3 = **6 tiles**. Dropping
+`maxEdge` from 1536 to 1024, or to 768, changes the picture quality and not the
+bill. The measurement script prints the tile count at each size, in both
+directions, so the claim is visible rather than asserted.
 
-*(If OpenAI in fact does not upscale — the documented wording implies it does, and I
-could not read the page to be sure — then **1024px** on the long edge gives 4 tiles
-instead of 6 and saves 31% of the per-photo tokens, with 768px saving no more than
-that. So the check is worth one glance at the docs: if upscaling is not applied,
-there is a 31% saving available at a resolution where a photographed page is
-probably still legible. The script prints both.)*
+That leaves two levers, and **they are one decision rather than two**:
 
-So there are two real levers:
+- **The model.** The patch-based tokenisation on the newer mini and nano models
+  takes our page from ~36,835 tokens to ~2,385. That is the lever, and it is large
+  enough that everything else is rounding.
+- **The weight.** Against *today's* model a photo batch costs $0.0078 per billed
+  unit where everything else costs $0.0005–$0.0014, so 3 is off by roughly 10×.
+  **Do not act on that number alone.** Re-weighting to 12 and then moving models
+  would tell students a batch costs 12 when it costs 1, which is a worse error
+  than the one being fixed — it is visible, and it is ours.
 
-- **Re-weight the photo batch.** At $0.0078 per billed unit against $0.0005–$0.0014
-  for everything else, a weight of 3 is off by roughly 10×. A weight of **12** per
-  batch would bring it into line and make a 16-page reading cost 49 units — a third
-  of the AI tier's monthly text allowance, which is an honest thing to tell a
-  student and is the shape `sectionsAffordable` already renders.
-- **`detail: "low"`**, which is a flat 2,833 tokens per image — 13× cheaper — and is
-  a 512 × 512 thumbnail. For a page of print that is a page of grey, exactly as the
-  comment in `prompts.js` says. **Not a real option**, listed so nobody rediscovers
-  it as one.
+Listed so nobody rediscovers it as an option: **`detail: "low"`** is a flat 2,833
+tokens per image, 13× cheaper, and a 512 × 512 thumbnail. For a page of print that
+is a page of grey, exactly as the comment in `prompts.js` says. The interesting
+`detail` question is the opposite one — `original`, which the docs recommend for
+OCR and small text — and it belongs with the model pricing.
 
-The honest third option is to send photos to a model whose image pricing is not
-inverted, which is section 7's territory.
+Both levers are priced together in the follow-up work, and the recommendation is
+one decision: **model and weight, named at the same time.**
 
 ---
 
@@ -391,6 +419,11 @@ Every row at its input and output ceiling, so these are upper bounds.
 | Merge | — | $0.00144 | $0.00144 | — | 1 | — |
 | **16-page photo reading (whole)** | — | **$0.0948** | **$0.0948** | — | 13 | — |
 
+The photo rows price the model we call **today**. The patch-based lever under
+finding 1 would take a page from ~36,835 tokens to ~2,385, so every photo figure in
+this document is an upper bound on what the feature costs after that decision — and
+the whole worst-case column below moves with it.
+
 ### Three scenarios
 
 | Scenario | Composition | Monthly cost |
@@ -427,78 +460,61 @@ set against, and it is **4.9× smaller** than the one the current code underwrit
 
 ---
 
-## 7. gpt-4o-mini's lifespan
+## 7. Model lifespan — WITHDRAWN, the premise was wrong
 
-**I could not confirm the brief's premise, and I think it may be wrong.** Both
-`platform.openai.com` and `developers.openai.com` are blocked by this container's
-egress proxy, so I could not read the deprecations page itself. What web search
-returns, consistently across sources:
+**The brief's premise did not survive checking, and it was not mine to check.**
+`gpt-4o-mini` appears nowhere on OpenAI's deprecations page — not upcoming, not
+past. The brief took it from a third-party tracker that had conflated it with the
+audio and realtime variants. The analysis that stood here has been withdrawn
+rather than corrected: there is nothing to plan around.
 
-- **gpt-4o, gpt-4.1, gpt-4.1-mini and o4-mini** were retired from ChatGPT on 13
-  February 2026, with API shutdowns reported around 16 February 2026.
-- **gpt-4o-mini is repeatedly named as an exception with no sunset date**, alongside
-  gpt-4o-mini-transcribe and gpt-4o-mini-tts.
+What this document originally said — that I could not reach the page, that every
+source I *could* reach named `gpt-4o-mini` as an exception, and that it wanted a
+human's eyes — was the right shape of answer to give. Recording that here because
+the next brief written from a remembered figure will look exactly like this one.
 
-**Jared: please read the deprecations page directly before anything is planned on
-this.** If gpt-4o-mini genuinely carries a published sunset, the six-month notice
-policy still applies and this is not urgent, but the migration below becomes real
-work rather than a contingency.
+**THE TRAP TO RECORD, since somebody will walk into it:**
 
-### Pricing a replacement — I am declining to, and here is why
+> **`gpt-4.1-nano` and `o4-mini` shut down 23 October 2026. Neither is the cheap
+> option.**
 
-Third-party price aggregators disagree with each other by a factor of six on the
-current mini-class model ($0.125/$1.00, $0.25/$2.00 and $0.75/$4.50 per 1M in/out
-all appear, for models with confusingly similar names). Picking one and building a
-migration budget on it would be the `TYPICAL_SUMMARY_OUTPUT_TOKENS` mistake again —
-a constant nobody measured quietly setting the price of the product, at 5.9× reality.
+They are the two names that come up first when someone goes looking for something
+smaller and cheaper than what we run, and both have a date on them.
 
-What I will say without a number: **the successor generation is more expensive per
-text token, plausibly 1.7×–7.5× on output.** Applied to the Typical scenario's
-$0.397, even the top of that range is about $2/month/user — survivable, and it
-would need to be reflected in the site copy.
+### Still true, and still worth doing: the model string sits in three places
 
-**And it might make photos dramatically cheaper.** The 2,833/5,667 multiplier is
-specific to gpt-4o-mini's unusually low text-token price. Newer models generally
-price images closer to the gpt-4o ratio. So the migration that looks like a cost
-increase for lectures could be a large cost *decrease* for readings. **That is the
-first thing to price once the real rate table is in hand**, because it may make the
-photo re-weighting in section 4 unnecessary.
-
-### The model string, and how to stop it drifting
-
-Two production occurrences plus one in a measurement script:
+Not a deprecation matter, and it becomes live the moment the photo work moves a
+model. Two production occurrences plus one in a measurement script:
 
 - `supabase/functions/ai-notes/openai.ts:97`
 - `supabase/functions/ai-text/openai.ts:27`
 - `scripts/measure-summary-depth.mjs:192`
 
 This is not the unavoidable browser/Deno mirror. **Both are Deno functions in the
-same repository, and `supabase/functions/ai-notes/_shared/` already exists.**
-Recommendation: move `_shared/` up to `supabase/functions/_shared/model.ts`
-exporting a single `SUMMARY_MODEL`, import it in both adapters, and have the
-measurement script read it too. A model migration then touches one line, and a test
-grepping for a bare `model: "` literal in either adapter keeps it that way.
+same repository, and `supabase/functions/ai-notes/_shared/` already exists.** Move
+`_shared/` up to `supabase/functions/_shared/model.ts` exporting a single
+`SUMMARY_MODEL`, import it in both adapters, and have the measurement script read
+it too. A model change then touches one line, and a test grepping for a bare
+`model: "` literal in either adapter keeps it that way. Worth doing *before* the
+photo model change rather than after, so that change is one line rather than three.
 
-### Prompt portability
+### Portability, since a model move is now likely rather than hypothetical
 
-**The prompts themselves are portable.** The depth rules are plain instructions
-about specificity and not-inventing; nothing in them depends on model-specific
-behaviour. The two structural risks are mechanical rather than linguistic:
+**The prompts themselves are portable.** The depth rules are instructions about
+specificity and not-inventing; nothing in them depends on model-specific behaviour.
+Two structural risks, both mechanical:
 
 - `ai-notes` uses `response_format: { type: "json_schema", strict: true }`;
-  `ai-text` uses `json_object`. Both survive into the GPT-5 family, but strict
-  schema support and its quirks (it still has no `minItems`, which is why depth is a
-  prompt property here) need re-checking on whatever we land on.
-- **`max_tokens` is the migration hazard.** The GPT-5 family takes
-  `max_completion_tokens`, and reasoning tokens count toward that budget. Every
-  ceiling in `ai-text/config.ts` and `SUMMARY_MAX_TOKENS` is sized against *visible*
-  output. Ported unchanged, a reasoning model could spend the entire budget
-  thinking and return `finish_reason: "length"` with nothing — which this code
-  correctly treats as a hard failure, so it would fail loudly rather than truncate,
-  but it would fail on every request. **Budget one re-measurement pass, not one
-  find-and-replace.**
-
----
+  `ai-text` uses `json_object`. Strict-schema support and its quirks (still no
+  `minItems`, which is why depth is a prompt property here) need re-checking on
+  whatever we land on.
+- **`max_tokens` is the hazard.** The GPT-5 family takes `max_completion_tokens`,
+  and reasoning tokens count toward that budget. Every ceiling in
+  `ai-text/config.ts` and `SUMMARY_MAX_TOKENS` is sized against *visible* output.
+  Ported unchanged, a reasoning model could spend the whole budget thinking and
+  return `finish_reason: "length"` with nothing — which this code correctly treats
+  as a hard failure, so it would fail loudly rather than truncate, but it would
+  fail on every request. **Budget a re-measurement pass, not a find-and-replace.**
 
 ## 8. Plan: per-tier limits — plan only, nothing built
 
@@ -796,18 +812,20 @@ nothing else in this document does.
 | OpenAI, spend | $0.0948 | $0.0758 – $0.1137 |
 | Groq | $0 | — |
 
-**The input token count is the whole experiment.** It is not a near-miss kind of
-number:
+**The input token count was designed to be the experiment**, and the experiment
+has been settled another way: the tokenisation was confirmed from OpenAI's guide on
+20 August. So this reading is now a **confirmation, and nothing waits on it.**
 
-- **~590,000 input tokens** — the 2,833/5,667 model is right, photos are the most
-  expensive thing in the app, and section 4's remedies are live.
-- **~20,000 input tokens** — the 85/170 model in `ai-text/config.ts` was right all
-  along, a photo batch really does cost about what a text chunk costs, the weight of
-  3 is correct, and **finding 1 at the top of this document is wrong and should be
-  struck.**
+It is still worth doing when convenient, because it checks the whole path rather
+than the rate — that `downscalePhoto` really emits what we think, that `detail`
+really arrives as `high`, that four batches really go out. Expect **~590,000 input
+tokens.** If it reads ~20,000 instead, something in our own client is not doing what
+this document says it does, which would be a different and more interesting
+finding than the one it was built to test.
 
-There is no reading of the dashboard that lands between those two. That is
-deliberate — a check that can only come back "roughly right" is not a check.
+The lever recorded under finding 1 changes what this reading is *for*: once the
+photo path moves to a patch-based model, the number to expect is around 2,400
+tokens a page rather than 36,835, and the reading becomes the check on that move.
 
 **If either total is out by more than 20%, stop and find out why before any of this
 reaches the website.** The most likely culprits, in order: the summariser output

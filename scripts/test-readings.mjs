@@ -394,6 +394,40 @@ test("the merge weight matches the server's", () => {
 
 /* ---------- the design facts ---------- */
 
+/* Everything the ai-text endpoint can WRITE, whichever spelling it uses.
+   Since migration 0011 billing goes through an RPC rather than an
+   upsert, so a check that only looked for `.from("X").upsert` would have
+   found nothing to inspect and passed with an empty set — the guard
+   that the copyright posture rests on, quietly measuring nothing.
+
+   The RPC is resolved to the tables it touches by READING THE MIGRATION
+   that defines it, rather than by a mapping typed here. A function that
+   grew a second table would go red without anyone remembering to.
+
+   IT DOES NOT STRIP SQL COMMENTS, deliberately, and that is the one way
+   it differs from every other source grep here. Those strip comments
+   because a comment naming the forbidden thing is a false alarm; this
+   one errs the other way on purpose, because the question is "where can
+   a student's pasted reading end up" and a guard about that should
+   flag a mention it cannot account for rather than wave it through. The
+   cost is that `-- insert into public.foo` in one of these migrations
+   fails the suite; the fix then is to reword the comment. */
+function tablesWrittenByAiText() {
+  const fn = source("supabase/functions/ai-text/index.ts");
+  const direct = [...fn.matchAll(/\.from\("([^"]+)"\)\s*\.(?:upsert|insert|update|delete)/gs)].map((m) => m[1]);
+  const rpcs = [...fn.matchAll(/\.rpc\(\s*"([^"]+)"/g)].map((m) => m[1]);
+  const viaRpc = [];
+  for (const name of rpcs) {
+    const file = fs
+      .readdirSync(path.join(rootDir, "supabase/migrations"))
+      .find((f) => fs.readFileSync(path.join(rootDir, "supabase/migrations", f), "utf8").includes(`function public.${name}(`));
+    assert.ok(file, `no migration defines public.${name} — an ai-text write nobody can account for`);
+    const sql = fs.readFileSync(path.join(rootDir, "supabase/migrations", file), "utf8");
+    for (const m of sql.matchAll(/(?:insert\s+into|update)\s+public\.([a-z_]+)/gi)) viaRpc.push(m[1]);
+  }
+  return [...new Set([...direct, ...viaRpc])].sort();
+}
+
 test("the pasted text is never persisted anywhere", () => {
   /* THE fact the copyright posture rests on, asserted for readings
      specifically rather than inherited from the note path.
@@ -405,8 +439,7 @@ test("the pasted text is never persisted anywhere", () => {
   const fn = source("supabase/functions/ai-text/index.ts");
   const tables = [...fn.matchAll(/\.from\("([^"]+)"\)/g)].map((m) => m[1]);
   assert.deepEqual([...new Set(tables)].sort(), ["ai_usage", "profiles"]);
-  const written = [...fn.matchAll(/\.from\("([^"]+)"\)\s*\.(?:upsert|insert|update|delete)/gs)].map((m) => m[1]);
-  assert.deepEqual([...new Set(written)], ["ai_usage"]);
+  assert.deepEqual(tablesWrittenByAiText(), ["ai_usage"]);
 
   const app = source("src/PlannerApp.jsx");
   const handler = app.slice(app.indexOf("const summariseReading ="), app.indexOf("const summariseReading =") + 2000);
@@ -478,8 +511,7 @@ test("the photos are never persisted anywhere, on any path", () => {
      the draft, the blob, or localStorage. */
   const fn = source("supabase/functions/ai-text/index.ts");
   assert.doesNotMatch(fn, /\.storage/, "ai-text touches the Storage API — photos would have a server-side home");
-  const written = [...fn.matchAll(/\.from\("([^"]+)"\)\s*\.(?:upsert|insert|update|delete)/gs)].map((m) => m[1]);
-  assert.deepEqual([...new Set(written)], ["ai_usage"], "the endpoint writes more than usage");
+  assert.deepEqual(tablesWrittenByAiText(), ["ai_usage"], "the endpoint writes more than usage");
 
   /* Comments stripped before the grep -- this assertion caught its own
      explanatory comment on the first run, the same way the wording

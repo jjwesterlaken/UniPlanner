@@ -87,6 +87,18 @@ export const AI_NOTES_COPY = {
     retrying: "Writing your summary…",
     retryFailed:
       "That didn't work either. Nothing has been charged for the attempt, and your transcript is still here.",
+    /* The refusal, which is not a failure: the summary is already
+       there. Reachable from a stale screen — the retry succeeded on
+       another device and this one still shows the failure. It says
+       nothing was charged, because every sentence about this lecture's
+       cost says what was and was not charged.
+
+       Note what is NOT here: an entry in ERROR_MESSAGES in
+       aiNotesLogic.js. `parseAiNotesError` already falls back to the
+       server's own `error` string, so restating this sentence there
+       would be a second copy to keep in step for no gain. */
+    retryAlreadyDone:
+      "This lecture already has its summary — there's nothing to write again. Nothing has been charged.",
     retryExpired: (days = FAILED_RESULT_RETENTION_DAYS) =>
       `We no longer have the transcript for this lecture — we keep it for ${days} days. Nothing has been charged for this attempt.`,
     retryDone: "Summary written. It's saved with your notes.",

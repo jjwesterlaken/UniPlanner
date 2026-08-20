@@ -251,5 +251,20 @@ export const SUMMARY_MAX_TOKENS = 8000;
    describe without asking the server. */
 export const RESUMMARISE_EXPIRED_MESSAGE =
   "We no longer have the transcript for this lecture, so it can't be summarised again. Nothing has been charged for this attempt.";
+/* The retry's third ending, and it is a REFUSAL rather than a failure.
+
+   Reachable two ways. A stale screen: the student has the failure
+   screen open, the retry succeeded on another device, they tap again.
+   And a client that asks for a retry on a lecture that never failed,
+   which is what the precondition in index.ts exists to refuse — see the
+   long note there for what it used to cost.
+
+   It says the summary is there, because that is the good news, and it
+   says nothing was charged, because a refusal never charges and a
+   student who has already paid for this lecture once is owed the
+   arithmetic every time it is mentioned. */
+export const RESUMMARISE_NOT_FAILED_MESSAGE =
+  "This lecture already has its summary, so there's nothing to write again. Nothing has been charged.";
+
 export const RESUMMARISE_FAILED_MESSAGE =
   "We couldn't write the summary this time. Nothing has been charged for this attempt, and your transcript is still here — you can try again.";

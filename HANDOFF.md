@@ -1,7 +1,27 @@
 # AI lecture notes — where things stand
 
-Working notes for picking this feature up in a new session. Delete once
-it's stale.
+> **STALE, 20 August 2026 — read `CLAUDE.md` and `COST-MODEL.md` instead.**
+>
+> This file was written on 10 August at `c45ad5f` and says "delete once
+> it's stale". It is: the test counts below (35 + 10) are now around 800
+> across twenty suites, and the storage move, the archive, the text
+> features, the readings work and the handwriting removal all landed
+> after it.
+>
+> It is kept for one reason — its Edge Function orientation is still
+> broadly right — and banner-ed rather than quietly patched because
+> correcting one number in a document whose other numbers are also wrong
+> is how a stale document starts looking trustworthy again.
+>
+> **The figure that has already cost something:** the monthly audio
+> allowance is `MONTHLY_MINUTES_LIMIT = 300`
+> (`supabase/functions/ai-notes/config.ts`), mirrored by
+> `MONTHLY_MINUTES_LIMIT_HINT` with a test asserting they agree. A brief
+> written from a remembered "30" asked for it to be raised to 200, which
+> would have cut the closed test's allowance by a third. Read the
+> constant, never the recollection.
+
+Working notes for picking this feature up in a new session.
 
 Last updated: 2026-08-10, at commit `c45ad5f`.
 

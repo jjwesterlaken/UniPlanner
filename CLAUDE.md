@@ -1290,41 +1290,87 @@ tokens are so cheap that OpenAI charges images at a token multiple; an
 image on the mini model costs about twice what it costs on gpt-4o. So a
 batch costs ~12x a text chunk, not slightly less, and a 16-page reading
 costs **2.2x an entire hour of recorded, transcribed, summarised and
-translated lecture** while billing 8.7% of a month's text units. The
-finding rests on a figure OpenAI's own pages could not be reached to
-confirm, so section 11 of the document is built to falsify it with one
-unmistakable number: ~590,000 input tokens on the dashboard confirms it,
-~20,000 refutes it.
+translated lecture** while billing 8.7% of a month's text units.
+**CONFIRMED from OpenAI's vision guide, 20 August 2026** — it was
+written as the one figure the build container could not reach.
 
-**Sending smaller photos is not a lever.** The tiler normalises the
-shortest side to 768px in both directions, so a portrait page is 6 tiles
-whatever it was downscaled to. The levers are the weight and the model.
+**Sending smaller photos is not a lever, and that is settled.** The
+tiler scales the *shortest* side to 768px in BOTH directions, so a
+portrait page is 6 tiles whatever it was downscaled to. `maxEdge`
+changes the picture quality and not the bill.
 
-**The re-summarise retry has no failure precondition.** Step 4b of
-`ai-notes/index.ts` checks that the row exists, is yours, and holds a
-transcript — never that the summary failed. A successful three-hour
-lecture can therefore be re-summarised for the whole retention window at
-a flat 2 billed minutes against a real cost of $0.0072, which is
-$0.0036 a billed minute against the $0.0007 every real recording costs.
-It is the most expensive legal way to spend the allowance, and at a
-3,000-minute cap it is $10 of provider spend from one recording.
-`RESUMMARISE_BILLED_MINUTES` is derived correctly and is not the
-problem: it is derived for a *typical short* summary, and a three-hour
-transcript is 21x that input. **The fix is the precondition, not the
-price.**
+**THE LEVER IS THE MODEL, and it plausibly inverts the finding.** The
+newer mini and nano models do not tile: they cover the image in 32x32
+patches, cap it at a patch budget (1,536 on the mini tier) and apply a
+per-model multiplier. Our page comes out around **2,385 tokens instead
+of 36,835 — fifteen times fewer** — so even at three times the
+per-token price photos land ~5x cheaper than today, which would make
+them cheaper than lectures rather than 2.2x dearer. **Do not re-weight
+the photo batch against the current model:** re-weighting to 12 and
+then moving would tell students a batch costs 12 when it costs 1, which
+is a worse error than the one being fixed because it is visible and it
+is ours. Model and weight are ONE decision.
 
-Two smaller ones recorded there and not repeated here: the allowance
-read/write is not atomic in either function (two overlapping requests
-both read N and both write N+cost), and the pre-flight guard uses the
-client's estimated duration, so a cap can be overshot by exactly one
-recording. Billing itself is honest — the billed figure comes from the
-provider, never from the client.
+**The re-summarise retry had no failure precondition — FIXED.** Step 4b
+checked that the row exists, is yours, and holds a transcript, never
+that the summary failed, so a successful three-hour lecture could be
+re-summarised for the whole retention window at a flat 2 billed minutes
+against a real $0.0072 — $0.0036 a billed minute where every real
+recording costs $0.0007, and $10 of provider spend from one recording
+at a 3,000-minute cap. **The fix was the precondition, not the price:**
+`RESUMMARISE_BILLED_MINUTES` is derived correctly, but for a *typical
+short* summary, and a three-hour transcript is 21x that input.
 
-**And the brief that commissioned it had two constants wrong.** It
-authorised switching Groq to Turbo (already Turbo) and raising
-`MONTHLY_MINUTES_LIMIT` from 30 to 200 (it is 300, so that would have
-cut the closed test's allowance by a third). Neither change was made.
-Enter the tier table against the code.
+It requires `summary_failed = true`, checked BEFORE the transcript —
+a successful note has nothing to retry whether or not the sweep has
+since taken its transcript, and answering "expired" there is a true
+sentence about the wrong question. It returns its own code
+(`already_summarised`), which does not breach the identical-rejection
+rule: that rule is about not-found versus not-yours, and this branch is
+only reachable once ownership is proven. The bonus falls out free —
+the success path writes `summary_failed = false`, so it is **one retry
+per failure** rather than an open door.
+
+**THE ALLOWANCE INCREMENT IS ATOMIC — migration 0011.** Both functions
+did `select minutes_used` then `upsert { minutes_used: read + cost }`,
+so two overlapping requests both read N and both wrote N + cost and one
+of them was free. `add_ai_usage` does the `+` under the row lock that
+`ON CONFLICT DO UPDATE` takes, and returns the post-increment totals so
+the fraction a student is shown is the database's rather than one
+computed here from a stale read.
+
+**What deliberately did NOT move is the READ.** It still precedes the
+provider call, which is what makes a missing column (0006) and an
+exhausted allowance both fail having spent nothing. Folding the check
+into the increment — "add it and tell me if I went over" — would move
+the refusal to after the money was spent. So the bounded race remains
+and is named: two requests can both pass the check at N and both be
+billed, exceeding the cap by one request's cost. Same class as the
+estimated-duration overshoot, which is also left alone. What is fixed
+is the strictly worse bug, where the second request was never billed.
+
+The test worth knowing by name is **"THE LOST UPDATE, demonstrated"**:
+it runs the OLD read-modify-write in two concurrent psql sessions and
+asserts the total is 3 rather than 6. Without it, "two concurrent calls
+add up" could pass because the two calls never overlapped — a green
+test proving nothing, which is how every concurrency test fails.
+
+**And the brief that commissioned it had three things wrong**, which is
+the part to carry. It authorised switching Groq to Turbo (already
+Turbo) and raising `MONTHLY_MINUTES_LIMIT` from 30 to 200 (it is
+**300**, so that would have cut the closed test's allowance by a
+third) — neither change was made. And it stated that `gpt-4o-mini`
+carries a published sunset; it does not appear on OpenAI's
+deprecations page at all, upcoming or past, and the tracker the brief
+came from had conflated it with the audio and realtime variants.
+
+All three came from remembered or third-hand figures. Enter a constant
+against the code, and a provider's rate against the provider.
+
+**THE DEPRECATION TRAP TO REMEMBER, since it is the one that is real:
+`gpt-4.1-nano` and `o4-mini` shut down 23 October 2026.** They are the
+two names that come up first when someone goes looking for something
+smaller and cheaper than what we run, and both have a date on them.
 
 ## Rotating a credential means auditing where it is configured
 
@@ -1901,7 +1947,20 @@ record.
 
 ### Pending, in order, once someone is at a desk
 
-**Only two genuine leftovers remain, both minor and both post-launch.**
+**One item is BLOCKING and must happen before the next function
+deploy**, then two minor post-launch leftovers.
+
+0. **Apply migration 0011 (`add_ai_usage`) BEFORE deploying either Edge
+   Function.** It WIDENS — it creates a function the new code calls —
+   so it goes first, the 0003/0004 direction rather than 0008's. If
+   the code ships first, every bill fails: `supabaseAdmin.rpc` returns
+   "function does not exist", which is logged loudly at the billing
+   stage and does NOT fail the request, so the student gets their work
+   and we charge nothing. Fails safe for the student and expensively
+   for us, which is the right way round but not a state to sit in.
+   Verify with `select has_function_privilege('service_role',
+   'public.add_ai_usage(uuid, text, numeric, numeric)', 'execute');`
+   returning true and the same for `authenticated` returning false.
 Everything else on this list has been applied and verified; the record
 of what each migration did is kept below the line because the ordering
 lessons are load-bearing, not because the work is outstanding.
@@ -2334,6 +2393,17 @@ the same way: it hardcoded the value it was supposed to be guarding.
   updates zero rows without it — the state production was actually in,
   shown to be defence-in-depth and not a hole.
 
+- **The same stand-in, running the other way: it had no `service_role`
+  at all.** Every migration up to 0010 happened not to name the role,
+  so nothing noticed. 0011 grants execute on `add_ai_usage` to it, and
+  the whole suite went red with `role "service_role" does not exist` —
+  a *correct* migration failing against a shim that was missing a
+  piece of the platform. Fourteenth instance, and worth keeping beside
+  the default-privileges one because they are the same fault pointing
+  in opposite directions: there the shim let a bad migration pass,
+  here it would have failed a good one. A stand-in that restates the
+  environment is wrong in whichever direction it happens to differ.
+
 - The grant audit's own **"the app's own queries still work" test**
   enumerated those queries by hand, from reading the client. It
   included `planner_data`'s upsert and omitted `ai_notes`, so 0008
@@ -2366,7 +2436,7 @@ the same way: it hardcoded the value it was supposed to be guarding.
   the browser/Deno mirrors this one is avoidable: both functions are
   Deno, in the same repository, and `ai-notes/_shared/` already exists.
 
-One is an anecdote. Thirteen is a rule: **derive a guard from its source
+One is an anecdote. Fourteen is a rule: **derive a guard from its source
 of truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the

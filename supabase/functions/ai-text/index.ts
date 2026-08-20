@@ -201,7 +201,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          subsidy for whatever made the model produce unusable output,
          which is exactly the case worth noticing. */
       logFailure(stage, err, { task });
-      const charged = await bill(admin, { userId, month, unitsUsed, cost: allowance.cost, now });
+      const charged = await bill(admin, { userId, month, cost: allowance.cost });
       if (!charged.ok) logFailure("billing", charged.error, { task, cost: allowance.cost, after: "parse_failure" });
       /* A legibility refusal is not unusable output -- it is the model
          doing what it was told. BILLED, same as any generated output
@@ -225,7 +225,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
     }
 
     stage = "billing";
-    const billed = await bill(admin, { userId, month, unitsUsed, cost: allowance.cost, now });
+    const billed = await bill(admin, { userId, month, cost: allowance.cost });
     if (!billed.ok) {
       // Logged loudly and NOT failed to the user: the work is done and
       // they have it. An unbilled success is a revenue hole; an error
@@ -237,8 +237,15 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       ok: true,
       task,
       result,
-      // The app turns this into a sentence. It never receives a unit count.
-      allowanceUsed: allowanceFraction(unitsUsed + allowance.cost, limitForTier(profile.tier)),
+      /* The app turns this into a sentence. It never receives a unit
+         count. The figure is the database's post-increment total when
+         the bill landed, and only falls back to the local sum when it
+         did not — in which case the number is the best available guess
+         about a month whose write just failed. */
+      allowanceUsed: allowanceFraction(
+        billed.ok && billed.unitsUsed !== null ? billed.unitsUsed : unitsUsed + allowance.cost,
+        limitForTier(profile.tier)
+      ),
     });
   } catch (err) {
     logFailure(stage, err);
@@ -253,16 +260,32 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
  * the `user_id` here is the only thing standing between this and another
  * student's allowance — a mis-scoped write is a takeover rather than a
  * disclosure, and returns nothing to notice it by.
+ *
+ * THE ADDITION HAPPENS IN THE DATABASE, not here. This used to read the
+ * month's total, add the cost in JavaScript, and write the sum back —
+ * so two requests that overlapped both read N and both wrote N + cost,
+ * and one of them was free. `add_ai_usage` (migration 0011) does the
+ * `+` under the row lock that ON CONFLICT DO UPDATE takes, which is the
+ * only place it is safe to do. `unitsUsed` is deliberately no longer a
+ * parameter: passing it would leave the stale read within reach.
+ *
+ * It returns the POST-INCREMENT total, so the fraction the student is
+ * shown is the one the database holds rather than one computed here
+ * from a read that may already be out of date.
  */
 // deno-lint-ignore no-explicit-any
-async function bill(admin: any, { userId, month, unitsUsed, cost, now }: Record<string, any>) {
-  const { error } = await admin
-    .from("ai_usage")
-    .upsert(
-      { user_id: userId, month, text_units_used: unitsUsed + cost, updated_at: now().toISOString() },
-      { onConflict: "user_id,month" }
-    );
-  return error ? { ok: false, error } : { ok: true };
+async function bill(admin: any, { userId, month, cost }: Record<string, any>) {
+  const { data, error } = await admin.rpc("add_ai_usage", {
+    p_user_id: userId,
+    p_month: month,
+    p_minutes: 0,
+    p_units: cost,
+  });
+  if (error) return { ok: false, error };
+  // `returns table` arrives as an array of one row.
+  const row = Array.isArray(data) ? data[0] : data;
+  const unitsUsed = row && typeof row.new_units !== "undefined" ? Number(row.new_units) : null;
+  return { ok: true, unitsUsed };
 }
 
 Deno.serve(async (req: Request) => {

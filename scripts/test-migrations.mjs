@@ -35,7 +35,7 @@ import { newIdempotencyKey } from "../src/aiNotesLogic.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -157,6 +157,28 @@ function psql(db, sql) {
   return { ok: result.status === 0, out: result.stdout.trim(), err: result.stderr.trim() };
 }
 
+/* Two psql processes at once, which is the only way to demonstrate a
+   lost update: it needs two sessions holding two snapshots. `exec` is
+   synchronous by design (everything else here is a single statement
+   batch), so this is its async twin, with the same su-as-postgres
+   handling. */
+function psqlAsync(db, sql) {
+  const connection = useExistingServer ? [] : ["-h", sockDir];
+  const args = [...connection, "-d", db, "-v", "ON_ERROR_STOP=1", "-X", "-q", "-t", "-A", "-f", "-"];
+  const [cmd, cmdArgs] = unprivilegedUser
+    ? ["su", [unprivilegedUser, "-c", [bin("psql"), ...args].map((a) => `'${a}'`).join(" ")]]
+    : [bin("psql"), args];
+  return new Promise((resolve) => {
+    const child = spawn(cmd, cmdArgs, { stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("close", (code) => resolve({ ok: code === 0, out: out.trim(), err: err.trim() }));
+    child.stdin.end(sql);
+  });
+}
+
 function psqlOrThrow(db, sql) {
   const r = psql(db, sql);
   if (!r.ok) throw new Error(r.err || r.out);
@@ -185,10 +207,19 @@ const SUPABASE_STUBS = `
   do $$ begin
     if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
     if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+    -- service_role is the one the Edge Functions authenticate as, and it
+    -- was MISSING here until 0011 named it in a grant. A migration that
+    -- referenced it would have failed on this shim while applying
+    -- perfectly to the real project -- the same "the stand-in is weaker
+    -- than production" lesson as the default privileges below, running
+    -- in the opposite direction: there the shim let a bad migration
+    -- pass, here it would have failed a good one. Both are the shim
+    -- restating the environment instead of matching it.
+    if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
   end $$;
 
   alter default privileges in schema public grant all on tables to anon, authenticated;
-  grant usage on schema public to anon, authenticated;
+  grant usage on schema public to anon, authenticated, service_role;
 
   create schema if not exists auth;
   create table auth.users (id uuid primary key default gen_random_uuid(), email text);
@@ -1178,6 +1209,117 @@ async function run() {
     // The re-run must also re-close the grant the test above re-opened
     // in its own db; here it simply asserts revoke is idempotent.
     assert.equal(one(db, `select has_table_privilege('authenticated', 'public.semester_archives', 'update')::text;`), "false");
+  });
+
+  /* ---------- 0011: the allowance increment is atomic ---------- */
+
+  const withUsage = () => {
+    const db = withArchives();
+    psqlOrThrow(
+      db,
+      `insert into auth.users (id) values (${USER});
+       insert into public.ai_usage (user_id, month, minutes_used, text_units_used)
+         values (${USER}, '2026-08', 0, 0);`
+    );
+    return db;
+  };
+  const minutes = (db) =>
+    Number(one(db, `select minutes_used::text from public.ai_usage where user_id = ${USER} and month = '2026-08';`));
+
+  await test("THE LOST UPDATE, demonstrated: a read-modify-write drops one of two concurrent bills", async () => {
+    /* This asserts the BUG, not the fix, and it is here so the next
+       test means something. Without it, "two concurrent calls add up"
+       could be passing because the two calls never actually overlapped
+       — a green test proving nothing, which is the failure mode every
+       concurrency test has.
+
+       Session A reads 0, sleeps, writes 0 + 3. Session B reads 0 (A has
+       not written yet), sleeps, blocks on A's row lock, and then writes
+       its own stale 0 + 3. Total 3, not 6. */
+    const db = withUsage();
+    const readModifyWrite = (cost) => `
+      begin;
+      do $$
+      declare v numeric;
+      begin
+        select minutes_used into v from public.ai_usage where user_id = ${USER} and month = '2026-08';
+        perform pg_sleep(0.4);
+        update public.ai_usage set minutes_used = v + ${cost} where user_id = ${USER} and month = '2026-08';
+      end $$;
+      commit;`;
+    const both = await Promise.all([psqlAsync(db, readModifyWrite(3)), psqlAsync(db, readModifyWrite(3))]);
+    for (const r of both) assert.ok(r.ok, `a session failed: ${r.err}`);
+    assert.equal(
+      minutes(db),
+      3,
+      "the two sessions did not overlap, so this test is not demonstrating anything — raise the sleep"
+    );
+  });
+
+  await test("add_ai_usage keeps both concurrent bills, because the addition happens under the row lock", async () => {
+    /* The fix, under exactly the interleaving above. MUTATION CHECK:
+       change `ai_usage.minutes_used + excluded.minutes_used` to
+       `excluded.minutes_used` in 0011 and this reads 3. */
+    const db = withUsage();
+    const atomic = `
+      begin;
+      select pg_sleep(0.4);
+      select * from public.add_ai_usage(${USER}, '2026-08', 3, 0);
+      commit;`;
+    const both = await Promise.all([psqlAsync(db, atomic), psqlAsync(db, atomic)]);
+    for (const r of both) assert.ok(r.ok, `a session failed: ${r.err}`);
+    assert.equal(minutes(db), 6, "one of two concurrent bills was lost");
+  });
+
+  await test("add_ai_usage creates the month's row when there isn't one, and adds to it when there is", async () => {
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
+    psqlOrThrow(db, `select * from public.add_ai_usage(${USER}, '2026-09', 3, 0);`);
+    psqlOrThrow(db, `select * from public.add_ai_usage(${USER}, '2026-09', 0, 2);`);
+    psqlOrThrow(db, `select * from public.add_ai_usage(${USER}, '2026-09', 50, 1);`);
+    assert.equal(
+      one(db, `select minutes_used::text || '/' || text_units_used::text from public.ai_usage where month = '2026-09';`),
+      "53/3",
+      "the two counters must accumulate independently — minutes are audio, units are text"
+    );
+    assert.equal(one(db, `select count(*)::text from public.ai_usage where month = '2026-09';`), "1", "one row per user per month");
+  });
+
+  await test("add_ai_usage returns the totals it just wrote, so no caller reports a stale figure", () => {
+    const db = withUsage();
+    psqlOrThrow(db, `select * from public.add_ai_usage(${USER}, '2026-08', 4, 0);`);
+    assert.equal(one(db, `select new_units::text from public.add_ai_usage(${USER}, '2026-08', 0, 7);`), "7");
+    assert.equal(one(db, `select new_minutes::text from public.add_ai_usage(${USER}, '2026-08', 0, 0);`), "4");
+  });
+
+  await test("only service_role may call add_ai_usage — the caller names the user_id", () => {
+    /* A function's platform default is EXECUTE TO PUBLIC, which is the
+       same default-grant trap 0008 found on the tables one layer down.
+       It matters more here than on a table: this takes p_user_id as an
+       argument, so an execute grant to `authenticated` would read
+       "spend anybody's allowance". */
+    const db = withArchives();
+    const sig = "public.add_ai_usage(uuid, text, numeric, numeric)";
+    for (const role of ["anon", "authenticated", "public"]) {
+      assert.equal(
+        one(db, `select has_function_privilege('${role}', '${sig}', 'execute')::text;`),
+        "false",
+        `${role} can call add_ai_usage`
+      );
+    }
+    assert.equal(one(db, `select has_function_privilege('service_role', '${sig}', 'execute')::text;`), "true");
+  });
+
+  await test("0011 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = withUsage();
+    applyMigration(db, "0011_atomic_usage.sql");
+    psqlOrThrow(db, `select * from public.add_ai_usage(${USER}, '2026-08', 5, 0);`);
+    assert.equal(minutes(db), 5, "the re-applied function stopped adding");
+    assert.equal(
+      one(db, `select has_function_privilege('authenticated', 'public.add_ai_usage(uuid, text, numeric, numeric)', 'execute')::text;`),
+      "false",
+      "the re-run must re-close the grant, not just create the function"
+    );
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

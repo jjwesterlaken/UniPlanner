@@ -684,7 +684,9 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
         message:
           err && err.code === "transcript_expired"
             ? AI_NOTES_COPY.summaryFailed.retryExpired()
-            : AI_NOTES_COPY.summaryFailed.retryFailed,
+            : err && err.code === "already_summarised"
+              ? AI_NOTES_COPY.summaryFailed.retryAlreadyDone
+              : AI_NOTES_COPY.summaryFailed.retryFailed,
       });
     }
   };

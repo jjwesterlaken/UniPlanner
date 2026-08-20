@@ -123,9 +123,25 @@ function makeAdmin({ tier = "ai", unitsUsed = 0, usageError = null, billError = 
     };
     return chain;
   };
+  /* Billing is an RPC since migration 0011: the `+` happens under the
+     row lock ON CONFLICT DO UPDATE takes, rather than in this
+     function's memory where two overlapping requests both read N and
+     both write N + cost. The fake ADDS, because the SQL does — a fake
+     that assigned would let a regression to the read-modify-write pass
+     unnoticed, which is the "a fake that returns nothing makes
+     everything downstream agree" trap in a new costume. */
+  let banked = unitsUsed;
+  const rpc = async (fn, args) => {
+    seen.push({ op: "rpc", fn, payload: args });
+    if (trace) trace.push(`db:rpc:${fn}`);
+    if (billError) return { data: null, error: billError };
+    banked += Number(args.p_units || 0);
+    return { data: [{ new_minutes: 0, new_units: banked }], error: null };
+  };
   return {
     seen,
     from: table,
+    rpc,
     auth: { getUser: async () => ({ data: { user: { id: USER } }, error: null }) },
   };
 }
@@ -352,11 +368,12 @@ async function main() {
   await test("billing is scoped to the caller's own row, on both keys", async () => {
     const admin = makeAdmin();
     await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
-    const bill = admin.seen.find((s) => s.op === "upsert" && s.table === "ai_usage");
+    const bill = admin.seen.find((s) => s.op === "rpc" && s.fn === "add_ai_usage");
     assert.ok(bill, "nothing was billed");
-    assert.equal(bill.payload.user_id, USER, "the service-role client bypasses RLS — this scope is the only check");
-    assert.equal(bill.payload.month, "2026-08");
-    assert.equal(bill.payload.text_units_used, 1, "explain costs 1");
+    assert.equal(bill.payload.p_user_id, USER, "the service-role client bypasses RLS — this scope is the only check");
+    assert.equal(bill.payload.p_month, "2026-08");
+    assert.equal(bill.payload.p_units, 1, "explain costs 1");
+    assert.equal(bill.payload.p_minutes, 0, "a text task must not touch the audio allowance");
   });
 
   await test("each task bills its own weight", async () => {
@@ -373,8 +390,8 @@ async function main() {
     ]) {
       const admin = makeAdmin();
       await run({ task, ...body }, { supabaseAdmin: admin, summarizer: okSummarizer(out) });
-      const bill = admin.seen.find((s) => s.op === "upsert");
-      assert.equal(bill.payload.text_units_used, cost, `${task} billed ${bill.payload.text_units_used}, expected ${cost}`);
+      const bill = admin.seen.find((s) => s.op === "rpc");
+      assert.equal(bill.payload.p_units, cost, `${task} billed ${bill.payload.p_units}, expected ${cost}`);
     }
   });
 
@@ -405,7 +422,7 @@ async function main() {
       { supabaseAdmin: admin, summarizer: { complete: async () => "not json at all" } }
     );
     assert.equal(res.status, 502);
-    assert.equal(admin.seen.filter((s) => s.op === "upsert").length, 1, "spent tokens went unbilled");
+    assert.equal(admin.seen.filter((s) => s.op === "rpc").length, 1, "spent tokens went unbilled");
   });
 
   await test("a charged failure and a free failure are DIFFERENT codes", async () => {
@@ -451,8 +468,8 @@ async function main() {
     const sys = messages.find((m) => m.role === "system");
     assert.match(sys.content, /NOT CLEARLY LEGIBLE, DO NOT GUESS/, "the legibility refusal left the prompt");
     // Billed as ONE summarise -- the same weight as one text chunk.
-    const bill = admin.seen.find((x) => x.op === "upsert");
-    assert.equal(bill.payload.text_units_used, 3, "a photo batch is not priced as one summarise");
+    const bill = admin.seen.find((x) => x.op === "rpc");
+    assert.equal(bill.payload.p_units, 3, "a photo batch is not priced as one summarise");
   });
 
   await test("mixed media and oversize batches are refused before anything is spent", async () => {
@@ -486,7 +503,7 @@ async function main() {
     const body = await res.json();
     assert.equal(body.code, "pages_unreadable");
     assert.deepEqual(body.pages, [1, 3], "the pages the student can act on never reached them");
-    assert.equal(admin.seen.filter((x) => x.op === "upsert").length, 1, "the refusal was not billed — billing follows spend");
+    assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 1, "the refusal was not billed — billing follows spend");
   });
 
   await test("ai-text has NO storage client, so photos cannot have a server-side home", async () => {
@@ -778,11 +795,22 @@ async function main() {
   });
 
   await test("every ai_usage statement is scoped to a user, by filter or by payload", async () => {
-    const statements = src.split(/;\s*\n/).filter((st) => st.includes('.from("ai_usage")') || st.includes('from("ai_usage")'));
+    /* Since 0011 the WRITE is an RPC rather than an upsert, so the
+       write half of this invariant would silently stop being checked if
+       this only looked for `.from("ai_usage")` — the loop would run
+       over one statement and pass. Both spellings are gathered, and the
+       count is asserted, so losing either one goes red. */
+    const statements = src
+      .split(/;\s*\n/)
+      .filter((st) => st.includes('from("ai_usage")') || st.includes('rpc("add_ai_usage"'));
     assert.ok(statements.length >= 2, `expected the read and the write, found ${statements.length}`);
+    assert.ok(
+      statements.some((st) => st.includes('from("ai_usage")')) && statements.some((st) => st.includes('rpc("add_ai_usage"')),
+      "one half of the allowance path has disappeared — the read and the write must both be here to be checked"
+    );
     for (const st of statements) {
       assert.ok(
-        st.includes('eq("user_id"') || /user_id:\s*userId/.test(st),
+        st.includes('eq("user_id"') || /user_id:\s*userId/.test(st) || /p_user_id:\s*userId/.test(st),
         `an ai_usage statement is unscoped — the service-role client bypasses RLS:\n${st.trim().slice(0, 200)}`
       );
     }

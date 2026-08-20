@@ -43,6 +43,7 @@ import {
   REQUEST_RETENTION_DAYS,
   ORPHAN_SWEEP_HOURS,
   RESUMMARISE_EXPIRED_MESSAGE,
+  RESUMMARISE_NOT_FAILED_MESSAGE,
   RESUMMARISE_FAILED_MESSAGE,
 } from "./config.ts";
 
@@ -316,7 +317,7 @@ Deno.serve(async (req: Request) => {
       logStage(stage);
       const { data: existing, error: lookupErr } = await supabaseAdmin
         .from("ai_notes_requests")
-        .select("result, status")
+        .select("result, status, summary_failed")
         .eq("idempotency_key", idempotencyKey)
         .eq("user_id", userId)
         .maybeSingle();
@@ -330,6 +331,51 @@ Deno.serve(async (req: Request) => {
         // which; the response must not.
         logFailure(stage, new Error("no row for this key and user"), { key: String(idempotencyKey).slice(0, 64) });
         return rejectIdempotencyKey();
+      }
+
+      /* THE PRECONDITION, and its absence was the most expensive hole
+         in the app.
+
+         This branch used to require only that the row exists, is yours,
+         and holds a transcript. It never asked whether the summary had
+         actually FAILED — so a SUCCESSFUL lecture could be re-summarised
+         over and over for the whole retention window, at a flat
+         RESUMMARISE_BILLED_MINUTES each. Costed in COST-MODEL.md: a
+         three-hour transcript back through the summariser is $0.0072
+         against 2 billed minutes, which is $0.0036 a billed minute
+         where every real recording costs $0.0007. At a 3,000-minute cap
+         that is $10 of provider spend from one recording, and it was
+         the single most expensive legal way to spend an allowance.
+
+         THE FIX IS THE PRECONDITION, NOT THE PRICE.
+         RESUMMARISE_BILLED_MINUTES is derived correctly — from a
+         TYPICAL SHORT summary, which is what a retry of a normal
+         recording is. What was wrong was that the action could be taken
+         when there was nothing to retry.
+
+         It is checked BEFORE the transcript, because the two answers
+         are about different things: a successful note has nothing to
+         retry whether or not the sweep has since taken its transcript,
+         and answering "expired" there would be a true sentence about
+         the wrong question.
+
+         A DISTINCT CODE, and this does not break the identical-
+         rejection rule. That rule is about not-found versus not-yours,
+         which must be indistinguishable or the endpoint becomes an
+         oracle for keys. This branch is only reachable once ownership
+         is PROVEN, so it tells the owner a fact about their own row.
+
+         Note the second property this buys, free: a successful retry
+         writes summary_failed = false, so it is one retry per failure
+         rather than an open door. */
+      if (existing.summary_failed !== true) {
+        logStage(stage, { outcome: "nothing_to_retry", status: existing.status });
+        return errorResponse(
+          stage,
+          "already_summarised",
+          RESUMMARISE_NOT_FAILED_MESSAGE,
+          409
+        );
       }
 
       const transcript = (existing.result && (existing.result as Record<string, unknown>).transcript) || "";
@@ -384,10 +430,18 @@ Deno.serve(async (req: Request) => {
       stage = "billing";
       const billed = RESUMMARISE_BILLED_MINUTES;
       logStage(stage, { minutes: billed, resummarise: true });
-      await supabaseAdmin.from("ai_usage").upsert(
-        { user_id: userId, month: monthKey, minutes_used: usedThisMonth + billed, updated_at: new Date().toISOString() },
-        { onConflict: "user_id,month" }
-      );
+      // Atomic, for the reason spelled out at the fresh-recording bill
+      // below. `usedThisMonth` stays where it is — it is the allowance
+      // CHECK, which precedes the provider call and must.
+      const { error: retryBillErr } = await supabaseAdmin.rpc("add_ai_usage", {
+        p_user_id: userId,
+        p_month: monthKey,
+        p_minutes: billed,
+        p_units: 0,
+      });
+      if (retryBillErr) {
+        logFailure(stage, retryBillErr, { minutes: billed, resummarise: true, hint: "is migration 0011 applied?" });
+      }
 
       const retried = { ok: true, transcript, summaryFailed: false, original: summary.original, translated: summary.translated };
       await supabaseAdmin
@@ -650,10 +704,29 @@ Deno.serve(async (req: Request) => {
       });
     }
     logStage(stage, { minutes: minutesBilled });
-    await supabaseAdmin.from("ai_usage").upsert(
-      { user_id: userId, month, minutes_used: minutesUsedThisMonth + minutesBilled, updated_at: new Date().toISOString() },
-      { onConflict: "user_id,month" }
-    );
+    /* THE ADDITION HAPPENS IN THE DATABASE. This used to write
+       `minutesUsedThisMonth + minutesBilled` — a sum computed from a
+       read taken back at step 7, before the provider call — so two
+       overlapping recordings both read N and both wrote N + cost, and
+       one of them was never billed at all. `add_ai_usage` (migration
+       0011) does the `+` under the row lock ON CONFLICT DO UPDATE
+       takes. `minutesUsedThisMonth` is still used for the ALLOWANCE
+       CHECK, which must stay where it is: the read precedes the
+       provider call so a refusal costs nothing. Only the write moved. */
+    const { error: billErr } = await supabaseAdmin.rpc("add_ai_usage", {
+      p_user_id: userId,
+      p_month: month,
+      p_minutes: minutesBilled,
+      p_units: 0,
+    });
+    /* Never silent. The upsert this replaced discarded its error
+       entirely, so a month that failed to bill looked exactly like one
+       that billed — the same "no and nothing answer alike" trap 0008
+       closed at the database. The request still succeeds: the work is
+       done and the student has it. */
+    if (billErr) {
+      logFailure(stage, billErr, { minutes: minutesBilled, hint: "is migration 0011 applied?" });
+    }
 
     // 13. Mark the request done.
     await supabaseAdmin
