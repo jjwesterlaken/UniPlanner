@@ -833,3 +833,218 @@ model (soft, flagged, affects lectures only), the image token model (binary,
 flagged, affects photos only), and the 140 wpm speech-rate assumption (affects
 summariser input by the same proportion it is wrong by, and lecture totals by about
 a third of that).
+
+---
+
+## 12. The photo model — priced, with one recommendation and one measurement
+
+Commissioned after the review, which supplied the lever this document could not
+see. **Report before building**: nothing here is implemented.
+
+Every figure is printed by `scripts/measure-cost-model.mjs`, which now implements
+the patch rule and checks it against the worked example in the brief — 1086 × 1536
+on a 1,536-patch budget comes out at 1,472 patches and **2,385 tokens**, matching
+to the digit. The second step of the shrink is what makes that work, and leaving it
+out gets the answer wrong by about 8%: shrink to fit the budget, then land the
+width on a whole patch boundary and scale the height by *that* adjusted factor.
+
+### The headline, before the tables
+
+**The brief's estimate was right about the mechanism and wrong about the size of
+the prize, and the reason is a price nobody was looking at.** "Even at three times
+the per-token price, photos land roughly five times cheaper" assumes the image
+tokens dominate. They do today. They do not on `gpt-5.4-mini`, whose **output** is
+$4.50/1M against gpt-4o-mini's $0.60 — 7.5× — and `MAX_TOKENS.summarise` is 2,000.
+
+> On `gpt-5.4-mini`, **the summary costs more than the four photos it is about.**
+
+So the real numbers are 1.4–1.8× for `gpt-5.4-mini` and 4.3–5.8× for
+`gpt-5.4-nano`. The five-fold prize is real, and it is on nano.
+
+### 12.1 Availability
+
+| Model | Status | Image scheme |
+|---|---|---|
+| `gpt-4o-mini` | live, no sunset published | tiles, 2,833 + 5,667 |
+| `gpt-5.4-mini` | live, not on the deprecation list | patches, budget 1,536, ×1.62 |
+| `gpt-5.4-nano` | live, not on the deprecation list | patches, budget 1,536, ×2.46 |
+| `gpt-5-mini` / `gpt-5-nano` | **2025-08-07 snapshots shut down 11 December 2026** | patches |
+| `gpt-4.1-nano`, `o4-mini` | **shut down 23 October 2026** | patches |
+
+The last two rows are the trap from section 7: the cheap-looking names both have
+dates on them, and `gpt-5-mini`/`gpt-5-nano` are only pinned-snapshot deaths — but
+pinning a snapshot is exactly what you do when you want a model to stay put.
+
+**RATES ARE THIRD-HAND AND THAT IS THE WEAKEST PART OF THIS SECTION.** OpenAI's own
+pricing and vision pages are unreachable from the build container. The figures
+below came from search results that agreed with one another, and two of them decide
+the recommendation. Section 12.7 says which, and how one API call settles both.
+
+| Model | Input /1M | Output /1M |
+|---|---|---|
+| `gpt-4o-mini` | $0.150 | $0.600 |
+| `gpt-5.4-mini` | $0.750 | $4.50 |
+| `gpt-5.4-nano` | $0.200 | $1.25 |
+
+### 12.2 One A4 page, at each `maxEdge` — and the lever that now exists
+
+`downscalePhoto` keeps the aspect ratio, so an A4 page leaves the device at
+`round(edge / 1.414) × edge`.
+
+| `maxEdge` | `gpt-4o-mini` (tiles) | `gpt-5.4-mini` | `gpt-5.4-nano` |
+|---|---|---|---|
+| 1536px (today) | 36,835 tok · $0.00553 | 2,385 tok · $0.00179 | 3,621 tok · $0.00072 |
+| 1280px | 36,835 tok · $0.00553 | 1,879 tok · $0.00141 | 2,854 tok · $0.00057 |
+| **1024px** | 36,835 tok · $0.00553 | **1,192 tok · $0.00089** | **1,811 tok · $0.00036** |
+| 896px | 36,835 tok · $0.00553 | 907 tok · $0.00068 | 1,378 tok · $0.00028 |
+| 768px | 36,835 tok · $0.00553 | 661 tok · $0.00050 | 1,004 tok · $0.00020 |
+
+**`maxEdge` IS a lever under patch tokenisation, and this is the answer to the
+question the brief said was not obvious.** Under tiling the shortest side is
+normalised to 768 in both directions, so the column is flat — that is section 4's
+settled finding. Under patches the budget is a **cap, not a target**: an image that
+fits under it is billed for exactly the patches it needs, so the cost falls
+linearly with what we send. Dropping 1536 → 1024 halves the image tokens.
+
+It is a free change in code and it is **worth nothing on the model we run today**,
+which is why it belongs in this decision rather than beside it.
+
+### 12.3 `detail` — the setting we have wrong, and it is nearly free to fix
+
+`prompts.js` sends `detail: "high"`. The docs recommend **`"original"`** for OCR
+and small text, and warn that `low` and `high` may resize and obscure fine detail —
+so today's setting is not the OCR-optimal one for a photographed page of print.
+
+`"original"` raises the patch budget to 10,000 (max dimension 6,000) and does not
+resize, so the page is billed exactly as sent:
+
+| `maxEdge` | `gpt-5.4-mini` | `gpt-5.4-nano` |
+|---|---|---|
+| 1536px | 2,644 tok · $0.00198 | 4,015 tok · $0.00080 |
+| **1024px** | **1,192 tok · $0.00089** | **1,811 tok · $0.00036** |
+| 768px | 661 tok · $0.00050 | 1,004 tok · $0.00020 |
+
+**At 1024px, `original` and `high` cost the same** — the budget is not binding, so
+there is nothing to shrink — and `original` guarantees the model reads the pixels
+we chose rather than a resize we did not. At 1536px `original` costs 11% more and
+buys a page that was not silently shrunk.
+
+That is the shape of the recommendation: **stop letting the provider decide the
+resolution, decide it ourselves, and pick the number by legibility rather than by
+what a budget happens to allow.**
+
+### 12.4 A batch of four pages, and a whole 16-page reading
+
+| Model | `maxEdge` | Batch input | Batch output | **Batch** | 16 pages | vs today |
+|---|---|---|---|---|---|---|
+| `gpt-4o-mini` (today) | 1536 | $0.0221 | $0.00120 | **$0.0233** | $0.0948 | 1.00× |
+| `gpt-5.4-mini` | 1536 | $0.00731 | $0.00900 | **$0.0163** | $0.0754 | 1.43× |
+| `gpt-5.4-mini` | 1024 | $0.00373 | $0.00900 | **$0.0127** | $0.0611 | 1.83× |
+| `gpt-5.4-nano` | 1536 | $0.00294 | $0.00250 | **$0.00544** | $0.0246 | 4.29× |
+| **`gpt-5.4-nano`** | **1024** | $0.00149 | $0.00250 | **$0.00399** | **$0.0188** | **5.85×** |
+
+The output column is the one to read. At 2,000 tokens it is $0.00120 on
+`gpt-4o-mini`, $0.00250 on nano and **$0.00900 on `gpt-5.4-mini`** — where it is
+more than twice the cost of the four photographed pages. Moving to `gpt-5.4-mini`
+trades an image problem for an output problem and keeps most of the bill.
+
+One consequence worth naming for later: **`MAX_TOKENS.summarise` becomes a price
+lever it has never been.** On gpt-4o-mini the ceiling is a safety rail costing a
+tenth of a cent. On any of these it is a real fraction of the action's cost, so a
+future "let summaries be longer" is a pricing change rather than a comfort change.
+
+### 12.5 The model must be chosen per MEDIUM, not per task
+
+Photos and pasted text are the **same `summarise` task**, so moving the task moves
+both. That would be a bad trade:
+
+| Model | 20,000-char text chunk | 60-minute lecture summary |
+|---|---|---|
+| `gpt-4o-mini` (today) | $0.00193 | $0.00375 |
+| `gpt-5.4-mini` | $0.0127 — **6.6× worse** | $0.0237 — **6.3× worse** |
+| `gpt-5.4-nano` | $0.00348 — 1.8× worse | $0.00648 — 1.7× worse |
+
+**Text stays on `gpt-4o-mini`.** It has no published sunset, it is the cheapest
+thing in the table for text, and the lecture summariser has a measured prompt tuned
+against it.
+
+That means two model strings rather than one, which **raises the priority of the
+`_shared/model.ts` move in section 7 rather than lowering it**: `SUMMARY_MODEL` and
+`VISION_MODEL`, one place each, imported by both functions. Do that first and the
+photo change is one line.
+
+Ruled out on the arithmetic, so nobody proposes it: **OCR the pages with a cheap
+model, then summarise the text with `gpt-4o-mini`.** Nano would have to emit the
+page text (~3,200 tokens for four pages) at $1.25/1M, which alone is $0.0040 —
+more than the entire single-call nano batch — before the second call is paid for.
+Two calls, two failure paths, and it costs more.
+
+### 12.6 What it does to the weight — model and weight, as one decision
+
+Priced in credits, where **1 credit = 1 minute of recorded lecture = $0.00071**
+(the single-currency preview; the full pass is the next piece of work). A 20,000-
+character text chunk comes out at **3 credits — exactly today's
+`TASK_UNITS.summarise`**, which is a good sign the currency change will be clean.
+
+| Photo batch of 4 | Honest weight | A 16-page reading |
+|---|---|---|
+| `gpt-4o-mini` today, any `maxEdge` | **33 credits** | ~133 credits |
+| `gpt-5.4-mini` @1024 | 18 credits | ~73 credits |
+| **`gpt-5.4-nano` @1024** | **6 credits** | **~25 credits** |
+
+**Read the first row, because it is the real conclusion of this section.** Priced
+honestly on the model we run today, four photographed pages cost eleven text chunks,
+and a 16-page reading costs most of a month. Weight 3 is not a mispricing that
+needs correcting — **at an honest weight the feature is unusable on this model.**
+The move is not an optimisation; it is what makes the feature exist at a price we
+can state out loud.
+
+Nano at 1024 puts a whole reading at ~25 credits, which is a sentence a student can
+hear: *a 16-page reading costs about as much as a 25-minute lecture.*
+
+### 12.7 THE RECOMMENDATION, and the one thing that must be measured first
+
+**Move the photo path — and only the photo path — to `gpt-5.4-nano`, with
+`detail: "original"` and `maxEdge` 1024, and weight a batch at 6 credits.**
+Keep text and lectures on `gpt-4o-mini`. Split the model string into
+`SUMMARY_MODEL` and `VISION_MODEL` in `supabase/functions/_shared/` first.
+
+**It is conditional on one measurement, and I would not ship it without.** Two
+things are unverified and both can only be settled by a real call:
+
+1. **Can nano actually read a photographed page of print?** This is the whole
+   feature. Nano is the cheapest model in the family and OCR of a phone photo is
+   the hardest thing we would ask of it. A summariser that quietly misreads a page
+   is the worst outcome the readings work has — it is billed, saved and trusted —
+   which is exactly why the legibility rule is a model *refusal* rather than a
+   client heuristic. If nano's refusals get worse rather than its reading, that is
+   a silent quality regression on the most sensitive path in the app.
+2. **The rates and the tokenisation on this specific path.** There is an
+   unresolved report of a 1920×1080 PNG billing ~66,000 prompt tokens on
+   `gpt-5.4-mini`, where the documented arithmetic says ~2,400. Cause unknown;
+   PNG-as-data-URL and the `detail` handling are both implicated in the thread.
+   **We send exactly that shape** — a base64 data URL from a canvas — so if that
+   report is real, the whole saving evaporates and the recommendation inverts.
+
+That is *verify the evidence before endorsing the remedy*, pointed at a remedy I am
+proposing. The arithmetic is clean, checks against the brief to the digit, and rests
+on two published numbers I could not read at the source and one behaviour somebody
+says does not match its documentation.
+
+**The measurement, and it is cheap.** One reading, four photographed pages, run
+three times — once on `gpt-4o-mini` @1536/high (the control, which this document
+predicts at **147,544 input tokens**), once on `gpt-5.4-nano` @1024/original
+(predicted **7,448 input tokens**), once on `gpt-5.4-mini` @1024/original
+(predicted **4,972**). Read the input token counts on the OpenAI dashboard and read
+the three summaries side by side.
+
+- If the token counts land within 20%, the rates and the tokenisation are sound.
+- If nano's summary is as good, ship it.
+- If nano misreads and mini does not, the answer is `gpt-5.4-mini` at 18 credits —
+  worse economics, still a real improvement, and a feature that works.
+- If any of them bills five figures for four pages, that community report is real
+  and none of this is the answer.
+
+**Do not re-weight photos before this runs.** Setting 33 credits against a model we
+are about to leave tells students a reading costs a third of their month when it is
+about to cost a fortieth, and a visible wrong number is worse than an invisible one.

@@ -1355,6 +1355,45 @@ asserts the total is 3 rather than 6. Without it, "two concurrent calls
 add up" could pass because the two calls never overlapped — a green
 test proving nothing, which is how every concurrency test fails.
 
+**THE PHOTO MODEL IS PRICED (section 12), and the recommendation is
+conditional.** Move the photo path — and only the photo path — to
+`gpt-5.4-nano` at `detail: "original"` and `maxEdge` 1024, weight a
+batch at 6 credits, and keep text and lectures on `gpt-4o-mini`.
+
+Three things in that sentence are load-bearing:
+
+- **The output price, not the image price, is what decides it.**
+  `gpt-5.4-mini` is only 1.4-1.8x better overall because its output is
+  $4.50/1M against $0.60 — on a 2,000-token ceiling the summary costs
+  more than the four photographed pages it is about. The 5x prize is
+  on nano.
+- **`maxEdge` is a lever again.** Under tiling the shortest side is
+  normalised to 768 in both directions, so it does nothing. Under
+  patches the budget is a CAP, not a target, so cost falls linearly
+  with what we send: 1536 -> 1024 halves the image tokens. Free to
+  change, worth nothing on the model we run today, which is why it
+  belongs in the same decision.
+- **Per MEDIUM, not per task.** Photos and pasted text are the same
+  `summarise` task, and moving the task would make a text chunk 6.6x
+  worse and a lecture 6.3x worse on mini. So there are two model
+  strings, which raises rather than lowers the priority of the
+  `_shared/` move: `SUMMARY_MODEL` and `VISION_MODEL`.
+
+**Priced honestly on the model we run TODAY, the feature is unusable:**
+four photographed pages cost eleven text chunks, so a 16-page reading
+is ~133 credits of a 150-unit month. Weight 3 is not a mispricing to
+correct — the model move is what makes the feature exist at a price
+anyone can say out loud. **Do not re-weight against a model we are
+about to leave.**
+
+**And it waits on one measurement**, because two published rates and
+one behaviour are third-hand: there is an unresolved report of a
+1920x1080 PNG billing ~66,000 prompt tokens on `gpt-5.4-mini` where the
+documented arithmetic says ~2,400, and we send exactly that shape — a
+base64 data URL from a canvas. Section 12.7 has the three-call test and
+what each outcome means. That is *verify the evidence before endorsing
+the remedy*, pointed at a remedy of my own.
+
 **And the brief that commissioned it had three things wrong**, which is
 the part to carry. It authorised switching Groq to Turbo (already
 Turbo) and raising `MONTHLY_MINUTES_LIMIT` from 30 to 200 (it is

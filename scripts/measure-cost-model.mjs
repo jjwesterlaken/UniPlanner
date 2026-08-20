@@ -264,6 +264,128 @@ say("\nTRANSCRIPTION MODEL\n");
 say(`  whisper-large-v3-turbo (what ships)  ${usd(GROQ_TURBO_PER_HOUR)}/hr\n`);
 say(`  whisper-large-v3                     ${usd(GROQ_LARGE_PER_HOUR)}/hr  (${(GROQ_LARGE_PER_HOUR / GROQ_TURBO_PER_HOUR).toFixed(1)}x)\n`);
 
+/* ==================================================================
+   THE PHOTO MODEL COMPARISON (section 12 of COST-MODEL.md)
+
+   The models we call today TILE images. The newer mini and nano models
+   PATCH them: 32x32 patches, a per-model patch budget, a per-model
+   multiplier, billed at ordinary text rates. The two schemes behave in
+   opposite ways when you send a smaller photo, which is the whole
+   reason this block exists rather than a single number.
+
+   RATES ARE THIRD-HAND. OpenAI's own pages are unreachable from this
+   container; these came from search results that agreed with each
+   other, and they are the figures the recommendation is least sure of.
+   Section 12 says which ones matter and how to settle them.
+   ================================================================== */
+
+const CANDIDATES = {
+  "gpt-4o-mini (today)": { in: 0.15 / 1e6, out: 0.60 / 1e6, tiles: { base: 2833, tile: 5667 } },
+  "gpt-5.4-mini": { in: 0.75 / 1e6, out: 4.50 / 1e6, patch: { budget: 1536, multiplier: 1.62 } },
+  "gpt-5.4-nano": { in: 0.20 / 1e6, out: 1.25 / 1e6, patch: { budget: 1536, multiplier: 2.46 } },
+};
+
+const patchesFor = (w, h) => Math.ceil(w / 32) * Math.ceil(h / 32);
+function patchTokens(w, h, { budget, multiplier }) {
+  let patches = patchesFor(w, h);
+  if (patches > budget) {
+    /* Shrink to fit the budget, then land the width on a whole patch
+       boundary and scale the height by that same adjusted factor. The
+       second step is what takes a raw 0.9711 to 0.9428 on our page, and
+       leaving it out gets the answer wrong by ~8%. */
+    const shrink = Math.sqrt((32 * 32 * budget) / (w * h));
+    const wPatches = Math.floor((w * shrink) / 32);
+    const adjusted = (wPatches * 32) / w;
+    w = wPatches * 32;
+    h = Math.floor(h * adjusted);
+    patches = patchesFor(w, h);
+  }
+  return { patches, tokens: Math.round(patches * multiplier) };
+}
+const pageTokens = (model, w, h) =>
+  model.patch ? patchTokens(w, h, model.patch).tokens : model.tiles.base + tilesFor(w, h) * model.tiles.tile;
+/* downscalePhoto keeps the aspect ratio; an A4 page is 1:1.414. */
+const a4At = (edge) => [Math.round(edge / 1.414), edge];
+
+say("\nPHOTO MODEL CANDIDATES — one A4 page, by maxEdge\n");
+say("  maxEdge   " + Object.keys(CANDIDATES).map((k) => pad(k, 22)).join("") + "\n");
+for (const edge of [1536, 1280, 1024, 896, 768]) {
+  const [w, h] = a4At(edge);
+  const cells = Object.values(CANDIDATES).map((m) => {
+    const t = pageTokens(m, w, h);
+    return pad(`${t} tok ${usd(t * m.in)}`, 22);
+  });
+  say(`  ${pad(edge + "px", 7)}   ${cells.join("")}\n`);
+}
+say("  SENDING A SMALLER PHOTO: no effect under tiling, LINEAR under patches until the budget stops binding.\n");
+
+/* detail:"original" raises the budget to 10,000 patches (max_dim 6,000),
+   so nothing is resized and the cost is exactly what we chose to send.
+   It is also what the docs recommend for OCR and small text, which is
+   what a photographed page of print is. */
+say("\n  detail:\"original\" (budget 10,000, no resize) — the page is billed exactly as sent\n");
+for (const edge of [1536, 1024, 768]) {
+  const [w, h] = a4At(edge);
+  const cells = Object.entries(CANDIDATES)
+    .filter(([, m]) => m.patch)
+    .map(([name, m]) => {
+      const t = patchTokens(w, h, { ...m.patch, budget: 10000 }).tokens;
+      return pad(`${name.split("-").pop()} ${t} tok ${usd(t * m.in)}`, 26);
+    });
+  say(`    ${pad(edge + "px", 7)}  ${cells.join("")}\n`);
+}
+
+say("\nA BATCH OF 4 PAGES, and a whole 16-page reading\n");
+say("  model                 maxEdge   batch in   batch out    batch      16 pages   vs today\n");
+const todayBatch = (() => {
+  const m = CANDIDATES["gpt-4o-mini (today)"];
+  const [w, h] = a4At(1536);
+  return (4 * pageTokens(m, w, h) + SYS.images + 20) * m.in + 2000 * m.out;
+})();
+for (const [name, m] of Object.entries(CANDIDATES)) {
+  for (const edge of [1536, 1024]) {
+    const [w, h] = a4At(edge);
+    const inTok = 4 * pageTokens(m, w, h) + SYS.images + 20;
+    const batch = inTok * m.in + 2000 * m.out;
+    /* A 16-page reading is 4 batches plus one merge. The merge is TEXT,
+       so it is priced on whichever model handles text -- gpt-4o-mini
+       unless the whole task moves. Both shown by keeping the merge on
+       the same model as the batch, which is the pessimistic reading. */
+    const merge = (chars(6000) + SYS.merge) * m.in + 2000 * m.out;
+    say(
+      `  ${pad(name, 21)} ${pad(edge + "px", 7)}  ${pad(usd(inTok * m.in), 9)}  ${pad(usd(2000 * m.out), 9)}  ` +
+        `${pad(usd(batch), 9)}  ${pad(usd(4 * batch + merge), 9)}  ${pad((todayBatch / batch).toFixed(2) + "x", 8)}\n`
+    );
+  }
+}
+
+say("\nTHE HALF NOBODY EXPECTED: the OUTPUT price, on a 2,000-token ceiling\n");
+for (const [name, m] of Object.entries(CANDIDATES))
+  say(`  ${pad(name, 21)} 2,000 output tokens = ${usd(2000 * m.out)}\n`);
+say("  On gpt-5.4-mini the summary costs more than the four photos it is about.\n");
+
+say("\nWHAT ELSE WOULD MOVE IF THE WHOLE `summarise` TASK MOVED\n");
+for (const [name, m] of Object.entries(CANDIDATES)) {
+  const textChunkHere = (chars(20000) + SYS.summarise) * m.in + 2000 * m.out;
+  const lectureHere = inputTokens(60, true) * m.in + outputTokens(60, true) * m.out;
+  say(
+    `  ${pad(name, 21)} a 20k text chunk ${pad(usd(textChunkHere), 9)}   a 60-min lecture summary ${pad(usd(lectureHere), 9)}\n`
+  );
+}
+
+say("\nWHAT A CREDIT WOULD BE WORTH (preview of the single-currency pass)\n");
+const perBilledMinute = lectureCost(50, false) / 50;
+say(`  1 credit = 1 minute of recorded lecture = ${usd(perBilledMinute)}\n`);
+const asCredits = (c) => Math.max(1, Math.ceil(c / perBilledMinute));
+say(`  a 20,000-char text chunk            ${pad(asCredits(textChunk), 4)} credits   (TASK_UNITS.summarise is 3 today)\n`);
+for (const [name, m] of Object.entries(CANDIDATES)) {
+  for (const edge of [1536, 1024]) {
+    const [w, h] = a4At(edge);
+    const batch = (4 * pageTokens(m, w, h) + SYS.images + 20) * m.in + 2000 * m.out;
+    say(`  a 4-photo batch, ${pad(name, 21)} @${pad(edge + "px", 7)} ${pad(asCredits(batch), 4)} credits\n`);
+  }
+}
+
 say("\nSECTION 11 PREDICTIONS (what the dashboards should show)\n");
 say(`  A. one 50-minute lecture, no translation\n`);
 say(`       Groq    50.0 min of audio           ${usd(50 * 60 * GROQ_PER_SECOND)}\n`);
