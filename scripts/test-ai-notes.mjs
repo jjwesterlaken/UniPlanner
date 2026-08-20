@@ -2259,6 +2259,12 @@ async function run() {
       "mobile/android/app/uniplanner-upload.jks",
       "release.keystore",
       "transcript.txt",
+      /* Build output, not a secret — but it reached main three times
+         through the same mechanism the entries above exist to stop:
+         `git add -A` after a coverage run, with nothing ignoring c8's
+         per-process temp files. Probed here because this is the test
+         that asks git rather than reading the file. */
+      "coverage/tmp/coverage-1-2-0.json",
     ];
     const inRepo = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: rootDir, encoding: "utf8" });
     assert.equal(
