@@ -6,7 +6,7 @@
    bundle for leaked secrets). */
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -2218,11 +2218,56 @@ async function run() {
        publish: with the store passwords in key.properties beside it, a
        committed pair signs malicious updates as us. `git add -A` is the
        normal way work is committed in this repo, so the ignore entries
-       are load-bearing, not hygiene. */
+       are load-bearing, not hygiene.
+
+       transcript.txt joins them for a different reason and the same
+       mechanism: measure-summary-depth.mjs takes a transcript as a path
+       argument, so the obvious place to put a REAL lecture is the
+       repository root, and that file is a student's content and a
+       lecturer's copyrighted delivery. */
     const ignore = fs.readFileSync(path.join(rootDir, ".gitignore"), "utf8");
-    for (const entry of ["*.jks", "*.keystore", "key.properties"]) {
+    for (const entry of ["*.jks", "*.keystore", "key.properties", "transcript.txt"]) {
       assert.ok(ignore.split("\n").some((l) => l.trim() === entry), `.gitignore no longer ignores ${entry}`);
     }
+  });
+
+  await test("git REALLY ignores a keystore at each of those paths, not just the entry text", () => {
+    /* THE FAILURE THE TEXT CHECK ABOVE CANNOT SEE. An entry can be
+       present and still not bite: a later negation un-ignores it, a
+       pattern lands in the wrong section, or somebody "tidies"
+       `key.properties` into `/key.properties` and it stops matching
+       `mobile/key.properties` -- which is the exact path a Capacitor
+       build puts it at. The text assertion goes green through all three.
+
+       So this asks GIT, on the real paths a real build creates, which
+       is the difference between restating the file and checking the
+       thing the file exists to do. `git check-ignore -q` exits 0 when a
+       path is ignored and 1 when it is not; the paths need not exist. */
+    const probes = [
+      "mobile/key.properties",
+      "key.properties",
+      "mobile/android/key.properties",
+      "uniplanner-upload.jks",
+      "mobile/android/app/uniplanner-upload.jks",
+      "release.keystore",
+      "transcript.txt",
+    ];
+    const inRepo = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: rootDir, encoding: "utf8" });
+    assert.equal(
+      inRepo.status,
+      0,
+      "not a git checkout, so this cannot run — and it must not SKIP: a guard that " +
+        "quietly stops running is how a keystore gets committed"
+    );
+    for (const probe of probes) {
+      const r = spawnSync("git", ["check-ignore", "-q", "--no-index", probe], { cwd: rootDir, encoding: "utf8" });
+      assert.equal(r.status, 0, `git does NOT ignore ${probe} — the .gitignore entry is present but not doing its job`);
+    }
+    /* And the inverse, so this cannot pass by ignoring everything: a
+       file that MUST stay tracked is not ignored. Without it, a stray
+       `*` in .gitignore turns every assertion above green. */
+    const r = spawnSync("git", ["check-ignore", "-q", "--no-index", "package.json"], { cwd: rootDir, encoding: "utf8" });
+    assert.notEqual(r.status, 0, ".gitignore now ignores package.json — the patterns are far too broad");
   });
 
   await test("the release signing config is applied by script, and survives what regeneration does", async () => {

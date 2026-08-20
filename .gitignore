@@ -11,10 +11,20 @@ mobile/android/
 
 # Release signing secrets. The keystore must live OUTSIDE the repo; these
 # entries are the backstop for the day someone creates one inside it and
-# runs `git add -A`. A test asserts they are present.
+# runs `git add -A`. A test asserts they are present AND that git really
+# ignores a file at each of these paths -- an entry can be present and
+# still not bite, which is the only failure mode a text check cannot see.
 *.jks
 *.keystore
 key.properties
+
+# A real lecture transcript, pasted in to run scripts/measure-summary-depth.mjs.
+# It is a student's content and a lecturer's copyrighted delivery, and the
+# script takes it as a path argument, so the obvious place to put one is the
+# repository root. Ignored for the same reason as the keystore: the normal way
+# work gets committed here is `git add -A`.
+transcript.txt
+
 .archive-test-tmp/
 # e2e journey artifacts (per-run)
 e2e/.state.json
