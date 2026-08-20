@@ -1341,6 +1341,61 @@ guarded on the old columns still existing**, because 0013 removes what
 it reads and "re-runnable exactly once" is not re-runnable; a test
 applies the whole folder twice to prove it.
 
+## Three product plans, and the correction inside each
+
+`PRODUCT-PLANS.md`. Plans, not builds. Sequencing: reading depth and
+output language before the AAB; file upload during the closed test.
+
+**Reading depth: the ceiling is the suspect and the PROMPT is the
+cause.** `ai-text`'s summarise prompt is a schema and one sentence —
+exactly the state `ai-notes` was in when its output read "helpful but
+shallower than I'd like". That was fixed by telling the model what
+belongs IN each section, measured at **+189% words per key point with
+the entry count barely moving and the ceiling untouched**. Raising
+`MAX_TOKENS` without fixing the prompt buys permission to be verbose,
+and we pay for the tokens. Do the prompt first, measure, and raise the
+ceiling only if the output is really hitting it. 2,000 -> 4,000 takes a
+16-page reading from 14 to 24 credits — nothing on a 900-credit month,
+**40% of the 60-credit trial**, which is the number that decides it.
+
+Two things that are easy to get wrong there: a chunk does not know it is
+one of four, so depth scaling is per CHUNK and the MERGE is what must
+not flatten four deep summaries into one thin one — its prompt has no
+depth instruction at all today. And subheadings are a RENDERING
+decision, not a schema one: `keyPoints` is already the bullets, and a
+sixth field touches every screen and every saved note.
+
+**Output language: the cost moves the wrong way from what you'd
+expect.** CJK output is ~1 token per character against English's ~4.2
+chars/token, so at a fixed token ceiling CJK gets ~72% as much TEXT for
+the same price — the cost does not rise, the output shrinks. Credits are
+derived from the ceiling, so a Chinese summary costs exactly what an
+English one costs, which is the right answer and comes free from
+ceiling-derived weights. The interaction worth knowing: CJK plus the
+depth work is the case most likely to hit the ceiling, and hitting it
+is a hard failure that is still billed.
+
+Explain-it-back is the exception: it must answer in the language the
+STUDENT wrote in, ignoring the setting, because marking someone's
+Spanish explanation in Korean is worse than useless. A prompt clause,
+not a setting.
+
+**File upload: 41x on input tokens, ~10x in CREDITS, and the difference
+matters.** Extracted text is 905 tokens a page against 36,835 as an
+image — but a whole reading is 138 credits photographed and 14
+extracted, because the OUTPUT ceiling is identical either way and output
+is four times the price of input. **Assuming input dominates is the same
+error that made the photo model look 5x better than it is.** Ten times
+is still the largest saving available anywhere in this app, and it
+routes students off the most expensive path for the most common case.
+
+Client-side extraction is not a performance choice: `ai-text` has no
+storage client at all and a test pins that, because the day someone adds
+one the privacy policy and the consent both become false. The fallback
+threshold is per PAGE (~100 chars), never per document, and it is never
+automatic — falling from extraction to the vision path without saying so
+spends 40x what the student expected.
+
 ## The tiers, and why the trial is a SHAPE rather than a number
 
 `supabase/functions/_shared/credits.ts` holds the table, migration 0014
