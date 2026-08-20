@@ -44,19 +44,21 @@ jobs:
       # quietly stops running is worse than no test, so CI refuses to pass
       # on one.
       REQUIRE_POSTGRES: "1"
-      # Same arrangement for the differential render in
-      # test-blocks-neutral.mjs, which builds the previous commit's
-      # bundle and compares the rendered HTML against this one's. It
-      # skips without git history; here it must not.
+      # Same arrangement for the COVERAGE RATCHET, which reads
+      # origin/main's copy of .c8rc.json to prove the threshold was
+      # not lowered. It skips without git history; here it must not.
+      # (Both git-baseline differentials have since retired — see the
+      # note in test-dark-mode.mjs — but the ratchet needs the same
+      # flag and the same fetch-depth.)
       REQUIRE_BASELINE: "1"
 
     steps:
       - name: Get the code
         uses: actions/checkout@v4
         with:
-          # The differential render needs the parent commit to build, and
-          # the default shallow checkout has no parent. Without this the
-          # test skips in the one place skipping matters.
+          # The coverage ratchet reads origin/main's .c8rc.json, and the
+          # default shallow checkout does not fetch it. Without this the
+          # check skips in the one place skipping matters.
           fetch-depth: 0
 
       - name: Set up Node

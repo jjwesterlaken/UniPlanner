@@ -1018,6 +1018,20 @@ pre-token build, with the permitted substitutions enumerated in the
 test rather than waved at — that enumeration is what turned a 557-class
 sweep into a checked refactor.
 
+**The byte-identical differential has since RETIRED**, and the reason
+belongs with the rule rather than with the test: it compared against a
+MOVING baseline (origin/main), so the first intended UI change on top
+of it — the `?` help control — broke it, and the only ways to keep it
+green were to enumerate a new control as a "substitution" (which it is
+not; that list is for the same pixels through a variable) or to pin a
+sha. **A guard that has to be suppressed to let intended changes
+through is not a guard**, so it was deleted rather than weakened,
+exactly as `test-blocks-neutral`'s git baseline was when step 4 changed
+the editor on purpose. What it proved is recorded in the file: on 20
+August 2026 light mode was byte-for-byte identical to the pre-token
+build under two enumerated substitutions. Everything else in that
+suite compares the current build with itself and does not expire.
+
 **Dark accents are DERIVED from each palette, never hand-picked**: the
 accent lifts toward white, `soft` becomes a low-alpha wash, `deepText`
 lightens further. Eight palettes × two modes hand-written would be 64
@@ -2275,8 +2289,15 @@ the same way: it hardcoded the value it was supposed to be guarding.
   the blind spot as this pattern has got. Now derived: the upserts are
   matched out of `src/` and checked against the catalogue.
 
-One is an anecdote. Ten is a rule: **derive a guard from its source of
-truth, don't restate it.** The cache name is hashed from the built bytes,
+- The **help text's worked example** quotes the marks a student needs
+  — figures that come out of `grades.js`. Typing them into the copy
+  would have let the help disagree with the screen it explains, which
+  is worse than no help. They are re-derived by running the real
+  `requiredForBand` in the test, so a change to the bands or the
+  rounding targets goes red naming the figure that moved.
+
+One is an anecdote. Eleven is a rule: **derive a guard from its source
+of truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the
 migrations, and the mirrored constants are asserted equal to the ones
@@ -2451,6 +2472,93 @@ the answer** — deferred decisions, not forgotten ones:
   without end-to-end coverage is how business logic gets mangled.
   Condition: after launch, with the journeys in place to catch what
   the audit's changes break.
+
+## Read what the READER renders, not what the writer writes
+
+Twice now, mounting the app and inspecting the output of the
+*read-only* path has found something no test could — and both times
+the bug was invisible from the editor, where everything looked right.
+
+- The **differential mount** (handwriting removal) proved a canvas
+  with six strokes and a canvas with none produced identical HTML, so
+  half that test was decorative until the context recorded its calls.
+- The **note viewer rendered `body`** — plain text — so bold, colour,
+  highlight and font were all stripped the moment a student pressed
+  Done. **Every note anyone had formatted was being silently
+  flattened on save.** The editor showed the formatting the whole
+  time, because the editor renders `innerHTML`; nothing compared the
+  two. Found by seeding a formatted note, opening the view, and
+  reading what came out.
+
+The technique: seed the shape you care about, mount the real app, and
+assert on the *reader's* DOM. It is the only thing that catches a
+writer and a reader disagreeing, which is a class of bug that unit
+tests structurally cannot see — each half is correct on its own.
+
+The corollary, learned the same day: **rendering stored HTML makes the
+sanitiser load-bearing rather than precautionary.** A note's html is
+not something only this editor writes — the blob syncs and restores —
+so the same mount asserts a stored `<script>` and a stored `onerror`
+are stripped before reaching the DOM, and that a note whose only
+content is plain text is escaped rather than injected.
+
+## The ? help, and the two rules its copy is written under
+
+`src/helpText.js`, `HelpButton`/`HelpPanel` in PlannerApp.jsx,
+`scripts/test-help.mjs`.
+
+**A worked example, never an explanation.** Grace bounced off Grades
+not because the feature is wrong but because its payoff arrives weeks
+after its setup cost, and an abstract description of weighted averages
+does not survive contact with someone deciding whether to bother. Each
+Section already has a subtitle doing a one-line job, so help must
+answer what the subtitle cannot. A `?` that opens a thin restatement
+of the subtitle teaches people to stop tapping `?`. **If a topic
+cannot be written with a concrete example, that is a signal about the
+feature rather than about the writing** — say so instead of shipping
+something vague.
+
+**Say what it costs.** Grades needs every assessment and weight
+entered before it can say anything; a recording spends minutes and a
+short one still costs three; the archive needs an account and clears
+the semester off the device. Naming the cost up front is what stops
+someone discovering it three screens in.
+
+**The Grades figures are computed, not typed.** The example quotes the
+exam marks needed for a Distinction and a Credit, and the test
+re-derives them from `grades.js`. Writing that example also found
+something worth keeping: under the app's DEFAULT rounding the answers
+are 80% and 60%, but rounded down they are 81% and 61% — and that
+half-mark gap is the clearest available explanation of why the
+rounding setting exists, so the copy carries both.
+
+**Coverage is partial ON PURPOSE and enumerated.** Four topics ship
+(semester setup, grades, AI notes, archive), chosen where confusion
+costs something; the other fifteen Sections are listed in the test as
+not-yet-covered. A Section added later lands in neither list and goes
+red — the device-store guard's shape, because silent partial coverage
+is the thing to avoid, not partial coverage.
+
+**Inline panel, not a tooltip**: a tooltip needs a hover, and half the
+people this is for are on a phone. Pinned by a test, because "make it
+a tooltip" is the obvious tidy-up for someone who has not thought
+about touch.
+
+**The tutorial was DROPPED, not deferred** (Jared, 20 August 2026), and
+the reasoning is worth keeping: a closed test exists to discover what
+confuses people, and a tutorial pre-empts the finding by walking
+testers past the rough edges before they hit them. Orientation comes
+from the written guide sent with the install link. If real testers
+turn out to need in-app onboarding, that is a decision made later with
+evidence.
+
+**Grades and semester setup were nearly deleted and were not.** The
+proposal was to remove both; the dependency list showed courses are
+load-bearing for AI-note folders, the reading planner, study cards,
+the exam countdown, the workload forecast, the archive summary and
+every "Week 9" label — 61 references. The problem was never that the
+features are wrong, it is that they were unexplained. That is what
+this section exists to fix.
 
 ## Testing
 

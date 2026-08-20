@@ -122,6 +122,7 @@ import {
 import { buildAttempt, pruneAttempts, weakTopics } from "./practice.js";
 import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
 import { createReporter, installGlobalHandlers } from "./errorReport.js";
+import { HELP_TOPICS } from "./helpText.js";
 import {
   aiNotePreview,
   mapAiResultToItems,
@@ -509,18 +510,64 @@ const editBox = "rounded-xl border border-stone-300 bg-stone-50 p-3";
 /*  Shared bits                                                       */
 /* ------------------------------------------------------------------ */
 
-function Section({ icon: Icon, title, subtitle, children }) {
+/* ---- The ? that explains a feature ----
+
+   INLINE PANEL, NOT A TOOLTIP. A tooltip needs a hover, and half the
+   people this is for are on a phone where there is no such thing. The
+   panel opens below the heading, pushes the content down, and closes
+   from the same control — so it is reachable, dismissible and legible
+   at any width, with no positioning maths to go wrong when a screen
+   moves.
+
+   The copy lives in helpText.js under two rules it is written to
+   (worked example, and say what it costs); this component only
+   decides where it appears. */
+function HelpButton({ topic, open, onToggle }) {
+  const t = HELP_TOPICS[topic];
+  if (!t) return null;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-label={open ? `Hide help for ${t.title}` : `What is ${t.title} for?`}
+      className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border text-xs font-semibold u-focus transition-colors ${
+        open ? "u-accent-border u-accent-soft u-accent-deeptext" : "border-stone-300 text-stone-500 hover:bg-stone-100"
+      }`}
+    >
+      ?
+    </button>
+  );
+}
+
+function HelpPanel({ topic }) {
+  const t = HELP_TOPICS[topic];
+  if (!t) return null;
+  return (
+    <div className="mb-3 rounded-xl border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700" data-help-panel={topic}>
+      <p>{t.what}</p>
+      <p className="mt-2 rounded-lg bg-surface px-3 py-2 text-stone-800">{t.example}</p>
+      {t.detail && <p className="mt-2 text-stone-600">{t.detail}</p>}
+      <p className="mt-2 text-xs text-stone-500">{t.cost}</p>
+    </div>
+  );
+}
+
+function Section({ icon: Icon, title, subtitle, help, children }) {
+  const [helpOpen, setHelpOpen] = useState(false);
   return (
     <section className="mb-5">
       <div className="mb-3 flex items-center gap-2.5">
         <span className="flex h-8 w-8 items-center justify-center rounded-lg u-accent-soft u-accent-deeptext">
           <Icon size={17} />
         </span>
-        <div>
+        <div className="min-w-0 flex-1">
           <h2 className="font-serif text-lg font-semibold leading-tight text-stone-800">{title}</h2>
           {subtitle && <p className="text-xs text-stone-500">{subtitle}</p>}
         </div>
+        {help && <HelpButton topic={help} open={helpOpen} onToggle={() => setHelpOpen((v) => !v)} />}
       </div>
+      {help && helpOpen && <HelpPanel topic={help} />}
       {children}
     </section>
   );
@@ -3464,6 +3511,7 @@ export function ArchivePanel({ session, bucket, semesterName, onArchive, onResto
   const [confirming, setConfirming] = useState(false);
   const [label, setLabel] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const marker = archiveMarkerOf(bucket);
   const late = lateEdits(bucket);
@@ -3533,7 +3581,12 @@ export function ArchivePanel({ session, bucket, semesterName, onArchive, onResto
             Box up a finished semester. An archive restores into the semester you're viewing.
           </p>
         </div>
+        {/* The archive is not a Section — it is a panel inside Account —
+            so it carries its own ?, using the same two components. */}
+        <HelpButton topic="archive" open={helpOpen} onToggle={() => setHelpOpen((v) => !v)} />
       </div>
+
+      {helpOpen && <HelpPanel topic="archive" />}
 
       {/* RESTORE HANGS OFF THE MARKER, NOT OFF THE LIST. The marker
           holds the archive id, so the way back does not depend on a
@@ -5857,10 +5910,10 @@ export default function PlannerApp() {
             <Section icon={BookOpen} title="Courses" subtitle="Your units this semester">
               <Courses courses={sem.courses} addItem={addItem} removeItem={removeItem} focused={focused} onToggleFocus={toggleFocus} />
             </Section>
-            <Section icon={CalendarClock} title="Semester setup" subtitle="Teaching weeks and how your marks are rounded">
+            <Section icon={CalendarClock} title="Semester setup" subtitle="Teaching weeks and how your marks are rounded" help="semesterSetup">
               <SemesterSetup settings={settings} rounding={rounding} patchSettings={patchSettings} />
             </Section>
-            <Section icon={Target} title="Grades" subtitle="What you've got, and what you still need">
+            <Section icon={Target} title="Grades" subtitle="What you've got, and what you still need" help="grades">
               <Grades
                 assessments={sem.assessments}
                 courses={sem.courses}
@@ -6005,7 +6058,7 @@ export default function PlannerApp() {
           // JSON blob that syncs in full on every change (4-BACKEND-GUIDE.md).
           // They're bigger than manual notes — if sync ever gets noticeably
           // slower, splitting AI notes into their own table/row is the fix.
-          <Section icon={Mic} title="AI lecture notes" subtitle="Record a lecture and get an AI-generated summary and study cards">
+          <Section icon={Mic} title="AI lecture notes" subtitle="Record a lecture and get an AI-generated summary and study cards" help="aiNotes">
             <AiNotesPanel session={session} backend={backend} courses={sem.courses} data={data} setData={setData} recording={recording} textAllowance={textAllowance} onSummariseReading={summariseReading} onOpenSummary={openSummaryNote} />
           </Section>
         )}

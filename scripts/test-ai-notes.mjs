@@ -2035,20 +2035,23 @@ async function run() {
     assert.match(workflow, /image:\s*postgres:/, "the test workflow no longer starts a postgres service container");
   });
 
-  await test("CI forces the differential render to run rather than skip", () => {
+  await test("CI forces the coverage ratchet to check its baseline rather than skip", () => {
     /* Same arrangement, same reason, and it lives HERE rather than in
        the differential's own file for the same reason the migration
        guard does: a check inside a file that skips itself would skip
        in exactly the situation it exists to catch.
 
-       The baseline differential is test-dark-mode.mjs these days (it
-       builds origin/main's bundle; test-blocks-neutral.mjs stopped
-       using git when the handwriting removal made it a two-shapes
-       comparison through the current bundle). fetch-depth matters as
-       much as the flag: actions/checkout's default shallow clone has
-       no baseline commit — without it the test would skip,
-       REQUIRE_BASELINE would turn that into a failure, and the fix
-       would look like "drop the flag". */
+       WHAT READS THESE NOW: the COVERAGE RATCHET, which fetches
+       origin/main's copy of .c8rc.json to prove the threshold was not
+       lowered. Both git-baseline DIFFERENTIALS have since retired —
+       test-blocks-neutral's when the handwriting removal made it a
+       two-shapes comparison through the current bundle, and
+       test-dark-mode's when the ? help control landed on top of it
+       (a moving baseline cannot survive an intended UI change). The
+       flag and the depth outlived them because the ratchet needs the
+       same two things: fetch-depth, because actions/checkout's
+       default shallow clone has no origin/main to read, and the flag,
+       because without it a missing baseline would silently skip. */
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     assert.match(pkg.scripts.test, /test-blocks-neutral\.mjs/, "the differential render was dropped from `npm test`");
     assert.match(pkg.scripts.test, /test-note-blocks\.mjs/, "the block-view tests were dropped from `npm test`");
@@ -2059,8 +2062,8 @@ async function run() {
     assert.match(pkg.scripts.test, /test-local-only\.mjs/, "the local-only audit was dropped from `npm test`");
 
     const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
-    assert.match(workflow, /REQUIRE_BASELINE:\s*"1"/, "CI no longer forces the differential render to run");
-    assert.match(workflow, /fetch-depth:\s*0/, "CI checks out shallow, so the differential render has no baseline to build");
+    assert.match(workflow, /REQUIRE_BASELINE:\s*"1"/, "CI no longer forces the coverage ratchet to check its baseline");
+    assert.match(workflow, /fetch-depth:\s*0/, "CI checks out shallow, so the coverage ratchet has no origin/main to compare against");
   });
 
   await test("CI runs the three e2e journeys, and forces them rather than letting them skip", () => {
