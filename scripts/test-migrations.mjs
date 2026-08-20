@@ -294,7 +294,13 @@ function seedTwoUsers(db, { withPlannerData = true } = {}) {
   psqlOrThrow(
     db,
     `insert into auth.users (id) values (${USER}), (${OTHER});
-     insert into public.ai_usage (user_id, month, minutes_used) values (${USER}, '2026-08', 12), (${OTHER}, '2026-08', 5);
+     /* No usage COLUMN named here on purpose. This helper is used by
+        tests that stop at 0001 or 0002, before 0012 adds credits_used —
+        and by tests that run every migration, after 0013 has dropped
+        minutes_used. Naming either one makes the helper wrong at one end
+        of that range. What every caller actually needs is a row that
+        exists and belongs to a user. */
+     insert into public.ai_usage (user_id, month) values (${USER}, '2026-08'), (${OTHER}, '2026-08');
      insert into public.ai_notes_requests (idempotency_key, user_id, status, result) values
        (gen_random_uuid(), ${USER}, 'done', '{"transcript":"my lecture"}'),
        (gen_random_uuid(), ${OTHER}, 'done', '{"transcript":"their lecture"}');
@@ -697,15 +703,16 @@ async function run() {
   });
 
   await test("a new COLUMN needs no deletion change, unlike a new table", () => {
-    // delete_my_account_data() clears ai_usage wholesale, so the text
+    // delete_my_account_data() clears ai_usage wholesale, so the whole
     // allowance goes with it. Asserted rather than assumed, because the
     // distinction between "column" and "table" is exactly the kind of
-    // thing that gets remembered wrongly.
+    // thing that gets remembered wrongly — and it is what let the two
+    // currencies collapse into one without touching deletion at all.
     const db = freshDb();
     for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) applyMigration(db, file);
     psqlOrThrow(db, `insert into auth.users (id) values (${USER});
-                     insert into public.ai_usage (user_id, month, minutes_used, text_units_used)
-                       values (${USER}, '2026-08', 10, 7);`);
+                     insert into public.ai_usage (user_id, month, credits_used)
+                       values (${USER}, '2026-08', 17);`);
     psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
     assert.equal(count(db, "public.ai_usage", `user_id = ${USER}`), 0);
   });
@@ -927,7 +934,7 @@ async function run() {
     ok(`select data from public.planner_data where user_id = ${USER};`);
     ok(`insert into public.planner_data (user_id, data) values (${USER}, '{"a":1}') on conflict (user_id) do update set data = '{"a":2}';`);
     ok(`select tier from public.profiles where user_id = ${USER};`);
-    ok(`select minutes_used from public.ai_usage where user_id = ${USER};`);
+    ok(`select credits_used from public.ai_usage where user_id = ${USER};`);
     ok(`insert into public.semester_archives (id, user_id, label, summary, data) values ('eeeeeeee-0000-0000-0000-000000000001', ${USER}, 'L', '{}', '{}');`);
     ok(`select label from public.semester_archives where user_id = ${USER};`);
     ok(`delete from public.semester_archives where id = 'eeeeeeee-0000-0000-0000-000000000001';`);
@@ -1218,13 +1225,13 @@ async function run() {
     psqlOrThrow(
       db,
       `insert into auth.users (id) values (${USER});
-       insert into public.ai_usage (user_id, month, minutes_used, text_units_used)
-         values (${USER}, '2026-08', 0, 0);`
+       insert into public.ai_usage (user_id, month, credits_used)
+         values (${USER}, '2026-08', 0);`
     );
     return db;
   };
   const minutes = (db) =>
-    Number(one(db, `select minutes_used::text from public.ai_usage where user_id = ${USER} and month = '2026-08';`));
+    Number(one(db, `select credits_used::text from public.ai_usage where user_id = ${USER} and month = '2026-08';`));
 
   await test("THE LOST UPDATE, demonstrated: a read-modify-write drops one of two concurrent bills", async () => {
     /* This asserts the BUG, not the fix, and it is here so the next
@@ -1242,9 +1249,9 @@ async function run() {
       do $$
       declare v numeric;
       begin
-        select minutes_used into v from public.ai_usage where user_id = ${USER} and month = '2026-08';
+        select credits_used into v from public.ai_usage where user_id = ${USER} and month = '2026-08';
         perform pg_sleep(0.4);
-        update public.ai_usage set minutes_used = v + ${cost} where user_id = ${USER} and month = '2026-08';
+        update public.ai_usage set credits_used = v + ${cost} where user_id = ${USER} and month = '2026-08';
       end $$;
       commit;`;
     const both = await Promise.all([psqlAsync(db, readModifyWrite(3)), psqlAsync(db, readModifyWrite(3))]);
@@ -1256,7 +1263,7 @@ async function run() {
     );
   });
 
-  await test("add_ai_usage keeps both concurrent bills, because the addition happens under the row lock", async () => {
+  await test("add_ai_credits keeps both concurrent bills, because the addition happens under the row lock", async () => {
     /* The fix, under exactly the interleaving above. MUTATION CHECK:
        change `ai_usage.minutes_used + excluded.minutes_used` to
        `excluded.minutes_used` in 0011 and this reads 3. */
@@ -1264,59 +1271,89 @@ async function run() {
     const atomic = `
       begin;
       select pg_sleep(0.4);
-      select * from public.add_ai_usage(${USER}, '2026-08', 3, 0);
+      select * from public.add_ai_credits(${USER}, '2026-08', 3);
       commit;`;
     const both = await Promise.all([psqlAsync(db, atomic), psqlAsync(db, atomic)]);
     for (const r of both) assert.ok(r.ok, `a session failed: ${r.err}`);
     assert.equal(minutes(db), 6, "one of two concurrent bills was lost");
   });
 
-  await test("add_ai_usage creates the month's row when there isn't one, and adds to it when there is", async () => {
+  await test("add_ai_credits creates the month's row when there isn't one, and adds to it when there is", async () => {
     const db = withArchives();
     psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
-    psqlOrThrow(db, `select * from public.add_ai_usage(${USER}, '2026-09', 3, 0);`);
-    psqlOrThrow(db, `select * from public.add_ai_usage(${USER}, '2026-09', 0, 2);`);
-    psqlOrThrow(db, `select * from public.add_ai_usage(${USER}, '2026-09', 50, 1);`);
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-09', 3);`);
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-09', 2);`);
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-09', 51);`);
     assert.equal(
-      one(db, `select minutes_used::text || '/' || text_units_used::text from public.ai_usage where month = '2026-09';`),
-      "53/3",
-      "the two counters must accumulate independently — minutes are audio, units are text"
+      one(db, `select credits_used::text from public.ai_usage where month = '2026-09';`),
+      "56",
+      "the single counter must accumulate across every kind of action"
     );
     assert.equal(one(db, `select count(*)::text from public.ai_usage where month = '2026-09';`), "1", "one row per user per month");
   });
 
-  await test("add_ai_usage returns the totals it just wrote, so no caller reports a stale figure", () => {
+  await test("add_ai_credits returns the totals it just wrote, so no caller reports a stale figure", () => {
     const db = withUsage();
-    psqlOrThrow(db, `select * from public.add_ai_usage(${USER}, '2026-08', 4, 0);`);
-    assert.equal(one(db, `select new_units::text from public.add_ai_usage(${USER}, '2026-08', 0, 7);`), "7");
-    assert.equal(one(db, `select new_minutes::text from public.add_ai_usage(${USER}, '2026-08', 0, 0);`), "4");
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-08', 4);`);
+    assert.equal(one(db, `select new_credits::text from public.add_ai_credits(${USER}, '2026-08', 7);`), "11");
+    // Adding nothing returns the running total rather than zero — which
+    // is what makes the returned figure usable as "what to show now".
+    assert.equal(one(db, `select new_credits::text from public.add_ai_credits(${USER}, '2026-08', 0);`), "11");
   });
 
-  await test("only service_role may call add_ai_usage — the caller names the user_id", () => {
+  await test("only service_role may call add_ai_credits — the caller names the user_id", () => {
     /* A function's platform default is EXECUTE TO PUBLIC, which is the
        same default-grant trap 0008 found on the tables one layer down.
        It matters more here than on a table: this takes p_user_id as an
        argument, so an execute grant to `authenticated` would read
        "spend anybody's allowance". */
     const db = withArchives();
-    const sig = "public.add_ai_usage(uuid, text, numeric, numeric)";
+    const sig = "public.add_ai_credits(uuid, text, numeric)";
     for (const role of ["anon", "authenticated", "public"]) {
       assert.equal(
         one(db, `select has_function_privilege('${role}', '${sig}', 'execute')::text;`),
         "false",
-        `${role} can call add_ai_usage`
+        `${role} can call add_ai_credits`
       );
     }
     assert.equal(one(db, `select has_function_privilege('service_role', '${sig}', 'execute')::text;`), "true");
   });
 
-  await test("0011 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+  await test("0012's backfill carries the two old counters into the one new one", () => {
+    /* The migration a real project will run once, on rows that already
+       hold a month's spend. Applied at 0011 depth so the old columns are
+       still there — which is the state every existing account is in. */
+    const db = freshDb();
+    for (const f of fs.readdirSync(migrationsDir).filter((x) => x.endsWith(".sql")).sort()) {
+      if (f.startsWith("0012") || f.startsWith("0013")) break;
+      applyMigration(db, f);
+    }
+    psqlOrThrow(
+      db,
+      `insert into auth.users (id) values (${USER});
+       insert into public.ai_usage (user_id, month, minutes_used, text_units_used)
+         values (${USER}, '2026-08', 40, 12), (${USER}, '2026-07', 0, 0);`
+    );
+    applyMigration(db, "0012_one_currency.sql");
+    assert.equal(
+      one(db, `select credits_used::text from public.ai_usage where month = '2026-08';`),
+      "52",
+      "the backfill lost a month's spend — a text unit was already worth about a credit, so the sum carries"
+    );
+    assert.equal(one(db, `select credits_used::text from public.ai_usage where month = '2026-07';`), "0");
+  });
+
+  await test("0012 is re-runnable, even after 0013 has taken the columns it reads", () => {
+    /* THE FAILURE THIS CATCHES is specific and easy to ship: 0012's
+       backfill names minutes_used, 0013 drops it, and a re-apply of the
+       whole folder then dies on a column that is supposed to be gone.
+       Re-runnable exactly once is not re-runnable. */
     const db = withUsage();
-    applyMigration(db, "0011_atomic_usage.sql");
-    psqlOrThrow(db, `select * from public.add_ai_usage(${USER}, '2026-08', 5, 0);`);
+    applyMigration(db, "0012_one_currency.sql");
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-08', 5);`);
     assert.equal(minutes(db), 5, "the re-applied function stopped adding");
     assert.equal(
-      one(db, `select has_function_privilege('authenticated', 'public.add_ai_usage(uuid, text, numeric, numeric)', 'execute')::text;`),
+      one(db, `select has_function_privilege('authenticated', 'public.add_ai_credits(uuid, text, numeric)', 'execute')::text;`),
       "false",
       "the re-run must re-close the grant, not just create the function"
     );

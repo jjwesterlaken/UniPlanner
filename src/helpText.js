@@ -67,7 +67,7 @@ export const HELP_TOPICS = {
     example:
       "Record a 50-minute lecture and it comes back as a summary written from what was actually said — the worked examples, the dates and figures, the lines the lecturer flagged as examinable — plus a set of study cards you tick before anything is saved. The note files itself into that course's folder.",
     cost:
-      "Every recording spends minutes from a monthly allowance, and a recording shorter than three minutes still costs three. The app has to stay open while it records. Your audio is sent for transcription and deleted as soon as it has been transcribed.",
+      "Every recording spends credits from a monthly allowance — a credit is about a minute of recorded lecture, and a recording shorter than three minutes still costs three. The app has to stay open while it records. Your audio is sent for transcription and deleted as soon as it has been transcribed.",
   },
 
   archive: {

@@ -17,7 +17,7 @@
      text-only re-summarise endpoint. It is RECOVERABLE from the server
      row for the retention window, and that is a different word.
 
-   - Transcription minutes are billed even when summarising fails. The
+   - Transcription credits are billed even when summarising fails. The
      Edge Function bills on the transcription duration, after the audio
      has already been deleted and regardless of what the summariser
      did. Saying "we couldn't generate a summary" without saying that is
@@ -27,15 +27,15 @@
 import { FAILED_RESULT_RETENTION_DAYS } from "./aiNotesRetention.js";
 
 export const AI_NOTES_COPY = {
-  /* Why a two-minute recording shows as more minutes used than it ran.
+  /* Why a two-minute recording shows as more credits used than it ran.
 
      Disclosed rather than left to be discovered: a student who records a
      short tutorial segment and watches the counter jump would otherwise
      reasonably think the app was overcharging them. The honest reason is
      short and worth giving -- writing the notes up costs the same
-     whatever the length, so the minutes aren't purely recording time. */
-  minimumBilling: (minutes) =>
-    `Recordings count in ${minutes}-minute blocks. Writing the notes up costs us about the same whether a recording is two minutes or twenty, so a very short one still uses ${minutes} minutes of your allowance.`,
+     whatever the length, so the credits aren't purely recording time. */
+  minimumBilling: (credits) =>
+    `A credit is about a minute of recorded lecture, and a recording costs at least ${credits}. Writing the notes up costs us about the same whether a recording is two minutes or twenty, so a very short one still uses ${credits} credits.`,
 
   /* Shown INSTEAD of the record button for an account whose tier the
      app has definitively read as not-AI. Before the work, not after:
@@ -67,7 +67,7 @@ export const AI_NOTES_COPY = {
   summaryFailed: {
     title: "We transcribed your lecture, but couldn't write the summary.",
     billing:
-      "Transcribing used your AI minutes — that part worked and it's what costs money, so it has been counted. Summarising is included, and you haven't been charged extra for the part that failed.",
+      "Transcribing used your AI credits — that part worked and it's what costs money, so it has been counted. Summarising is included, and you haven't been charged extra for the part that failed.",
     recoverable: (days = FAILED_RESULT_RETENTION_DAYS) =>
       `Your transcript is saved to your account for ${days} days, so you can get it back from any of your devices if you need it.`,
     action: "Save transcript as a note",
@@ -77,13 +77,13 @@ export const AI_NOTES_COPY = {
 
        The cost sentence says what it charges AND what it does not,
        because this lecture has already been paid for once: the
-       transcription minutes were really spent and really billed, and
+       transcription credits were really spent and really billed, and
        the retry does not repeat them. Same register as the billing
        line above, which is what keeps a support ticket from becoming a
        chargeback. */
     retry: "Try the summary again",
-    retryCost: (minutes) =>
-      `Trying again writes the summary from the transcript we already have — no re-recording and no re-transcribing, so you're only charged for the summary: ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+    retryCost: (credits) =>
+      `Trying again writes the summary from the transcript we already have — no re-recording and no re-transcribing, so you're only charged for the summary: ${credits} credit${credits === 1 ? "" : "s"}.`,
     retrying: "Writing your summary…",
     retryFailed:
       "That didn't work either. Nothing has been charged for the attempt, and your transcript is still here.",

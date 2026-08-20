@@ -1272,6 +1272,75 @@ definitive answer, not a guess — and also bills nothing. The retry is
 offered ON the failure screen, because a student sitting on a failed
 summary should not have to go looking for the remedy.
 
+## One currency: a credit is a minute of recorded lecture
+
+`supabase/functions/_shared/credits.ts`, migrations 0012 and 0013,
+`src/aiTextLimits.js`.
+
+There used to be two — minutes for audio, weighted units for text — and
+the split is what hid the photographed-reading mispricing for months.
+A photo batch was billed in the currency the expensive thing it
+resembled did not use, so **there was nowhere for the comparison to
+happen**: "3 units" and "50 minutes" cannot be put beside each other by
+any screen or any test. One currency makes the comparison unavoidable
+rather than impossible.
+
+**A LECTURE MINUTE IS THE UNIT because it is the only quantity in this
+app a student already has an intuition for.** "This reading costs about
+as much as a 25-minute lecture" is a sentence somebody can act on. That
+is also why the old rule survives in an altered form: `aiTextCopy.js`
+existed to keep the word "units" off every screen, and the test still
+forbids it — but credits ARE sayable, so help may quote them. What is
+banned is the internal weight that meant nothing.
+
+**EVERY WEIGHT IS DERIVED FROM A PRICE.** `TASK_CREDITS` is computed
+from each task's own input and output ceilings at the published rates,
+divided by what a credit costs, so a raised `MAX_TOKENS` re-prices its
+task instead of leaving a number nobody re-derived. That is the exact
+failure `TYPICAL_SUMMARY_OUTPUT_TOKENS` produced at 5.9x reality while
+setting the price of the product. Two tests hold it: one asserts no
+literal weight exists in the config, the other re-runs `usdForTask` and
+compares. Only `merge` moved, 1 -> 2, because output is four times the
+price of input and its output ceiling equals `summarise`'s — the old
+reasoning about its smaller input was true and stopped deciding
+anything.
+
+**`round`, not `ceil`, with a floor of 1.** Every text action lands
+near a boundary, so ceiling would charge 2 for something costing 1.04 —
+a 92% surcharge for a rounding hair. The floor is what stops any action
+being free, because a free provider call is one a loop can make.
+
+**THE ALLOWANCE IS UNCHANGED BY THE COLLAPSE, deliberately.** 450 is
+300 audio minutes plus 150 text units, and a text unit was already
+worth about a credit. This pass changed the CURRENCY, not the
+entitlement; the per-tier table is its own piece of work, because an
+entitlement change hidden inside a currency change is one nobody can
+review.
+
+**THE PHOTO BATCH PRICE IS HELD, and the hold is tested.** Derived
+honestly it is ~34 credits on the model we call and ~6 on the one
+recommended; setting either before the model decision lands is a
+visible lie or an invisible subsidy. `PHOTO_BATCH_CREDITS` sits beside
+the reasoning in three places (server config, client mirror,
+`estimatePhotos`), and a test goes red if it moves — so lifting it
+sends whoever did it to COST-MODEL.md 12.7's two gates.
+
+**Two model strings, not one.** `_shared/model.ts` holds
+`SUMMARY_MODEL` and `VISION_MODEL`, both `gpt-4o-mini` today, chosen
+per MEDIUM at the adapter (`hasImages`). One string would drag text and
+lectures wherever the photo path goes, which section 12.5 prices at
+6.6x and 6.3x worse. Twelfth restatement-ledger entry closed.
+
+**0012 WIDENS, 0013 NARROWS, and the order is apply-deploy-verify-
+apply.** 0012 adds `credits_used`, backfills it as the sum of the two
+old counters, and adds `add_ai_credits`; the old columns and
+`add_ai_usage` stay so a function deployed either side of it works.
+0013 drops them and must not be applied until the deploy has landed —
+0008's lesson, in the direction that bites. **0012's backfill is
+guarded on the old columns still existing**, because 0013 removes what
+it reads and "re-runnable exactly once" is not re-runnable; a test
+applies the whole folder twice to prove it.
+
 ## What the AI features cost, and the two numbers that were wrong
 
 `COST-MODEL.md` is the document; `scripts/measure-cost-model.mjs` prints
@@ -1989,17 +2058,28 @@ record.
 **One item is BLOCKING and must happen before the next function
 deploy**, then two minor post-launch leftovers.
 
-0. **Apply migration 0011 (`add_ai_usage`) BEFORE deploying either Edge
-   Function.** It WIDENS — it creates a function the new code calls —
-   so it goes first, the 0003/0004 direction rather than 0008's. If
-   the code ships first, every bill fails: `supabaseAdmin.rpc` returns
-   "function does not exist", which is logged loudly at the billing
-   stage and does NOT fail the request, so the student gets their work
-   and we charge nothing. Fails safe for the student and expensively
-   for us, which is the right way round but not a state to sit in.
-   Verify with `select has_function_privilege('service_role',
-   'public.add_ai_usage(uuid, text, numeric, numeric)', 'execute');`
-   returning true and the same for `authenticated` returning false.
+0. **The currency deploy, in this order and no other.** 0011 has been
+   superseded by 0012 but both still apply cleanly, so run them in
+   sequence.
+
+   1. **Apply 0011 and 0012.** Both WIDEN — each creates a function
+      the new code calls — so they go before the deploy, the 0003/0004
+      direction rather than 0008's. If the code ships first, every
+      bill fails: `supabaseAdmin.rpc` returns "function does not
+      exist", logged loudly at the billing stage without failing the
+      request, so the student gets their work and we charge nothing.
+      Safe for them, expensive for us, and invisible unless somebody
+      reads the logs.
+   2. **Deploy both Edge Functions.**
+   3. **Verify** a real action bills `credits_used`:
+      `select * from ai_usage order by updated_at desc limit 5;`
+   4. **Apply 0013**, which NARROWS: it drops `minutes_used`,
+      `text_units_used` and `add_ai_usage`. Not before step 3.
+
+   Privilege check after 0012:
+   `select has_function_privilege('service_role',
+   'public.add_ai_credits(uuid, text, numeric)', 'execute');` returning
+   true, and the same for `authenticated` returning false.
 Everything else on this list has been applied and verified; the record
 of what each migration did is kept below the line because the ordering
 lessons are load-bearing, not because the work is outstanding.

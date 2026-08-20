@@ -161,31 +161,28 @@ export function newIdempotencyKey(cryptoObj = typeof globalThis !== "undefined" 
 // with it, since that constant assumes this bitrate.
 export const RECORDER_AUDIO_BITS_PER_SECOND = 32000;
 
-// Display-only hint for the "X of Y minutes used" badge and the
-// near-cap warning banner. The real limit is enforced server-side
-// (supabase/functions/ai-notes/config.ts MONTHLY_MINUTES_LIMIT) — if
-// this drifts out of sync with that constant it's a cosmetic issue,
-// not a security one, since the server never trusts the client's copy.
-export const MONTHLY_MINUTES_LIMIT_HINT = 300;
+// THE MONTHLY LIMIT MOVED to src/aiTextLimits.js, which is now the
+// client's copy of the whole currency rather than of the text half.
+// Two mirrors of one number is one mirror too many, and this one spent
+// several months with a comment where its assertion should have been.
+// Import MONTHLY_CREDITS_LIMIT from there.
 
-/* Mirrored from the Edge Function's MINIMUM_BILLED_MINUTES, for the same
+/* Mirrored from the Edge Function's MINIMUM_BILLED_CREDITS, for the same
    reason TRANSLATION_LANGUAGES is mirrored: the browser bundle can't
-   import from supabase/functions/. A test asserts the two agree, which
-   the older MONTHLY_MINUTES_LIMIT_HINT above did not have until this was
-   added -- a restatement with nothing checking it.
+   import from supabase/functions/. A test asserts the two agree.
 
-   Unlike that one, this constant is not cosmetic. It is what a student
-   sees their allowance move by, so a drift here makes the number on
-   screen disagree with the number being charged. */
-export const MINIMUM_BILLED_MINUTES_HINT = 3;
+   Not cosmetic. It is what a student sees their allowance move by, so a
+   drift here makes the number on screen disagree with the number being
+   charged. */
+export const MINIMUM_BILLED_CREDITS_HINT = 3;
 
-/* What a re-summarise costs, mirrored for the copy that has to state it
+/* What a re-summarise costs in credits, mirrored for the copy that has to state it
    before the student commits. A browser bundle cannot import from
    supabase/functions, so this is the allowed kind of restatement — and
    the EQUALITY is the guard: test-ai-notes.mjs asserts it against the
    server's derived constant, because a figure on screen that disagrees
    with the figure charged is the failure this pattern exists to stop. */
-export const RESUMMARISE_BILLED_MINUTES_HINT = 2;
+export const RESUMMARISE_BILLED_CREDITS_HINT = 2;
 
 const CANDIDATE_MIME_TYPES = [
   { mimeType: "audio/webm;codecs=opus", extension: "webm" },

@@ -16,7 +16,7 @@
 //     -> provider    <- SPENDS money
 //     -> billing     <- WRITES the database
 //
-// `allowance` reads `ai_usage.text_units_used` BEFORE `provider` runs.
+// `allowance` reads `ai_usage.credits_used` BEFORE `provider` runs.
 // That is what makes migration 0006 fail free: if the column is missing,
 // the read fails and the request errors having spent nothing. Reordering
 // these two turns a clean error into "the student is charged for work
@@ -36,10 +36,10 @@ import {
   MAX_IMAGE_BASE64_CHARS,
   PRACTICE_MAX_CARDS,
   WEAKSPOTS_MAX_TOPICS,
-  TASK_UNITS,
+  TASK_CREDITS,
   TEXT_TIERS,
   MAX_READING_CHUNKS,
-  limitForTier,
+  creditsForTier,
 } from "./config.ts";
 
 const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra, "ai-text"));
@@ -149,23 +149,23 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
     const month = currentMonthKey(now());
     const { data: usageRow, error: usageErr } = await admin
       .from("ai_usage")
-      .select("text_units_used")
+      .select("credits_used")
       .eq("user_id", userId)
       .eq("month", month)
       .maybeSingle();
     if (usageErr) {
-      /* This is where a missing `text_units_used` column lands — the
+      /* This is where a missing `credits_used` column lands — the
          whole reason this read is here and not after the provider call.
          Nothing has been spent at this point. */
-      logFailure(stage, usageErr, { hint: "is migration 0006 applied?" });
+      logFailure(stage, usageErr, { hint: "is migration 0012 applied?" });
       return errorResponse(stage, "server_error", "Something went wrong. Please try again.", 500);
     }
-    const unitsUsed = usageRow?.text_units_used || 0;
+    const creditsUsed = usageRow?.credits_used || 0;
     const allowance = checkTextAllowance({
       task,
-      unitsUsed,
-      taskUnits: TASK_UNITS,
-      monthlyLimit: limitForTier(profile.tier),
+      creditsUsed,
+      taskCredits: TASK_CREDITS,
+      monthlyLimit: creditsForTier(profile.tier),
     });
     if (!allowance.ok) {
       logStage(stage, { rejected: allowance.code });
@@ -181,6 +181,8 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
         messages: buildMessages(task, body),
         maxTokens: MAX_TOKENS[task],
         apiKey: env("OPENAI_API_KEY")!,
+        // Which MEDIUM this is, not which task — see openai.ts.
+        hasImages: Array.isArray(body.images) && body.images.length > 0,
       });
     } catch (err) {
       // Nothing is billed. The call failed, so there is nothing to
@@ -243,8 +245,8 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          did not — in which case the number is the best available guess
          about a month whose write just failed. */
       allowanceUsed: allowanceFraction(
-        billed.ok && billed.unitsUsed !== null ? billed.unitsUsed : unitsUsed + allowance.cost,
-        limitForTier(profile.tier)
+        billed.ok && billed.creditsUsed !== null ? billed.creditsUsed : creditsUsed + allowance.cost,
+        creditsForTier(profile.tier)
       ),
     });
   } catch (err) {
@@ -264,9 +266,9 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
  * THE ADDITION HAPPENS IN THE DATABASE, not here. This used to read the
  * month's total, add the cost in JavaScript, and write the sum back —
  * so two requests that overlapped both read N and both wrote N + cost,
- * and one of them was free. `add_ai_usage` (migration 0011) does the
+ * and one of them was free. `add_ai_credits` (migration 0012) does the
  * `+` under the row lock that ON CONFLICT DO UPDATE takes, which is the
- * only place it is safe to do. `unitsUsed` is deliberately no longer a
+ * only place it is safe to do. `creditsUsed` is deliberately no longer a
  * parameter: passing it would leave the stale read within reach.
  *
  * It returns the POST-INCREMENT total, so the fraction the student is
@@ -275,17 +277,16 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
  */
 // deno-lint-ignore no-explicit-any
 async function bill(admin: any, { userId, month, cost }: Record<string, any>) {
-  const { data, error } = await admin.rpc("add_ai_usage", {
+  const { data, error } = await admin.rpc("add_ai_credits", {
     p_user_id: userId,
     p_month: month,
-    p_minutes: 0,
-    p_units: cost,
+    p_credits: cost,
   });
   if (error) return { ok: false, error };
   // `returns table` arrives as an array of one row.
   const row = Array.isArray(data) ? data[0] : data;
-  const unitsUsed = row && typeof row.new_units !== "undefined" ? Number(row.new_units) : null;
-  return { ok: true, unitsUsed };
+  const creditsUsed = row && typeof row.new_credits !== "undefined" ? Number(row.new_credits) : null;
+  return { ok: true, creditsUsed };
 }
 
 Deno.serve(async (req: Request) => {

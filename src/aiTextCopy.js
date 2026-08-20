@@ -12,7 +12,7 @@
       weighting is ours to reason about, not a student's. They get a
       proportion in plain words. The endpoint enforces this at the
       boundary by returning a fraction and never a count, so this module
-      could not print a unit even if someone wanted to.
+      could not print a raw count even if someone wanted to.
 
    2. IF WE CHARGED, SAY SO. A request that fails after the provider has
       run has already cost us the tokens, so it costs the student their
@@ -104,9 +104,16 @@ export const describeTextFailure = (code) => AI_TEXT_FAILURES[code] || AI_TEXT_F
 
    The endpoint returns a fraction. These are the words for it. Bands
    rather than a percentage because "you have used 38% of your AI study
-   help" invites arithmetic nobody wants to do about a thing they cannot
-   see the units of -- and because a band is honest about a number whose
-   precision is meaningless to the reader. */
+   help" invites arithmetic nobody wants to do, and because a band is
+   honest about a number whose precision is meaningless to the reader.
+
+   THE CURRENCY COLLAPSE DID NOT MOVE THIS. Credits are sayable where
+   units were not — a credit is a minute of recorded lecture — and the
+   place a student meets the number is the PRE-FLIGHT ESTIMATE, which
+   can say what an action will cost before they take it. A running
+   total is a different job, and a band still does it better than a
+   figure whose denominator depends on a tier this endpoint does not
+   know has just changed. */
 export function describeAllowance(fraction) {
   const f = Math.min(1, Math.max(0, fraction || 0));
   if (f >= 1) return "You've used all of this month's AI study help.";
@@ -240,13 +247,15 @@ export const READING_COPY = {
      real numbers": parts are the currency this feature already shows
      ("done in 3 parts"), a student can act on them, and stating the
      allowance the same way keeps rule 1 at the top of this file intact.
-     Saying "this needs 13 and you have 7" would be the first time a
-     unit count reached a screen, and it would mean nothing to anyone.
+     Saying "this needs 14 credits and you have 7" is now sayable —
+     a credit means a minute of recorded lecture — but it is still the
+     wrong sentence here, because what a student can DO about a refusal
+     is paste a shorter piece, and parts are what that advice is in.
 
      Without this a free student who has used nothing all month, pastes
      a long reading and is refused reads the counter as broken rather
      than as spent — the interaction is baffling precisely because ten
-     units is ONE shorter reading, not four of anything. */
+     credits is ONE shorter reading, not four of anything. */
   cantAfford: ({ chunks, sectionsLeft, isFree }) => {
     const size =
       chunks > 1

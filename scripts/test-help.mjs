@@ -26,7 +26,7 @@ import { HELP_TOPICS, HELP_TOPIC_IDS } from "../src/helpText.js";
 import { requiredForBand, summarise } from "../src/grades.js";
 import { schedule, MAX_SESSION_MINUTES, WINDOW_DAYS } from "../src/srs.js";
 import { weakTopics } from "../src/practice.js";
-import { TASK_UNITS, limitForTier } from "../src/aiTextLimits.js";
+import { TASK_CREDITS, creditsForTier } from "../src/aiTextLimits.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appSrc = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
@@ -192,14 +192,21 @@ test("weak spots quotes the real miss threshold and list size", () => {
 });
 
 test("the AI costs are in the currency the SCREENS use, never in units", () => {
-  /* THE BOUNDARY RULE: students never see the word "units" — the
+  /* THE BOUNDARY RULE SURVIVED THE CURRENCY COLLAPSE, and it is worth
+     saying why it did not simply become obsolete. Credits ARE sayable —
+     one is a minute of recorded lecture — so help may quote them. What
+     stays banned is "units", the internal weight that meant nothing to
+     anybody and that this rule existed to keep off screens. A topic
+     that says "units" is quoting a currency that no longer exists.
+
+     THE BOUNDARY RULE: students never see the word "units" — the
      endpoint returns a fraction and aiTextCopy turns it into words.
      Help that leaked the internal unit count would be the first place
      it reached a screen. What it may say is how many actions a plan
      buys, which is derived from the same constants. */
-  const free = limitForTier("free");
-  const perExplain = free / TASK_UNITS.explain;
-  const perPractice = free / TASK_UNITS.practice;
+  const free = creditsForTier("free");
+  const perExplain = free / TASK_CREDITS.explain;
+  const perPractice = free / TASK_CREDITS.practice;
   const words = { 5: "five", 10: "ten" };
   for (const id of ["studyCards", "weakSpots", "practiceQuestions"]) {
     const all = [HELP_TOPICS[id].what, HELP_TOPICS[id].example, HELP_TOPICS[id].cost, ...[].concat(HELP_TOPICS[id].detail || [])].join(" ");

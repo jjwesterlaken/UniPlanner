@@ -28,16 +28,16 @@ export function currentMonthKey(d = new Date()) {
  */
 export async function fetchUsage(session, { supabaseClient = supabase, isDemo = backend.isDemo } = {}) {
   if (!session || isDemo || !supabaseClient) {
-    return { minutesUsed: 0, unavailable: true };
+    return { creditsUsed: 0, unavailable: true };
   }
   const { data, error } = await supabaseClient
     .from("ai_usage")
-    .select("minutes_used")
+    .select("credits_used")
     .eq("user_id", session.user.id)
     .eq("month", currentMonthKey())
     .maybeSingle();
-  if (error) return { minutesUsed: 0, unavailable: true };
-  return { minutesUsed: (data && data.minutes_used) || 0, unavailable: false };
+  if (error) return { creditsUsed: 0, unavailable: true };
+  return { creditsUsed: (data && data.credits_used) || 0, unavailable: false };
 }
 
 /**

@@ -140,14 +140,14 @@ const serialisedLength = (value) => {
 /**
  * Whether this month's allowance covers the task about to run.
  *
- * `unitsUsed` comes from the database read that happens BEFORE the
- * provider call — which is what makes a missing `text_units_used`
+ * `creditsUsed` comes from the database read that happens BEFORE the
+ * provider call — which is what makes a missing `credits_used`
  * column fail free rather than after money is spent. See migration
  * 0006.
  */
-export function checkTextAllowance({ task, unitsUsed, taskUnits, monthlyLimit }) {
-  const cost = taskUnits[task] || 0;
-  const projected = (unitsUsed || 0) + cost;
+export function checkTextAllowance({ task, creditsUsed, taskCredits, monthlyLimit }) {
+  const cost = taskCredits[task] || 0;
+  const projected = (creditsUsed || 0) + cost;
   if (projected > monthlyLimit) {
     return {
       ok: false,
@@ -163,11 +163,19 @@ export function checkTextAllowance({ task, unitsUsed, taskUnits, monthlyLimit })
  * How much of the allowance is gone, as a fraction.
  *
  * Returned by the endpoint so the app can say it in words. The app is
- * what decides the wording; this only decides the number, so "never show
- * a student the word units" stays a UI rule enforced in one place rather
- * than a convention spread across four screens.
+ * what decides the wording; this only decides the number.
+ *
+ * IT STAYS A FRACTION EVEN THOUGH CREDITS ARE NOW SAYABLE. The old
+ * reason was that "units" meant nothing to anybody, and that reason is
+ * gone — a credit is a minute of recorded lecture. The reason it
+ * survives is different and better: a fraction is the one shape that
+ * cannot go stale against a tier whose limit this endpoint does not
+ * know the student has just changed, and the four screens already read
+ * it. The credit COUNT reaches the student through the pre-flight
+ * estimate, which is computed client-side and can say what an action
+ * will cost before they do it.
  */
-export function allowanceFraction(unitsUsed, monthlyLimit) {
+export function allowanceFraction(creditsUsed, monthlyLimit) {
   if (!(monthlyLimit > 0)) return 0;
-  return Math.min(1, Math.max(0, (unitsUsed || 0) / monthlyLimit));
+  return Math.min(1, Math.max(0, (creditsUsed || 0) / monthlyLimit));
 }

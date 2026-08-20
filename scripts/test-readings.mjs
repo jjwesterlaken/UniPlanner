@@ -34,7 +34,7 @@ import {
 } from "../src/readingChunks.js";
 import { READING_COPY } from "../src/aiTextCopy.js";
 import * as failuresCopy from "../src/aiTextCopy.js";
-import { TASK_UNITS, sectionsAffordable, canAffordUnits } from "../src/aiTextLimits.js";
+import { TASK_CREDITS, PHOTO_BATCH_CREDITS, sectionsAffordable, canAffordCredits } from "../src/aiTextLimits.js";
 import { validateRequest } from "../supabase/functions/ai-text/guards.js";
 import { buildMessages, parseTaskResult } from "../supabase/functions/ai-text/prompts.js";
 
@@ -67,7 +67,7 @@ test("a short reading is one chunk and needs no merge", () => {
   const r = estimateReading("A short paragraph about tectonics.");
   assert.equal(r.ok, true);
   assert.equal(r.chunks, 1);
-  assert.equal(r.units, TASK_UNITS.summarise);
+  assert.equal(r.credits, TASK_CREDITS.summarise);
 });
 
 test("a reading is split on paragraph boundaries, never mid-sentence", () => {
@@ -149,23 +149,23 @@ test("the cost of a reading rises with its length, and the estimate says so", ()
   const many = estimateReading(reading([para(19000), para(19000), para(19000)]));
   assert.equal(one.chunks, 1);
   assert.ok(many.chunks > one.chunks);
-  assert.ok(many.units > one.units);
-  assert.equal(many.units, many.chunks * TASK_UNITS.summarise + TASK_UNITS.merge);
+  assert.ok(many.credits > one.credits);
+  assert.equal(many.credits, many.chunks * TASK_CREDITS.summarise + TASK_CREDITS.merge);
 });
 
-test("the four-chunk ceiling costs 13 units", () => {
+test("the four-chunk ceiling costs 14 credits", () => {
   /* The arithmetic in config.ts, asserted rather than left in a comment. */
-  assert.equal(MAX_READING_CHUNKS * TASK_UNITS.summarise + TASK_UNITS.merge, 13);
+  assert.equal(MAX_READING_CHUNKS * TASK_CREDITS.summarise + TASK_CREDITS.merge, 14);
 });
 
 test("a single-chunk reading is never charged for a merge", () => {
   const r = estimateReading(para(500));
-  assert.equal(r.units, TASK_UNITS.summarise);
+  assert.equal(r.credits, TASK_CREDITS.summarise);
 });
 
 test("a refusal states the real numbers: how big it is and what's left", () => {
   /* Not a generic "not enough left". The interaction is otherwise
-     baffling: ten units is ONE shorter reading, not four of anything,
+     baffling: ten credits is ONE shorter reading, not four of anything,
      and a student refused a long one after using nothing all month
      reads the counter as broken rather than as spent. */
   const copy = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, isFree: true });
@@ -215,8 +215,8 @@ test("how many sections are left is the same arithmetic the server bills", () =>
   assert.equal(sectionsAffordable({ remaining: 3 }), 1);
   assert.equal(sectionsAffordable({ remaining: 2 }), 0);
   assert.equal(sectionsAffordable(null), 0);
-  assert.equal(canAffordUnits({ remaining: 13 }, 13), true);
-  assert.equal(canAffordUnits({ remaining: 12 }, 13), false);
+  assert.equal(canAffordCredits({ remaining: 13 }, 13), true);
+  assert.equal(canAffordCredits({ remaining: 12 }, 13), false);
 });
 
 test("a summarised reading is filed into the per-course folder, like a recording", () => {
@@ -386,10 +386,28 @@ test("the chunk ceiling matches the server's", () => {
   assert.equal(CHUNK_MAX_CHARS, serverSummarise);
 });
 
-test("the merge weight matches the server's", () => {
+test("no weight on the server is a typed number any more — they are all derived", () => {
+  /* This test used to scrape `merge: N` out of a hand-written table on
+     the server and compare it with the client's copy. That comparison
+     has moved to the mirror test in test-ai-text-function.mjs, which
+     deep-equals the WHOLE table against the real config rather than one
+     row of it — and what is worth pinning here instead is that there is
+     no table to scrape.
+
+     TASK_CREDITS is now computed from each task's own input and output
+     ceilings at the published rates, so raising MAX_TOKENS re-prices
+     the task instead of leaving a number nobody re-derived. Putting a
+     literal back is exactly the regression this catches. */
   const config = source("supabase/functions/ai-text/config.ts");
-  const units = config.slice(config.indexOf("export const TASK_UNITS"));
-  assert.equal(Number(units.match(/merge: (\d+)/)[1]), TASK_UNITS.merge);
+  const table = config.slice(
+    config.indexOf("export const TASK_CREDITS"),
+    config.indexOf("export const PHOTO_BATCH_CREDITS")
+  );
+  assert.ok(/creditsFor\(/.test(table), "TASK_CREDITS is no longer derived from a cost");
+  assert.ok(
+    !/\b(explain|weakspots|practice|summarise|merge)\s*:\s*\d/.test(table),
+    "a task weight has been typed back in as a literal — a raised ceiling would stop re-pricing its task"
+  );
 });
 
 /* ---------- the design facts ---------- */
@@ -452,14 +470,14 @@ test("the pasted text is never persisted anywhere", () => {
 test("photos are priced as parts of the reading, not as a second scheme", () => {
   /* The entire pricing story: a batch of PHOTOS_PER_CHUNK pages is one
      summarise call, further batches are further chunks, merge as
-     today. Derived from TASK_UNITS, so a weight change re-runs this
+     today. Derived from TASK_CREDITS, so a weight change re-runs this
      instead of leaving it green. */
-  assert.equal(estimatePhotos(1).units, TASK_UNITS.summarise);
-  assert.equal(estimatePhotos(4).units, TASK_UNITS.summarise);
-  assert.equal(estimatePhotos(5).units, 2 * TASK_UNITS.summarise + TASK_UNITS.merge);
+  assert.equal(estimatePhotos(1).credits, PHOTO_BATCH_CREDITS);
+  assert.equal(estimatePhotos(4).credits, PHOTO_BATCH_CREDITS);
+  assert.equal(estimatePhotos(5).credits, 2 * PHOTO_BATCH_CREDITS + TASK_CREDITS.merge);
   /* The photo ceiling costs exactly what the text ceiling costs -- 16
      photos and an 80,000-character reading are the same 4-chunk job. */
-  assert.equal(estimatePhotos(MAX_READING_PHOTOS).units, 4 * TASK_UNITS.summarise + TASK_UNITS.merge);
+  assert.equal(estimatePhotos(MAX_READING_PHOTOS).credits, 4 * PHOTO_BATCH_CREDITS + TASK_CREDITS.merge);
   assert.equal(estimatePhotos(MAX_READING_PHOTOS).chunks, MAX_READING_CHUNKS);
 });
 

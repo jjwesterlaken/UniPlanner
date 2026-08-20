@@ -34,12 +34,16 @@ import {
   INITIAL_RECORDER_STATE,
   newIdempotencyKey,
   TRANSLATION_LANGUAGES,
-  MONTHLY_MINUTES_LIMIT_HINT,
-  MINIMUM_BILLED_MINUTES_HINT,
-  RESUMMARISE_BILLED_MINUTES_HINT,
+  MINIMUM_BILLED_CREDITS_HINT,
+  RESUMMARISE_BILLED_CREDITS_HINT,
   recoveryFailureKind,
   RECOVERY_MISSING_CODES,
 } from "../src/aiNotesLogic.js";
+/* The client's copy of the monthly limit moved to aiTextLimits.js when
+   the two currencies collapsed into one — one mirror instead of two.
+   Aliased so the mirror test below compares two DIFFERENT bindings and
+   cannot become a tautology. */
+import { MONTHLY_CREDITS_LIMIT as CLIENT_MONTHLY_CREDITS_LIMIT } from "../src/aiTextLimits.js";
 import { AI_NOTES_COPY } from "../src/aiNotesCopy.js";
 import { fetchUsage, callAiNotes } from "../src/aiNotesClient.js";
 import { mergeData, COLLECTIONS, purgeOldTombstones } from "../src/sync.js";
@@ -80,7 +84,7 @@ import {
   checkRequestGuards,
   selectTranscriber,
   minutesFromSeconds,
-  billedMinutes,
+  billedCredits,
   isUuid,
   sanitizeCourse,
   normalizeTranslateTo,
@@ -89,9 +93,9 @@ import {
   TRANSLATION_CODES,
   MAX_COURSE_LENGTH,
   SUMMARY_MAX_TOKENS,
-  MONTHLY_MINUTES_LIMIT,
-  MINIMUM_BILLED_MINUTES,
-  RESUMMARISE_BILLED_MINUTES,
+  MONTHLY_CREDITS_LIMIT,
+  MINIMUM_BILLED_CREDITS,
+  RESUMMARISE_BILLED_CREDITS,
   USD_PER_TRANSCRIBED_MINUTE,
   USD_PER_1M_SUMMARY_INPUT,
   USD_PER_1M_SUMMARY_OUTPUT,
@@ -391,14 +395,14 @@ async function run() {
   /* ---------- demo/no-account mode doesn't crash ---------- */
 
   await test("fetchUsage never crashes with no session or no Supabase client", async () => {
-    assert.deepEqual(await fetchUsage(null), { minutesUsed: 0, unavailable: true });
+    assert.deepEqual(await fetchUsage(null), { creditsUsed: 0, unavailable: true });
     assert.deepEqual(
       await fetchUsage({ user: { id: "u1" } }, { supabaseClient: null, isDemo: false }),
-      { minutesUsed: 0, unavailable: true }
+      { creditsUsed: 0, unavailable: true }
     );
     assert.deepEqual(
       await fetchUsage({ user: { id: "u1" } }, { supabaseClient: {}, isDemo: true }),
-      { minutesUsed: 0, unavailable: true }
+      { creditsUsed: 0, unavailable: true }
     );
   });
 
@@ -408,8 +412,8 @@ async function run() {
     const g = checkRequestGuards({
       estimatedDurationSeconds: 5,
       receivedBytes: 100_000_000,
-      minutesUsedThisMonth: 0,
-      monthlyLimitMinutes: 300,
+      creditsUsedThisMonth: 0,
+      monthlyLimitCredits: 300,
       maxRequestSeconds: 3 * 3600,
       maxBodyBytes: 46_000_000,
     });
@@ -421,8 +425,8 @@ async function run() {
     const g = checkRequestGuards({
       estimatedDurationSeconds: 4 * 3600,
       receivedBytes: 1000,
-      minutesUsedThisMonth: 0,
-      monthlyLimitMinutes: 300,
+      creditsUsedThisMonth: 0,
+      monthlyLimitCredits: 300,
       maxRequestSeconds: 3 * 3600,
       maxBodyBytes: 46_000_000,
     });
@@ -434,8 +438,8 @@ async function run() {
     const g = checkRequestGuards({
       estimatedDurationSeconds: 600, // 10 minutes
       receivedBytes: 1000,
-      minutesUsedThisMonth: 295,
-      monthlyLimitMinutes: 300,
+      creditsUsedThisMonth: 295,
+      monthlyLimitCredits: 300,
       maxRequestSeconds: 3 * 3600,
       maxBodyBytes: 46_000_000,
     });
@@ -447,8 +451,8 @@ async function run() {
     const g = checkRequestGuards({
       estimatedDurationSeconds: 600,
       receivedBytes: 1_000_000,
-      minutesUsedThisMonth: 0,
-      monthlyLimitMinutes: 300,
+      creditsUsedThisMonth: 0,
+      monthlyLimitCredits: 300,
       maxRequestSeconds: 3 * 3600,
       maxBodyBytes: 46_000_000,
     });
@@ -493,14 +497,14 @@ async function run() {
   /* ---------- what a recording costs, not how long it is ---------- */
 
   await test("a short recording bills the minimum, because summarising is charged per request", () => {
-    assert.equal(billedMinutes(60, MINIMUM_BILLED_MINUTES), MINIMUM_BILLED_MINUTES);
-    assert.equal(billedMinutes(30, MINIMUM_BILLED_MINUTES), MINIMUM_BILLED_MINUTES);
+    assert.equal(billedCredits(60, MINIMUM_BILLED_CREDITS), MINIMUM_BILLED_CREDITS);
+    assert.equal(billedCredits(30, MINIMUM_BILLED_CREDITS), MINIMUM_BILLED_CREDITS);
   });
 
   await test("a recording longer than the minimum bills its real length", () => {
-    assert.equal(billedMinutes(50 * 60, MINIMUM_BILLED_MINUTES), 50);
+    assert.equal(billedCredits(50 * 60, MINIMUM_BILLED_CREDITS), 50);
     // Exactly at the floor, neither branch rounds it anywhere.
-    assert.equal(billedMinutes(MINIMUM_BILLED_MINUTES * 60, MINIMUM_BILLED_MINUTES), MINIMUM_BILLED_MINUTES);
+    assert.equal(billedCredits(MINIMUM_BILLED_CREDITS * 60, MINIMUM_BILLED_CREDITS), MINIMUM_BILLED_CREDITS);
   });
 
   await test("a provider that reports no duration bills zero, NOT the minimum", () => {
@@ -508,8 +512,8 @@ async function run() {
        three minutes for it would hide a fault the logs exist to surface,
        and it is bounded by how often a provider breaks rather than by
        anything a user chooses. */
-    assert.equal(billedMinutes(0, MINIMUM_BILLED_MINUTES), 0);
-    assert.equal(billedMinutes(undefined, MINIMUM_BILLED_MINUTES), 0);
+    assert.equal(billedCredits(0, MINIMUM_BILLED_CREDITS), 0);
+    assert.equal(billedCredits(undefined, MINIMUM_BILLED_CREDITS), 0);
   });
 
   await test("the allowance is projected with the same floor that billing charges", () => {
@@ -518,11 +522,11 @@ async function run() {
     const guard = checkRequestGuards({
       estimatedDurationSeconds: 60,
       receivedBytes: 1000,
-      minutesUsedThisMonth: MONTHLY_MINUTES_LIMIT - 1,
-      monthlyLimitMinutes: MONTHLY_MINUTES_LIMIT,
+      creditsUsedThisMonth: MONTHLY_CREDITS_LIMIT - 1,
+      monthlyLimitCredits: MONTHLY_CREDITS_LIMIT,
       maxRequestSeconds: 3 * 3600,
       maxBodyBytes: 46_000_000,
-      minimumBilledMinutes: MINIMUM_BILLED_MINUTES,
+      minimumBilledCredits: MINIMUM_BILLED_CREDITS,
     });
     assert.equal(guard.ok, false);
     assert.equal(guard.code, "usage_exceeded");
@@ -549,8 +553,8 @@ async function run() {
       1_000_000;
 
     const cost = (recordings, realMinutesEach) => {
-      const billedEach = Math.max(realMinutesEach, MINIMUM_BILLED_MINUTES);
-      const fit = Math.floor(MONTHLY_MINUTES_LIMIT / billedEach);
+      const billedEach = Math.max(realMinutesEach, MINIMUM_BILLED_CREDITS);
+      const fit = Math.floor(MONTHLY_CREDITS_LIMIT / billedEach);
       const n = Math.min(recordings, fit);
       return n * realMinutesEach * TRANSCRIBE_PER_MINUTE + n * SUMMARISE_PER_REQUEST;
     };
@@ -563,13 +567,13 @@ async function run() {
       `a month of one-minute recordings costs $${pathological.toFixed(3)} against $${realistic.toFixed(
         3
       )} for a full timetable. The minimum billed increment is meant to keep these within 25% of ` +
-        "each other — re-derive MINIMUM_BILLED_MINUTES, don't relax this number."
+        "each other — re-derive MINIMUM_BILLED_CREDITS, don't relax this number."
     );
 
     // And confirm the floor is what's doing it, rather than the assertion
     // passing for some unrelated reason.
     const withoutFloor = (() => {
-      const n = MONTHLY_MINUTES_LIMIT; // 300 one-minute recordings
+      const n = MONTHLY_CREDITS_LIMIT; // 300 one-minute recordings
       return n * 1 * TRANSCRIBE_PER_MINUTE + n * SUMMARISE_PER_REQUEST;
     })();
     assert.ok(
@@ -587,7 +591,7 @@ async function run() {
        times the floor pay for one summary?
 
        Stated as an inequality against the derived cost rather than as
-       "MINIMUM_BILLED_MINUTES === 4", because pinning the answer is how
+       "MINIMUM_BILLED_CREDITS === 4", because pinning the answer is how
        a guard stops noticing the input. Make the prompt deeper, raise
        TYPICAL_SUMMARY_OUTPUT_TOKENS to match, and this fails until
        someone decides what the floor should be. */
@@ -598,10 +602,10 @@ async function run() {
     const requiredFloor = Math.ceil(summaryCost / USD_PER_TRANSCRIBED_MINUTE);
 
     assert.ok(
-      MINIMUM_BILLED_MINUTES >= requiredFloor,
+      MINIMUM_BILLED_CREDITS >= requiredFloor,
       `one summary costs $${summaryCost.toFixed(5)}, which is ${requiredFloor} billed minutes, but the floor is ` +
-        `${MINIMUM_BILLED_MINUTES}. A short recording now costs more to summarise than it is charged for — ` +
-        "raise MINIMUM_BILLED_MINUTES to at least " + requiredFloor + ", or make the summariser cheaper."
+        `${MINIMUM_BILLED_CREDITS}. A short recording now costs more to summarise than it is charged for — ` +
+        "raise MINIMUM_BILLED_CREDITS to at least " + requiredFloor + ", or make the summariser cheaper."
     );
 
     /* And the ceiling has to be above the typical, with room. A ceiling
@@ -670,18 +674,22 @@ async function run() {
        The minimum matters most: it is what a student watches their
        allowance move by, so a drift makes the number on screen disagree
        with the number being charged. */
-    assert.equal(MINIMUM_BILLED_MINUTES_HINT, MINIMUM_BILLED_MINUTES);
+    assert.equal(MINIMUM_BILLED_CREDITS_HINT, MINIMUM_BILLED_CREDITS);
     /* The retry's price is shown before the student commits, so a drift
        here means the screen promises one figure and the server charges
        another. A browser bundle cannot import from supabase/functions,
        so the mirror is allowed — the equality is what makes it a guard
        rather than a comment. */
     assert.equal(
-      RESUMMARISE_BILLED_MINUTES_HINT,
-      RESUMMARISE_BILLED_MINUTES,
+      RESUMMARISE_BILLED_CREDITS_HINT,
+      RESUMMARISE_BILLED_CREDITS,
       "the retry cost on screen disagrees with the retry cost charged"
     );
-    assert.equal(MONTHLY_MINUTES_LIMIT_HINT, MONTHLY_MINUTES_LIMIT);
+    assert.equal(
+      CLIENT_MONTHLY_CREDITS_LIMIT,
+      MONTHLY_CREDITS_LIMIT,
+      "the allowance on screen disagrees with the allowance enforced"
+    );
   });
 
   /* ---------- recordings file themselves ---------- */
@@ -2186,7 +2194,7 @@ async function run() {
        the workflow can be deleted along with the workflow.
 
        WHY THIS GUARD AND NOT A BETTER MIRROR TEST. The mirror test
-       compares the server's MINIMUM_BILLED_MINUTES to the client's
+       compares the server's MINIMUM_BILLED_CREDITS to the client's
        hint. Both moved together when a parked billing change leaked
        onto main inside a documentation-only pull request, so it stayed
        green throughout. A test that compares two copies to each other

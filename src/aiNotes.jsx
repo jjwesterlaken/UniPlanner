@@ -20,8 +20,7 @@ import {
   buildConsentPatch,
   pickSupportedMimeType,
   RECORDER_AUDIO_BITS_PER_SECOND,
-  MONTHLY_MINUTES_LIMIT_HINT,
-  MINIMUM_BILLED_MINUTES_HINT,
+  MINIMUM_BILLED_CREDITS_HINT,
   describeRecorderError,
   parseAiNotesError,
   PERMANENT_FAILURE_CODES,
@@ -38,7 +37,7 @@ import {
   defaultCardSelection,
   folderForRecording,
   DEFAULT_CARDS_SELECTED,
-  RESUMMARISE_BILLED_MINUTES_HINT,
+  RESUMMARISE_BILLED_CREDITS_HINT,
 } from "./aiNotesLogic.js";
 import {
   describeCapabilities,
@@ -55,6 +54,7 @@ import {
 } from "./audioSources.js";
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
 import { noteCache } from "./noteCache.js";
+import { MONTHLY_CREDITS_LIMIT } from "./aiTextLimits.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes, callResummarise } from "./aiNotesClient.js";
 import { nowISO, supabase } from "./sync.js";
@@ -78,16 +78,16 @@ function UsageBadge({ session }) {
   }, [session && session.user.id]);
 
   if (!usage || usage.unavailable) return null;
-  const near = usage.minutesUsed >= MONTHLY_MINUTES_LIMIT_HINT * 0.9;
+  const near = usage.creditsUsed >= MONTHLY_CREDITS_LIMIT * 0.9;
   return (
     <div className={`mb-3 rounded-lg px-3 py-2 text-xs ${near ? "bg-amber-50 text-amber-800" : "bg-stone-100 text-stone-500"}`}>
       <div className="flex items-center gap-1.5">
         {near && <TriangleAlert size={13} />}
-        {Math.round(usage.minutesUsed)} of {MONTHLY_MINUTES_LIMIT_HINT} AI minutes used this month
+        {Math.round(usage.creditsUsed)} of {MONTHLY_CREDITS_LIMIT} AI credits used this month
       </div>
       {/* Disclosed here rather than discovered by watching the counter
           jump after a two-minute recording. */}
-      <p className="mt-1 opacity-80">{AI_NOTES_COPY.minimumBilling(MINIMUM_BILLED_MINUTES_HINT)}</p>
+      <p className="mt-1 opacity-80">{AI_NOTES_COPY.minimumBilling(MINIMUM_BILLED_CREDITS_HINT)}</p>
     </div>
   );
 }
@@ -726,7 +726,7 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
         {onRetrySummary && (
           <div className="space-y-2 rounded-lg border border-stone-200 p-3">
             <p className="text-xs text-stone-600">
-              {AI_NOTES_COPY.summaryFailed.retryCost(RESUMMARISE_BILLED_MINUTES_HINT)}
+              {AI_NOTES_COPY.summaryFailed.retryCost(RESUMMARISE_BILLED_CREDITS_HINT)}
             </p>
             {retryState.status === "error" && (
               <p role="status" className="text-xs text-rose-700">

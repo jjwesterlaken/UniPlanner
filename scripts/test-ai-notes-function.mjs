@@ -18,8 +18,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
-  RESUMMARISE_BILLED_MINUTES,
-  MINIMUM_BILLED_MINUTES,
+  RESUMMARISE_BILLED_CREDITS,
+  MINIMUM_BILLED_CREDITS,
   TYPICAL_SUMMARY_INPUT_TOKENS,
   TYPICAL_SUMMARY_OUTPUT_TOKENS,
   USD_PER_1M_SUMMARY_INPUT,
@@ -97,7 +97,7 @@ function makeDb(rows, missingObject = false, storedExt = "webm") {
   // row -- but the scope still has to be there).
   const writes = [];
   const storageCalls = [];
-  /* Billing is an RPC now (migration 0011's add_ai_usage), not an
+  /* Billing is an RPC now (migration 0011's add_ai_credits), not an
      upsert, so the fake has to model one -- and modelling it as ADDING
      is what lets a test see the difference between a bill that landed
      and one that overwrote. The old fake's `upsert: async () => ({})`
@@ -173,17 +173,16 @@ function makeDb(rows, missingObject = false, storedExt = "webm") {
     auth: { getUser: async () => ({ data: { user: { id: OWNER } }, error: null }) },
     rpc: async (name, args) => {
       rpcCalls.push({ name, args });
-      if (name !== "add_ai_usage") return { data: null, error: { message: `no such function: ${name}` } };
+      if (name !== "add_ai_credits") return { data: null, error: { message: `no such function: ${name}` } };
       let row = rows.find((r) => r._t === "ai_usage" && r.user_id === args.p_user_id && r.month === args.p_month);
       if (!row) {
-        row = { _t: "ai_usage", user_id: args.p_user_id, month: args.p_month, minutes_used: 0, text_units_used: 0 };
+        row = { _t: "ai_usage", user_id: args.p_user_id, month: args.p_month, credits_used: 0 };
         rows.push(row);
       }
       // ADDS, exactly as the SQL does. A fake that assigned would let a
       // regression to the read-modify-write pass.
-      row.minutes_used += Number(args.p_minutes || 0);
-      row.text_units_used += Number(args.p_units || 0);
-      return { data: [{ new_minutes: row.minutes_used, new_units: row.text_units_used }], error: null };
+      row.credits_used += Number(args.p_credits || 0);
+      return { data: [{ new_credits: row.credits_used }], error: null };
     },
     from: (name) => {
       if (name === "profiles") {
@@ -224,7 +223,7 @@ function makeDb(rows, missingObject = false, storedExt = "webm") {
 /* ---------- invoke the handler ---------- */
 
 async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath, tier = "ai", mode, summariserOk = false, usage } = {}) {
-  if (usage) rows = [...rows, { _t: "ai_usage", user_id: callerId, month: usage.month, minutes_used: usage.minutesUsed || 0, text_units_used: 0 }];
+  if (usage) rows = [...rows, { _t: "ai_usage", user_id: callerId, month: usage.month, credits_used: usage.creditsUsed || 0 }];
   const db = makeDb(rows, missingObject, storedExt);
   db.client.auth.getUser = async () => ({ data: { user: { id: callerId } }, error: null });
   const baseFrom = db.client.from;
@@ -559,7 +558,7 @@ async function run() {
     const r = await invoke({ mode: "resummarise", rows, summariserOk: true });
     assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 200));
     assert.equal(r.body.result.summaryFailed, false);
-    assert.equal(r.body.minutesBilled, RESUMMARISE_BILLED_MINUTES);
+    assert.equal(r.body.creditsBilled, RESUMMARISE_BILLED_CREDITS);
     // Derived from the measured constants, never typed: the same
     // arithmetic the floor uses, rounded up to a whole minute.
     const derived = Math.max(
@@ -570,9 +569,9 @@ async function run() {
           USD_PER_TRANSCRIBED_MINUTE
       )
     );
-    assert.equal(RESUMMARISE_BILLED_MINUTES, derived, "the retry price stopped being derived from the measured cost");
+    assert.equal(RESUMMARISE_BILLED_CREDITS, derived, "the retry price stopped being derived from the measured cost");
     assert.ok(
-      RESUMMARISE_BILLED_MINUTES < MINIMUM_BILLED_MINUTES,
+      RESUMMARISE_BILLED_CREDITS < MINIMUM_BILLED_CREDITS,
       "a retry must cost less than a fresh recording — the transcription was already paid for"
     );
   });
@@ -587,7 +586,7 @@ async function run() {
     /* THE PRECONDITION. Without it this branch required only that the
        row exists, is yours, and holds a transcript -- so a successful
        three-hour lecture could be re-summarised for the whole retention
-       window at RESUMMARISE_BILLED_MINUTES a go, which COST-MODEL.md
+       window at RESUMMARISE_BILLED_CREDITS a go, which COST-MODEL.md
        prices at 5x what a real recording costs per billed minute and
        the most expensive legal way to spend an allowance.
 
@@ -634,32 +633,32 @@ async function run() {
 
   /* ---------- billing is atomic, and it is atomic IN THE DATABASE ---------- */
 
-  await test("a fresh recording bills through add_ai_usage, scoped and in minutes only", async () => {
-    const r = await invoke({ usage: { month: monthNow(), minutesUsed: 12 } });
+  await test("a fresh recording bills through add_ai_credits, scoped and in minutes only", async () => {
+    const r = await invoke({ usage: { month: monthNow(), creditsUsed: 12 } });
     assert.equal(r.status, 200, r.bodyText.slice(0, 200));
-    const bills = r.rpcCalls.filter((c) => c.name === "add_ai_usage");
+    const bills = r.rpcCalls.filter((c) => c.name === "add_ai_credits");
     assert.equal(bills.length, 1, "a recording billed something other than once through the RPC");
     assert.equal(bills[0].args.p_user_id, OWNER, "the bill was not scoped to the caller");
-    assert.equal(bills[0].args.p_minutes, MINIMUM_BILLED_MINUTES, "the 60-second fake recording should bill the floor");
-    assert.equal(bills[0].args.p_units, 0, "a recording must not touch the text allowance");
+    assert.equal(bills[0].args.p_credits, MINIMUM_BILLED_CREDITS, "the 60-second fake recording should bill the floor");
+    assert.equal(typeof bills[0].args.p_credits, "number", "the bill must be a number of credits");
   });
 
   await test("the RPC ADDS to the month, so a second recording does not overwrite the first", async () => {
     /* The whole point of 0011, seen from the caller. The fake models
-       add_ai_usage as ADDING because the SQL does; if the function went
+       add_ai_credits as ADDING because the SQL does; if the function went
        back to writing a sum computed here from a read taken before the
        provider call, the second recording in a month would replace the
        first rather than add to it. */
     // ONE row object, carried across two invocations, so the second
     // bill lands on the month the first one wrote.
-    const usageRow = { _t: "ai_usage", user_id: OWNER, month: monthNow(), minutes_used: 0, text_units_used: 0 };
+    const usageRow = { _t: "ai_usage", user_id: OWNER, month: monthNow(), credits_used: 0 };
     await invoke({ rows: [usageRow] });
-    const before = usageRow.minutes_used;
+    const before = usageRow.credits_used;
     await invoke({ rows: [usageRow], key: "4f9a1c2e-7b4d-4e6f-9a1b-2c3d4e5f6a7c" });
-    assert.equal(before, MINIMUM_BILLED_MINUTES, "the first recording did not bill the floor");
+    assert.equal(before, MINIMUM_BILLED_CREDITS, "the first recording did not bill the floor");
     assert.equal(
-      usageRow.minutes_used,
-      MINIMUM_BILLED_MINUTES * 2,
+      usageRow.credits_used,
+      MINIMUM_BILLED_CREDITS * 2,
       "the second recording overwrote the month instead of adding to it"
     );
   });
@@ -682,7 +681,7 @@ async function run() {
         !/\.from\(\s*["']ai_usage["']\s*\)[\s\S]{0,300}?\.upsert\(/.test(src),
         `${rel} still upserts ai_usage from a value it computed itself — that is the lost update 0011 closed`
       );
-      assert.ok(/\.rpc\(\s*["']add_ai_usage["']/.test(src), `${rel} no longer bills through add_ai_usage`);
+      assert.ok(/\.rpc\(\s*["']add_ai_credits["']/.test(src), `${rel} no longer bills through add_ai_credits`);
       assert.ok(
         /\.from\(\s*["']ai_usage["']\s*\)[\s\S]{0,200}?\.select\(/.test(src),
         `${rel} stopped READING the allowance — that read must still precede the provider call`

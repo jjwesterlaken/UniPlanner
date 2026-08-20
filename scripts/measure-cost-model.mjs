@@ -377,7 +377,7 @@ say("\nWHAT A CREDIT WOULD BE WORTH (preview of the single-currency pass)\n");
 const perBilledMinute = lectureCost(50, false) / 50;
 say(`  1 credit = 1 minute of recorded lecture = ${usd(perBilledMinute)}\n`);
 const asCredits = (c) => Math.max(1, Math.ceil(c / perBilledMinute));
-say(`  a 20,000-char text chunk            ${pad(asCredits(textChunk), 4)} credits   (TASK_UNITS.summarise is 3 today)\n`);
+say(`  a 20,000-char text chunk            ${pad(asCredits(textChunk), 4)} credits   (TASK_CREDITS.summarise is 3)\n`);
 for (const [name, m] of Object.entries(CANDIDATES)) {
   for (const edge of [1536, 1024]) {
     const [w, h] = a4At(edge);

@@ -26,9 +26,9 @@ import {
   allowanceState,
   canAfford,
   isLastAction,
-  canAffordUnits,
+  canAffordCredits,
   sectionsAffordable,
-  TASK_UNITS,
+  TASK_CREDITS,
 } from "./aiTextLimits.js";
 import { estimateReading, estimatePhotos, photoNumberFor, combineParts, MAX_READING_PHOTOS } from "./readingChunks.js";
 import { bodyOf } from "./noteBlocks.js";
@@ -566,7 +566,7 @@ export function SummariseReading({
      paywall caused by going into a tunnel is worse than a missing
      line. Same rule as AiActionFrame. */
   const unknown = !allowance || allowance.unavailable;
-  const affordable = unknown || !estimate.ok || canAffordUnits(allowance, estimate.units);
+  const affordable = unknown || !estimate.ok || canAffordCredits(allowance, estimate.credits);
 
   const reset = () => {
     setResult(null);

@@ -38,7 +38,7 @@ export async function fetchTextAllowance(session, { supabaseClient = supabase, i
     supabaseClient.from("profiles").select("tier").eq("user_id", session.user.id).maybeSingle(),
     supabaseClient
       .from("ai_usage")
-      .select("text_units_used")
+      .select("credits_used")
       .eq("user_id", session.user.id)
       .eq("month", month)
       .maybeSingle(),
@@ -47,7 +47,7 @@ export async function fetchTextAllowance(session, { supabaseClient = supabase, i
   if (!profile) return { unavailable: true };
   return {
     unavailable: false,
-    ...allowanceState({ tier: profile.tier, unitsUsed: (usage && usage.text_units_used) || 0 }),
+    ...allowanceState({ tier: profile.tier, creditsUsed: (usage && usage.credits_used) || 0 }),
   };
 }
 

@@ -75,6 +75,20 @@ const cfgBundle = await build({
 });
 fs.writeFileSync(path.join(tmpDir, "cfg.mjs"), cfgBundle.outputFiles[0].text);
 
+/* The currency itself, bundled separately so a test can re-run the
+   derivation the config performs rather than trusting its output. */
+const creditsBundle = await build({
+  entryPoints: [path.join(rootDir, "supabase/functions/_shared/credits.ts")],
+  bundle: true,
+  format: "esm",
+  platform: "neutral",
+  write: false,
+});
+fs.writeFileSync(path.join(tmpDir, "credits.mjs"), creditsBundle.outputFiles[0].text);
+
+const cfg = await import(pathToUrl(path.join(tmpDir, "cfg.mjs")));
+const credits = await import(pathToUrl(path.join(tmpDir, "credits.mjs")));
+
 const fnPath = path.join(tmpDir, "fn.mjs");
 fs.writeFileSync(fnPath, bundle.outputFiles[0].text);
 
@@ -94,7 +108,7 @@ const USER = "11111111-1111-4111-8111-111111111111";
  * A fake database that records the order of everything, so the ordering
  * property can be asserted rather than read.
  */
-function makeAdmin({ tier = "ai", unitsUsed = 0, usageError = null, billError = null, trace } = {}) {
+function makeAdmin({ tier = "ai", creditsUsed = 0, usageError = null, billError = null, trace } = {}) {
   const seen = [];
   const table = (name) => {
     const filters = [];
@@ -111,7 +125,7 @@ function makeAdmin({ tier = "ai", unitsUsed = 0, usageError = null, billError = 
         if (name === "profiles") return { data: tier ? { tier } : null, error: null };
         if (name === "ai_usage") {
           if (usageError) return { data: null, error: usageError };
-          return { data: { text_units_used: unitsUsed }, error: null };
+          return { data: { credits_used: creditsUsed }, error: null };
         }
         return { data: null, error: null };
       },
@@ -130,13 +144,13 @@ function makeAdmin({ tier = "ai", unitsUsed = 0, usageError = null, billError = 
      that assigned would let a regression to the read-modify-write pass
      unnoticed, which is the "a fake that returns nothing makes
      everything downstream agree" trap in a new costume. */
-  let banked = unitsUsed;
+  let banked = creditsUsed;
   const rpc = async (fn, args) => {
     seen.push({ op: "rpc", fn, payload: args });
     if (trace) trace.push(`db:rpc:${fn}`);
     if (billError) return { data: null, error: billError };
-    banked += Number(args.p_units || 0);
-    return { data: [{ new_minutes: 0, new_units: banked }], error: null };
+    banked += Number(args.p_credits || 0);
+    return { data: [{ new_credits: banked }], error: null };
   };
   return {
     seen,
@@ -253,23 +267,22 @@ async function main() {
        TEXT_TIERS without a smaller limit hands free accounts 150 units
        -- generous-looking right up to the invoice -- and each constant
        checked in isolation would pass throughout. */
-    const cfg = await import(pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
     for (const tier of cfg.TEXT_TIERS) {
-      const limit = cfg.limitForTier(tier);
+      const limit = cfg.creditsForTier(tier);
       assert.ok(limit > 0, `${tier} is allowed in with no allowance at all`);
       if (tier !== "ai") {
         assert.ok(
-          limit < cfg.MONTHLY_TEXT_UNITS_LIMIT,
+          limit < cfg.MONTHLY_CREDITS_LIMIT,
           `"${tier}" is in TEXT_TIERS but limitForTier gives it ${limit}, the same as the paid tier. ` +
             "The gate and the limit are two halves of one decision."
         );
       }
     }
-    assert.equal(cfg.limitForTier("free"), 10, "the free allowance is a decided number, not a default");
+    assert.equal(cfg.creditsForTier("free"), 10, "the free allowance is a decided number, not a default");
   });
 
   await test("a free account gets the features, at the free allowance", async () => {
-    const admin = makeAdmin({ tier: "free", unitsUsed: 0 });
+    const admin = makeAdmin({ tier: "free", creditsUsed: 0 });
     const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
     assert.equal(res.status, 200);
     // 1 of 10, not 1 of 150 — the fraction is what the app shows.
@@ -280,7 +293,7 @@ async function main() {
     const summarizer = okSummarizer(EXPLAIN_OK);
     const res = await run(
       { task: "explain", topic: "t", text: "hi" },
-      { supabaseAdmin: makeAdmin({ tier: "free", unitsUsed: 10 }), summarizer }
+      { supabaseAdmin: makeAdmin({ tier: "free", creditsUsed: 10 }), summarizer }
     );
     assert.equal((await res.json()).code, "usage_exceeded");
     assert.equal(summarizer.calls, 0);
@@ -308,7 +321,7 @@ async function main() {
   /* ---------- THE ORDERING ---------- */
 
   await test("the allowance is READ before the provider is CALLED", async () => {
-    /* The load-bearing one. Migration 0006 adds text_units_used; if the
+    /* The load-bearing one. Migration 0006 adds credits_used; if the
        provider ran first, a missing column would mean money spent and
        then an error shown for work that was really done. */
     const trace = [];
@@ -323,14 +336,14 @@ async function main() {
     assert.ok(
       readAt < calledAt,
       `the provider was called before the allowance was read (${trace.join(" -> ")}). ` +
-        "That ordering is what makes a missing text_units_used column fail free."
+        "That ordering is what makes a missing credits_used column fail free."
     );
   });
 
-  await test("a missing text_units_used column fails having spent nothing", async () => {
+  await test("a missing credits_used column fails having spent nothing", async () => {
     const summarizer = okSummarizer(EXPLAIN_OK);
     const admin = makeAdmin({
-      usageError: { code: "42703", message: 'column ai_usage.text_units_used does not exist' },
+      usageError: { code: "42703", message: 'column ai_usage.credits_used does not exist' },
     });
     const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer });
     assert.equal(res.status, 500);
@@ -343,7 +356,7 @@ async function main() {
     const summarizer = okSummarizer(EXPLAIN_OK);
     const res = await run(
       { task: "explain", topic: "t", text: "hi" },
-      { supabaseAdmin: makeAdmin({ unitsUsed: 150 }), summarizer }
+      { supabaseAdmin: makeAdmin({ creditsUsed: cfg.MONTHLY_CREDITS_LIMIT }), summarizer }
     );
     assert.equal(res.status, 403);
     assert.equal((await res.json()).code, "usage_exceeded");
@@ -351,13 +364,19 @@ async function main() {
   });
 
   await test("a task is refused when its own weight won't fit, not merely when the limit is reached", async () => {
-    // summarise costs 3. At 148 used there is room for explain but not
-    // for this, and checking the limit rather than the cost would let it
-    // through and overspend.
+    /* Left with room for an explain but not for a summarise. Checking
+       the limit rather than the COST would let this through and
+       overspend. Derived from the real weights so a re-priced task
+       re-runs the arithmetic instead of leaving a stale literal. */
     const summarizer = okSummarizer({ overview: "o" });
+    const nearlyFull = cfg.MONTHLY_CREDITS_LIMIT - cfg.TASK_CREDITS.summarise + 1;
+    assert.ok(
+      nearlyFull + cfg.TASK_CREDITS.explain <= cfg.MONTHLY_CREDITS_LIMIT,
+      "the fixture no longer leaves room for the cheaper task, so this proves nothing"
+    );
     const res = await run(
       { task: "summarise", text: "a note" },
-      { supabaseAdmin: makeAdmin({ unitsUsed: 148 }), summarizer }
+      { supabaseAdmin: makeAdmin({ creditsUsed: nearlyFull }), summarizer }
     );
     assert.equal((await res.json()).code, "usage_exceeded");
     assert.equal(summarizer.calls, 0);
@@ -368,31 +387,71 @@ async function main() {
   await test("billing is scoped to the caller's own row, on both keys", async () => {
     const admin = makeAdmin();
     await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
-    const bill = admin.seen.find((s) => s.op === "rpc" && s.fn === "add_ai_usage");
+    const bill = admin.seen.find((s) => s.op === "rpc" && s.fn === "add_ai_credits");
     assert.ok(bill, "nothing was billed");
     assert.equal(bill.payload.p_user_id, USER, "the service-role client bypasses RLS — this scope is the only check");
     assert.equal(bill.payload.p_month, "2026-08");
-    assert.equal(bill.payload.p_units, 1, "explain costs 1");
-    assert.equal(bill.payload.p_minutes, 0, "a text task must not touch the audio allowance");
+    assert.equal(bill.payload.p_credits, 1, "explain costs 1");
+    assert.equal(typeof bill.payload.p_credits, "number", "a text task must bill a number of credits");
   });
 
-  await test("each task bills its own weight", async () => {
-    for (const [task, body, cost, out] of [
-      ["explain", { topic: "t", text: "hi" }, 1, EXPLAIN_OK],
-      ["weakspots", { topics: [{ term: "a", lapses: 3 }] }, 1, { topics: [{ term: "a", why: "w", try: "t" }] }],
-      ["practice", { cards: [{ term: "a", content: "b" }] }, 2, { questions: [{ q: "?", a: "!" }] }],
-      ["summarise", { text: "a note" }, 3, { overview: "o" }],
-      /* 1, not 3. A merge takes four short summaries where summarise
-         takes 20,000 characters, so pricing it as a summarise would
-         overcharge for a step the student only needs because their
-         reading was long. */
-      ["merge", { parts: [{ overview: "a" }, { overview: "b" }] }, 1, { overview: "o" }],
+  await test("each task bills its own weight, and the weight is the derived one", async () => {
+    /* THE COST COMES FROM cfg, NOT FROM A TABLE HERE. It used to be a
+       literal beside each task, which is a restatement of the thing
+       being tested: the day a weight was re-derived, this test would
+       have gone red for being right. Now it asserts the BILL matches the
+       DERIVATION, which is the property that matters, and a separate
+       assertion keeps the derivation itself honest. */
+    for (const [task, body, out] of [
+      ["explain", { topic: "t", text: "hi" }, EXPLAIN_OK],
+      ["weakspots", { topics: [{ term: "a", lapses: 3 }] }, { topics: [{ term: "a", why: "w", try: "t" }] }],
+      ["practice", { cards: [{ term: "a", content: "b" }] }, { questions: [{ q: "?", a: "!" }] }],
+      ["summarise", { text: "a note" }, { overview: "o" }],
+      ["merge", { parts: [{ overview: "a" }, { overview: "b" }] }, { overview: "o" }],
     ]) {
       const admin = makeAdmin();
       await run({ task, ...body }, { supabaseAdmin: admin, summarizer: okSummarizer(out) });
       const bill = admin.seen.find((s) => s.op === "rpc");
-      assert.equal(bill.payload.p_units, cost, `${task} billed ${bill.payload.p_units}, expected ${cost}`);
+      const cost = cfg.TASK_CREDITS[task];
+      assert.ok(cost > 0, `${task} is priced at nothing`);
+      assert.equal(bill.payload.p_credits, cost, `${task} billed ${bill.payload.p_credits}, expected ${cost}`);
     }
+  });
+
+  await test("a task's weight really is round(its own cost / a credit), not a number somebody typed", async () => {
+    /* The other half of the test above, and the one that would catch a
+       literal creeping back in. `usdForTask` is the endpoint's own
+       arithmetic; this re-runs it and checks the published table agrees.
+       A raised MAX_TOKENS now re-prices its task, which is exactly what
+       did not happen when TYPICAL_SUMMARY_OUTPUT_TOKENS sat at 5.9x
+       reality while setting the price of the product. */
+    for (const task of cfg.TASKS) {
+      const expected = Math.max(1, Math.round(cfg.usdForTask(task) / credits.USD_PER_CREDIT));
+      assert.equal(cfg.TASK_CREDITS[task], expected, `${task} is priced at ${cfg.TASK_CREDITS[task]}, derived says ${expected}`);
+    }
+    /* And the ordering the derivation implies, stated so a silent
+       inversion is visible: nothing costs less than an explanation, and
+       a full-length summarise is the dearest of the five. */
+    assert.equal(Math.min(...cfg.TASKS.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.explain);
+    assert.equal(Math.max(...cfg.TASKS.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.summarise);
+  });
+
+  await test("THE PHOTO BATCH PRICE IS HELD, and says what unblocks it", async () => {
+    /* Not derived, and deliberately so. On the model we call today a
+       batch of four photographed pages costs about 34 credits — an A4
+       page is 36,835 input tokens at 2,833 base + 5,667 a tile — and on
+       the model COST-MODEL.md 12.7 recommends it costs about 6. Setting
+       either before that decision lands is a visible lie or an
+       invisible subsidy.
+
+       This test is the reason lifting the hold has to be deliberate:
+       change PHOTO_BATCH_CREDITS and it goes red, which sends whoever
+       did it to the two gates. */
+    assert.equal(
+      cfg.PHOTO_BATCH_CREDITS,
+      cfg.TASK_CREDITS.summarise,
+      "the photo batch price moved — if that is the model change, update this test and the two mirrors in the same commit"
+    );
   });
 
   await test("a failed provider call bills nothing, because nothing was produced", async () => {
@@ -469,7 +528,7 @@ async function main() {
     assert.match(sys.content, /NOT CLEARLY LEGIBLE, DO NOT GUESS/, "the legibility refusal left the prompt");
     // Billed as ONE summarise -- the same weight as one text chunk.
     const bill = admin.seen.find((x) => x.op === "rpc");
-    assert.equal(bill.payload.p_units, 3, "a photo batch is not priced as one summarise");
+    assert.equal(bill.payload.p_credits, 3, "a photo batch is not priced as one summarise");
   });
 
   await test("mixed media and oversize batches are refused before anything is spent", async () => {
@@ -525,11 +584,10 @@ async function main() {
 
        Derived from TASKS rather than listing the tasks here, so the
        fifth one was covered the moment it was added. */
-    const cfg = await import(pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
     for (const task of cfg.TASKS) {
       assert.ok(cfg.MAX_TOKENS[task] > 0, `${task} has no output ceiling`);
       assert.ok(cfg.MAX_INPUT_CHARS[task] > 0, `${task} has no input cap`);
-      assert.ok(cfg.TASK_UNITS[task] > 0, `${task} bills nothing`);
+      assert.ok(cfg.TASK_CREDITS[task] > 0, `${task} bills nothing`);
     }
   });
 
@@ -538,7 +596,7 @@ async function main() {
        the new task specifically: the sequence is a property of the
        handler, but a task that took a different path through it would
        not be covered by an assertion about `explain`. */
-    const admin = makeAdmin({ usageError: { code: "42703", message: "column ai_usage.text_units_used does not exist" } });
+    const admin = makeAdmin({ usageError: { code: "42703", message: "column ai_usage.credits_used does not exist" } });
     let called = false;
     const res = await run(
       { task: "merge", parts: [{ overview: "a" }, { overview: "b" }] },
@@ -608,11 +666,19 @@ async function main() {
   });
 
   await test("the response carries a fraction, never a unit count", async () => {
-    const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: makeAdmin({ unitsUsed: 29 }), summarizer: okSummarizer(EXPLAIN_OK) });
+    const before = 29;
+    const res = await run(
+      { task: "explain", topic: "t", text: "hi" },
+      { supabaseAdmin: makeAdmin({ creditsUsed: before }), summarizer: okSummarizer(EXPLAIN_OK) }
+    );
     const json = await res.json();
-    assert.equal(json.allowanceUsed, 30 / 150);
-    assert.equal(json.units, undefined);
-    assert.equal(json.unitsUsed, undefined);
+    assert.equal(json.allowanceUsed, (before + cfg.TASK_CREDITS.explain) / cfg.MONTHLY_CREDITS_LIMIT);
+    /* A COUNT still never crosses the wire, even though credits are
+       sayable now. The fraction is what survives a tier whose limit this
+       endpoint does not know has just changed; the count reaches the
+       student through the client-side pre-flight estimate. */
+    assert.equal(json.credits, undefined);
+    assert.equal(json.creditsUsed, undefined);
   });
 
   /* ---------- prompts ---------- */
@@ -677,12 +743,12 @@ async function main() {
        becomes the guard. A comment would not have caught this. */
     const server = await import(pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
     const client = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
-    assert.deepEqual(client.TASK_UNITS, server.TASK_UNITS);
+    assert.deepEqual(client.TASK_CREDITS, server.TASK_CREDITS);
     assert.deepEqual(client.TEXT_TIERS, server.TEXT_TIERS);
-    assert.equal(client.MONTHLY_TEXT_UNITS_LIMIT, server.MONTHLY_TEXT_UNITS_LIMIT);
-    assert.equal(client.FREE_TEXT_UNITS_LIMIT, server.FREE_TEXT_UNITS_LIMIT);
+    assert.equal(client.MONTHLY_CREDITS_LIMIT, server.MONTHLY_CREDITS_LIMIT);
+    assert.equal(client.FREE_CREDITS_LIMIT, server.FREE_CREDITS_LIMIT);
     for (const tier of server.TEXT_TIERS) {
-      assert.equal(client.limitForTier(tier), server.limitForTier(tier), `limitForTier disagrees for "${tier}"`);
+      assert.equal(client.creditsForTier(tier), server.creditsForTier(tier), `creditsForTier disagrees for "${tier}"`);
     }
   });
 
@@ -691,16 +757,16 @@ async function main() {
 
     // A free account with 9 of 10 used can still explain (1) but not
     // summarise (3). Knowing that BEFORE the text box is the point.
-    const nearlyOut = allowanceState({ tier: "free", unitsUsed: 9 });
+    const nearlyOut = allowanceState({ tier: "free", creditsUsed: 9 });
     assert.equal(canAfford(nearlyOut, "explain"), true);
     assert.equal(canAfford(nearlyOut, "summarise"), false);
     assert.equal(canAfford(nearlyOut, "practice"), false);
 
     // "This is the last one" is specific, not a vague low-fuel light.
     assert.equal(isLastAction(nearlyOut, "explain"), true);
-    assert.equal(isLastAction(allowanceState({ tier: "free", unitsUsed: 0 }), "explain"), false);
+    assert.equal(isLastAction(allowanceState({ tier: "free", creditsUsed: 0 }), "explain"), false);
 
-    const spent = allowanceState({ tier: "free", unitsUsed: 10 });
+    const spent = allowanceState({ tier: "free", creditsUsed: 10 });
     assert.equal(spent.remaining, 0);
     assert.equal(canAfford(spent, "explain"), false);
     assert.equal(spent.isFree, true, "the upgrade wording depends on knowing which tier is out");
@@ -802,10 +868,10 @@ async function main() {
        count is asserted, so losing either one goes red. */
     const statements = src
       .split(/;\s*\n/)
-      .filter((st) => st.includes('from("ai_usage")') || st.includes('rpc("add_ai_usage"'));
+      .filter((st) => st.includes('from("ai_usage")') || st.includes('rpc("add_ai_credits"'));
     assert.ok(statements.length >= 2, `expected the read and the write, found ${statements.length}`);
     assert.ok(
-      statements.some((st) => st.includes('from("ai_usage")')) && statements.some((st) => st.includes('rpc("add_ai_usage"')),
+      statements.some((st) => st.includes('from("ai_usage")')) && statements.some((st) => st.includes('rpc("add_ai_credits"')),
       "one half of the allowance path has disappeared — the read and the write must both be here to be checked"
     );
     for (const st of statements) {

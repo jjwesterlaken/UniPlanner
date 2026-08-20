@@ -838,6 +838,14 @@ a third of that).
 
 ## 12. The photo model — priced, with one recommendation and one measurement
 
+> **SINCE THIS SECTION WAS WRITTEN:** the single currency has shipped, and the
+> weights in it are now derived in code rather than argued in prose —
+> `supabase/functions/_shared/credits.ts`. A credit is a minute of recorded
+> lecture; a text chunk is 3, a merge is 2, and the photo batch is **held** at 3
+> with a test that goes red if it moves. The credit figures below are the ones
+> the code now produces, give or take the rounding described in 12.6. The two
+> gates are unchanged and nothing about the photo path has been built.
+
 Commissioned after the review, which supplied the lever this document could not
 see. **Report before building**: nothing here is implemented.
 
@@ -988,9 +996,15 @@ character text chunk comes out at **3 credits — exactly today's
 
 | Photo batch of 4 | Honest weight | A 16-page reading |
 |---|---|---|
-| `gpt-4o-mini` today, any `maxEdge` | **33 credits** | ~133 credits |
-| `gpt-5.4-mini` @1024 | 18 credits | ~73 credits |
-| **`gpt-5.4-nano` @1024** | **6 credits** | **~25 credits** |
+| `gpt-4o-mini` today, any `maxEdge` | **34 credits** | ~138 credits |
+| `gpt-5.4-mini` @1024 | 19 credits | ~78 credits |
+| **`gpt-5.4-nano` @1024** | **6 credits** | **~26 credits** |
+
+*(The shipped code defines a credit slightly more conservatively than this
+section did — transcription plus a SHORT lecture's summary share, rather than a
+measured 50-minute lecture's total — so its credit is worth $0.000686 against
+$0.00071 here and every weight rounds up rather than down. The direction is
+deliberate: a credit worth less means an action costs more.)*
 
 **Read the first row, because it is the real conclusion of this section.** Priced
 honestly on the model we run today, four photographed pages cost eleven text chunks,
