@@ -1045,6 +1045,23 @@ proposing. The arithmetic is clean, checks against the brief to the digit, and r
 on two published numbers I could not read at the source and one behaviour somebody
 says does not match its documentation.
 
+**IT IS A SCRIPT, NOT A PROCEDURE.** `scripts/measure-photo-gates.mjs` makes the
+three calls, downscales the photos exactly as `downscalePhoto` does (sharp, 1024px,
+quality 0.8 — and says so loudly if sharp is absent, because then the bytes sent
+are not the bytes the app sends), pulls the vision prompt out of `prompts.js`
+rather than retyping it, and prints reported `prompt_tokens` beside this
+document's prediction with the ratio. Gate 1 is that ratio. Gate 2 is the three
+summaries it prints, which need a human and the actual pages.
+
+```
+export OPENAI_API_KEY=sk-...
+npm i --no-save sharp
+node scripts/measure-photo-gates.mjs page1.jpg page2.jpg page3.jpg page4.jpg
+```
+
+**Photograph the pages, do not screenshot them.** A clean PDF export answers an
+easier question than the one gate 2 asks.
+
 **The measurement, and it is cheap.** One reading, four photographed pages, run
 three times — once on `gpt-4o-mini` @1536/high (the control, which this document
 predicts at **147,544 input tokens**), once on `gpt-5.4-nano` @1024/original
