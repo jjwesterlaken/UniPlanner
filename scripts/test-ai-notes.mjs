@@ -2079,6 +2079,46 @@ async function run() {
     );
   });
 
+  await test("the release-path guards are wired: promote script, audit gate, security headers", () => {
+    /* Three cheap things whose absence would be silent:
+       - `npm run promote` IS the promote-on-release ritual; a ritual
+         documented only in a merged PR body is a ritual nobody
+         performs, and this one stands between every merge and any
+         user seeing it.
+       - the npm audit step is CI's supply-chain gate (policy: high
+         and critical block; the reasoning lives in the workflow).
+       - public/_headers is how Cloudflare Pages serves the security
+         headers; it must keep riding the build into dist-web. */
+    const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    assert.match(pkg.scripts.promote || "", /promote\.mjs/, "the promote script is gone — the ritual is back to being folklore");
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
+    assert.match(workflow, /npm audit --audit-level=high/, "the dependency audit gate left CI");
+    assert.ok(fs.existsSync(path.join(rootDir, "public/_headers")), "public/_headers is gone — Pages serves no security headers");
+    assert.ok(fs.existsSync(path.join(rootDir, "dist-web/_headers")), "_headers did not survive the build into dist-web");
+    const headers = fs.readFileSync(path.join(rootDir, "public/_headers"), "utf8");
+    /* Comment lines are the file's own explanation of the policy —
+       including the policy text — so a naive grep would pass on a
+       commented-out CSP. Strip them first (the recurring trap), then
+       assert on what Pages will actually SERVE. */
+    const served = headers
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("#"))
+      .join("\n");
+    for (const h of ["X-Frame-Options: DENY", "X-Content-Type-Options: nosniff", "Referrer-Policy: no-referrer"]) {
+      assert.ok(served.includes(h), `the active headers lost "${h}"`);
+    }
+    /* The CSP is ACTIVE by ruling (20 August 2026). 'unsafe-inline' is
+       a deliberate concession recorded in the file; what must never
+       silently vanish is the policy itself or the directives that do
+       the actual blocking. */
+    const csp = served.split("\n").find((l) => l.includes("Content-Security-Policy:"));
+    assert.ok(csp, "the CSP is no longer served — it is a ruling, not a draft");
+    for (const directive of ["default-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "base-uri 'self'"]) {
+      assert.ok(csp.includes(directive), `the CSP lost "${directive}"`);
+    }
+    assert.ok(csp.includes("script-src 'self'"), "script-src no longer restricts to self — external injection is back");
+  });
+
   await test("the deploy workflow ships BOTH functions", () => {
     /* It deployed only ai-notes for as long as ai-text existed, so
        every ai-text change needed a by-hand deploy nobody's checklist
