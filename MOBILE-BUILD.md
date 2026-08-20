@@ -165,6 +165,17 @@ keyAlias=upload
 keyPassword=THE_KEY_PASSWORD
 ```
 
+**`keyAlias` must match whatever `-alias` you actually used in step 1.**
+The two are `upload` above because that is what the command above
+generates, and they have to agree or Gradle fails at signing time with an
+error about a missing key rather than a mismatched one. If your keystore
+came from different instructions — Jared's was made with
+`-alias uniplanner` — then `keyAlias` is that name, and the step-1
+command here is what a FRESH keystore should use rather than a
+description of one you already have. Nothing in the repo can check this:
+`key.properties` is gitignored and the keystore lives outside the repo
+entirely, which is the whole point of both.
+
 Use the absolute path to wherever step 1 put the keystore (forward
 slashes work on Windows too: `C:/Users/jjwes/keystores/...`).
 

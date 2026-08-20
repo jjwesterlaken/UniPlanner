@@ -2414,6 +2414,31 @@ costume: a remedy sized to an anecdote is sized to the wrong thing.
 A floor, a cap and a threshold all need the shape of the data, not the
 existence of the problem.
 
+## Commit or stash before you mutate a file to check a guard
+
+The mutation rule — break the thing on purpose and watch the test go
+red — is the only way to know a guard is real, and it has a sharp edge
+that has now cost work: **`git checkout <file>` reverts to the last
+COMMIT, not to what was in the working tree a second ago.** Used to undo
+a deliberate mutation on a file that also carried an hour of uncommitted
+change, it silently throws the change away and restores something that
+builds, which is the worst combination — no error, no conflict, and a
+file that looks plausible.
+
+That is what happened to `src/aiTextLimits.js` during the currency
+collapse: mutated to check the mirror test, reverted with
+`git checkout`, and the whole rewrite went with it. Caught by the next
+`npm test` build failure, which is luck rather than process — the same
+edit in a file the bundler does not touch would have reached a commit.
+
+The rule, and it costs nothing: **before mutating a file, either commit
+the real work or copy the file aside**, and revert from the copy. This
+codebase already does the copy-aside version for migrations and
+configs (`cp x /tmp/... && ... && cp /tmp/... x`); the failure was
+reaching for `git checkout` on the one file whose work was not yet
+committed. Never revert a mutation with a command that reads from git
+unless the file's real state is already IN git.
+
 ## Branch from `main`, verified — and a mirror test cannot see a decision
 
 Two failures from one mistake, both worth keeping.
