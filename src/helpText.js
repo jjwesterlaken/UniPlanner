@@ -79,6 +79,87 @@ export const HELP_TOPICS = {
     cost:
       "It needs an account, because the archive is stored there rather than on the device. Nothing is removed from your device until the archive has been stored safely. Restoring needs the current semester to be empty first, so archive it before you bring an old one back.",
   },
+
+  studyCards: {
+    title: "Study cards",
+    what:
+      "Shows you a card, you try to recall the answer, and you say how it went. What you say decides when you see it again.",
+    example:
+      "Rate a card Again and it comes back in this same session — a card you just missed is not one to leave until tomorrow. Good sends it to tomorrow, then three days, then eight; Easy sends it three days out, then eleven, then forty-two. So a card you keep getting right disappears for weeks, and the twelve you keep missing are what fills your session.",
+    detail: [
+      "“Review what's due” deliberately mixes cards from all your courses together instead of doing one subject at a time. That feels harder, and that is the point — switching between topics is what makes recall stick. Drill a single course when you are cramming for one exam, and interleave the rest of the time.",
+      "Practice mode exists for the night before an exam, when nothing is “due” because you reviewed it all yesterday. It ignores the schedule and runs every card for a course — and it does NOT change when those cards next come up, so using it costs you nothing.",
+      "“Explain it back” during a review asks you to say the answer in your own words and marks it. It is the one part of the review that spends your monthly AI allowance.",
+    ],
+    cost:
+      "Rating cards costs nothing and works offline. Only “Explain it back” spends anything: on the free plan its allowance covers about ten of them a month. A card rated Again also gets slightly harder to graduate, which is intended — it is the app noticing you find that one difficult.",
+  },
+
+  weakSpots: {
+    title: "Weak spots",
+    what:
+      "Collects the cards you have missed more than once, so the pattern in what you are forgetting is visible rather than something you have to notice yourself.",
+    example:
+      "Miss “oxaloacetate” in two separate sessions and it appears here. One bad session does not put a card on the list — it takes at least two misses before there is a pattern rather than a bad night, and the list shows up to eight topics at a time.",
+    detail: [
+      "The AI explanation of WHY a group of topics keeps slipping is optional and separate: it reads the topics you are missing and looks for what connects them.",
+    ],
+    cost:
+      "The list itself is free and needs nothing but a couple of review sessions. The AI explanation spends from your monthly allowance — the same as one “Explain it back”, so about ten a month on the free plan.",
+  },
+
+  practiceQuestions: {
+    title: "Practice questions",
+    what:
+      "Writes short questions from the study cards you already have, so you are tested on your own material rather than something generic.",
+    example:
+      "With twenty cards saved for BIOL120, ask for a set and you get questions drawn from those twenty — then you answer them and they are marked. Your answers are kept so weak spots can see what you keep missing.",
+    cost:
+      "It does nothing at all until you have study cards: it writes questions FROM them, so an empty course produces nothing. A set costs about double an “Explain it back” — on the free plan that is roughly five sets a month.",
+  },
+
+  studyTimer: {
+    title: "Study timer",
+    what:
+      "Times a study session against one course, so “Your studying” can show where the hours actually went.",
+    example:
+      "Pick BIOL120, start it before you sit down, and stop it when you get up. Forty minutes lands against BIOL120 for today. Leave it running by accident and it stops counting at four hours rather than logging fourteen.",
+    cost:
+      "A run of a few seconds is not recorded — the timer keeps its state and tells you there was nothing to log, rather than silently throwing the session away. Nothing else about it costs anything, and it works offline.",
+  },
+
+  yourStudying: {
+    title: "Your studying",
+    what:
+      "Your streak, the minutes you have logged per course, and the cards you have reviewed — for the semester you are looking at.",
+    example:
+      "Study on Monday, Tuesday and Wednesday and the streak reads 3. Miss Thursday and it reads 0 again on Friday — a streak is consecutive days, so it lapses rather than pausing.",
+    detail: [
+      "These are per semester, which matters when you archive one: the minutes and card counts reset with the new semester, and your STREAK carries over. That is deliberate — minutes are about the courses you just finished, a streak is about you.",
+    ],
+    cost:
+      "Nothing, and it works offline. Only the last six weeks of daily detail are kept, which is what stops the figures growing without limit; the totals and the streak are not trimmed.",
+  },
+
+  classNotes: {
+    title: "Class notes",
+    what:
+      "Where study cards come from. A note here is a term and what it means, filed against a course and a week — and that pair is what the review session shows you.",
+    example:
+      "Add “Oxaloacetate — the four-carbon acceptor that starts each turn of the cycle” under BIOL120, week 3. It becomes a card you will be shown, it becomes a topic the exam plan can schedule, and it becomes material the practice questions can be written from.",
+    cost:
+      "Typing them is the cost, and it is the up-front one: nothing in the Study tab has anything to show until some exist. AI lecture notes can create them for you from a recording if you would rather not type.",
+  },
+
+  exams: {
+    title: "Exams",
+    what:
+      "A countdown to each exam, and a day-by-day plan of which topic to study when.",
+    example:
+      "An exam in nine days with five topics gets a session a day: each topic once, then the rounds repeat, and the last day before the exam is left for reviewing everything. With only two days for those same five topics there is NO review day — spending one of two days revising what you never studied is worse than covering a second topic.",
+    cost:
+      "It needs the exam entered with a date, and it needs study cards for that course — the topics in the plan ARE your cards' terms, so a course with no cards gets a countdown and no plan. The plan is worked out fresh each time rather than saved, so changing the date or adding cards changes it immediately.",
+  },
 };
 
 /** The ids a screen may ask for. Used by the tests, not by the UI. */

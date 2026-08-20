@@ -547,7 +547,15 @@ function HelpPanel({ topic }) {
     <div className="mb-3 rounded-xl border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700" data-help-panel={topic}>
       <p>{t.what}</p>
       <p className="mt-2 rounded-lg bg-surface px-3 py-2 text-stone-800">{t.example}</p>
-      {t.detail && <p className="mt-2 text-stone-600">{t.detail}</p>}
+      {/* `detail` may be one paragraph or several: the study-cards
+          topic has to cover the scheduler, why reviews interleave, and
+          what practice mode is for, and running those together would
+          be a wall. */}
+      {[].concat(t.detail || []).map((d, i) => (
+        <p key={i} className="mt-2 text-stone-600">
+          {d}
+        </p>
+      ))}
       <p className="mt-2 text-xs text-stone-500">{t.cost}</p>
     </div>
   );
@@ -6001,24 +6009,24 @@ export default function PlannerApp() {
 
         {tab === "study" && (
           <>
-            <Section icon={Flame} title="Your studying" subtitle="Streaks, time and cards — this semester only">
+            <Section icon={Flame} title="Your studying" subtitle="Streaks, time and cards — this semester only" help="yourStudying">
               <StudyStats studyStats={sem.studyStats} />
             </Section>
-            <Section icon={Timer} title="Study timer" subtitle="Track time against a course">
+            <Section icon={Timer} title="Study timer" subtitle="Track time against a course" help="studyTimer">
               {/* Keyed by semester so switching semesters tears the timer
                   down rather than letting it keep running and then commit
                   its minutes to the wrong semester. */}
               <StudyTimer key={data.semester} courses={sem.courses} onLog={logStudyMinutes} semester={data.semester} />
             </Section>
-            <Section icon={StickyNote} title="Class notes" subtitle="These become your study cards">
+            <Section icon={StickyNote} title="Class notes" subtitle="These become your study cards" help="classNotes">
               <ClassNotes notes={sem.notes} courses={sem.courses} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} />
             </Section>
-            <Section icon={Brain} title="Study cards" subtitle="Review what's due, or drill a course">
+            <Section icon={Brain} title="Study cards" subtitle="Review what's due, or drill a course" help="studyCards">
               {/* Same reason: a half-finished session must not survive a
                   semester switch and rate cards that are no longer here. */}
               <StudyGame key={data.semester} notes={sem.notes} onRate={rateCard} session={session} textAllowance={textAllowance} />
             </Section>
-            <Section icon={TrendingDown} title="Weak spots" subtitle="The cards you keep missing">
+            <Section icon={TrendingDown} title="Weak spots" subtitle="The cards you keep missing" help="weakSpots">
               <WeakSpots notes={sem.notes} />
               {/* Sits BELOW the existing panel and renders nothing when
                   there is nothing to explain, so the screen a student
@@ -6032,7 +6040,7 @@ export default function PlannerApp() {
                 />
               )}
             </Section>
-            <Section icon={Sparkles} title="Practice questions" subtitle="Written from your own study cards">
+            <Section icon={Sparkles} title="Practice questions" subtitle="Written from your own study cards" help="practiceQuestions">
               {session ? (
                 <PracticePanel
                   session={session}
@@ -6046,7 +6054,7 @@ export default function PlannerApp() {
                 </Card>
               )}
             </Section>
-            <Section icon={AlarmClock} title="Exams" subtitle="Countdown, and a plan for the time left">
+            <Section icon={AlarmClock} title="Exams" subtitle="Countdown, and a plan for the time left" help="exams">
               <ExamPlanner assessments={sem.assessments} notes={sem.notes} addItem={addItem} />
             </Section>
           </>

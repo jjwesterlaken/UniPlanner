@@ -2568,12 +2568,37 @@ are 80% and 60%, but rounded down they are 81% and 61% — and that
 half-mark gap is the clearest available explanation of why the
 rounding setting exists, so the copy carries both.
 
-**Coverage is partial ON PURPOSE and enumerated.** Four topics ship
-(semester setup, grades, AI notes, archive), chosen where confusion
-costs something; the other fifteen Sections are listed in the test as
-not-yet-covered. A Section added later lands in neither list and goes
-red — the device-store guard's shape, because silent partial coverage
-is the thing to avoid, not partial coverage.
+**Coverage is partial ON PURPOSE and enumerated.** Eleven topics
+ship — the original four (semester setup, grades, AI notes, archive)
+plus the whole Study tab; the remaining nine Sections are listed in
+the test as not-yet-covered. A Section added later lands in neither
+list and goes red — the device-store guard's shape, because silent
+partial coverage is the thing to avoid, not partial coverage.
+
+**THE STUDY TAB'S FIGURES ARE RE-DERIVED TOO, and writing them
+corrected the brief twice.** The scheduler's ladder is quoted from
+`srs.js` by running `schedule()`: **Again returns in the SAME
+session** (interval 0 — a card you just missed is not one to leave
+overnight), not "tomorrow" as the draft had it, and Good is 1 → 3 → 8
+days rather than "a few". The timer's floor is **a few seconds**
+(`MIN_RECORDABLE_MINUTES` is 0.1), not the minute the draft assumed.
+Both are the grades correction again: a plausible number in a brief
+is still a restatement, and the only cure is running the real code.
+
+**The AI costs in help are stated in the currency the SCREENS use.**
+A test forbids the word "units" anywhere in a topic — that word is an
+internal weight and `aiTextCopy.js` exists to keep it off screens, so
+help quoting it would be the first place it leaked. What the copy may
+say is what a plan BUYS (ten explanations a month on free, five
+question sets), derived from `TASK_UNITS` and `limitForTier`.
+
+**Three topics needed their reason-to-exist stated, not their
+behaviour.** Interleaving feels wrong to students, so the copy says
+it feels harder and why that is the point; practice mode's whole
+purpose is the night before an exam when nothing is due, and its cost
+statement is inverted — the reassurance is that it changes no
+schedule; the exam plan's missing review day (five topics, two days)
+is deliberate and reads as a bug unless said out loud.
 
 **Inline panel, not a tooltip**: a tooltip needs a hover, and half the
 people this is for are on a phone. Pinned by a test, because "make it
