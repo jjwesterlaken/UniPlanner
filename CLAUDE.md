@@ -1581,9 +1581,11 @@ by someone, running in parallel with everything else. It is the item that
 decides when Android can ship. Confirm the current rule in the Play
 Console — it changes.
 
-**Email delivery blocks the testers too.** A closed tester who cannot
-confirm their account wastes the fortnight they are spending on you, so
-Resend (below) is a prerequisite for the test, not just for launch.
+**Email delivery was the other prerequisite, and it is DONE** (Resend,
+verified against real inboxes on 20 August 2026 — see the email section
+below). A closed tester who cannot confirm their account wastes the
+fortnight they are spending on you, so this had to land before
+recruitment, not before launch.
 
 `MOBILE-BUILD.md` has the two first-time compile guides and the
 hardware verification list. The item that decides whether offline notes
@@ -1669,11 +1671,13 @@ Cloudflare Pages setting instead of a duplicated backend. Merging to
 `main` no longer touches production at all — production only moves
 when `main` is deliberately promoted into `release`.
 
-**The one-time dashboard change (Jared's clicks):** Cloudflare
-dashboard → Workers & Pages → `uniplanner` → Settings → Builds &
-deployments → **Production branch** → change `main` to `release` →
-Save. The `release` branch already exists at the same commit `main`
-served when this landed, so the flip itself deploys nothing new.
+**The dashboard change is DONE** (Cloudflare → Workers & Pages →
+`uniplanner` → Settings → Builds & deployments → Production branch →
+`release`, 20 August 2026), and the first promote has run: both
+branches sat at `950f068` with production's build id reading
+`2bb6d4f442a5`, matching. Recorded because the same clicks are what a
+future project would need, and because "the flip happened" is the fact
+that makes every sentence below true.
 
 **The merge ritual from then on:**
 
@@ -1829,55 +1833,53 @@ record.
 
 ### Pending, in order, once someone is at a desk
 
-1. **Migration 0004, applied before the code that needs it.** It adds the
-   folder-scoped storage delete policy the in-app deletion depends on.
-   Without it `removeOwnAudio` cannot delete anything, and the deletion
-   page's "immediately" is false. **This was merged before the migration
-   was applied — the ordering mistake 0003 already taught us not to
-   make.** Migrations are applied by hand in the SQL editor; nothing in
-   CI or the deploy applies them, so the ordering is a habit, not a
-   mechanism.
-2. **Migration 0005, applied before this code reaches users.** It creates
-   `ai_notes` and its three policies. Until it is applied, every attempt
-   to move a note fails — which is the *safe* direction by design
-   (`migrateNote` returns the stub only on success, so the note stays
-   whole and readable in the blob and the next sync retries), so nothing
-   breaks and nothing is lost. But no note ever moves, so the whole
-   change quietly does nothing, which is the failure that is hardest to
-   notice. Verify by saving one AI note while signed in and checking a
-   row appears in `ai_notes`.
-3. **Migration 0008, applied as soon as convenient.** The grant audit:
-   it revokes `anon` on every table holding a student's data, so an
-   unauthenticated read fails loudly instead of returning an empty
-   list, and tightens `authenticated` to the verbs each table's
-   policies actually name. Nothing breaks while it is unapplied — the
-   silence is the status quo — but the archive list's "nothing here"
-   failure mode stays possible until it is. Verify with the anon check
-   in its header.
-4. ~~**Migration 0007**~~ — **applied 16 August 2026**, and verified
-   by hand: three policies, no update, and `update_granted = false` on
-   both three-verb tables after the revoke it carries. Left here
-   because its by-hand privilege check is what found the default-grant
-   trap that 0008 then closed everywhere.
-5. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
+**Only two genuine leftovers remain, both minor and both post-launch.**
+Everything else on this list has been applied and verified; the record
+of what each migration did is kept below the line because the ordering
+lessons are load-bearing, not because the work is outstanding.
+
+1. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+   Vault secrets migration 0004 reads. Until then the retention sweep
+   only runs opportunistically and the periods the privacy policy states
+   are aspirational rather than enforced. 0004 raises a notice saying so
+   rather than failing. The error-report digest email waits on this same
+   wiring.
+2. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
    every workflow. Both currently target Node 20, which GitHub has
    deprecated; the runners force them onto Node 24 and they work, so this
    is a warning today and not a failure. It becomes a failure on
    **GitHub's timetable, not ours**, and when the fallback is removed
-   every workflow in the repo stops at once — tests, the desktop build
-   and the function deploy together. Scheduled here rather than
-   remembered, and deliberately kept out of the native-build fix so a
-   packaging change and a runner change can be told apart if either
-   misbehaves.
-6. **Resend (or another real SMTP provider)** configured in Supabase
-   Auth → SMTP Settings. The built-in sender is rate-limited and lands in
-   spam, so password reset does not work for real users without it. See
-   the section above.
-7. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
-   Vault secrets migration 0004 reads. Until then the retention sweep
-   only runs opportunistically and the periods the privacy policy states
-   are aspirational rather than enforced. 0004 raises a notice saying so
-   rather than failing.
+   every workflow in the repo stops at once — tests, the e2e journeys,
+   the desktop build and the function deploy together. Scheduled here
+   rather than remembered.
+
+**Applied and verified — kept for the lessons, not as work:**
+
+- **0004** (folder-scoped storage delete policy) — merged before it was
+  applied, the ordering mistake 0003 had already taught. Migrations are
+  applied by hand in the SQL editor; nothing in CI or the deploy applies
+  them, so the ordering is a habit, not a mechanism. That habit is the
+  reason the widening/narrowing rule is written down at all.
+- **0005** (`ai_notes` and its three policies) — and note what it cost:
+  the table existed for weeks while EVERY insert was rejected, because
+  the id column was `uuid` and page ids are base36. "Applied" was never
+  the same as "working", which is what 0009 and its verification exist
+  to prove.
+- **0007** (`semester_archives`) — applied 16 August 2026, verified by
+  hand: three policies, no update, `update_granted = false` on both
+  three-verb tables. Its by-hand privilege check is what found the
+  default-grant trap.
+- **0008** (the grant audit) — applied, verification clean. It also
+  broke AI-note writes on the way in (PostgREST needs UPDATE for any
+  upsert), which is why the client now plain-inserts and reads 23505 as
+  already-migrated.
+- **0009** (`ai_notes.id` → `text`) — applied and **VERIFIED 20 August
+  2026**: `data_type = text` confirmed, three notes migrated carrying
+  base36 ids, and the six-step first-migration check in
+  `MOBILE-BUILD.md` passed end to end. This is the one that made the
+  storage move actually run for the first time since 0005.
+- **0010** (`client_errors`) — applied, `select count(*)` returns 0 as
+  expected on a table nothing has written to yet.
 
 **The scheduled sweep authenticates with a dedicated secret, never the
 service role key.** pg_net stores each outbound request — headers
@@ -1957,19 +1959,23 @@ The only loss was auto-sign-in: the user lands signed out and signs in
 with the password they just chose. Clunky, never blocking, and it
 improves for free now the protocol gate is in.
 
-### Email delivery is a launch requirement, not a nice-to-have
+### Email delivery — DONE, and verified against real inboxes
 
-**Supabase's built-in email sender is rate-limited to a handful of
+**Resend is configured in Supabase Auth → SMTP Settings, verified 20
+August 2026**: signup confirmation and password reset both tested with
+real inboxes, and Grace re-signed up successfully after her account was
+deleted (which exercises the confirm path from scratch, not just the
+resend path). It does NOT block the closed test any more.
+
+Why it was a launch requirement, kept because the reasoning outlives
+the task: **Supabase's built-in sender is rate-limited to a handful of
 messages an hour and lands in spam routinely.** Password reset does not
-survive real users on it: a student who cannot sign in and whose reset
+survive real users on it — a student who cannot sign in and whose reset
 email never arrives has no route back into their account and no way to
-tell whether the app or their inbox is at fault.
-
-Configure **Resend** (or another real SMTP provider) in Supabase Auth →
-SMTP Settings before launch. This is on the pending list below rather
-than in it as a footnote because the symptom — "the email never arrived"
-— is indistinguishable from a code bug to everyone except whoever checks
-the SMTP configuration.
+tell whether the app or their inbox is at fault. The symptom, "the
+email never arrived", is indistinguishable from a code bug to everyone
+except whoever checks the SMTP configuration, which is exactly why it
+could not be left to be noticed later.
 
 `EMAIL-SETUP.md` is the step-by-step, and **the SPF conflict is the part
 to read before touching DNS.** The domain already carries an SPF record
@@ -1986,8 +1992,9 @@ still be on **Authentication → URL Configuration → Redirect URLs**, for
 the same reason as before: the app passes `redirectTo` explicitly, and
 Supabase silently falls back to the Site URL if it is not allowlisted.
 
-**It blocks the closed test, not just launch.** A tester who cannot
-confirm their account wastes the fortnight they are giving you.
+**It would have blocked the closed test, not just launch** — a tester
+who cannot confirm their account wastes the fortnight they are giving
+you. That risk is now retired.
 
 ## When Netlify was the host
 
@@ -2361,9 +2368,9 @@ Account deletion clears the account's reports; anonymous rows stay
 (they belong to nobody, and sweeping them would delete other
 signed-out users' diagnostics). **The daily digest email is ruled YES
 but deferred**: build it when the closed test starts generating
-reports worth waking up to — it depends on the pg_cron/Resend wiring
-still on the pending list, and with two users the dashboard query is
-enough. One email a day via a dedicated secret (the sweep-secret
+reports worth waking up to. Resend is done; the remaining dependency
+is the pg_cron/pg_net wiring, and with two users the dashboard query
+is enough. One email a day via a dedicated secret (the sweep-secret
 rule), never one per error.
 
 **Promote-on-release** (the Hosting section has the full ritual) is
@@ -2392,7 +2399,14 @@ React writes style attributes at runtime. **The policy was verified
 in a real browser before activation** — pre-paint stamping, mount,
 dark ground, inline styles, the derived accent, every tab, and an
 injected external script and object both refused — and that check is
-re-run whenever the policy changes.
+re-run whenever the policy changes. **Confirmed in PRODUCTION on 20
+August 2026**: Pages really serves `_headers`, and the inline
+pre-paint script survives the policy (no white flash into dark mode,
+accents and folder colours correct, no console violations). That last
+link could not be tested from a dev container, because the network
+policy there blocks both the production host and `*.pages.dev` — a
+local check against the exact header is the closest a build machine
+gets, and it is not the same thing.
 
 **Rate limiting on the AI endpoints: there is none beyond allowance
 metering, stated plainly.** The allowance is a monthly SPEND ceiling

@@ -1,9 +1,11 @@
 # Compiling University Planner to a phone or tablet
 
-Nothing has ever been compiled to a device. These are the two first-time
-guides — **Android for Jared on Windows**, **iOS for Grace on a Mac** —
-and a verification list at the end that matters more than the build
-itself.
+**Android has been compiled and run on real hardware** (moto g05,
+August 2026 — recording verified end to end, API 36 confirmed on the
+generated project). **iOS has never been compiled at all.** These are
+the two first-time guides — **Android for Jared on Windows**, **iOS
+for Grace on a Mac** — and a verification list at the end that matters
+more than the build itself.
 
 Neither guide assumes you have built a mobile app before.
 
@@ -297,18 +299,26 @@ access with our wording, not Apple's generic text.
 
 ---
 
-## THE FIRST MIGRATION — do this first, and deliberately
+## THE FIRST MIGRATION — DONE, 20 August 2026
 
-**Six code paths have never run in production.** `ai_notes.id` was
+**All six steps below passed end to end**, with 0009 applied
+(`data_type = text` confirmed) and three notes migrated carrying
+base36 ids. The AI-notes storage move has therefore run in production
+for the first time since 0005 shipped. The checklist is kept verbatim
+because it is the shape a future first-run check should take, and
+because step 3's trap (below) is the kind of thing that gets
+rediscovered the expensive way.
+
+**What it was: six code paths that had never run in production.** `ai_notes.id` was
 typed `uuid` while page ids come from the planner's own base36 helper,
 so every insert was rejected with 22P02 from migration 0005 until 0009
 moved the column. The feature failed *safely* every time — the note
 stayed whole and readable in the blob — which is exactly why nobody
 noticed for eleven days.
 
-So the first successful migration fires five things at once, none with
-any production evidence behind it. Run these in order, once 0009 is
-applied and both functions are deployed. **Everything here works in
+So the first successful migration fired five things at once, none of
+which had any production evidence behind it. They were run in this
+order, after 0009 was applied and both functions deployed. **Everything here works in
 the web app** — the phone only matters where it says so.
 
 Do them in order: each one leaves the state the next needs.
