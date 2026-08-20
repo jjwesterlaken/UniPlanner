@@ -1359,6 +1359,100 @@ async function run() {
     );
   });
 
+  /* ---------- 0014: per-tier allowances and the lifetime trial ---------- */
+
+  await test("the trial counter is on the ACCOUNT, with no month in it", () => {
+    /* The whole shape. ai_usage is keyed (user_id, month) and a lifetime
+       allowance has no month; a sentinel month would be invisible to
+       every query that filters on the current one, which reports the
+       trial as unspent forever. */
+    const db = withArchives();
+    assert.equal(
+      one(db, `select data_type from information_schema.columns
+                where table_schema='public' and table_name='profiles' and column_name='trial_credits_used';`),
+      "numeric"
+    );
+    assert.equal(
+      one(db, `select count(*)::text from information_schema.columns
+                where table_schema='public' and table_name='profiles' and column_name like '%month%';`),
+      "0",
+      "profiles grew a month column — the trial is not a monthly allowance and must not gain one"
+    );
+  });
+
+  await test("add_trial_credits ADDS, and a new month does not reset it", () => {
+    /* The property the lifetime trial IS. A month rolling over must not
+       touch this counter, and the way that breaks is somebody keying it
+       by month "for consistency" with ai_usage. */
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
+    psqlOrThrow(db, `select * from public.add_trial_credits(${USER}, 20);`);
+    psqlOrThrow(db, `select * from public.add_trial_credits(${USER}, 25);`);
+    assert.equal(one(db, `select trial_credits_used::text from public.profiles where user_id = ${USER};`), "45");
+    /* Spending in a different MONTH lands on the same counter, because
+       there is no month to land in. */
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-09', 7);`);
+    assert.equal(
+      one(db, `select trial_credits_used::text from public.profiles where user_id = ${USER};`),
+      "45",
+      "the monthly counter wrote into the lifetime one, or the reverse"
+    );
+    assert.equal(one(db, `select new_trial_credits::text from public.add_trial_credits(${USER}, 0);`), "45");
+  });
+
+  await test("NO ROLLOVER: a fresh month starts at nothing, and cannot inherit a balance", () => {
+    /* True by construction — a new month simply has no row — and
+       asserted anyway, because the way it stops being true is somebody
+       adding "carry over what you didn't use", which is three lines and
+       would turn a semester's prepayment into one month's spending. */
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-08', 400);`);
+    assert.equal(one(db, `select count(*)::text from public.ai_usage where user_id = ${USER} and month = '2026-09';`), "0");
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-09', 5);`);
+    assert.equal(
+      one(db, `select credits_used::text from public.ai_usage where user_id = ${USER} and month = '2026-09';`),
+      "5",
+      "a new month inherited last month's spend, or its unused balance"
+    );
+    assert.equal(one(db, `select credits_used::text from public.ai_usage where user_id = ${USER} and month = '2026-08';`), "400");
+  });
+
+  await test("only service_role may spend somebody's trial", () => {
+    const db = withArchives();
+    const sig = "public.add_trial_credits(uuid, numeric)";
+    for (const role of ["anon", "authenticated", "public"]) {
+      assert.equal(one(db, `select has_function_privilege('${role}', '${sig}', 'execute')::text;`), "false", `${role} can spend a trial`);
+    }
+    assert.equal(one(db, `select has_function_privilege('service_role', '${sig}', 'execute')::text;`), "true");
+  });
+
+  await test("deleting an account takes the trial counter with it — the hole, asserted", () => {
+    /* NOT a bug being fixed. delete_my_account_data() empties profiles,
+       so delete-and-resignup resets the lifetime trial. There is no
+       clean fix that keeps both promises, the hole costs about four
+       cents per abuse and needs a fresh confirmed email each time, and
+       it is accepted deliberately. Asserted so nobody later "fixes" it
+       by retaining a per-email counter after a deletion request. */
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
+    psqlOrThrow(db, `select * from public.add_trial_credits(${USER}, 60);`);
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
+    assert.equal(count(db, "public.profiles", `user_id = ${USER}`), 0, "the trial counter survived account deletion");
+  });
+
+  await test("0014 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
+    psqlOrThrow(db, `select * from public.add_trial_credits(${USER}, 12);`);
+    applyMigration(db, "0014_per_tier_allowance.sql");
+    assert.equal(one(db, `select trial_credits_used::text from public.profiles where user_id = ${USER};`), "12", "the re-apply reset a lifetime counter");
+    assert.equal(
+      one(db, `select has_function_privilege('authenticated', 'public.add_trial_credits(uuid, numeric)', 'execute')::text;`),
+      "false"
+    );
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 

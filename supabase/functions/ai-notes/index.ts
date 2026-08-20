@@ -13,6 +13,8 @@
 
 import { corsHeaders, jsonResponse } from "./_shared/cors.ts";
 import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
+import { readAllowance, billAllowance } from "../_shared/allowance.ts";
+import { allowanceForTier, TIERS } from "../_shared/credits.ts";
 import { requiredEnvNames, missingEnv, envPresence, failureLine, stageLine } from "./diagnostics.js";
 import {
   checkRequestGuards,
@@ -28,7 +30,6 @@ import { openaiAdapter } from "./openai.ts";
 import {
   TRANSCRIPTION_PROVIDER,
   PROVIDER_API_KEY_ENV,
-  creditsForTier,
   RESUMMARISE_BILLED_CREDITS,
   MINIMUM_BILLED_CREDITS,
   MAX_REQUEST_SECONDS,
@@ -239,7 +240,9 @@ Deno.serve(async (req: Request) => {
     logStage(stage);
     const { data: profile, error: profileErr } = await supabaseAdmin
       .from("profiles")
-      .select("tier")
+      // The trial counter rides along: for a trial tier it IS the
+      // allowance, so fetching it here costs nothing and saves a query.
+      .select("tier, trial_credits_used")
       .eq("user_id", userId)
       .maybeSingle();
 
@@ -256,9 +259,23 @@ Deno.serve(async (req: Request) => {
       logFailure("tier_lookup", new Error("no profiles row for this user — the signup trigger may not have run"));
       return errorResponse("tier_lookup", "no_access", "AI notes isn't enabled for your account yet.", 403);
     }
-    if (profile.tier !== "ai") {
-      logStage("tier_lookup", { outcome: "not_entitled" });
-      return errorResponse("tier_lookup", "no_access", "AI notes isn't enabled for your account yet.", 403);
+    /* RECORDING IS NO LONGER GATED ON A PAID TIER, and this is the diff
+       to look at twice. It used to refuse anything but `ai`; now every
+       tier has an allowance and the ALLOWANCE is the gate — a free
+       account gets the 60-credit lifetime trial, which is what lets the
+       trial demonstrate the thing being sold. A trial that cannot
+       produce one set of lecture notes cannot sell lecture notes.
+
+       What still refuses: an account with no profiles row at all. That
+       is an anomaly (the signup trigger should always have made one),
+       not a tier, and treating it as "spend the default allowance"
+       would hand a free allowance to a state we do not understand.
+
+       An UNKNOWN tier gets the trial rather than a paid allowance —
+       see allowanceForTier. A typo in the dashboard costs sixty
+       credits; the other direction costs three thousand a month. */
+    if (!TIERS.includes(profile.tier)) {
+      logStage("tier_lookup", { outcome: "unknown_tier", tier: String(profile.tier).slice(0, 32) });
     }
 
     // 4. Parse the (small, JSON-only) request body.
@@ -394,18 +411,13 @@ Deno.serve(async (req: Request) => {
       // costs nothing. Same ordering ai-text's traced fake pins.
       stage = "allowance";
       const monthKey = currentMonthKey();
-      const { data: usageRow, error: usageErr } = await supabaseAdmin
-        .from("ai_usage")
-        .select("credits_used")
-        .eq("user_id", userId)
-        .eq("month", monthKey)
-        .maybeSingle();
-      if (usageErr) {
-        logFailure(stage, usageErr);
+      const allowance = await readAllowance(supabaseAdmin, { userId, profile, month: monthKey });
+      if (!allowance.ok) {
+        logFailure(stage, allowance.error);
         return errorResponse(stage, "server_error", "Something went wrong. Please try again.", 500);
       }
-      const usedThisMonth = usageRow?.credits_used || 0;
-      if (usedThisMonth + RESUMMARISE_BILLED_CREDITS > creditsForTier(profile.tier)) {
+      const usedThisMonth = allowance.used;
+      if (usedThisMonth + RESUMMARISE_BILLED_CREDITS > allowance.limit) {
         logStage(stage, { outcome: "over_limit" });
         return errorResponse(stage, "monthly_limit", "You've used your AI credits for this month.", 429);
       }
@@ -433,13 +445,13 @@ Deno.serve(async (req: Request) => {
       // Atomic, for the reason spelled out at the fresh-recording bill
       // below. `usedThisMonth` stays where it is — it is the allowance
       // CHECK, which precedes the provider call and must.
-      const { error: retryBillErr } = await supabaseAdmin.rpc("add_ai_credits", {
-        p_user_id: userId,
-        p_month: monthKey,
-        p_credits: billed,
-      });
-      if (retryBillErr) {
-        logFailure(stage, retryBillErr, { credits: billed, resummarise: true, hint: "is migration 0012 applied?" });
+      const retryBill = await billAllowance(supabaseAdmin, { userId, profile, month: monthKey, credits: billed });
+      if (!retryBill.ok) {
+        logFailure(stage, retryBill.error, {
+          credits: billed,
+          resummarise: true,
+          hint: "are migrations 0012 and 0014 applied?",
+        });
       }
 
       const retried = { ok: true, transcript, summaryFailed: false, original: summary.original, translated: summary.translated };
@@ -553,19 +565,18 @@ Deno.serve(async (req: Request) => {
     // 7. Duration/allowance guard — the logic that decides whether we pay
     // money, exercised directly by scripts/test-ai-notes.mjs.
     const month = currentMonthKey();
-    const { data: usageRow } = await supabaseAdmin
-      .from("ai_usage")
-      .select("credits_used")
-      .eq("user_id", userId)
-      .eq("month", month)
-      .maybeSingle();
-    const creditsUsedThisMonth = usageRow?.credits_used || 0;
+    const allowance = await readAllowance(supabaseAdmin, { userId, profile, month });
+    if (!allowance.ok) {
+      logFailure("size_guard", allowance.error);
+      return errorResponse("size_guard", "server_error", "Something went wrong. Please try again.", 500);
+    }
+    const creditsUsedThisMonth = allowance.used;
 
     const guard = checkRequestGuards({
       estimatedDurationSeconds: estimatedDurationSeconds || 0,
       receivedBytes,
       creditsUsedThisMonth,
-      monthlyLimitCredits: creditsForTier(profile.tier),
+      monthlyLimitCredits: allowance.limit,
       maxRequestSeconds: MAX_REQUEST_SECONDS,
       maxBodyBytes: MAX_BODY_BYTES,
       minimumBilledCredits: MINIMUM_BILLED_CREDITS,
@@ -713,18 +724,14 @@ Deno.serve(async (req: Request) => {
        takes. `creditsUsedThisMonth` is still used for the ALLOWANCE
        CHECK, which must stay where it is: the read precedes the
        provider call so a refusal costs nothing. Only the write moved. */
-    const { error: billErr } = await supabaseAdmin.rpc("add_ai_credits", {
-      p_user_id: userId,
-      p_month: month,
-      p_credits: creditsBilled,
-    });
+    const bill = await billAllowance(supabaseAdmin, { userId, profile, month, credits: creditsBilled });
     /* Never silent. The upsert this replaced discarded its error
        entirely, so a month that failed to bill looked exactly like one
        that billed — the same "no and nothing answer alike" trap 0008
        closed at the database. The request still succeeds: the work is
        done and the student has it. */
-    if (billErr) {
-      logFailure(stage, billErr, { credits: creditsBilled, hint: "is migration 0012 applied?" });
+    if (!bill.ok) {
+      logFailure(stage, bill.error, { credits: creditsBilled, hint: "are migrations 0012 and 0014 applied?" });
     }
 
     // 13. Mark the request done.

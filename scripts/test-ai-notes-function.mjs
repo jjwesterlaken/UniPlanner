@@ -90,7 +90,7 @@ const KEY = "3f9a1c2e-7b4d-4e6f-9a1b-2c3d4e5f6a7b";
 // seeded row is invisible to it and every billing test starts from zero.
 const monthNow = () => new Date().toISOString().slice(0, 7);
 
-function makeDb(rows, missingObject = false, storedExt = "webm") {
+function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used: 0 }) {
   // Every filter applied to a request-row query is recorded, so a test can
   // assert that writes are scoped even where the effect isn't observable
   // (the key is a primary key, so a mis-scoped update can't hit another
@@ -173,6 +173,14 @@ function makeDb(rows, missingObject = false, storedExt = "webm") {
     auth: { getUser: async () => ({ data: { user: { id: OWNER } }, error: null }) },
     rpc: async (name, args) => {
       rpcCalls.push({ name, args });
+      if (name === "add_trial_credits") {
+        /* The LIFETIME counter, modelled as a separate store because it
+           is one: a column on profiles with no month in it. A fake that
+           folded it into ai_usage would hide exactly the bug worth
+           fearing — a trial allowance that refills every month. */
+        trial.used += Number(args.p_credits || 0);
+        return { data: [{ new_trial_credits: trial.used }], error: null };
+      }
       if (name !== "add_ai_credits") return { data: null, error: { message: `no such function: ${name}` } };
       let row = rows.find((r) => r._t === "ai_usage" && r.user_id === args.p_user_id && r.month === args.p_month);
       if (!row) {
@@ -222,14 +230,22 @@ function makeDb(rows, missingObject = false, storedExt = "webm") {
 
 /* ---------- invoke the handler ---------- */
 
-async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath, tier = "ai", mode, summariserOk = false, usage } = {}) {
+async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath, tier = "ai", trialCreditsUsed = 0, estimatedDurationSeconds, mode, summariserOk = false, usage } = {}) {
   if (usage) rows = [...rows, { _t: "ai_usage", user_id: callerId, month: usage.month, credits_used: usage.creditsUsed || 0 }];
-  const db = makeDb(rows, missingObject, storedExt);
+  /* One object, shared between the profiles fake and the RPC fake, so
+     a trial bill is VISIBLE to a later read in the same run — which is
+     what makes "the trial does not refill" testable at all. */
+  const trial = { used: trialCreditsUsed };
+  const db = makeDb(rows, missingObject, storedExt, trial);
   db.client.auth.getUser = async () => ({ data: { user: { id: callerId } }, error: null });
   const baseFrom = db.client.from;
   db.client.from = (name) => {
     if (name === "profiles") {
-      return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { tier }, error: null }) }) }) };
+      return {
+        select: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: { tier, trial_credits_used: trial.used }, error: null }) }),
+        }),
+      };
     }
     return baseFrom(name);
   };
@@ -299,6 +315,7 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
               path: bodyPath !== undefined ? bodyPath : `${callerId}/${key}.webm`,
               mimeType: "audio/webm",
               idempotencyKey: key,
+              ...(estimatedDurationSeconds === undefined ? {} : { estimatedDurationSeconds }),
             }
       ),
     })
@@ -309,7 +326,7 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
 
   return {
     status: res.status, bodyText, body: JSON.parse(bodyText),
-    rows: db.rows, writes: db.writes, storageCalls: db.storageCalls, rpcCalls: db.rpcCalls, logs, providerCalls,
+    rows: db.rows, writes: db.writes, storageCalls: db.storageCalls, rpcCalls: db.rpcCalls, trial, logs, providerCalls,
   };
 }
 
@@ -472,23 +489,62 @@ async function run() {
     assert.ok(!r.storageCalls.some((c) => c.op === "sign"), "an unexpected file type was signed");
   });
 
-  await test("A FREE TIER SPENDS NOTHING: refused before any provider call, before any billing", async () => {
-    /* The client now tells a free user before they record; THIS is the
-       enforcement behind it, and the ordering is the point. The tier
-       check is step 3 and transcription is step 9 -- reverse them and a
-       free student's recording is transcribed (money spent) and then
-       refused. The traced fetch is what makes the ordering a fact
+  await test("AN EXHAUSTED ALLOWANCE SPENDS NOTHING: refused before any provider call, before any billing", async () => {
+    /* THIS TEST USED TO ASSERT THAT A FREE TIER WAS REFUSED. It is not
+       any more: every tier has an allowance, and a free account records
+       against the 60-credit lifetime trial, because a trial that cannot
+       produce one set of lecture notes cannot sell lecture notes.
+
+       What it was really guarding is unchanged and is what it now
+       asserts: a REFUSAL costs nothing. The allowance read is step 7
+       and transcription is step 9 — reverse them and a student out of
+       credits has their recording transcribed (money spent) and is then
+       told no. The traced fetch is what makes that ordering a fact
        rather than a comment. */
-    const out = await invoke({ tier: "free" });
+    const out = await invoke({ tier: "free", trialCreditsUsed: 60, estimatedDurationSeconds: 600 });
     assert.equal(out.status, 403);
-    assert.equal(out.body.code, "no_access");
+    assert.equal(out.body.code, "usage_exceeded");
     assert.deepEqual(out.providerCalls, [], "a provider was called for a free-tier request — money was spent on a refusal");
     assert.ok(!out.storageCalls.some((c) => c.op === "sign"), "the audio was signed for a request that was refused");
     assert.deepEqual(out.rpcCalls, [], "usage was billed on a refused request");
     /* And the refusal precedes the idempotency claim, so the upload is a
        clean orphan: no request row points at it, and the sweep removes
        it once it is over ORPHAN_SWEEP_HOURS old. */
-    assert.ok(!out.rows.some((r) => r._t === "ai_notes_requests"), "a request row was created for a refused request");
+    assert.ok(
+      out.rows.every((r) => r._t !== "ai_notes_requests" || r.status === "failed"),
+      "a live request row was left behind by a refused request"
+    );
+  });
+
+  await test("THE CAP IS SOFT BY EXACTLY ONE RECORDING, and the client's estimate is why", async () => {
+    /* NOT A BUG BEING FIXED — a bounded hole being pinned, because the
+       tier work made it the only thing between an exhausted account and
+       a paid transcription. The pre-flight guard projects using the
+       CLIENT's estimatedDurationSeconds; a client that sends nothing
+       projects zero and passes. Billing afterwards is honest — it uses
+       the provider's reported duration — so the account simply ends up
+       over its limit by one recording.
+       COST-MODEL.md section 5(c) has the reasoning for leaving it.
+       This test exists so that "the cap holds" is never claimed. */
+    const out = await invoke({ tier: "free", trialCreditsUsed: 60 }); // no estimate sent
+    assert.equal(out.status, 200, "the estimate-less path stopped getting through — if that is deliberate, delete this test");
+    assert.ok(out.trial.used > 60, "the overshoot must still be BILLED honestly, or it is a free ride rather than an overshoot");
+  });
+
+  await test("a free account with an untouched trial CAN record", async () => {
+    /* The other half, and the reason the test above changed shape. The
+       trial exists to demonstrate the thing being sold; a gate that
+       refuses every free account refuses the demonstration. */
+    const out = await invoke({ tier: "free", trialCreditsUsed: 0 });
+    assert.equal(out.status, 200, out.bodyText.slice(0, 200));
+    const bills = out.rpcCalls.filter((c) => c.name === "add_trial_credits");
+    assert.equal(bills.length, 1, "a trial recording billed the wrong counter, or none");
+    assert.equal(bills[0].args.p_credits, MINIMUM_BILLED_CREDITS);
+    assert.equal(
+      out.rpcCalls.filter((c) => c.name === "add_ai_credits").length,
+      0,
+      "a trial tier wrote to the MONTHLY counter — that allowance would refill every month"
+    );
   });
 
   await test("the source never reads a path from the request body", async () => {
@@ -675,16 +731,27 @@ async function run() {
        reason: remove the allowance READ as well and the upsert guard
        would go green while the ordering that makes a refusal free had
        been destroyed. */
+    /* THE READ AND THE WRITE BOTH MOVED to _shared/allowance.ts when
+       tiers arrived, because which counter a credit lands in depends on
+       the tier and two copies of that branch is two chances to refill a
+       lifetime allowance every month. So the guard reads the helper for
+       the RPCs, and each endpoint for the absence of an upsert. */
+    const shared = fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/allowance.ts"), "utf8");
+    assert.ok(/\.rpc\(\s*["']add_ai_credits["']/.test(shared), "the monthly counter is no longer billed through add_ai_credits");
+    assert.ok(/\.rpc\(\s*["']add_trial_credits["']/.test(shared), "the lifetime counter is no longer billed through add_trial_credits");
+    assert.ok(
+      /\.from\(\s*["']ai_usage["']\s*\)[\s\S]{0,200}?\.select\(/.test(shared),
+      "the allowance is no longer READ — that read must still precede the provider call"
+    );
+    assert.ok(
+      !/\.from\(\s*["']ai_usage["']\s*\)[\s\S]{0,300}?\.upsert\(/.test(shared),
+      "the helper upserts ai_usage from a value it computed itself — the lost update, back"
+    );
     for (const rel of ["supabase/functions/ai-notes/index.ts", "supabase/functions/ai-text/index.ts"]) {
       const src = fs.readFileSync(path.join(rootDir, rel), "utf8");
       assert.ok(
-        !/\.from\(\s*["']ai_usage["']\s*\)[\s\S]{0,300}?\.upsert\(/.test(src),
-        `${rel} still upserts ai_usage from a value it computed itself — that is the lost update 0011 closed`
-      );
-      assert.ok(/\.rpc\(\s*["']add_ai_credits["']/.test(src), `${rel} no longer bills through add_ai_credits`);
-      assert.ok(
-        /\.from\(\s*["']ai_usage["']\s*\)[\s\S]{0,200}?\.select\(/.test(src),
-        `${rel} stopped READING the allowance — that read must still precede the provider call`
+        !/\.from\(\s*["']ai_usage["']\s*\)/.test(src),
+        `${rel} talks to ai_usage directly again — the tier branch belongs in one place`
       );
     }
   });

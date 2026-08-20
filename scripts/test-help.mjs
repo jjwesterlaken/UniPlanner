@@ -26,7 +26,7 @@ import { HELP_TOPICS, HELP_TOPIC_IDS } from "../src/helpText.js";
 import { requiredForBand, summarise } from "../src/grades.js";
 import { schedule, MAX_SESSION_MINUTES, WINDOW_DAYS } from "../src/srs.js";
 import { weakTopics } from "../src/practice.js";
-import { TASK_CREDITS, creditsForTier } from "../src/aiTextLimits.js";
+import { TASK_CREDITS, creditsForTier, allowanceForTier } from "../src/aiTextLimits.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appSrc = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
@@ -204,22 +204,33 @@ test("the AI costs are in the currency the SCREENS use, never in units", () => {
      Help that leaked the internal unit count would be the first place
      it reached a screen. What it may say is how many actions a plan
      buys, which is derived from the same constants. */
+  /* THE TRIAL IS NOT MONTHLY, and the copy must not say it is. That is
+     the half of this test that matters most now: a free or Plus
+     account's credits are once ever, so "a month" in any of these
+     sentences is a promise of a reset that never comes. */
   const free = creditsForTier("free");
+  assert.equal(allowanceForTier("free").perMonth, false, "the free allowance became monthly and this test needs rewriting");
   const perExplain = free / TASK_CREDITS.explain;
   const perPractice = free / TASK_CREDITS.practice;
-  const words = { 5: "five", 10: "ten" };
   for (const id of ["studyCards", "weakSpots", "practiceQuestions"]) {
     const all = [HELP_TOPICS[id].what, HELP_TOPICS[id].example, HELP_TOPICS[id].cost, ...[].concat(HELP_TOPICS[id].detail || [])].join(" ");
     assert.ok(!/\bunits?\b/i.test(all), `${id}'s help says "units" — that word never reaches a student`);
   }
   assert.ok(
-    HELP_TOPICS.practiceQuestions.cost.includes(words[perPractice]),
-    `the free plan buys ${perPractice} question sets a month and the copy does not say so`
+    HELP_TOPICS.practiceQuestions.cost.includes(String(perPractice)),
+    `the free trial buys ${perPractice} question sets and the copy does not say so`
   );
   for (const id of ["studyCards", "weakSpots"]) {
     assert.ok(
-      HELP_TOPICS[id].cost.includes(words[perExplain]),
-      `the free plan buys ${perExplain} explanations a month and ${id}'s copy does not say so`
+      HELP_TOPICS[id].cost.includes(String(perExplain)),
+      `the free trial buys ${perExplain} explanations and ${id}'s copy does not say so`
+    );
+  }
+  for (const id of ["studyCards", "weakSpots", "practiceQuestions"]) {
+    assert.doesNotMatch(
+      HELP_TOPICS[id].cost,
+      /free (plan|trial)[^.]*\ba month\b/i,
+      `${id}'s cost line calls the free trial monthly — it is once ever, and waiting for a reset is a support ticket`
     );
   }
 });

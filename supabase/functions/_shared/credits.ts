@@ -97,23 +97,90 @@ export const creditsFor = (usd: number) => Math.max(1, Math.round(usd / USD_PER_
 
 /* ---------- the allowance ---------- */
 
-/* WHAT ANYBODY GETS TODAY, unchanged by the collapse and deliberately
-   so: this pass changes the CURRENCY, not the entitlement.
-   300 audio minutes + 150 text units was the old pair, and a text unit
-   was already worth about a credit, so 450 is the same spending power
-   with the walls between the two pools removed.
+/* THE TIERS, and the only place these numbers are written.
 
-   The per-tier table — Free/Plus 60 once ever, Study AI 900, Max 3,000,
-   per calendar month with no rollover — is the NEXT piece of work and
-   replaces both constants here. Do not fold it in early: an entitlement
-   change hidden inside a currency change is a change nobody can review. */
-export const MONTHLY_CREDITS_LIMIT = 450;
+     free        60 credits, ONCE EVER
+     plus        60 credits, ONCE EVER   (Plus buys sync, not AI)
+     ai         900 credits per month     (Study AI)
+     ai_max   3,000 credits per month     (Study AI Max)
 
-/* What a free account gets. Text only today, because ai-notes keeps its
-   own `tier === "ai"` gate — the lifetime trial that lets a free
-   account actually record something is the next piece of work. */
-export const FREE_CREDITS_LIMIT = 10;
+   TWO SHAPES, NOT FOUR NUMBERS, and the distinction is the design.
+   A per-month free allowance is the one cost line that grows without
+   bound as signups grow: ten thousand signed-up-and-forgot accounts is
+   ten thousand allowances a month, forever, for people who are not
+   using the app. A lifetime trial costs the same ten thousand accounts
+   exactly once. That is why `trialTier` exists rather than a fourth
+   entry in a table of monthly numbers.
 
-/** The monthly allowance for a tier. */
-export const creditsForTier = (tier: string) =>
-  tier === "ai" ? MONTHLY_CREDITS_LIMIT : FREE_CREDITS_LIMIT;
+   WHAT A TRIAL IS FOR, and it decides the size: 60 credits has to be
+   enough to DEMONSTRATE the thing being sold, or the trial cannot sell
+   it. A student must be able to record a lecture and get notes back,
+   and — once the photo model lands — complete one photographed reading.
+   At today's held photo weight a 16-page reading is ~138 credits and a
+   free account cannot finish one, which is a real argument for the
+   model move and is recorded in COST-MODEL.md 12.6 rather than fixed
+   by making the trial bigger. */
+export const TIERS = ["free", "plus", "ai", "ai_max"] as const;
+export type Tier = (typeof TIERS)[number];
+
+/** Tiers whose allowance is once-ever rather than per month. */
+export const TRIAL_TIERS: readonly string[] = ["free", "plus"];
+export const isTrialTier = (tier: string) => TRIAL_TIERS.includes(tier);
+
+/** The lifetime trial, for `free` and `plus`. */
+export const TRIAL_CREDITS = 60;
+
+const MONTHLY: Record<string, number> = {
+  ai: 900,
+  ai_max: 3000,
+};
+
+/**
+ * The allowance for a tier, and the SHAPE of it.
+ *
+ * `perMonth: false` means the number is a lifetime total held on
+ * `profiles.trial_credits_used`, not a monthly one held in `ai_usage` —
+ * a different counter, not a different limit. Callers must branch on it
+ * rather than assuming, which is why it is returned beside the number
+ * instead of being something the caller has to know.
+ *
+ * An unknown tier gets the trial. That is the safe direction: a typo in
+ * the dashboard costs somebody sixty credits, where defaulting to a
+ * paid allowance costs three thousand a month per mistyped account.
+ */
+export function allowanceForTier(tier: string): { credits: number; perMonth: boolean } {
+  if (isTrialTier(tier) || !(tier in MONTHLY)) return { credits: TRIAL_CREDITS, perMonth: false };
+  return { credits: MONTHLY[tier], perMonth: true };
+}
+
+/**
+ * The number alone, for the places that only need it.
+ *
+ * KEPT because five call sites want a limit and not a shape, and
+ * because a helper that returns an object forces every one of them to
+ * destructure something they do not use. Anything that BILLS must use
+ * `allowanceForTier` — the shape is what decides which counter moves.
+ */
+export const creditsForTier = (tier: string) => allowanceForTier(tier).credits;
+
+/* WHAT NOBODY GETS: rollover. The monthly allowance does not carry, and
+   a prepaid term does not pool — six months of Max is 3,000 credits
+   each month, not 18,000 on day one.
+
+   IT IS TRUE BY CONSTRUCTION rather than by a rule written anywhere:
+   `ai_usage` is keyed (user_id, month), a new month simply has no row,
+   and the limit is re-read from the tier on every request. Unused
+   credits are not stored, so there is nothing to carry.
+
+   That construction is also why it is fragile in one specific way. A
+   "carry over what you didn't use" feature is about three lines — read
+   last month's row, subtract — and it would quietly convert a
+   semester's prepayment into a single month's spending power, against
+   revenue already collected and inside the store's refund window. A
+   test asserts a fresh month starts at zero, so that change cannot
+   arrive silently. */
+
+/* Superseded names, kept so nothing has to move in the same pass.
+   MONTHLY_CREDITS_LIMIT was the single figure before tiers existed. */
+export const MONTHLY_CREDITS_LIMIT = MONTHLY.ai;
+export const FREE_CREDITS_LIMIT = TRIAL_CREDITS;

@@ -24,6 +24,7 @@
 
 import { corsHeaders, jsonResponse } from "../ai-notes/_shared/cors.ts";
 import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
+import { readAllowance, billAllowance } from "../_shared/allowance.ts";
 import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
 import { validateRequest, checkTextAllowance, allowanceFraction } from "./guards.js";
 import { buildMessages, parseTaskResult } from "./prompts.js";
@@ -39,7 +40,6 @@ import {
   TASK_CREDITS,
   TEXT_TIERS,
   MAX_READING_CHUNKS,
-  creditsForTier,
 } from "./config.ts";
 
 const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra, "ai-text"));
@@ -100,7 +100,9 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
     stage = "tier_lookup";
     const { data: profile, error: profileErr } = await admin
       .from("profiles")
-      .select("tier")
+      // The trial counter rides along: for a trial tier it IS the
+      // allowance, so fetching it here costs nothing and saves a query.
+      .select("tier, trial_credits_used")
       .eq("user_id", userId)
       .maybeSingle();
     // A broken query and an absent row are told apart, so a database
@@ -147,25 +149,20 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
     /* ---- allowance: the read that must precede the spend ---- */
     stage = "allowance";
     const month = currentMonthKey(now());
-    const { data: usageRow, error: usageErr } = await admin
-      .from("ai_usage")
-      .select("credits_used")
-      .eq("user_id", userId)
-      .eq("month", month)
-      .maybeSingle();
-    if (usageErr) {
+    const spent = await readAllowance(admin, { userId, profile, month });
+    if (!spent.ok) {
       /* This is where a missing `credits_used` column lands — the
          whole reason this read is here and not after the provider call.
          Nothing has been spent at this point. */
-      logFailure(stage, usageErr, { hint: "is migration 0012 applied?" });
+      logFailure(stage, spent.error, { hint: "are migrations 0012 and 0014 applied?" });
       return errorResponse(stage, "server_error", "Something went wrong. Please try again.", 500);
     }
-    const creditsUsed = usageRow?.credits_used || 0;
+    const creditsUsed = spent.used;
     const allowance = checkTextAllowance({
       task,
       creditsUsed,
       taskCredits: TASK_CREDITS,
-      monthlyLimit: creditsForTier(profile.tier),
+      monthlyLimit: spent.limit,
     });
     if (!allowance.ok) {
       logStage(stage, { rejected: allowance.code });
@@ -203,7 +200,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          subsidy for whatever made the model produce unusable output,
          which is exactly the case worth noticing. */
       logFailure(stage, err, { task });
-      const charged = await bill(admin, { userId, month, cost: allowance.cost });
+      const charged = await billAllowance(admin, { userId, profile, month, credits: allowance.cost });
       if (!charged.ok) logFailure("billing", charged.error, { task, cost: allowance.cost, after: "parse_failure" });
       /* A legibility refusal is not unusable output -- it is the model
          doing what it was told. BILLED, same as any generated output
@@ -227,7 +224,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
     }
 
     stage = "billing";
-    const billed = await bill(admin, { userId, month, cost: allowance.cost });
+    const billed = await billAllowance(admin, { userId, profile, month, credits: allowance.cost });
     if (!billed.ok) {
       // Logged loudly and NOT failed to the user: the work is done and
       // they have it. An unbilled success is a revenue hole; an error
@@ -245,8 +242,8 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          did not — in which case the number is the best available guess
          about a month whose write just failed. */
       allowanceUsed: allowanceFraction(
-        billed.ok && billed.creditsUsed !== null ? billed.creditsUsed : creditsUsed + allowance.cost,
-        creditsForTier(profile.tier)
+        billed.ok && billed.used !== null ? billed.used : creditsUsed + allowance.cost,
+        spent.limit
       ),
     });
   } catch (err) {
@@ -255,39 +252,11 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
   }
 }
 
-/**
- * Add this task's cost to the month.
- *
- * Scoped by hand on both keys. The service-role client bypasses RLS, so
- * the `user_id` here is the only thing standing between this and another
- * student's allowance — a mis-scoped write is a takeover rather than a
- * disclosure, and returns nothing to notice it by.
- *
- * THE ADDITION HAPPENS IN THE DATABASE, not here. This used to read the
- * month's total, add the cost in JavaScript, and write the sum back —
- * so two requests that overlapped both read N and both wrote N + cost,
- * and one of them was free. `add_ai_credits` (migration 0012) does the
- * `+` under the row lock that ON CONFLICT DO UPDATE takes, which is the
- * only place it is safe to do. `creditsUsed` is deliberately no longer a
- * parameter: passing it would leave the stale read within reach.
- *
- * It returns the POST-INCREMENT total, so the fraction the student is
- * shown is the one the database holds rather than one computed here
- * from a read that may already be out of date.
- */
-// deno-lint-ignore no-explicit-any
-async function bill(admin: any, { userId, month, cost }: Record<string, any>) {
-  const { data, error } = await admin.rpc("add_ai_credits", {
-    p_user_id: userId,
-    p_month: month,
-    p_credits: cost,
-  });
-  if (error) return { ok: false, error };
-  // `returns table` arrives as an array of one row.
-  const row = Array.isArray(data) ? data[0] : data;
-  const creditsUsed = row && typeof row.new_credits !== "undefined" ? Number(row.new_credits) : null;
-  return { ok: true, creditsUsed };
-}
+/* `bill` used to live here. It is now billAllowance in
+   _shared/allowance.ts, because which counter a credit lands in depends
+   on the tier — a monthly row in `ai_usage`, or a lifetime column on
+   `profiles` — and two copies of that branch is two chances to refill a
+   lifetime allowance every month. */
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });

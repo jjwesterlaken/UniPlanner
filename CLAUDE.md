@@ -1341,6 +1341,73 @@ guarded on the old columns still existing**, because 0013 removes what
 it reads and "re-runnable exactly once" is not re-runnable; a test
 applies the whole folder twice to prove it.
 
+## The tiers, and why the trial is a SHAPE rather than a number
+
+`supabase/functions/_shared/credits.ts` holds the table, migration 0014
+holds the counter it needs, `_shared/allowance.ts` holds the branch.
+
+| Tier | Allowance |
+|---|---|
+| Free | 60 credits, **once ever** |
+| Plus | 60 credits, the same trial — Plus buys sync, not AI |
+| Study AI | 900 credits a month |
+| Study AI Max | 3,000 credits a month |
+
+**A PER-MONTH FREE ALLOWANCE IS THE ONE COST LINE THAT GROWS WITHOUT
+BOUND AS SIGNUPS DO.** Ten thousand signed-up-and-forgot accounts is ten
+thousand allowances every month, forever, for people not using the app.
+A lifetime trial costs those same accounts exactly once. That is the
+whole reason `perMonth` exists beside the number instead of a fourth
+row in a table of monthly figures.
+
+**The counter is a column on `profiles`, not a row in `ai_usage`.**
+`ai_usage` is keyed `(user_id, month)` and a lifetime allowance has no
+month; a sentinel month would be invisible to every query filtering on
+the current one, which reports the trial as unspent forever — the
+friendly-looking direction and the wrong one. `profiles` is already
+read at the tier lookup, so a trial tier costs no extra query: its
+counter rides along on the row that was fetched anyway.
+
+**THE BRANCH LIVES IN ONE PLACE** (`_shared/allowance.ts`). Two copies
+of "which counter does this tier use" is two chances to write a trial
+spend into `ai_usage`, which leaves `trial_credits_used` at zero so the
+once-ever allowance quietly refills on the first of every month and
+nothing anywhere looks wrong. A test asserts a trial tier calls
+`add_trial_credits` and never `add_ai_credits`.
+
+**An unknown tier gets the TRIAL.** A typo in the dashboard costs sixty
+credits; defaulting the other way costs three thousand a month per
+mistyped account.
+
+**RECORDING IS NO LONGER GATED ON A PAID TIER, and that is the diff to
+look at twice.** It used to refuse anything but `ai`. Every tier now has
+an allowance and the ALLOWANCE is the gate, because a trial that cannot
+produce one set of lecture notes cannot sell lecture notes. What still
+refuses is an account with no `profiles` row — an anomaly, not a tier.
+
+**NO ROLLOVER, and it is true by construction rather than by a rule.**
+A new month has no `ai_usage` row, the limit is re-read from the tier
+per request, and unused credits are stored nowhere, so there is nothing
+to carry. The way that stops being true is somebody adding "carry over
+what you didn't use", which is about three lines and would convert a
+semester's prepayment into a single month's spending power against
+revenue already collected and inside the store's refund window. A test
+asserts a fresh month starts at nothing.
+
+**THE HOLE, ACCEPTED DELIBERATELY: `delete_my_account_data()` empties
+`profiles`, so delete-and-resignup resets the trial.** There is no clean
+fix that keeps both promises — retaining a per-email counter after a
+deletion request is retaining personal data after a deletion request.
+It costs ~4 cents an abuse and needs a fresh confirmed email each time.
+A test asserts the deletion, so nobody later "fixes" it by keeping
+something behind.
+
+**The allowance line says "this month" only when it is true.** A trial
+tier's badge drops those two words and adds one sentence saying the
+credits do not reset — because letting a student infer that from an
+absence is how somebody waits until November for a reset that is not
+coming. A test forbids "a month" in any free-trial cost line.
+
 ## What the AI features cost, and the two numbers that were wrong
 
 `COST-MODEL.md` is the document; `scripts/measure-cost-model.mjs` prints
@@ -2075,6 +2142,10 @@ deploy**, then two minor post-launch leftovers.
       `select * from ai_usage order by updated_at desc limit 5;`
    4. **Apply 0013**, which NARROWS: it drops `minutes_used`,
       `text_units_used` and `add_ai_usage`. Not before step 3.
+
+   **0014 goes with 0012**, in step 1: it WIDENS too (a column and a
+   function the new code calls), and the code that reads
+   `profiles.trial_credits_used` ships in the same deploy.
 
    Privilege check after 0012:
    `select has_function_privilege('service_role',

@@ -395,15 +395,10 @@ async function run() {
   /* ---------- demo/no-account mode doesn't crash ---------- */
 
   await test("fetchUsage never crashes with no session or no Supabase client", async () => {
-    assert.deepEqual(await fetchUsage(null), { creditsUsed: 0, unavailable: true });
-    assert.deepEqual(
-      await fetchUsage({ user: { id: "u1" } }, { supabaseClient: null, isDemo: false }),
-      { creditsUsed: 0, unavailable: true }
-    );
-    assert.deepEqual(
-      await fetchUsage({ user: { id: "u1" } }, { supabaseClient: {}, isDemo: true }),
-      { creditsUsed: 0, unavailable: true }
-    );
+    const nothing = { creditsUsed: 0, tier: null, unavailable: true };
+    assert.deepEqual(await fetchUsage(null), nothing);
+    assert.deepEqual(await fetchUsage({ user: { id: "u1" } }, { supabaseClient: null, isDemo: false }), nothing);
+    assert.deepEqual(await fetchUsage({ user: { id: "u1" } }, { supabaseClient: {}, isDemo: true }), nothing);
   });
 
   /* ---------- the guard that decides whether we pay money ---------- */
@@ -2362,12 +2357,34 @@ async function run() {
     assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: failing, isDemo: true }), { unknown: true });
   });
 
-  await test("a tier that was really read gates in both directions", async () => {
+  await test("an allowance that was really read gates in both directions", async () => {
+    /* IT IS NO LONGER A TIER CHECK. Every tier can record — a free
+       account has the lifetime trial — so what gates is whether there
+       is allowance left for one recording. A free account with an
+       untouched trial records; a free account that has spent it does
+       not; a paid account with a full month does not either. */
     const { fetchRecordingAccess } = await import("../src/aiNotesClient.js");
     const session = { user: { id: "u1" } };
-    const withTier = (tier) => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { tier }, error: null }) }) }) }) });
-    assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: withTier("ai"), isDemo: false }), { canRecord: true });
-    assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: withTier("free"), isDemo: false }), { canRecord: false });
+    const account = (tier, trialUsed = 0, monthUsed = 0) => ({
+      from: (table) => ({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({ maybeSingle: async () => ({ data: { credits_used: monthUsed }, error: null }) }),
+            maybeSingle: async () =>
+              table === "profiles"
+                ? { data: { tier, trial_credits_used: trialUsed }, error: null }
+                : { data: { credits_used: monthUsed }, error: null },
+          }),
+        }),
+      }),
+    });
+    const ask = (c) => fetchRecordingAccess(session, { supabaseClient: c, isDemo: false });
+    assert.equal((await ask(account("free", 0))).canRecord, true, "an untouched trial must be able to record");
+    assert.equal((await ask(account("free", 59))).canRecord, false, "a spent trial must not");
+    assert.equal((await ask(account("plus", 0))).canRecord, true, "Plus shares the same trial");
+    assert.equal((await ask(account("ai", 0, 0))).canRecord, true);
+    assert.equal((await ask(account("ai", 0, 899))).canRecord, false, "a spent month must not");
+    assert.equal((await ask(account("ai_max", 0, 899))).canRecord, true, "Max has more of the same month");
   });
 
   await test("the recorder consults the gate, and only a definitive no removes the controls", () => {

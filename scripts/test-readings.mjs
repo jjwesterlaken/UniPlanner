@@ -431,7 +431,12 @@ test("no weight on the server is a typed number any more — they are all derive
    cost is that `-- insert into public.foo` in one of these migrations
    fails the suite; the fix then is to reword the comment. */
 function tablesWrittenByAiText() {
-  const fn = source("supabase/functions/ai-text/index.ts");
+  /* THE ENDPOINT PLUS THE HELPER IT CALLS. The allowance read and both
+     writes moved to _shared/allowance.ts when tiers arrived, so reading
+     index.ts alone would inspect a shrinking surface and pass over an
+     empty set — the exact way this guard failed once already. */
+  const fn =
+    source("supabase/functions/ai-text/index.ts") + "\n" + source("supabase/functions/_shared/allowance.ts");
   const direct = [...fn.matchAll(/\.from\("([^"]+)"\)\s*\.(?:upsert|insert|update|delete)/gs)].map((m) => m[1]);
   const rpcs = [...fn.matchAll(/\.rpc\(\s*"([^"]+)"/g)].map((m) => m[1]);
   const viaRpc = [];
@@ -442,6 +447,10 @@ function tablesWrittenByAiText() {
     assert.ok(file, `no migration defines public.${name} — an ai-text write nobody can account for`);
     const sql = fs.readFileSync(path.join(rootDir, "supabase/migrations", file), "utf8");
     for (const m of sql.matchAll(/(?:insert\s+into|update)\s+public\.([a-z_]+)/gi)) viaRpc.push(m[1]);
+    /* `update public.profiles set trial_credits_used = ...` is the
+       lifetime counter, which is an allowance and not user content.
+       Named here rather than filtered silently, because the whole point
+       of this guard is that a new table shows up. */
   }
   return [...new Set([...direct, ...viaRpc])].sort();
 }
@@ -450,14 +459,20 @@ test("the pasted text is never persisted anywhere", () => {
   /* THE fact the copyright posture rests on, asserted for readings
      specifically rather than inherited from the note path.
 
-     Two halves. The endpoint writes only ai_usage -- so the text has no
-     server-side home even on the failure path, unlike a lecture, whose
-     transcript is kept for 7 or 30 days. And the client's save path
-     stores the RESULT, never the source. */
-  const fn = source("supabase/functions/ai-text/index.ts");
+     Two halves. The endpoint touches only the allowance tables -- so
+     the text has no server-side home even on the failure path, unlike a
+     lecture, whose transcript is kept for 7 or 30 days. And the
+     client's save path stores the RESULT, never the source.
+
+     THE HELPER COUNTS AS THE ENDPOINT. _shared/allowance.ts holds the
+     allowance read since tiers arrived, so a check confined to
+     index.ts would be measuring a surface that shrank rather than a
+     posture that held. */
+  const fn =
+    source("supabase/functions/ai-text/index.ts") + "\n" + source("supabase/functions/_shared/allowance.ts");
   const tables = [...fn.matchAll(/\.from\("([^"]+)"\)/g)].map((m) => m[1]);
   assert.deepEqual([...new Set(tables)].sort(), ["ai_usage", "profiles"]);
-  assert.deepEqual(tablesWrittenByAiText(), ["ai_usage"]);
+  assert.deepEqual(tablesWrittenByAiText(), ["ai_usage", "profiles"], "ai-text writes something other than the two allowance counters");
 
   const app = source("src/PlannerApp.jsx");
   const handler = app.slice(app.indexOf("const summariseReading ="), app.indexOf("const summariseReading =") + 2000);
@@ -529,7 +544,7 @@ test("the photos are never persisted anywhere, on any path", () => {
      the draft, the blob, or localStorage. */
   const fn = source("supabase/functions/ai-text/index.ts");
   assert.doesNotMatch(fn, /\.storage/, "ai-text touches the Storage API — photos would have a server-side home");
-  assert.deepEqual(tablesWrittenByAiText(), ["ai_usage"], "the endpoint writes more than usage");
+  assert.deepEqual(tablesWrittenByAiText(), ["ai_usage", "profiles"], "the endpoint writes more than the two allowance counters");
 
   /* Comments stripped before the grep -- this assertion caught its own
      explanatory comment on the first run, the same way the wording

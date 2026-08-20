@@ -92,7 +92,7 @@ export const HELP_TOPICS = {
       "“Explain it back” during a review asks you to say the answer in your own words and marks it. It is the one part of the review that spends your monthly AI allowance.",
     ],
     cost:
-      "Rating cards costs nothing and works offline. Only “Explain it back” spends anything: on the free plan its allowance covers about ten of them a month. A card rated Again also gets slightly harder to graduate, which is intended — it is the app noticing you find that one difficult.",
+      "Rating cards costs nothing and works offline. Only “Explain it back” spends anything: it costs one credit, and the free trial is 60 credits to spend once — so about 60 of them. A card rated Again also gets slightly harder to graduate, which is intended — it is the app noticing you find that one difficult.",
   },
 
   weakSpots: {
@@ -105,7 +105,7 @@ export const HELP_TOPICS = {
       "The AI explanation of WHY a group of topics keeps slipping is optional and separate: it reads the topics you are missing and looks for what connects them.",
     ],
     cost:
-      "The list itself is free and needs nothing but a couple of review sessions. The AI explanation spends from your monthly allowance — the same as one “Explain it back”, so about ten a month on the free plan.",
+      "The list itself is free and needs nothing but a couple of review sessions. The AI explanation costs one credit, the same as one “Explain it back” — so the free trial of 60 credits covers about 60 of them.",
   },
 
   practiceQuestions: {
@@ -115,7 +115,7 @@ export const HELP_TOPICS = {
     example:
       "With twenty cards saved for BIOL120, ask for a set and you get questions drawn from those twenty — then you answer them and they are marked. Your answers are kept so weak spots can see what you keep missing.",
     cost:
-      "It does nothing at all until you have study cards: it writes questions FROM them, so an empty course produces nothing. A set costs about double an “Explain it back” — on the free plan that is roughly five sets a month.",
+      "It does nothing at all until you have study cards: it writes questions FROM them, so an empty course produces nothing. A set costs two credits, double an “Explain it back” — so the free trial of 60 credits covers about 30 sets.",
   },
 
   studyTimer: {

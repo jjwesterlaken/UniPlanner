@@ -263,7 +263,17 @@ export const PHOTO_BATCH_CREDITS = TASK_CREDITS.summarise;
 
    Nothing in the four screens branches on tier, so this array and the
    limits below are the whole decision. */
-export const TEXT_TIERS = ["ai", "free"];
+/* EVERY TIER GETS THE TEXT FEATURES. It was ["ai", "free"] when there
+   were two; the tier table has four and none of them is excluded, so
+   this is now the same list as TIERS and exists only because the
+   endpoint's validation reads a name it owns.
+
+   The reasoning is unchanged from when it was written: ten credits is
+   roughly five practice sets or ten explanations, it costs about a cent
+   per free account, and it is the best advertisement for the paid tier.
+   Gating the cheapest features means nobody ever experiences the thing
+   they would be buying. */
+export const TEXT_TIERS = ["free", "plus", "ai", "ai_max"];
 
 /* THE ALLOWANCE MOVED TO _shared/credits.ts, because it is no longer a
    property of the text features: audio and text draw on the same pool.
@@ -274,4 +284,13 @@ export const TEXT_TIERS = ["ai", "free"];
    without giving it a smaller limit hands it the paid allowance, which
    is the mistake that looks like generosity until the bill arrives — so
    a test asserts the COMBINATION, not each constant on its own. */
-export { MONTHLY_CREDITS_LIMIT, FREE_CREDITS_LIMIT, creditsForTier } from "../_shared/credits.ts";
+export {
+  MONTHLY_CREDITS_LIMIT,
+  FREE_CREDITS_LIMIT,
+  TRIAL_CREDITS,
+  TIERS,
+  TRIAL_TIERS,
+  isTrialTier,
+  allowanceForTier,
+  creditsForTier,
+} from "../_shared/credits.ts";

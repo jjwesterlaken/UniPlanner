@@ -52,12 +52,36 @@ export const TASK_CREDITS = {
    hold is recorded next to the same reasoning. */
 export const PHOTO_BATCH_CREDITS = TASK_CREDITS.summarise;
 
-export const MONTHLY_CREDITS_LIMIT = 450;
-export const FREE_CREDITS_LIMIT = 10;
-export const TEXT_TIERS = ["ai", "free"];
+/* THE TIERS, mirrored from _shared/credits.ts.
 
-/** The monthly allowance for a tier. Mirrors creditsForTier on the server. */
-export const creditsForTier = (tier) => (tier === "ai" ? MONTHLY_CREDITS_LIMIT : FREE_CREDITS_LIMIT);
+     free / plus      60 credits, ONCE EVER   (Plus buys sync, not AI)
+     ai              900 credits per month     (Study AI)
+     ai_max        3,000 credits per month     (Study AI Max)
+
+   TWO SHAPES, NOT FOUR NUMBERS. `perMonth: false` means the number is a
+   LIFETIME total, held on the account rather than on a month — a
+   different counter, not a smaller limit. Every screen that says "this
+   month" has to branch on it, because telling a trial student their
+   allowance resets in November is a support ticket and an angry one. */
+export const TIERS = ["free", "plus", "ai", "ai_max"];
+export const TRIAL_TIERS = ["free", "plus"];
+export const isTrialTier = (tier) => TRIAL_TIERS.includes(tier);
+export const TRIAL_CREDITS = 60;
+
+const MONTHLY = { ai: 900, ai_max: 3000 };
+
+/** Mirrors allowanceForTier on the server, shape included. */
+export function allowanceForTier(tier) {
+  if (isTrialTier(tier) || !(tier in MONTHLY)) return { credits: TRIAL_CREDITS, perMonth: false };
+  return { credits: MONTHLY[tier], perMonth: true };
+}
+
+export const creditsForTier = (tier) => allowanceForTier(tier).credits;
+
+/* Superseded names, kept so nothing has to move in the same pass. */
+export const MONTHLY_CREDITS_LIMIT = MONTHLY.ai;
+export const FREE_CREDITS_LIMIT = TRIAL_CREDITS;
+export const TEXT_TIERS = TIERS;
 
 /**
  * What a student can be told before they start.
@@ -68,15 +92,16 @@ export const creditsForTier = (tier) => (tier === "ai" ? MONTHLY_CREDITS_LIMIT :
  * count is now a sayable thing, and the pre-flight estimate says it.
  */
 export function allowanceState({ tier, creditsUsed }) {
-  const limit = creditsForTier(tier);
+  const { credits: limit, perMonth } = allowanceForTier(tier);
   const used = Math.max(0, creditsUsed || 0);
   return {
     tier,
     limit,
+    perMonth,
     used,
     remaining: Math.max(0, limit - used),
     fraction: limit > 0 ? Math.min(1, used / limit) : 1,
-    isFree: tier !== "ai",
+    isFree: !perMonth,
   };
 }
 

@@ -7,6 +7,8 @@
    ================================================================== */
 
 import { supabase, backend } from "./sync.js";
+import { allowanceForTier } from "./aiTextLimits.js";
+import { MINIMUM_BILLED_CREDITS_HINT } from "./aiNotesLogic.js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 
 const BUCKET = "lecture-audio";
@@ -28,40 +30,76 @@ export function currentMonthKey(d = new Date()) {
  */
 export async function fetchUsage(session, { supabaseClient = supabase, isDemo = backend.isDemo } = {}) {
   if (!session || isDemo || !supabaseClient) {
-    return { creditsUsed: 0, unavailable: true };
+    return { creditsUsed: 0, tier: null, unavailable: true };
   }
+  /* THE TIER DECIDES WHICH COUNTER TO READ, so it is read first rather
+     than assumed. A trial tier's spend is a column on `profiles` with
+     no month in it; a monthly tier's is a row in `ai_usage`. Reading
+     ai_usage for a trial account would report 0 used forever, which is
+     the friendly-looking direction and the wrong one. */
+  const { data: profile, error: profileErr } = await supabaseClient
+    .from("profiles")
+    .select("tier, trial_credits_used")
+    .eq("user_id", session.user.id)
+    .maybeSingle();
+  if (profileErr || !profile) return { creditsUsed: 0, tier: null, unavailable: true };
+
+  if (!allowanceForTier(profile.tier).perMonth) {
+    return { creditsUsed: Number(profile.trial_credits_used) || 0, tier: profile.tier, unavailable: false };
+  }
+
   const { data, error } = await supabaseClient
     .from("ai_usage")
     .select("credits_used")
     .eq("user_id", session.user.id)
     .eq("month", currentMonthKey())
     .maybeSingle();
-  if (error) return { creditsUsed: 0, unavailable: true };
-  return { creditsUsed: (data && data.credits_used) || 0, unavailable: false };
+  /* A FAILED READ IS "UNKNOWN", NEVER "NONE LEFT". Same rule as
+     fetchNote and the archive list: the badge disappears rather than
+     telling a student on a train that they are out of credits. */
+  if (error) return { creditsUsed: 0, tier: profile.tier, unavailable: true };
+  return { creditsUsed: (data && data.credits_used) || 0, tier: profile.tier, unavailable: false };
 }
 
 /**
  * Whether this account can record lectures at all. Three answers, and
  * the third is the one that must not collapse into the second:
  *
- *   { canRecord: true }               tier is "ai"
- *   { canRecord: false }              the read RAN and the tier is not
+ *   { canRecord: true }               there is allowance left
+ *   { canRecord: false }              the read RAN and there is none
  *   { unknown: true }                 offline / demo / read failed
  *
+ * IT IS NO LONGER A TIER CHECK. Every tier can record now — a free
+ * account gets the 60-credit lifetime trial, which is what lets the
+ * trial demonstrate the thing being sold — so what this asks is whether
+ * the ALLOWANCE covers one recording, not which plan somebody is on.
+ *
  * UNKNOWN MUST NEVER GATE. A student in a lecture theatre with no
- * signal must not be shown a paywall because the tier read timed out --
- * that is the same rule as the text allowance ("a failed read degrades
- * to unknown, never to none left"). The server refuses a free-tier
- * request anyway, at its tier check, BEFORE the paid transcription
- * call; this read only exists so the refusal arrives before an hour of
- * recording rather than after it.
+ * signal must not be shown a paywall because the read timed out -- that
+ * is the same rule as the text allowance ("a failed read degrades to
+ * unknown, never to none left"). The server re-checks anyway, BEFORE
+ * the paid transcription call; this read only exists so a refusal
+ * arrives before an hour of recording rather than after it.
  */
 export async function fetchRecordingAccess(session, { supabaseClient = supabase, isDemo = backend.isDemo } = {}) {
   if (!session || isDemo || !supabaseClient) return { unknown: true };
   try {
-    const { data, error } = await supabaseClient.from("profiles").select("tier").eq("user_id", session.user.id).maybeSingle();
+    const { data, error } = await supabaseClient
+      .from("profiles")
+      .select("tier, trial_credits_used")
+      .eq("user_id", session.user.id)
+      .maybeSingle();
     if (error || !data) return { unknown: true };
-    return { canRecord: data.tier === "ai" };
+    const { credits: limit, perMonth } = allowanceForTier(data.tier);
+    if (!perMonth) {
+      const used = Number(data.trial_credits_used) || 0;
+      return { canRecord: used + MINIMUM_BILLED_CREDITS_HINT <= limit, tier: data.tier };
+    }
+    /* A monthly tier's spend needs the usage row, and a failed read of
+       THAT is unknown too rather than a refusal. */
+    const usage = await fetchUsage(session, { supabaseClient, isDemo });
+    if (usage.unavailable) return { unknown: true };
+    return { canRecord: usage.creditsUsed + MINIMUM_BILLED_CREDITS_HINT <= limit, tier: data.tier };
   } catch (e) {
     return { unknown: true };
   }

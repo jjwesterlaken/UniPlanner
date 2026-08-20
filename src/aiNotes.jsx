@@ -78,13 +78,23 @@ function UsageBadge({ session }) {
   }, [session && session.user.id]);
 
   if (!usage || usage.unavailable) return null;
-  const near = usage.creditsUsed >= MONTHLY_CREDITS_LIMIT * 0.9;
+  /* THE SHAPE, NOT JUST THE NUMBER. A trial tier's 60 credits are
+     once-ever, so the words "this month" would be a lie that reads as a
+     promise — a student who waits for a reset that never comes is a
+     support ticket, and an angry one. The tier decides both halves. */
+  const { credits: limit, perMonth } = allowanceForTier(usage.tier);
+  const near = usage.creditsUsed >= limit * 0.9;
   return (
     <div className={`mb-3 rounded-lg px-3 py-2 text-xs ${near ? "bg-amber-50 text-amber-800" : "bg-stone-100 text-stone-500"}`}>
       <div className="flex items-center gap-1.5">
         {near && <TriangleAlert size={13} />}
-        {Math.round(usage.creditsUsed)} of {MONTHLY_CREDITS_LIMIT} AI credits used this month
+        {Math.round(usage.creditsUsed)} of {limit} AI credits used{perMonth ? " this month" : ""}
       </div>
+      {!perMonth && (
+        /* Said once, plainly, rather than left to be inferred from the
+           absence of "this month". */
+        <p className="mt-1 opacity-80">{AI_NOTES_COPY.trialAllowance(limit)}</p>
+      )}
       {/* Disclosed here rather than discovered by watching the counter
           jump after a two-minute recording. */}
       <p className="mt-1 opacity-80">{AI_NOTES_COPY.minimumBilling(MINIMUM_BILLED_CREDITS_HINT)}</p>

@@ -110,6 +110,7 @@ const USER = "11111111-1111-4111-8111-111111111111";
  */
 function makeAdmin({ tier = "ai", creditsUsed = 0, usageError = null, billError = null, trace } = {}) {
   const seen = [];
+  let banked = creditsUsed;
   const table = (name) => {
     const filters = [];
     const chain = {
@@ -122,7 +123,13 @@ function makeAdmin({ tier = "ai", creditsUsed = 0, usageError = null, billError 
       maybeSingle: async () => {
         seen.push({ op: "select", table: name, filters: filters.map(([c]) => c) });
         if (trace) trace.push(`db:select:${name}`);
-        if (name === "profiles") return { data: tier ? { tier } : null, error: null };
+        if (name === "profiles") {
+          /* `creditsUsed` means "this much spent", whichever counter
+             this tier actually uses — so the fixture reads the same at
+             every call site and the SHAPE is what varies, which is the
+             thing under test. */
+          return { data: tier ? { tier, trial_credits_used: banked } : null, error: null };
+        }
         if (name === "ai_usage") {
           if (usageError) return { data: null, error: usageError };
           return { data: { credits_used: creditsUsed }, error: null };
@@ -144,13 +151,15 @@ function makeAdmin({ tier = "ai", creditsUsed = 0, usageError = null, billError 
      that assigned would let a regression to the read-modify-write pass
      unnoticed, which is the "a fake that returns nothing makes
      everything downstream agree" trap in a new costume. */
-  let banked = creditsUsed;
   const rpc = async (fn, args) => {
     seen.push({ op: "rpc", fn, payload: args });
     if (trace) trace.push(`db:rpc:${fn}`);
     if (billError) return { data: null, error: billError };
     banked += Number(args.p_credits || 0);
-    return { data: [{ new_credits: banked }], error: null };
+    return {
+      data: [fn === "add_trial_credits" ? { new_trial_credits: banked } : { new_credits: banked }],
+      error: null,
+    };
   };
   return {
     seen,
@@ -267,33 +276,90 @@ async function main() {
        TEXT_TIERS without a smaller limit hands free accounts 150 units
        -- generous-looking right up to the invoice -- and each constant
        checked in isolation would pass throughout. */
+    /* Every tier is allowed in now, so what this checks is that being
+       allowed in never means inheriting somebody else's number, and
+       that the TRIAL tiers are trials — a smaller figure on a
+       once-ever counter, not a smaller monthly one. */
     for (const tier of cfg.TEXT_TIERS) {
-      const limit = cfg.creditsForTier(tier);
-      assert.ok(limit > 0, `${tier} is allowed in with no allowance at all`);
-      if (tier !== "ai") {
+      const { credits, perMonth } = cfg.allowanceForTier(tier);
+      assert.ok(credits > 0, `${tier} is allowed in with no allowance at all`);
+      assert.equal(
+        perMonth,
+        !cfg.isTrialTier(tier),
+        `"${tier}" has the wrong SHAPE of allowance — a trial that renews monthly is not a trial`
+      );
+      if (cfg.isTrialTier(tier)) {
         assert.ok(
-          limit < cfg.MONTHLY_CREDITS_LIMIT,
-          `"${tier}" is in TEXT_TIERS but limitForTier gives it ${limit}, the same as the paid tier. ` +
+          credits < cfg.allowanceForTier("ai").credits,
+          `"${tier}" is a trial tier but gets ${credits}, which is not less than the cheapest paid month. ` +
             "The gate and the limit are two halves of one decision."
         );
       }
     }
-    assert.equal(cfg.creditsForTier("free"), 10, "the free allowance is a decided number, not a default");
+    assert.equal(cfg.creditsForTier("free"), cfg.TRIAL_CREDITS, "the free allowance is a decided number, not a default");
+    assert.equal(cfg.creditsForTier("plus"), cfg.TRIAL_CREDITS, "Plus buys sync, not AI — it shares the trial");
+    assert.ok(
+      cfg.allowanceForTier("ai_max").credits > cfg.allowanceForTier("ai").credits,
+      "Max is not more than Study AI, which is the only thing it is"
+    );
+    /* An unknown tier gets the TRIAL, not a paid month. A typo in the
+       dashboard costs sixty credits; the other direction costs three
+       thousand a month per mistyped account. */
+    assert.equal(cfg.creditsForTier("stduy-ai"), cfg.TRIAL_CREDITS);
+    assert.equal(cfg.allowanceForTier("stduy-ai").perMonth, false);
   });
 
-  await test("a free account gets the features, at the free allowance", async () => {
+  await test("a free account gets the features, at the TRIAL allowance", async () => {
     const admin = makeAdmin({ tier: "free", creditsUsed: 0 });
     const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
     assert.equal(res.status, 200);
-    // 1 of 10, not 1 of 150 — the fraction is what the app shows.
-    assert.equal((await res.json()).allowanceUsed, 1 / 10);
+    // 1 of 60, not 1 of 900 — the fraction is what the app shows.
+    assert.equal((await res.json()).allowanceUsed, cfg.TASK_CREDITS.explain / cfg.TRIAL_CREDITS);
   });
 
-  await test("a free account is stopped at the free limit, not the paid one", async () => {
+  await test("a trial tier bills the LIFETIME counter, never the monthly one", async () => {
+    /* The bug this exists to catch is silent and expensive: writing a
+       trial spend into ai_usage leaves trial_credits_used at zero, so
+       the once-ever allowance quietly refills on the first of every
+       month and nothing anywhere looks wrong. */
+    const admin = makeAdmin({ tier: "free", creditsUsed: 0 });
+    await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
+    const rpcs = admin.seen.filter((x) => x.op === "rpc");
+    assert.equal(rpcs.length, 1);
+    assert.equal(rpcs[0].fn, "add_trial_credits", "a trial spend went to the monthly counter");
+    assert.equal(rpcs[0].payload.p_user_id, USER);
+    assert.ok(!("p_month" in rpcs[0].payload), "a lifetime counter must not be keyed by month");
+  });
+
+  await test("a paid tier bills the MONTHLY counter, and a fresh month starts at nothing", async () => {
+    /* NO ROLLOVER, asserted rather than trusted to the (user_id, month)
+       key. It is true by construction today — a new month simply has no
+       row — and the way it stops being true is somebody adding "carry
+       over what you didn't use", which is about three lines and would
+       convert a semester's prepayment into one month's spending power. */
+    const admin = makeAdmin({ tier: "ai", creditsUsed: 0 });
+    await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
+    const bill = admin.seen.find((x) => x.op === "rpc");
+    assert.equal(bill.fn, "add_ai_credits");
+    assert.equal(bill.payload.p_month, "2026-08", "the monthly counter must be keyed by the month it is spent in");
+
+    const nextMonth = makeAdmin({ tier: "ai", creditsUsed: 0 });
+    const res = await run(
+      { task: "explain", topic: "t", text: "hi" },
+      { supabaseAdmin: nextMonth, summarizer: okSummarizer(EXPLAIN_OK) }
+    );
+    assert.equal(
+      (await res.json()).allowanceUsed,
+      cfg.TASK_CREDITS.explain / cfg.allowanceForTier("ai").credits,
+      "a month with no row must start at nothing — neither carrying a balance nor inheriting a debt"
+    );
+  });
+
+  await test("a free account is stopped at the trial limit, not the paid one", async () => {
     const summarizer = okSummarizer(EXPLAIN_OK);
     const res = await run(
       { task: "explain", topic: "t", text: "hi" },
-      { supabaseAdmin: makeAdmin({ tier: "free", creditsUsed: 10 }), summarizer }
+      { supabaseAdmin: makeAdmin({ tier: "free", creditsUsed: cfg.TRIAL_CREDITS }), summarizer }
     );
     assert.equal((await res.json()).code, "usage_exceeded");
     assert.equal(summarizer.calls, 0);
@@ -755,9 +821,13 @@ async function main() {
   await test("a student learns an action is unaffordable before doing the work", async () => {
     const { allowanceState, canAfford, isLastAction } = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
 
-    // A free account with 9 of 10 used can still explain (1) but not
-    // summarise (3). Knowing that BEFORE the text box is the point.
-    const nearlyOut = allowanceState({ tier: "free", creditsUsed: 9 });
+    /* Derived from the trial size rather than typed, so re-sizing the
+       trial re-runs the arithmetic instead of leaving a stale 9 here.
+       One credit left: an explanation (1) fits, a summarise (3) and a
+       practice set (2) do not. Knowing that BEFORE the text box is the
+       point. */
+    const { TRIAL_CREDITS, TASK_CREDITS } = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    const nearlyOut = allowanceState({ tier: "free", creditsUsed: TRIAL_CREDITS - TASK_CREDITS.explain });
     assert.equal(canAfford(nearlyOut, "explain"), true);
     assert.equal(canAfford(nearlyOut, "summarise"), false);
     assert.equal(canAfford(nearlyOut, "practice"), false);
@@ -766,7 +836,7 @@ async function main() {
     assert.equal(isLastAction(nearlyOut, "explain"), true);
     assert.equal(isLastAction(allowanceState({ tier: "free", creditsUsed: 0 }), "explain"), false);
 
-    const spent = allowanceState({ tier: "free", creditsUsed: 10 });
+    const spent = allowanceState({ tier: "free", creditsUsed: TRIAL_CREDITS });
     assert.equal(spent.remaining, 0);
     assert.equal(canAfford(spent, "explain"), false);
     assert.equal(spent.isFree, true, "the upgrade wording depends on knowing which tier is out");
@@ -849,8 +919,16 @@ async function main() {
        the SOURCE: a convenience read of ai_notes added later would be
        invisible to every behavioural test here, and would reintroduce
        exactly the class of bug ai-notes shipped. */
-    const tables = [...src.matchAll(/\.from\(\s*"([^"]+)"/g)].map((m) => m[1]);
-    assert.ok(tables.length >= 2, `expected the profiles and ai_usage queries, found ${tables.length}`);
+    /* THE ALLOWANCE READ MOVED to _shared/allowance.ts when tiers
+       arrived, so the guard follows it: this property is about what the
+       ENDPOINT can reach, and a helper it calls is part of that reach.
+       Checking index.ts alone would have gone quietly green over a
+       shrinking surface, which is the same shape as a guard that
+       resolves an RPC to nothing. */
+    const shared = fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/allowance.ts"), "utf8");
+    const tables = [...`${src}\n${shared}`.matchAll(/\.from\(\s*"([^"]+)"/g)].map((m) => m[1]);
+    assert.ok(tables.includes("profiles"), "the tier lookup has gone");
+    assert.ok(tables.includes("ai_usage"), "the allowance read has gone");
     for (const t of tables) {
       assert.ok(
         ["profiles", "ai_usage"].includes(t),
@@ -861,19 +939,28 @@ async function main() {
   });
 
   await test("every ai_usage statement is scoped to a user, by filter or by payload", async () => {
-    /* Since 0011 the WRITE is an RPC rather than an upsert, so the
-       write half of this invariant would silently stop being checked if
-       this only looked for `.from("ai_usage")` — the loop would run
-       over one statement and pass. Both spellings are gathered, and the
-       count is asserted, so losing either one goes red. */
-    const statements = src
+    /* Both halves moved to _shared/allowance.ts when tiers arrived, so
+       the guard reads that file too. Since 0011 the WRITE is an RPC
+       rather than an upsert, and since 0014 there are TWO of them — a
+       monthly counter and a lifetime one — so a check that only looked
+       for `.from("X").upsert` would find nothing to inspect and pass
+       with an empty set. The count is asserted so losing a half goes
+       red rather than quiet. */
+    const sharedSrc = fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/allowance.ts"), "utf8");
+    const statements = `${src}\n${sharedSrc}`
       .split(/;\s*\n/)
-      .filter((st) => st.includes('from("ai_usage")') || st.includes('rpc("add_ai_credits"'));
-    assert.ok(statements.length >= 2, `expected the read and the write, found ${statements.length}`);
-    assert.ok(
-      statements.some((st) => st.includes('from("ai_usage")')) && statements.some((st) => st.includes('rpc("add_ai_credits"')),
-      "one half of the allowance path has disappeared — the read and the write must both be here to be checked"
-    );
+      .filter((st) => st.includes('from("ai_usage")') || st.includes('rpc("add_ai_credits"') || st.includes('rpc("add_trial_credits"'));
+    /* Two, not three: the monthly and lifetime writes are the two arms
+       of one ternary, so they share a statement. That is the point of
+       the marker loop below — counting statements would have made this
+       assertion a fact about formatting. */
+    assert.ok(statements.length >= 2, `expected the read and the writes, found ${statements.length}`);
+    for (const marker of ['from("ai_usage")', 'rpc("add_ai_credits"', 'rpc("add_trial_credits"']) {
+      assert.ok(
+        statements.some((st) => st.includes(marker)),
+        `${marker} has disappeared — one part of the allowance path is no longer being checked`
+      );
+    }
     for (const st of statements) {
       assert.ok(
         st.includes('eq("user_id"') || /user_id:\s*userId/.test(st) || /p_user_id:\s*userId/.test(st),
