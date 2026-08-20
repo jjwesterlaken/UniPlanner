@@ -111,6 +111,9 @@ import {
 } from "../supabase/functions/ai-notes/diagnostics.js";
 import {
   patchInfoPlist,
+  applyNativePermissions,
+  CAMERA_USAGE_DESCRIPTION,
+  IOS_CAMERA_PLIST_KEY,
   patchAndroidManifest,
   MIC_USAGE_DESCRIPTION,
   IOS_PLIST_KEY,
@@ -943,6 +946,51 @@ async function run() {
     assert.equal(value.textContent, MIC_USAGE_DESCRIPTION);
     // Everything Capacitor generated is still there.
     assert.ok(rootDictKeys(doc).includes("CFBundleDisplayName"));
+  });
+
+  await test("the plist gets the CAMERA usage string too, or Take Photo terminates the app", () => {
+    /* The reading summariser's photo input reaches three routes on iOS.
+       Library and Files need no declaration; TAKE PHOTO without
+       NSCameraUsageDescription is an OS-level termination, not a
+       graceful refusal — the MODIFY_AUDIO_SETTINGS lesson in a second
+       costume, and equally invisible to every environment this suite
+       runs in. */
+    const mic = patchInfoPlist(CAP_INFO_PLIST);
+    const cam = patchInfoPlist(mic.xml, CAMERA_USAGE_DESCRIPTION, IOS_CAMERA_PLIST_KEY);
+    assert.equal(cam.changed, true, "the camera usage string was not added");
+    assert.match(cam.xml, new RegExp(`<key>${IOS_CAMERA_PLIST_KEY}</key>`), "the camera key is missing");
+    assert.ok(cam.xml.includes("photograph pages"), "the camera string no longer says what the camera is for");
+    // Both keys survive together, in the ROOT dict.
+    assert.match(cam.xml, /<key>NSMicrophoneUsageDescription<\/key>/, "adding the camera key dropped the microphone one");
+    const rootDict = cam.xml.slice(cam.xml.indexOf("<dict>"), cam.xml.lastIndexOf("</dict>"));
+    assert.ok(rootDict.includes(IOS_CAMERA_PLIST_KEY), "the camera key landed in a nested dict, where iOS will not read it");
+  });
+
+  await test("applyNativePermissions reports both usage strings in one pass", () => {
+    /* Two patches over one file: a second pass that read the ORIGINAL
+       xml would silently drop the first key. */
+    const src = fs.readFileSync(path.join(rootDir, "mobile/scripts/native-permissions.mjs"), "utf8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    assert.match(code, /patchInfoPlist\(mic\.xml, CAMERA_USAGE_DESCRIPTION, IOS_CAMERA_PLIST_KEY\)/,
+      "the camera patch no longer chains off the microphone patch's output — one of the two keys will be lost");
+    assert.equal(typeof applyNativePermissions, "function");
+  });
+
+  await test("the reading photo input offers the library and files, not only the camera", () => {
+    /* `capture` does not mean "offer the camera", it means "use the
+       camera and nothing else" — with it set, the photo library and
+       the files app are unreachable on every phone. */
+    /* Matched on the ELEMENT rather than on comment-stripped source.
+       Stripping bit back here: `accept="image/*"` contains a literal
+       `/*`, so a comment stripper runs from it to the next `*​/` and
+       eats the very attribute being asserted — the comment-strip trap
+       in a new costume, where the corrupted thing is code, not prose.
+       Reading the one element is both narrower and immune. */
+    const src = fs.readFileSync(path.join(rootDir, "src/aiText.jsx"), "utf8");
+    const input = /<input\b[^>]*type="file"[^>]*>/s.exec(src);
+    assert.ok(input, "the photo file input is gone from the reading summariser");
+    assert.ok(!/capture=/.test(input[0]), "capture is back on the photo input — the gallery and files are hidden again");
+    assert.ok(input[0].includes('accept="image/*"'), "the photo input no longer restricts to images");
   });
 
   await test("patchInfoPlist is idempotent and never overwrites a reworded description", () => {
@@ -1987,20 +2035,23 @@ async function run() {
     assert.match(workflow, /image:\s*postgres:/, "the test workflow no longer starts a postgres service container");
   });
 
-  await test("CI forces the differential render to run rather than skip", () => {
+  await test("CI forces the coverage ratchet to check its baseline rather than skip", () => {
     /* Same arrangement, same reason, and it lives HERE rather than in
        the differential's own file for the same reason the migration
        guard does: a check inside a file that skips itself would skip
        in exactly the situation it exists to catch.
 
-       The baseline differential is test-dark-mode.mjs these days (it
-       builds origin/main's bundle; test-blocks-neutral.mjs stopped
-       using git when the handwriting removal made it a two-shapes
-       comparison through the current bundle). fetch-depth matters as
-       much as the flag: actions/checkout's default shallow clone has
-       no baseline commit — without it the test would skip,
-       REQUIRE_BASELINE would turn that into a failure, and the fix
-       would look like "drop the flag". */
+       WHAT READS THESE NOW: the COVERAGE RATCHET, which fetches
+       origin/main's copy of .c8rc.json to prove the threshold was not
+       lowered. Both git-baseline DIFFERENTIALS have since retired —
+       test-blocks-neutral's when the handwriting removal made it a
+       two-shapes comparison through the current bundle, and
+       test-dark-mode's when the ? help control landed on top of it
+       (a moving baseline cannot survive an intended UI change). The
+       flag and the depth outlived them because the ratchet needs the
+       same two things: fetch-depth, because actions/checkout's
+       default shallow clone has no origin/main to read, and the flag,
+       because without it a missing baseline would silently skip. */
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     assert.match(pkg.scripts.test, /test-blocks-neutral\.mjs/, "the differential render was dropped from `npm test`");
     assert.match(pkg.scripts.test, /test-note-blocks\.mjs/, "the block-view tests were dropped from `npm test`");
@@ -2011,8 +2062,8 @@ async function run() {
     assert.match(pkg.scripts.test, /test-local-only\.mjs/, "the local-only audit was dropped from `npm test`");
 
     const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
-    assert.match(workflow, /REQUIRE_BASELINE:\s*"1"/, "CI no longer forces the differential render to run");
-    assert.match(workflow, /fetch-depth:\s*0/, "CI checks out shallow, so the differential render has no baseline to build");
+    assert.match(workflow, /REQUIRE_BASELINE:\s*"1"/, "CI no longer forces the coverage ratchet to check its baseline");
+    assert.match(workflow, /fetch-depth:\s*0/, "CI checks out shallow, so the coverage ratchet has no origin/main to compare against");
   });
 
   await test("CI runs the three e2e journeys, and forces them rather than letting them skip", () => {

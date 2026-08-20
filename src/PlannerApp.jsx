@@ -122,6 +122,7 @@ import {
 import { buildAttempt, pruneAttempts, weakTopics } from "./practice.js";
 import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
 import { createReporter, installGlobalHandlers } from "./errorReport.js";
+import { HELP_TOPICS } from "./helpText.js";
 import {
   aiNotePreview,
   mapAiResultToItems,
@@ -509,18 +510,64 @@ const editBox = "rounded-xl border border-stone-300 bg-stone-50 p-3";
 /*  Shared bits                                                       */
 /* ------------------------------------------------------------------ */
 
-function Section({ icon: Icon, title, subtitle, children }) {
+/* ---- The ? that explains a feature ----
+
+   INLINE PANEL, NOT A TOOLTIP. A tooltip needs a hover, and half the
+   people this is for are on a phone where there is no such thing. The
+   panel opens below the heading, pushes the content down, and closes
+   from the same control — so it is reachable, dismissible and legible
+   at any width, with no positioning maths to go wrong when a screen
+   moves.
+
+   The copy lives in helpText.js under two rules it is written to
+   (worked example, and say what it costs); this component only
+   decides where it appears. */
+function HelpButton({ topic, open, onToggle }) {
+  const t = HELP_TOPICS[topic];
+  if (!t) return null;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-label={open ? `Hide help for ${t.title}` : `What is ${t.title} for?`}
+      className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border text-xs font-semibold u-focus transition-colors ${
+        open ? "u-accent-border u-accent-soft u-accent-deeptext" : "border-stone-300 text-stone-500 hover:bg-stone-100"
+      }`}
+    >
+      ?
+    </button>
+  );
+}
+
+function HelpPanel({ topic }) {
+  const t = HELP_TOPICS[topic];
+  if (!t) return null;
+  return (
+    <div className="mb-3 rounded-xl border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700" data-help-panel={topic}>
+      <p>{t.what}</p>
+      <p className="mt-2 rounded-lg bg-surface px-3 py-2 text-stone-800">{t.example}</p>
+      {t.detail && <p className="mt-2 text-stone-600">{t.detail}</p>}
+      <p className="mt-2 text-xs text-stone-500">{t.cost}</p>
+    </div>
+  );
+}
+
+function Section({ icon: Icon, title, subtitle, help, children }) {
+  const [helpOpen, setHelpOpen] = useState(false);
   return (
     <section className="mb-5">
       <div className="mb-3 flex items-center gap-2.5">
         <span className="flex h-8 w-8 items-center justify-center rounded-lg u-accent-soft u-accent-deeptext">
           <Icon size={17} />
         </span>
-        <div>
+        <div className="min-w-0 flex-1">
           <h2 className="font-serif text-lg font-semibold leading-tight text-stone-800">{title}</h2>
           {subtitle && <p className="text-xs text-stone-500">{subtitle}</p>}
         </div>
+        {help && <HelpButton topic={help} open={helpOpen} onToggle={() => setHelpOpen((v) => !v)} />}
       </div>
+      {help && helpOpen && <HelpPanel topic={help} />}
       {children}
     </section>
   );
@@ -1387,11 +1434,29 @@ function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) 
 
 /* ---- Formatting options ---- */
 
+/* THE "DEFAULT" ENTRY IS GONE, AND `sans` DID NOT GO WITH IT. The entry
+   labelled "Default" resolved to the system sans stack, NOT to Times —
+   so mapping existing notes onto the new default would have restyled
+   every note anyone has already written, which is the retroactive edit
+   this project refuses everywhere else. The font is kept under an
+   honest name instead: no note changes, and the picker no longer
+   offers a magic "whatever the app feels like" option. Ids are stable
+   because they are stored on every existing page. */
 const NOTE_FONTS = [
-  { id: "sans", label: "Default", css: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif' },
   { id: "times", label: "Times New Roman", css: '"Times New Roman", Times, serif' },
+  { id: "sans", label: "Sans serif", css: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif' },
   { id: "comfortaa", label: "Comfortaa", css: '"Comfortaa", ui-rounded, sans-serif' },
 ];
+
+/* What a NEW note opens in. Existing notes keep whatever they stored,
+   including "sans" — see the note above. */
+const DEFAULT_NOTE_FONT = "times";
+
+/** The css for a stored font id. Unknown or missing ids fall back to the
+    SANS stack, not to the list's first entry: a note written before this
+    change stored "sans" or nothing, and both must keep rendering exactly
+    as they did. */
+const fontCssFor = (id) => (NOTE_FONTS.find((f) => f.id === id) || NOTE_FONTS.find((f) => f.id === "sans")).css;
 
 const TEXT_COLORS = [
   { id: "black", label: "Black", hex: "#1c1917" },
@@ -1449,6 +1514,13 @@ function sanitizeHtml(dirty) {
   } catch (e) {
     return "";
   }
+}
+
+/** Plain text made safe to render as HTML. Used for notes saved before
+    the editor stored html, where `body` is the only content there is —
+    it must reach the screen as text, never as markup. */
+function escapeHtml(text) {
+  return String(text || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
 /** Plain text version, used for list previews and the study cards. */
@@ -1579,7 +1651,8 @@ function ToolButton({ onClick, title, children, active }) {
 /* ---- text tools ---- */
 
 function TextTools({ font, setFont, getArea, afterCommand, hint, setHint }) {
-  const fontCss = (NOTE_FONTS.find((f) => f.id === (font || "sans")) || NOTE_FONTS[0]).css;
+  const fontCss = fontCssFor(font || "sans");
+
 
   const hasSelection = () => {
     const sel = window.getSelection();
@@ -1636,6 +1709,38 @@ function TextTools({ font, setFont, getArea, afterCommand, hint, setHint }) {
     afterCommand();
   };
 
+  /* THE FONT PICKER ACTS ON THE SELECTION, like every other tool here.
+     It used to set a note-level property, so changing it restyled every
+     word already written — the one tool in this bar that did not behave
+     the way an editor is expected to. It now goes through the same
+     execCommand path as bold, colour and highlight, which gives both
+     halves of the expected behaviour for free: with text selected it
+     restyles that text, and with a bare cursor it arms the style for
+     what is typed next.
+
+     `fontName` under styleWithCSS emits <span style="font-family: …">,
+     which the sanitiser's allow-list already keeps (SPAN + font-family)
+     — so this needed no widening of what a stored note may contain.
+
+     The note-level `font` stays as the note's BASE font: it is what
+     unstyled text renders in, it is what every existing note carries,
+     and it is what a new note's Times default sets. Nothing reads it as
+     "the font of the whole note" any more. */
+  const applyFont = (id) => {
+    const chosen = NOTE_FONTS.find((f) => f.id === id);
+    if (!chosen) return;
+    setHint("");
+    const area = getArea();
+    /* No editor focused yet — nothing to select, so the choice can only
+       mean the note's base font. This is also what makes the picker
+       usable before typing has started. */
+    if (!area) {
+      setFont(id);
+      return;
+    }
+    run("fontName", chosen.css);
+  };
+
   /* Highlighters only ever colour text you've selected. Without this they
      "arm" themselves and highlight whatever you type next. */
   const highlight = (hex) => {
@@ -1661,11 +1766,13 @@ function TextTools({ font, setFont, getArea, afterCommand, hint, setHint }) {
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {/* Font — applies to the whole note, and is saved with it */}
+      {/* Font — applies to the SELECTION (or to what you type next),
+          the same as every other control in this bar. */}
       <select
         className="rounded-md border border-stone-300 bg-surface px-2 py-1 text-sm text-stone-700 u-field"
         value={font || "sans"}
-        onChange={(e) => setFont(e.target.value)}
+        onChange={(e) => applyFont(e.target.value)}
+        onMouseDown={(e) => e.stopPropagation()}
         style={{ fontFamily: fontCss }}
         aria-label="Font"
       >
@@ -1782,7 +1889,7 @@ function TextBlockEditor({ block, onChange, style, font, registerArea, onFocusBl
     onBackspaceAtStart(block.id);
   };
 
-  const fontCss = (NOTE_FONTS.find((f) => f.id === (font || "sans")) || NOTE_FONTS[0]).css;
+  const fontCss = fontCssFor(font || "sans");
 
   return (
     <div
@@ -1796,7 +1903,10 @@ function TextBlockEditor({ block, onChange, style, font, registerArea, onFocusBl
       onKeyDown={onKeyDown}
       onFocus={() => onFocusBlock(block.id)}
       data-placeholder="Start writing..."
-      className={`min-h-[120px] w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 u-field ${
+      /* Fills the screen rather than sitting at a fixed 120px: the
+         viewport-relative floor is what makes the note dominate on a
+         phone, and it still grows with the text beyond that. */
+      className={`min-h-[55vh] sm:min-h-[320px] w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 u-field ${
         style === "lined" ? "lined-paper" : "bg-paper"
       }`}
       style={{ fontFamily: fontCss, outline: "none" }}
@@ -1831,20 +1941,19 @@ function NoteEditor({ draft, setDraft, onSave, onCancel, saveLabel = "Save note"
   };
 
   return (
-    <div className="space-y-3">
-      <span className="inline-flex items-center gap-1.5 rounded-full u-accent-soft u-accent-deeptext px-2.5 py-1 text-xs font-medium">
-        {draft.style} page
-      </span>
-      <div>
-        <label className={labelCls}>Title</label>
-        <input
-          className={inputCls}
-          spellCheck
-          placeholder="Note title"
-          value={draft.title}
-          onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
-        />
-      </div>
+    <div className="space-y-2">
+      {/* The "lined page" chip and the "Title" label are both gone: the
+          paper style is visible in the paper, and the placeholder says
+          what the field is. Two rows of vertical space that were
+          telling the writer things the screen already told them. */}
+      <input
+        className={inputCls}
+        spellCheck
+        aria-label="Note title"
+        placeholder="Note title"
+        value={draft.title}
+        onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+      />
 
       <div className="sticky top-0 z-10 rounded-lg border border-stone-300 bg-stone-50 p-2">
         <TextTools
@@ -2133,9 +2242,8 @@ function NoteView({ page, folders, onEdit, onClose, onMove, onDelete }) {
              page keeps its lines after conversion. Found by the
              comparison below rather than by looking. */
           <div
-            className={`mt-3 whitespace-pre-wrap text-sm text-stone-700 ${page.style === "lined" ? "lined-paper px-1" : ""} ${
-              page.font === "serif" ? "font-serif" : page.font === "mono" ? "font-mono" : ""
-            }`}
+            className={`mt-3 whitespace-pre-wrap text-sm text-stone-700 ${page.style === "lined" ? "lined-paper px-1" : ""}`}
+            style={{ fontFamily: fontCssFor(page.font || "sans") }}
           >
             <span className="text-stone-400">This note is empty.</span>
           </div>
@@ -2146,22 +2254,23 @@ function NoteView({ page, folders, onEdit, onClose, onMove, onDelete }) {
               .map((b) => (
                 <div
                   key={b.id}
-                  className={`whitespace-pre-wrap text-sm text-stone-700 ${page.style === "lined" ? "lined-paper px-1" : ""} ${
-                    page.font === "serif" ? "font-serif" : page.font === "mono" ? "font-mono" : ""
-                  }`}
-                >
-                  {b.body || htmlToText(b.html || "")}
-                </div>
+                  className={`whitespace-pre-wrap text-sm text-stone-700 ${page.style === "lined" ? "lined-paper px-1" : ""}`}
+                  style={{ fontFamily: fontCssFor(page.font || "sans") }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(b.html || "") || escapeHtml(b.body || "") }}
+                />
               ))}
           </div>
         )
       ) : (
         <div
-          className={`mt-3 whitespace-pre-wrap text-sm text-stone-700 ${page.style === "lined" ? "lined-paper px-1" : ""} ${
-            page.font === "serif" ? "font-serif" : page.font === "mono" ? "font-mono" : ""
-          }`}
+          className={`mt-3 whitespace-pre-wrap text-sm text-stone-700 ${page.style === "lined" ? "lined-paper px-1" : ""}`}
+          style={{ fontFamily: fontCssFor(page.font || "sans") }}
         >
-          {bodyOf(page) || htmlToText(htmlOf(page)) || <span className="text-stone-400">This note is empty.</span>}
+          {htmlOf(page) || bodyOf(page) ? (
+            <span dangerouslySetInnerHTML={{ __html: sanitizeHtml(htmlOf(page)) || escapeHtml(bodyOf(page)) }} />
+          ) : (
+            <span className="text-stone-400">This note is empty.</span>
+          )}
         </div>
       )}
     </Card>
@@ -2229,6 +2338,14 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
      whole panel -- there is no row to expand under yet. */
   const [expandedId, setExpandedId] = useState(null);
   const showList = !choosing && !(draft && !draft.id);
+  /* WHILE WRITING, THE NOTE DOMINATES. Editing an existing note used to
+     leave every other note stacked above and below it, so on a phone
+     the thing you were typing into was a slice of the screen between
+     other people's business. The list collapses to the note being
+     edited; it comes straight back when you press Done. Nothing is
+     hidden that you can reach only from here — New note and the count
+     return with it. */
+  const editingId = draft && draft.id ? draft.id : null;
 
   /* Opened from somewhere else -- today, the "Summarised" link on a
      reading row. Cleared immediately via onOpened so pressing back
@@ -2263,7 +2380,7 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
   const startNew = ({ style, kind }) => {
     /* `kind` is kept on the stored note as a legacy field; the strip
        normalises "drawing" to "text" and nothing branches on it. */
-    const base = { title: "", body: "", html: "", strokes: [], entries: [], style, kind, font: "sans", folderId: null };
+    const base = { title: "", body: "", html: "", strokes: [], entries: [], style, kind, font: DEFAULT_NOTE_FONT, folderId: null };
     if (isReferenceSheet(base)) {
       setDraft(base);
     } else {
@@ -2388,7 +2505,7 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
 
   return (
     <Card>
-      {showList && (
+      {showList && !editingId && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-stone-500">{pages.length} note{pages.length === 1 ? "" : "s"}</p>
           <button className={btnPrimary} onClick={() => setChoosing(true)} aria-label="New note">
@@ -2430,8 +2547,8 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
       )}
       {showList && visiblePages.length === 0 && <Empty>No notes yet. Tap "New note" to add one.</Empty>}
       {showList && visiblePages.length > 0 && (
-        <ul className="mt-3 space-y-2">
-          {visiblePages.map((p) => (
+        <ul className={editingId ? "space-y-2" : "mt-3 space-y-2"}>
+          {(editingId ? visiblePages.filter((p) => p.id === editingId) : visiblePages).map((p) => (
               <NoteRow
                 key={p.id}
                 p={p}
@@ -3394,6 +3511,7 @@ export function ArchivePanel({ session, bucket, semesterName, onArchive, onResto
   const [confirming, setConfirming] = useState(false);
   const [label, setLabel] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const marker = archiveMarkerOf(bucket);
   const late = lateEdits(bucket);
@@ -3463,7 +3581,12 @@ export function ArchivePanel({ session, bucket, semesterName, onArchive, onResto
             Box up a finished semester. An archive restores into the semester you're viewing.
           </p>
         </div>
+        {/* The archive is not a Section — it is a panel inside Account —
+            so it carries its own ?, using the same two components. */}
+        <HelpButton topic="archive" open={helpOpen} onToggle={() => setHelpOpen((v) => !v)} />
       </div>
+
+      {helpOpen && <HelpPanel topic="archive" />}
 
       {/* RESTORE HANGS OFF THE MARKER, NOT OFF THE LIST. The marker
           holds the archive id, so the way back does not depend on a
@@ -5787,10 +5910,10 @@ export default function PlannerApp() {
             <Section icon={BookOpen} title="Courses" subtitle="Your units this semester">
               <Courses courses={sem.courses} addItem={addItem} removeItem={removeItem} focused={focused} onToggleFocus={toggleFocus} />
             </Section>
-            <Section icon={CalendarClock} title="Semester setup" subtitle="Teaching weeks and how your marks are rounded">
+            <Section icon={CalendarClock} title="Semester setup" subtitle="Teaching weeks and how your marks are rounded" help="semesterSetup">
               <SemesterSetup settings={settings} rounding={rounding} patchSettings={patchSettings} />
             </Section>
-            <Section icon={Target} title="Grades" subtitle="What you've got, and what you still need">
+            <Section icon={Target} title="Grades" subtitle="What you've got, and what you still need" help="grades">
               <Grades
                 assessments={sem.assessments}
                 courses={sem.courses}
@@ -5935,7 +6058,7 @@ export default function PlannerApp() {
           // JSON blob that syncs in full on every change (4-BACKEND-GUIDE.md).
           // They're bigger than manual notes — if sync ever gets noticeably
           // slower, splitting AI notes into their own table/row is the fix.
-          <Section icon={Mic} title="AI lecture notes" subtitle="Record a lecture and get an AI-generated summary and study cards">
+          <Section icon={Mic} title="AI lecture notes" subtitle="Record a lecture and get an AI-generated summary and study cards" help="aiNotes">
             <AiNotesPanel session={session} backend={backend} courses={sem.courses} data={data} setData={setData} recording={recording} textAllowance={textAllowance} onSummariseReading={summariseReading} onOpenSummary={openSummaryNote} />
           </Section>
         )}

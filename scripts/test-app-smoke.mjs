@@ -1181,6 +1181,42 @@ for (const [tabName, phrases] of [
   phoneDom.window.close();
 }
 
+/* ---------- the ? actually opens something ---------- */
+
+{
+  /* The mechanism, in the real app rather than by grep: tap the ?
+     beside a Section title and the panel appears with the topic's
+     copy in it; tap again and it goes. A help control that renders
+     but opens nothing is the failure this catches. */
+  await goTo("Courses");
+  await new Promise((r) => setTimeout(r, 150));
+  const helpBtn = [...doc.querySelectorAll("button")].find((b) =>
+    (b.getAttribute("aria-label") || "").startsWith("What is ")
+  );
+  check(!!helpBtn, "a ? control is reachable on the Courses tab", "no help button found on a screen that has topics");
+  if (helpBtn) {
+    const topicLabel = helpBtn.getAttribute("aria-label");
+    helpBtn.click();
+    await new Promise((r) => setTimeout(r, 150));
+    const panel = doc.querySelector("[data-help-panel]");
+    check(!!panel, `tapping ${JSON.stringify(topicLabel)} opens its panel`);
+    check(
+      !!panel && (panel.textContent || "").length > 150,
+      "the panel carries the worked example, not a one-liner",
+      panel ? `${(panel.textContent || "").length} chars` : "no panel"
+    );
+    const again = [...doc.querySelectorAll("button")].find((b) =>
+      (b.getAttribute("aria-label") || "").startsWith("Hide help for ")
+    );
+    check(!!again, "the open control offers to hide it again");
+    if (again) {
+      again.click();
+      await new Promise((r) => setTimeout(r, 150));
+      check(!doc.querySelector("[data-help-panel]"), "tapping it again closes the panel");
+    }
+  }
+}
+
 check(complaints.length === 0, "nothing logged a React error or warning", complaints.slice(0, 3).join(" | ").slice(0, 400));
 
 fs.rmSync(tmp, { recursive: true, force: true });

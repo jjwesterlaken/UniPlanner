@@ -1,23 +1,26 @@
-/* Light and dark as an AXIS, and the one check that makes the sweep safe.
+/* Light and dark as an AXIS.
 
-   THE CLAIM THIS FILE EXISTS TO PROVE: turning the ground into tokens
-   changed nothing about the app in light mode. Not "looks the same" —
-   the same seeded planner, mounted before and after, renders
-   BYTE-IDENTICAL HTML, with one documented exception that is itself
-   enumerated below rather than waved at.
+   WHAT THIS FILE PROVES NOW: the mode reaches the document, dark is
+   genuinely different from light, every ground token has a value in
+   both modes, the note paper does not flip, the dark accents are
+   DERIVED from each palette rather than hand-picked, and the mode
+   never enters the synced blob.
 
-   The sweep is small because it happened at the theme layer rather
-   than at 557 call sites: `text-stone-500` still says "muted text"
-   and only the value behind it moves. The only source substitution is
-   bg-white -> bg-surface (surfaces flip) with bg-paper for note paper
-   (which does not). Everything else is tailwind.config.js.
+   WHAT IT USED TO PROVE, AND NO LONGER CAN: that tokenising the
+   ground rendered BYTE-IDENTICAL light mode against the pre-token
+   build. See the note in run() — that claim was verified when the
+   sweep landed and expired the first time a UI change landed on top
+   of it, exactly as test-blocks-neutral's git baseline did.
+
+   The sweep it checked was small because it happened at the theme
+   layer rather than at 557 call sites: `text-stone-500` still says
+   "muted text" and only the value behind it moves.
 
    Run via `npm test`. */
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { JSDOM } from "jsdom";
@@ -38,27 +41,6 @@ async function test(name, fn) {
     console.error(`        ${err.message}`);
   }
 }
-
-/* The documented substitutions. The baseline's HTML is transformed
-   through these before comparing, so the comparison asserts "nothing
-   changed EXCEPT exactly this" rather than "nothing changed much".
-   A stray edit anywhere else fails. */
-const SUBSTITUTIONS = [
-  // Surfaces flip with the mode; `white` stays white, because
-  // text-white sits on accent buttons in both modes.
-  ["bg-white", "bg-surface"],
-  /* The ruled paper now names its tokens instead of hardcoding the
-     line colour. In LIGHT the tokens hold exactly the values it used
-     to hardcode (--paper: white, --paper-line: #d6d3d1), so this is
-     the same pixels through a variable — which is precisely the kind
-     of claim this differential is here to check rather than assert. */
-  [
-    ".lined-paper{background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 27px,#d6d3d1 27px,#d6d3d1 28px);",
-    ".lined-paper{background-color:rgb(var(--paper));background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 27px,var(--paper-line) 27px,var(--paper-line) 28px);",
-  ],
-];
-const applySubstitutions = (html) =>
-  SUBSTITUTIONS.reduce((acc, [from, to]) => acc.split(from).join(to), html);
 
 const tmp = path.join(rootDir, ".dark-tmp");
 fs.mkdirSync(tmp, { recursive: true });
@@ -165,65 +147,33 @@ async function render(js, { mode } = {}) {
 }
 
 async function run() {
-  /* ---------- the differential ---------- */
+  /* ---------- the differential that EXPIRED, and why it is gone ----------
 
-  let baselineDir = null;
-  try {
-    /* The baseline is origin/main: this branch's parent, which has the
-       navigation work and none of the tokens. Deriving it from "the
-       last commit that touched tailwind.config.js" was wrong and the
-       test caught it -- that resolves to a tree from before the nav
-       restructure, so the comparison would have measured two changes
-       at once and blamed them both on this one. */
-    const before = execFileSync("git", ["rev-parse", "origin/main"], { cwd: rootDir, encoding: "utf8" }).trim();
-    baselineDir = path.join(tmp, "baseline");
-    fs.rmSync(baselineDir, { recursive: true, force: true });
-    fs.mkdirSync(baselineDir, { recursive: true });
-    execFileSync("git", ["--work-tree", baselineDir, "checkout", before, "--", "src", "tailwind.config.js"], {
-      cwd: rootDir,
-    });
-    // git checkout --work-tree leaves the index pointing at the old
-    // commit; restore it so the repo is not left mid-checkout.
-    execFileSync("git", ["reset", "--quiet"], { cwd: rootDir });
-  } catch (e) {
-    baselineDir = null;
-  }
+     This file used to build origin/main's bundle and assert that light
+     mode was BYTE-IDENTICAL to it, which is what turned a 557-class
+     token sweep into a checked refactor. That claim was true, it was
+     verified when the sweep landed (#46), and it has now expired —
+     for the same reason test-blocks-neutral's git baseline expired
+     when step 4 changed the editor on purpose.
 
-  if (!baselineDir || !fs.existsSync(path.join(baselineDir, "src/main.jsx"))) {
-    const msg = "no baseline available (needs git history) — the differential did not run";
-    if (process.env.REQUIRE_BASELINE === "1") {
-      console.error(`FAIL  - ${msg}`);
-      failed++;
-    } else {
-      console.log(`  skip - ${msg}`);
-    }
-  } else {
-    await test("LIGHT MODE IS BYTE-IDENTICAL: tokenising the ground changed nothing anyone can see", async () => {
-      const [after, before] = [await bundleFrom(rootDir), await bundleFrom(baselineDir)];
-      const a = await render(after, { mode: "light" });
-      const b = await render(before, { mode: "light" });
-      assert.equal(a.errors.length, 0, `the tokenised build logged errors: ${a.errors[0] || ""}`);
-      assert.ok(a.html.length > 500, "the comparison rendered almost nothing, which proves almost nothing");
-      const expected = applySubstitutions(b.html);
-      if (expected !== a.html) {
-        let i = 0;
-        while (i < Math.min(expected.length, a.html.length) && expected[i] === a.html[i]) i++;
-        console.error(`        first difference at ${i}:`);
-        console.error(`        before: ${JSON.stringify(expected.slice(Math.max(0, i - 60), i + 90))}`);
-        console.error(`        after : ${JSON.stringify(a.html.slice(Math.max(0, i - 60), i + 90))}`);
-      }
-      assert.equal(
-        expected,
-        a.html,
-        "light mode renders differently after tokenising — the only permitted difference is " +
-          SUBSTITUTIONS.map(([f, t]) => `${f} -> ${t}`).join(", ")
-      );
-      a.dom.window.close();
-      b.dom.window.close();
-    });
-  }
+     The comparison is against a MOVING baseline, so ANY intended UI
+     change breaks it: adding the ? help control to a Section did, and
+     the only ways to keep it green would have been to enumerate that
+     control as a permitted "substitution" — which it is not; the
+     substitution list is for the same pixels through a variable — or
+     to pin the baseline to a sha, which this project refuses for the
+     usual reason.
 
-  /* ---------- the axis itself ---------- */
+     **A guard that has to be suppressed to let intended changes
+     through is not a guard.** It is deleted rather than weakened, and
+     what it proved is recorded here: on 20 August 2026 the tokenised
+     build rendered light mode byte-for-byte identically to the
+     pre-token build, with two enumerated substitutions (bg-white →
+     bg-surface, and the lined-paper rule naming its tokens).
+
+     Everything below does NOT expire: those claims are about the
+     current build compared with itself in two modes, and about the
+     tokens' own values. */
 
   const js = await bundleFrom(rootDir);
 

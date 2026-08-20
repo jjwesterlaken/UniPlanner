@@ -1018,6 +1018,20 @@ pre-token build, with the permitted substitutions enumerated in the
 test rather than waved at — that enumeration is what turned a 557-class
 sweep into a checked refactor.
 
+**The byte-identical differential has since RETIRED**, and the reason
+belongs with the rule rather than with the test: it compared against a
+MOVING baseline (origin/main), so the first intended UI change on top
+of it — the `?` help control — broke it, and the only ways to keep it
+green were to enumerate a new control as a "substitution" (which it is
+not; that list is for the same pixels through a variable) or to pin a
+sha. **A guard that has to be suppressed to let intended changes
+through is not a guard**, so it was deleted rather than weakened,
+exactly as `test-blocks-neutral`'s git baseline was when step 4 changed
+the editor on purpose. What it proved is recorded in the file: on 20
+August 2026 light mode was byte-for-byte identical to the pre-token
+build under two enumerated substitutions. Everything else in that
+suite compares the current build with itself and does not expire.
+
 **Dark accents are DERIVED from each palette, never hand-picked**: the
 accent lifts toward white, `soft` becomes a low-alpha wash, `deepText`
 lightens further. Eight palettes × two modes hand-written would be 64
@@ -1581,9 +1595,11 @@ by someone, running in parallel with everything else. It is the item that
 decides when Android can ship. Confirm the current rule in the Play
 Console — it changes.
 
-**Email delivery blocks the testers too.** A closed tester who cannot
-confirm their account wastes the fortnight they are spending on you, so
-Resend (below) is a prerequisite for the test, not just for launch.
+**Email delivery was the other prerequisite, and it is DONE** (Resend,
+verified against real inboxes on 20 August 2026 — see the email section
+below). A closed tester who cannot confirm their account wastes the
+fortnight they are spending on you, so this had to land before
+recruitment, not before launch.
 
 `MOBILE-BUILD.md` has the two first-time compile guides and the
 hardware verification list. The item that decides whether offline notes
@@ -1669,11 +1685,13 @@ Cloudflare Pages setting instead of a duplicated backend. Merging to
 `main` no longer touches production at all — production only moves
 when `main` is deliberately promoted into `release`.
 
-**The one-time dashboard change (Jared's clicks):** Cloudflare
-dashboard → Workers & Pages → `uniplanner` → Settings → Builds &
-deployments → **Production branch** → change `main` to `release` →
-Save. The `release` branch already exists at the same commit `main`
-served when this landed, so the flip itself deploys nothing new.
+**The dashboard change is DONE** (Cloudflare → Workers & Pages →
+`uniplanner` → Settings → Builds & deployments → Production branch →
+`release`, 20 August 2026), and the first promote has run: both
+branches sat at `950f068` with production's build id reading
+`2bb6d4f442a5`, matching. Recorded because the same clicks are what a
+future project would need, and because "the flip happened" is the fact
+that makes every sentence below true.
 
 **The merge ritual from then on:**
 
@@ -1829,55 +1847,53 @@ record.
 
 ### Pending, in order, once someone is at a desk
 
-1. **Migration 0004, applied before the code that needs it.** It adds the
-   folder-scoped storage delete policy the in-app deletion depends on.
-   Without it `removeOwnAudio` cannot delete anything, and the deletion
-   page's "immediately" is false. **This was merged before the migration
-   was applied — the ordering mistake 0003 already taught us not to
-   make.** Migrations are applied by hand in the SQL editor; nothing in
-   CI or the deploy applies them, so the ordering is a habit, not a
-   mechanism.
-2. **Migration 0005, applied before this code reaches users.** It creates
-   `ai_notes` and its three policies. Until it is applied, every attempt
-   to move a note fails — which is the *safe* direction by design
-   (`migrateNote` returns the stub only on success, so the note stays
-   whole and readable in the blob and the next sync retries), so nothing
-   breaks and nothing is lost. But no note ever moves, so the whole
-   change quietly does nothing, which is the failure that is hardest to
-   notice. Verify by saving one AI note while signed in and checking a
-   row appears in `ai_notes`.
-3. **Migration 0008, applied as soon as convenient.** The grant audit:
-   it revokes `anon` on every table holding a student's data, so an
-   unauthenticated read fails loudly instead of returning an empty
-   list, and tightens `authenticated` to the verbs each table's
-   policies actually name. Nothing breaks while it is unapplied — the
-   silence is the status quo — but the archive list's "nothing here"
-   failure mode stays possible until it is. Verify with the anon check
-   in its header.
-4. ~~**Migration 0007**~~ — **applied 16 August 2026**, and verified
-   by hand: three policies, no update, and `update_granted = false` on
-   both three-verb tables after the revoke it carries. Left here
-   because its by-hand privilege check is what found the default-grant
-   trap that 0008 then closed everywhere.
-5. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
+**Only two genuine leftovers remain, both minor and both post-launch.**
+Everything else on this list has been applied and verified; the record
+of what each migration did is kept below the line because the ordering
+lessons are load-bearing, not because the work is outstanding.
+
+1. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+   Vault secrets migration 0004 reads. Until then the retention sweep
+   only runs opportunistically and the periods the privacy policy states
+   are aspirational rather than enforced. 0004 raises a notice saying so
+   rather than failing. The error-report digest email waits on this same
+   wiring.
+2. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
    every workflow. Both currently target Node 20, which GitHub has
    deprecated; the runners force them onto Node 24 and they work, so this
    is a warning today and not a failure. It becomes a failure on
    **GitHub's timetable, not ours**, and when the fallback is removed
-   every workflow in the repo stops at once — tests, the desktop build
-   and the function deploy together. Scheduled here rather than
-   remembered, and deliberately kept out of the native-build fix so a
-   packaging change and a runner change can be told apart if either
-   misbehaves.
-6. **Resend (or another real SMTP provider)** configured in Supabase
-   Auth → SMTP Settings. The built-in sender is rate-limited and lands in
-   spam, so password reset does not work for real users without it. See
-   the section above.
-7. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
-   Vault secrets migration 0004 reads. Until then the retention sweep
-   only runs opportunistically and the periods the privacy policy states
-   are aspirational rather than enforced. 0004 raises a notice saying so
-   rather than failing.
+   every workflow in the repo stops at once — tests, the e2e journeys,
+   the desktop build and the function deploy together. Scheduled here
+   rather than remembered.
+
+**Applied and verified — kept for the lessons, not as work:**
+
+- **0004** (folder-scoped storage delete policy) — merged before it was
+  applied, the ordering mistake 0003 had already taught. Migrations are
+  applied by hand in the SQL editor; nothing in CI or the deploy applies
+  them, so the ordering is a habit, not a mechanism. That habit is the
+  reason the widening/narrowing rule is written down at all.
+- **0005** (`ai_notes` and its three policies) — and note what it cost:
+  the table existed for weeks while EVERY insert was rejected, because
+  the id column was `uuid` and page ids are base36. "Applied" was never
+  the same as "working", which is what 0009 and its verification exist
+  to prove.
+- **0007** (`semester_archives`) — applied 16 August 2026, verified by
+  hand: three policies, no update, `update_granted = false` on both
+  three-verb tables. Its by-hand privilege check is what found the
+  default-grant trap.
+- **0008** (the grant audit) — applied, verification clean. It also
+  broke AI-note writes on the way in (PostgREST needs UPDATE for any
+  upsert), which is why the client now plain-inserts and reads 23505 as
+  already-migrated.
+- **0009** (`ai_notes.id` → `text`) — applied and **VERIFIED 20 August
+  2026**: `data_type = text` confirmed, three notes migrated carrying
+  base36 ids, and the six-step first-migration check in
+  `MOBILE-BUILD.md` passed end to end. This is the one that made the
+  storage move actually run for the first time since 0005.
+- **0010** (`client_errors`) — applied, `select count(*)` returns 0 as
+  expected on a table nothing has written to yet.
 
 **The scheduled sweep authenticates with a dedicated secret, never the
 service role key.** pg_net stores each outbound request — headers
@@ -1957,19 +1973,23 @@ The only loss was auto-sign-in: the user lands signed out and signs in
 with the password they just chose. Clunky, never blocking, and it
 improves for free now the protocol gate is in.
 
-### Email delivery is a launch requirement, not a nice-to-have
+### Email delivery — DONE, and verified against real inboxes
 
-**Supabase's built-in email sender is rate-limited to a handful of
+**Resend is configured in Supabase Auth → SMTP Settings, verified 20
+August 2026**: signup confirmation and password reset both tested with
+real inboxes, and Grace re-signed up successfully after her account was
+deleted (which exercises the confirm path from scratch, not just the
+resend path). It does NOT block the closed test any more.
+
+Why it was a launch requirement, kept because the reasoning outlives
+the task: **Supabase's built-in sender is rate-limited to a handful of
 messages an hour and lands in spam routinely.** Password reset does not
-survive real users on it: a student who cannot sign in and whose reset
+survive real users on it — a student who cannot sign in and whose reset
 email never arrives has no route back into their account and no way to
-tell whether the app or their inbox is at fault.
-
-Configure **Resend** (or another real SMTP provider) in Supabase Auth →
-SMTP Settings before launch. This is on the pending list below rather
-than in it as a footnote because the symptom — "the email never arrived"
-— is indistinguishable from a code bug to everyone except whoever checks
-the SMTP configuration.
+tell whether the app or their inbox is at fault. The symptom, "the
+email never arrived", is indistinguishable from a code bug to everyone
+except whoever checks the SMTP configuration, which is exactly why it
+could not be left to be noticed later.
 
 `EMAIL-SETUP.md` is the step-by-step, and **the SPF conflict is the part
 to read before touching DNS.** The domain already carries an SPF record
@@ -1986,8 +2006,9 @@ still be on **Authentication → URL Configuration → Redirect URLs**, for
 the same reason as before: the app passes `redirectTo` explicitly, and
 Supabase silently falls back to the Site URL if it is not allowlisted.
 
-**It blocks the closed test, not just launch.** A tester who cannot
-confirm their account wastes the fortnight they are giving you.
+**It would have blocked the closed test, not just launch** — a tester
+who cannot confirm their account wastes the fortnight they are giving
+you. That risk is now retired.
 
 ## When Netlify was the host
 
@@ -2268,8 +2289,15 @@ the same way: it hardcoded the value it was supposed to be guarding.
   the blind spot as this pattern has got. Now derived: the upserts are
   matched out of `src/` and checked against the catalogue.
 
-One is an anecdote. Ten is a rule: **derive a guard from its source of
-truth, don't restate it.** The cache name is hashed from the built bytes,
+- The **help text's worked example** quotes the marks a student needs
+  — figures that come out of `grades.js`. Typing them into the copy
+  would have let the help disagree with the screen it explains, which
+  is worse than no help. They are re-derived by running the real
+  `requiredForBand` in the test, so a change to the bands or the
+  rounding targets goes red naming the figure that moved.
+
+One is an anecdote. Eleven is a rule: **derive a guard from its source
+of truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the
 migrations, and the mirrored constants are asserted equal to the ones
@@ -2283,6 +2311,42 @@ comment instead of an assertion.
 The test for whether a guard is real is to break the thing it protects
 and watch it go red — restating a value gives you two copies to keep in
 step and a test that only checks one.
+
+## A byte-identical differential is a one-shot proof, not a standing guard
+
+Twice now — `test-blocks-neutral` when step 4 changed the editor on
+purpose, `test-dark-mode` when the `?` help control landed — a
+differential that compared the app against a previous build has been
+RETIRED rather than repaired. Same reasoning both times, which makes
+it a rule rather than two decisions.
+
+**What they are for.** A differential proves that one NAMED change
+did not alter output: the block conversion changed nothing a student
+can see; tokenising 557 ground classes changed nothing in light mode.
+That is a claim about a migration, and it is enormously valuable while
+the migration is landing — it is what turns a sweep into a checked
+refactor instead of a hope.
+
+**Why the proof expires the moment it is delivered.** The baseline is
+another commit, so it MOVES. Every legitimate later change to the same
+surface fails the comparison, and there are only two ways to get green
+again: enumerate the new thing as a permitted difference (which
+corrodes the enumeration — that list is for *the same pixels through a
+variable*, not for new markup), or pin the baseline to a sha (which
+this project refuses for the reason every restatement is refused).
+Both make the guard weaker while making it look alive.
+
+**So: write them with an expiry in mind.** Deliver the proof, keep it
+while the migration is in flight, and retire it DELIBERATELY when the
+surface it guards changes on purpose — recording in the file what it
+proved, when, and under which enumerated exceptions. What remains is
+the non-expiring assertions alongside it: those compare the current
+build with ITSELF (light against dark, legacy shape against block
+shape, a stripped note against its own husk) or check values rather
+than bytes, and none of them care what last month's build looked like.
+
+The tell that you are past the expiry: you are reaching for the
+exception list to describe something the user asked for.
 
 ## A source grep must strip comments first
 
@@ -2300,7 +2364,14 @@ forbidden thing while saying why it is forbidden:
 - the color-mix guard in `test-dark-mode.mjs` tripped on the comment
   explaining why color-mix is banned;
 - the husk's no-stroke-count check matched the two comments recording
-  why the husk copy exists.
+  why the husk copy exists;
+- and the sixth, in a new costume: a strip pattern ate CODE rather
+  than prose. `accept="image/*"` contains a literal `/*`, so stripping
+  `/*…*/` ran from that attribute to the next comment terminator and
+  removed the very line being asserted. The fix was to stop stripping
+  and match the one `<input>` element instead — **narrower beats
+  cleverer**, and a guard that reads exactly the thing it is about
+  cannot be confused by what surrounds it.
 
 The rule: **a guard that greps source must strip comments before
 matching, or reserve a marker that never appears in prose.** The
@@ -2361,9 +2432,9 @@ Account deletion clears the account's reports; anonymous rows stay
 (they belong to nobody, and sweeping them would delete other
 signed-out users' diagnostics). **The daily digest email is ruled YES
 but deferred**: build it when the closed test starts generating
-reports worth waking up to — it depends on the pg_cron/Resend wiring
-still on the pending list, and with two users the dashboard query is
-enough. One email a day via a dedicated secret (the sweep-secret
+reports worth waking up to. Resend is done; the remaining dependency
+is the pg_cron/pg_net wiring, and with two users the dashboard query
+is enough. One email a day via a dedicated secret (the sweep-secret
 rule), never one per error.
 
 **Promote-on-release** (the Hosting section has the full ritual) is
@@ -2392,7 +2463,14 @@ React writes style attributes at runtime. **The policy was verified
 in a real browser before activation** — pre-paint stamping, mount,
 dark ground, inline styles, the derived accent, every tab, and an
 injected external script and object both refused — and that check is
-re-run whenever the policy changes.
+re-run whenever the policy changes. **Confirmed in PRODUCTION on 20
+August 2026**: Pages really serves `_headers`, and the inline
+pre-paint script survives the policy (no white flash into dark mode,
+accents and folder colours correct, no console violations). That last
+link could not be tested from a dev container, because the network
+policy there blocks both the production host and `*.pages.dev` — a
+local check against the exact header is the closest a build machine
+gets, and it is not the same thing.
 
 **Rate limiting on the AI endpoints: there is none beyond allowance
 metering, stated plainly.** The allowance is a monthly SPEND ceiling
@@ -2430,6 +2508,93 @@ the answer** — deferred decisions, not forgotten ones:
   without end-to-end coverage is how business logic gets mangled.
   Condition: after launch, with the journeys in place to catch what
   the audit's changes break.
+
+## Read what the READER renders, not what the writer writes
+
+Twice now, mounting the app and inspecting the output of the
+*read-only* path has found something no test could — and both times
+the bug was invisible from the editor, where everything looked right.
+
+- The **differential mount** (handwriting removal) proved a canvas
+  with six strokes and a canvas with none produced identical HTML, so
+  half that test was decorative until the context recorded its calls.
+- The **note viewer rendered `body`** — plain text — so bold, colour,
+  highlight and font were all stripped the moment a student pressed
+  Done. **Every note anyone had formatted was being silently
+  flattened on save.** The editor showed the formatting the whole
+  time, because the editor renders `innerHTML`; nothing compared the
+  two. Found by seeding a formatted note, opening the view, and
+  reading what came out.
+
+The technique: seed the shape you care about, mount the real app, and
+assert on the *reader's* DOM. It is the only thing that catches a
+writer and a reader disagreeing, which is a class of bug that unit
+tests structurally cannot see — each half is correct on its own.
+
+The corollary, learned the same day: **rendering stored HTML makes the
+sanitiser load-bearing rather than precautionary.** A note's html is
+not something only this editor writes — the blob syncs and restores —
+so the same mount asserts a stored `<script>` and a stored `onerror`
+are stripped before reaching the DOM, and that a note whose only
+content is plain text is escaped rather than injected.
+
+## The ? help, and the two rules its copy is written under
+
+`src/helpText.js`, `HelpButton`/`HelpPanel` in PlannerApp.jsx,
+`scripts/test-help.mjs`.
+
+**A worked example, never an explanation.** Grace bounced off Grades
+not because the feature is wrong but because its payoff arrives weeks
+after its setup cost, and an abstract description of weighted averages
+does not survive contact with someone deciding whether to bother. Each
+Section already has a subtitle doing a one-line job, so help must
+answer what the subtitle cannot. A `?` that opens a thin restatement
+of the subtitle teaches people to stop tapping `?`. **If a topic
+cannot be written with a concrete example, that is a signal about the
+feature rather than about the writing** — say so instead of shipping
+something vague.
+
+**Say what it costs.** Grades needs every assessment and weight
+entered before it can say anything; a recording spends minutes and a
+short one still costs three; the archive needs an account and clears
+the semester off the device. Naming the cost up front is what stops
+someone discovering it three screens in.
+
+**The Grades figures are computed, not typed.** The example quotes the
+exam marks needed for a Distinction and a Credit, and the test
+re-derives them from `grades.js`. Writing that example also found
+something worth keeping: under the app's DEFAULT rounding the answers
+are 80% and 60%, but rounded down they are 81% and 61% — and that
+half-mark gap is the clearest available explanation of why the
+rounding setting exists, so the copy carries both.
+
+**Coverage is partial ON PURPOSE and enumerated.** Four topics ship
+(semester setup, grades, AI notes, archive), chosen where confusion
+costs something; the other fifteen Sections are listed in the test as
+not-yet-covered. A Section added later lands in neither list and goes
+red — the device-store guard's shape, because silent partial coverage
+is the thing to avoid, not partial coverage.
+
+**Inline panel, not a tooltip**: a tooltip needs a hover, and half the
+people this is for are on a phone. Pinned by a test, because "make it
+a tooltip" is the obvious tidy-up for someone who has not thought
+about touch.
+
+**The tutorial was DROPPED, not deferred** (Jared, 20 August 2026), and
+the reasoning is worth keeping: a closed test exists to discover what
+confuses people, and a tutorial pre-empts the finding by walking
+testers past the rough edges before they hit them. Orientation comes
+from the written guide sent with the install link. If real testers
+turn out to need in-app onboarding, that is a decision made later with
+evidence.
+
+**Grades and semester setup were nearly deleted and were not.** The
+proposal was to remove both; the dependency list showed courses are
+load-bearing for AI-note folders, the reading planner, study cards,
+the exam countdown, the workload forecast, the archive summary and
+every "Week 9" label — 61 references. The problem was never that the
+features are wrong, it is that they were unexplained. That is what
+this section exists to fix.
 
 ## Testing
 
