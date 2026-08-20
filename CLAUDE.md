@@ -1647,19 +1647,81 @@ not a lint.
 ## Hosting, and why merging is not deploying
 
 **The web app is hosted on Cloudflare Pages**, serving
-`www.uniplannerapp.com` from the `main` branch.
+`www.uniplannerapp.com` from the **`release`** branch — the
+promote-on-release arrangement below. `main` builds previews only.
 
 | Setting | Value |
 |---|---|
 | Build command | `npm run build:web` |
 | Output directory | `dist-web` |
 | Root directory | `/` |
-| Production branch | `main` |
+| Production branch | **`release`** |
 | Node version | `NODE_VERSION` = `22`, and `.nvmrc` |
 
 `.nvmrc` exists so the Node version is reviewable in the repo rather than
 living only in a dashboard — the same reasoning as the generated cache
 name. Keep them in step.
+
+### Promote-on-release: the gate between merging and users
+
+The cheap version of a dev/prod split, adapted to this stack: one
+Cloudflare Pages setting instead of a duplicated backend. Merging to
+`main` no longer touches production at all — production only moves
+when `main` is deliberately promoted into `release`.
+
+**The one-time dashboard change (Jared's clicks):** Cloudflare
+dashboard → Workers & Pages → `uniplanner` → Settings → Builds &
+deployments → **Production branch** → change `main` to `release` →
+Save. The `release` branch already exists at the same commit `main`
+served when this landed, so the flip itself deploys nothing new.
+
+**The merge ritual from then on:**
+
+1. PRs merge to `main` exactly as before. Each merge builds a
+   PREVIEW (the `main` branch preview URL), never production.
+2. To ship: verify the preview, then promote —
+
+   ```
+   git fetch origin && git push origin origin/main:release
+   ```
+
+   A fast-forward push of the exact commits that were verified.
+   **Never squash-merge main into release** — a squash mints new
+   commits, the branches diverge, and every later promote conflicts.
+   The ff push keeps `release` a strict prefix of `main` forever.
+3. Verify production the usual way (below) — the build id follows
+   the same bytes, so the preview's id and production's id match for
+   the same commit.
+
+**The build-id check now has TWO targets:**
+
+```
+# production — moves only on promote
+curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'
+# the main preview — moves on every merge to main
+curl -s https://main.uniplanner.pages.dev/sw.js | grep 'const CACHE'
+```
+
+After a merge to `main`, the *preview* id must match the Account tab
+of the preview URL; production is EXPECTED to lag until the promote.
+"Production is behind main" is now a state the process produces on
+purpose, not a broken deploy — the broken-deploy signal is production
+not moving *after a promote*.
+
+**THE LIMITATION, stated plainly: the database is still shared.** A
+migration applied so a preview can be exercised applies to the same
+Postgres production runs against — there is no second Supabase
+project (see the not-built list), so the apply-verify-merge migration
+ritual stays EXACTLY as it is, and the widening/narrowing ordering
+rules bind the same as before. What the gate protects is the
+app-bundle half of a release: a bad client no longer reaches users
+just because it merged. It protects nothing about the data layer.
+
+One second-order effect worth knowing: preview deployments run on
+`*.uniplanner.pages.dev`, a different origin from production, so a
+preview's localStorage is its own — signing into a preview and
+syncing writes to the REAL backend (shared database), but its local
+planner never mixes with production's.
 
 ### The app's origin is fixed, and it is not `/` forever
 
@@ -1747,7 +1809,10 @@ deploys when the account ran out of credits, and PR #6 — the fix that
 makes deploys reach users at all — sat merged and unshipped. Nothing in
 GitHub said so.
 
-So after any merge that matters, verify rather than assume:
+So after any deploy that matters, verify rather than assume — and
+under promote-on-release the verification has two targets (see the
+Promote-on-release section): after a merge to `main`, check the main
+PREVIEW's build id; after a promote, check production:
 
 ```
 curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'
@@ -1755,7 +1820,8 @@ curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'
 
 That build id must match the one on the Account tab. If it doesn't, the
 deploy didn't happen, whatever the merge said. Remember that a docs-only
-commit legitimately leaves the build id unchanged.
+commit legitimately leaves the build id unchanged — and that production
+LAGGING main is now the designed state between promotes, not a failure.
 
 Netlify remains configured and is deliberately not deleted, so there are
 two working options rather than zero. It is no longer the origin of
@@ -2293,7 +2359,20 @@ then throws an error on purpose and proves the report goes only to
 our own `client_errors` endpoint — and in demo mode goes nowhere.
 Account deletion clears the account's reports; anonymous rows stay
 (they belong to nobody, and sweeping them would delete other
-signed-out users' diagnostics).
+signed-out users' diagnostics). **The daily digest email is ruled YES
+but deferred**: build it when the closed test starts generating
+reports worth waking up to — it depends on the pg_cron/Resend wiring
+still on the pending list, and with two users the dashboard query is
+enough. One email a day via a dedicated secret (the sweep-secret
+rule), never one per error.
+
+**Promote-on-release** (the Hosting section has the full ritual) is
+the cheap dev/prod split: `release` is the Pages production branch,
+`main` builds previews, and production moves only on a deliberate
+fast-forward promote. What it buys is a gate between merging and
+users for the app bundle; what it does NOT buy is a second database —
+migrations stay shared, and the apply-verify-merge ritual is
+unchanged.
 
 **Deliberately NOT built, each with the condition that would change
 the answer** — deferred decisions, not forgotten ones:
