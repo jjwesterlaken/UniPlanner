@@ -2312,6 +2312,42 @@ The test for whether a guard is real is to break the thing it protects
 and watch it go red — restating a value gives you two copies to keep in
 step and a test that only checks one.
 
+## A byte-identical differential is a one-shot proof, not a standing guard
+
+Twice now — `test-blocks-neutral` when step 4 changed the editor on
+purpose, `test-dark-mode` when the `?` help control landed — a
+differential that compared the app against a previous build has been
+RETIRED rather than repaired. Same reasoning both times, which makes
+it a rule rather than two decisions.
+
+**What they are for.** A differential proves that one NAMED change
+did not alter output: the block conversion changed nothing a student
+can see; tokenising 557 ground classes changed nothing in light mode.
+That is a claim about a migration, and it is enormously valuable while
+the migration is landing — it is what turns a sweep into a checked
+refactor instead of a hope.
+
+**Why the proof expires the moment it is delivered.** The baseline is
+another commit, so it MOVES. Every legitimate later change to the same
+surface fails the comparison, and there are only two ways to get green
+again: enumerate the new thing as a permitted difference (which
+corrodes the enumeration — that list is for *the same pixels through a
+variable*, not for new markup), or pin the baseline to a sha (which
+this project refuses for the reason every restatement is refused).
+Both make the guard weaker while making it look alive.
+
+**So: write them with an expiry in mind.** Deliver the proof, keep it
+while the migration is in flight, and retire it DELIBERATELY when the
+surface it guards changes on purpose — recording in the file what it
+proved, when, and under which enumerated exceptions. What remains is
+the non-expiring assertions alongside it: those compare the current
+build with ITSELF (light against dark, legacy shape against block
+shape, a stripped note against its own husk) or check values rather
+than bytes, and none of them care what last month's build looked like.
+
+The tell that you are past the expiry: you are reaching for the
+exception list to describe something the user asked for.
+
 ## A source grep must strip comments first
 
 Five separate times, a grep-based guard has tripped on the comment
