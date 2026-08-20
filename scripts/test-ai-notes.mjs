@@ -2096,9 +2096,27 @@ async function run() {
     assert.ok(fs.existsSync(path.join(rootDir, "public/_headers")), "public/_headers is gone — Pages serves no security headers");
     assert.ok(fs.existsSync(path.join(rootDir, "dist-web/_headers")), "_headers did not survive the build into dist-web");
     const headers = fs.readFileSync(path.join(rootDir, "public/_headers"), "utf8");
+    /* Comment lines are the file's own explanation of the policy —
+       including the policy text — so a naive grep would pass on a
+       commented-out CSP. Strip them first (the recurring trap), then
+       assert on what Pages will actually SERVE. */
+    const served = headers
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("#"))
+      .join("\n");
     for (const h of ["X-Frame-Options: DENY", "X-Content-Type-Options: nosniff", "Referrer-Policy: no-referrer"]) {
-      assert.ok(headers.includes(h), `the active headers lost "${h}"`);
+      assert.ok(served.includes(h), `the active headers lost "${h}"`);
     }
+    /* The CSP is ACTIVE by ruling (20 August 2026). 'unsafe-inline' is
+       a deliberate concession recorded in the file; what must never
+       silently vanish is the policy itself or the directives that do
+       the actual blocking. */
+    const csp = served.split("\n").find((l) => l.includes("Content-Security-Policy:"));
+    assert.ok(csp, "the CSP is no longer served — it is a ruling, not a draft");
+    for (const directive of ["default-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "base-uri 'self'"]) {
+      assert.ok(csp.includes(directive), `the CSP lost "${directive}"`);
+    }
+    assert.ok(csp.includes("script-src 'self'"), "script-src no longer restricts to self — external injection is back");
   });
 
   await test("the deploy workflow ships BOTH functions", () => {

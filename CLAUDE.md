@@ -2379,20 +2379,34 @@ promote ritual as a script rather than folklore. CI gates
 dependencies with `npm audit --audit-level=high` — high and critical
 block, moderate and low deliberately don't (a gate that cries wolf
 gets disabled; policy reasoning in the workflow). `public/_headers`
-ships frame-denial, nosniff and no-referrer on every Pages deploy;
-the full CSP is PROPOSED in that file and inactive pending Jared's
-ruling, because it requires two allowances worth a decision
-('unsafe-inline' for the two deliberate inline scripts in index.html
-and for React style attributes — the tightening path is per-release
-hashes). **Rate limiting on the AI endpoints: there is none beyond
-allowance metering, stated plainly.** The allowance is a monthly
-SPEND ceiling per account — it bounds what any account can cost, and
+ships frame-denial, nosniff, no-referrer, a minimal
+Permissions-Policy and — Jared's ruling, 20 August 2026 — **an ACTIVE
+CSP whose `'unsafe-inline'` is a deliberate concession, not an
+oversight**: weaker than the hashed version, far stronger than
+nothing, and it still blocks external script injection, framing and
+objects. The hash path is named in the file so the concession stays
+visibly temporary — the build already holds the two inline blocks'
+bytes (it substitutes `__BUILD_ID__` into one), so it can emit
+`sha256-` hashes for script-src; style-src cannot follow, because
+React writes style attributes at runtime. **The policy was verified
+in a real browser before activation** — pre-paint stamping, mount,
+dark ground, inline styles, the derived accent, every tab, and an
+injected external script and object both refused — and that check is
+re-run whenever the policy changes.
+
+**Rate limiting on the AI endpoints: there is none beyond allowance
+metering, stated plainly.** The allowance is a monthly SPEND ceiling
+per account — it bounds what any account can cost, and
 unauthenticated calls are refused before any provider call, so
 hammering burns only the attacker's own allowance plus cheap function
 invocations. That is acceptable at closed-test scale and is NOT abuse
-prevention; if abuse appears (or at public launch), the cheap fix is
-a per-user request counter beside `ai_usage`, not a WAF — the
-functions don't sit behind Cloudflare.
+prevention. **THE TRIGGER TO BUILD IT IS THE FIRST PAYING CUSTOMER**,
+not a vague "if abuse appears": today an attacker burns their own
+free allowance, which costs them something nobody will ask us about;
+the moment allowance is *purchased*, the same act becomes a refund
+and a support conversation. The cheap fix then is a per-user request
+counter beside `ai_usage`, not a WAF — the functions don't sit behind
+Cloudflare.
 
 **Deliberately NOT built, each with the condition that would change
 the answer** — deferred decisions, not forgotten ones:
