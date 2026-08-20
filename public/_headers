@@ -1,0 +1,45 @@
+# Security headers, served by Cloudflare Pages (this file ships in
+# dist-web/ like every other public/ asset; Pages reads it from the
+# build output). Test: scripts/test-service-worker.mjs asserts it
+# survives the build.
+#
+# ACTIVE below: the headers that cannot break the app.
+# - frame-ancestors/X-Frame-Options: nothing embeds this app in a
+#   frame, and a planner is exactly the kind of thing clickjacking
+#   likes.
+# - nosniff: the build serves correct content types.
+# - Referrer-Policy no-referrer: URLs here can carry a recovery token
+#   in the hash; hashes are never sent in Referer, but no-referrer
+#   costs nothing and removes the whole question.
+# - Permissions-Policy: the app uses the microphone (recording) and
+#   nothing else on the list; everything unused is denied.
+#
+# PROPOSED, NOT ACTIVE — Content-Security-Policy. The policy below is
+# what the app can actually run under today; it is commented out
+# pending Jared's ruling because two allowances in it deserve a
+# decision rather than a default:
+#
+#   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://kuhtogvewcooigudmgwj.supabase.co; img-src 'self' data:; media-src 'self' blob:; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+#
+# What each allowance is for, and what tightening would break:
+# - script-src 'unsafe-inline': index.html carries two inline scripts
+#   ON PURPOSE (the pre-paint dark-mode block and the sw-register
+#   block). Dropping 'unsafe-inline' breaks both — dark mode flashes
+#   and the worker never registers. The tightening path is CSP hashes,
+#   which the build would need to compute per release since the
+#   blocks' bytes are part of index.html; doable, not free.
+# - style-src 'unsafe-inline': React style attributes (folder colours,
+#   theme accents) are inline styles; without it every coloured chip
+#   goes unstyled.
+# - connect-src: the Supabase project URL, which is in config.js. If
+#   the project ever moves, this line is a second place that names it.
+# - media-src blob:: the recording review screen plays back the
+#   just-recorded audio from a blob URL.
+# - The pages.dev PREVIEWS get these same headers (one file, every
+#   deploy), which is fine: same app, same backend.
+
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: microphone=(self), camera=(self), geolocation=(), payment=(), usb=()

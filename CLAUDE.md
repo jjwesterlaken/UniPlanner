@@ -2374,6 +2374,26 @@ users for the app bundle; what it does NOT buy is a second database —
 migrations stay shared, and the apply-verify-merge ritual is
 unchanged.
 
+**The cheap security items** (PR 5): `npm run promote` is the
+promote ritual as a script rather than folklore. CI gates
+dependencies with `npm audit --audit-level=high` — high and critical
+block, moderate and low deliberately don't (a gate that cries wolf
+gets disabled; policy reasoning in the workflow). `public/_headers`
+ships frame-denial, nosniff and no-referrer on every Pages deploy;
+the full CSP is PROPOSED in that file and inactive pending Jared's
+ruling, because it requires two allowances worth a decision
+('unsafe-inline' for the two deliberate inline scripts in index.html
+and for React style attributes — the tightening path is per-release
+hashes). **Rate limiting on the AI endpoints: there is none beyond
+allowance metering, stated plainly.** The allowance is a monthly
+SPEND ceiling per account — it bounds what any account can cost, and
+unauthenticated calls are refused before any provider call, so
+hammering burns only the attacker's own allowance plus cheap function
+invocations. That is acceptable at closed-test scale and is NOT abuse
+prevention; if abuse appears (or at public launch), the cheap fix is
+a per-user request counter beside `ai_usage`, not a WAF — the
+functions don't sit behind Cloudflare.
+
 **Deliberately NOT built, each with the condition that would change
 the answer** — deferred decisions, not forgotten ones:
 

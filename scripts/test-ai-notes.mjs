@@ -2079,6 +2079,28 @@ async function run() {
     );
   });
 
+  await test("the release-path guards are wired: promote script, audit gate, security headers", () => {
+    /* Three cheap things whose absence would be silent:
+       - `npm run promote` IS the promote-on-release ritual; a ritual
+         documented only in a merged PR body is a ritual nobody
+         performs, and this one stands between every merge and any
+         user seeing it.
+       - the npm audit step is CI's supply-chain gate (policy: high
+         and critical block; the reasoning lives in the workflow).
+       - public/_headers is how Cloudflare Pages serves the security
+         headers; it must keep riding the build into dist-web. */
+    const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    assert.match(pkg.scripts.promote || "", /promote\.mjs/, "the promote script is gone — the ritual is back to being folklore");
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
+    assert.match(workflow, /npm audit --audit-level=high/, "the dependency audit gate left CI");
+    assert.ok(fs.existsSync(path.join(rootDir, "public/_headers")), "public/_headers is gone — Pages serves no security headers");
+    assert.ok(fs.existsSync(path.join(rootDir, "dist-web/_headers")), "_headers did not survive the build into dist-web");
+    const headers = fs.readFileSync(path.join(rootDir, "public/_headers"), "utf8");
+    for (const h of ["X-Frame-Options: DENY", "X-Content-Type-Options: nosniff", "Referrer-Policy: no-referrer"]) {
+      assert.ok(headers.includes(h), `the active headers lost "${h}"`);
+    }
+  });
+
   await test("the deploy workflow ships BOTH functions", () => {
     /* It deployed only ai-notes for as long as ai-text existed, so
        every ai-text change needed a by-hand deploy nobody's checklist
