@@ -839,19 +839,116 @@ async function main() {
     const spent = allowanceState({ tier: "free", creditsUsed: TRIAL_CREDITS });
     assert.equal(spent.remaining, 0);
     assert.equal(canAfford(spent, "explain"), false);
-    assert.equal(spent.isFree, true, "the upgrade wording depends on knowing which tier is out");
+    assert.equal(spent.perMonth, false, "the upgrade wording depends on knowing which tier is out");
   });
 
-  await test("a free account at its limit is told what the plan adds, not only what it can't do", async () => {
+  await test("a trial account at its limit is told what the plan adds, not only what it can't do", async () => {
     const { describeExhausted } = await import(pathToUrl(path.join(rootDir, "src/aiTextCopy.js")));
-    const free = describeExhausted({ isFree: true });
-    assert.match(free.detail, /AI plan/i, "a free user out of allowance must learn what upgrading gives them");
+    const free = describeExhausted({ perMonth: false });
+    assert.match(free.detail, /AI plan/i, "a trial user out of allowance must learn what upgrading gives them");
     assert.ok(
       /lecture|record|more/i.test(free.detail),
       "saying only 'you have run out' is the version that sells nothing and helps nobody"
     );
-    const paid = describeExhausted({ isFree: false });
+    const paid = describeExhausted({ perMonth: true });
     assert.ok(!/AI plan/i.test(paid.detail), "a paying student must not be sold the plan they already have");
+  });
+
+  await test("NO TIER IS TOLD THE WRONG PERIOD — every allowance sentence, every tier", async () => {
+    /* THE BUG THIS EXISTS FOR, because it shipped: a trial tier's 60
+       credits are once ever, and every sentence in aiTextCopy.js said
+       "this month's" and "comes back at the start of next month". The
+       guard that was supposed to catch it greped helpText.js — a guard
+       scoped to a FILE rather than to a CLAIM, which the claim then
+       evaded by living somewhere else.
+
+       So this one is scoped to the claim: it runs EVERY sentence the
+       module can render, for EVERY tier the table knows about, and
+       checks the period against what allowanceForTier actually says.
+       It cannot be evaded by a sentence moving between functions, and
+       the completeness check below means it cannot be evaded by a new
+       function either. */
+    const copy = await import(pathToUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    const limits = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
+
+    /* Every export that can render an allowance sentence, mapped to a
+       call that renders ALL of it — every band, every section count. */
+    const RENDERERS = {
+      allowanceLine: (st) => [0, 0.3, 0.6, 0.8, 0.95, 1].map((fraction) => copy.allowanceLine({ ...st, fraction })),
+      describeAllowance: (st) => [0, 0.5, 1].map((fraction) => copy.describeAllowance({ ...st, fraction })),
+      lastActionWarning: (st) => [copy.lastActionWarning(st)],
+      describeExhausted: (st) => {
+        const c = copy.describeExhausted(st);
+        return [c.title, c.detail, c.action];
+      },
+      describeTextFailure: (st) =>
+        Object.keys(copy.AI_TEXT_FAILURES).flatMap((code) => {
+          const c = copy.describeTextFailure(code, st);
+          return [c.title, c.detail];
+        }),
+      READING_COPY: (st) =>
+        [0, 1, 3].flatMap((sectionsLeft) =>
+          [1, 4].flatMap((chunks) => {
+            const c = copy.READING_COPY.cantAfford({ chunks, sectionsLeft, perMonth: st.perMonth });
+            return [c.title, c.detail, c.action];
+          })
+        ),
+    };
+
+    /* THE COMPLETENESS HALF. Listing the renderers by hand would repeat
+       the original mistake one level down — the seventh function added
+       next month would be unchecked and nothing would say so. Every
+       export is either rendered above or excused BY NAME with a reason,
+       so a new one fails until somebody decides which it is. */
+    const NOT_ALLOWANCE_COPY = {
+      AI_TEXT_FAILURES: "the raw table; describeTextFailure renders every entry of it above",
+    };
+    for (const name of Object.keys(copy)) {
+      assert.ok(
+        RENDERERS[name] || NOT_ALLOWANCE_COPY[name],
+        `aiTextCopy.js exports "${name}" and this guard neither renders nor excuses it — ` +
+          "add it to RENDERERS, or to NOT_ALLOWANCE_COPY with a reason it cannot say a period"
+      );
+    }
+
+    const MONTHLY_WORDS = /\b(this|next|per|each|every|a)\s+month\b|\bmonthly\b/i;
+    for (const tier of limits.TIERS) {
+      const { perMonth } = limits.allowanceForTier(tier);
+      const state = limits.allowanceState({ tier, creditsUsed: 0 });
+      assert.equal(state.perMonth, perMonth, `allowanceState dropped the shape for "${tier}"`);
+
+      for (const [name, render] of Object.entries(RENDERERS)) {
+        for (const line of render(state).filter(Boolean)) {
+          if (perMonth) continue;
+          /* "a monthly allowance" is permitted in the ONE sentence whose
+             job is to deny it — "a one-off trial rather than a monthly
+             allowance". Matched as that whole phrase, not waved through
+             by a keyword, so any other monthly claim still fails. */
+          const denial = /one-off trial rather than a monthly allowance/i;
+          assert.ok(
+            !MONTHLY_WORDS.test(line.replace(denial, " ")),
+            `${tier} is a trial tier (once ever) and ${name} tells it: "${line}"`
+          );
+        }
+      }
+    }
+
+    /* The positive half, because absence is not a promise: a trial tier
+       must be told IN AS MANY WORDS that the credits do not come back.
+       Inferring it from two missing words is how somebody waits until
+       November for a reset that is not coming. */
+    for (const tier of limits.TRIAL_TIERS) {
+      const state = limits.allowanceState({ tier, creditsUsed: limits.TRIAL_CREDITS });
+      assert.match(
+        copy.describeExhausted(state).detail,
+        /don't reset|do not reset|one-off/i,
+        `${tier} runs out and is not told the credits do not come back`
+      );
+    }
+
+    // An unknown period promises nothing rather than guessing monthly.
+    const unknown = copy.describeTextFailure("usage_exceeded");
+    assert.ok(!MONTHLY_WORDS.test(`${unknown.title} ${unknown.detail}`), "an unknown tier is told its allowance is monthly");
   });
 
   await test("the endpoint URL is built from config, not a bundler-specific global", async () => {

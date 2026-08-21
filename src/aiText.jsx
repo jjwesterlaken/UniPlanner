@@ -19,7 +19,7 @@ import {
   describeTextFailure,
   describeExhausted,
   allowanceLine,
-  LAST_ACTION_WARNING,
+  lastActionWarning,
   READING_COPY,
 } from "./aiTextCopy.js";
 import {
@@ -96,14 +96,14 @@ export function AiActionFrame({ title, task, allowance, error, busy, children, f
           {last && (
             <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
               <TriangleAlert size={13} className="mt-0.5 shrink-0" />
-              {LAST_ACTION_WARNING}
+              {lastActionWarning(allowance)}
             </p>
           )}
           {children}
         </>
       )}
 
-      {error && <FailureNotice code={error} />}
+      {error && <FailureNotice code={error} allowance={allowance} />}
       {busy && <p className="text-xs text-stone-400">Working…</p>}
       {footer}
     </div>
@@ -120,8 +120,8 @@ function ExhaustedNotice({ allowance }) {
   );
 }
 
-function FailureNotice({ code }) {
-  const copy = describeTextFailure(code);
+function FailureNotice({ code, allowance }) {
+  const copy = describeTextFailure(code, allowance);
   /* A charged failure is amber rather than grey. The student lost
      allowance for a result they never saw, and that deserves to look
      like something happened. */
@@ -670,7 +670,7 @@ export function SummariseReading({
       ? READING_COPY.cantAfford({
           chunks: estimate.chunks,
           sectionsLeft: sectionsAffordable(allowance),
-          isFree: allowance.isFree,
+          perMonth: allowance.perMonth,
         })
       : null;
   const mergeCopy = mergeOutcome === "charged" ? READING_COPY.mergeCharged : READING_COPY.mergeFailed;
@@ -815,7 +815,7 @@ export function SummariseReading({
       {/* The generic failure notice is suppressed once a merge failure
           has its own panel below: that one says something different
           about what was charged. */}
-      {error && !mergeOutcome && <FailureNotice code={error} />}
+      {error && !mergeOutcome && <FailureNotice code={error} allowance={allowance} />}
 
       {mergeOutcome && (
         <div className="space-y-1 rounded-lg bg-amber-50 px-2.5 py-2 text-xs text-amber-900">

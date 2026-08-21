@@ -61,10 +61,17 @@ export const AI_TEXT_FAILURES = {
       "Retake the pages named above in better light, closer up, and try again.",
   },
 
-  usage_exceeded: {
-    title: "You've used all of this month's AI study help.",
-    detail: "It resets at the start of next month. Everything else in the planner keeps working as normal.",
-  },
+  /* THE ONLY ENTRY HERE THAT IS A FUNCTION, because it is the only one
+     whose wording depends on the tier: a trial account's credits do not
+     come back, and this sentence used to promise they did. A function
+     rather than a second map, so `describeTextFailure` has one branch
+     and every other entry stays a plain object. */
+  usage_exceeded: (state) => ({
+    title: `You've used all of ${allowanceNoun(state)}.`,
+    detail: [resetsSentence(state), "Everything else in the planner keeps working as normal."]
+      .filter(Boolean)
+      .join(" "),
+  }),
 
   no_access: {
     title: "AI study help isn't on your account.",
@@ -97,8 +104,16 @@ export const AI_TEXT_FAILURES = {
   },
 };
 
-/** The wording for a failure code, falling back rather than rendering blank. */
-export const describeTextFailure = (code) => AI_TEXT_FAILURES[code] || AI_TEXT_FAILURES.server_error;
+/**
+ * The wording for a failure code, falling back rather than rendering blank.
+ *
+ * `state` is optional and only `usage_exceeded` reads it. Passing none
+ * costs the period sentence, never correctness -- see allowanceNoun.
+ */
+export const describeTextFailure = (code, state) => {
+  const entry = AI_TEXT_FAILURES[code] || AI_TEXT_FAILURES.server_error;
+  return typeof entry === "function" ? entry(state) : entry;
+};
 
 /* ---------- the allowance, in words ----------
 
@@ -113,16 +128,64 @@ export const describeTextFailure = (code) => AI_TEXT_FAILURES[code] || AI_TEXT_F
    can say what an action will cost before they take it. A running
    total is a different job, and a band still does it better than a
    figure whose denominator depends on a tier this endpoint does not
-   know has just changed. */
-export function describeAllowance(fraction) {
-  const f = Math.min(1, Math.max(0, fraction || 0));
-  if (f >= 1) return "You've used all of this month's AI study help.";
-  if (f >= 0.9) return "You've nearly used up this month's AI study help.";
-  if (f >= 0.75) return "You've used about three quarters of this month's AI study help.";
-  if (f >= 0.5) return "You've used about half of this month's AI study help.";
-  if (f >= 0.25) return "You've used about a quarter of this month's AI study help.";
-  if (f > 0) return "You've used a little of this month's AI study help.";
-  return "You haven't used any of this month's AI study help yet.";
+   know has just changed.
+
+   THE PERIOD IS PART OF THE CLAIM, not decoration, and this file got
+   it wrong for a release. A trial tier's 60 credits are once ever
+   (`perMonth: false` — see aiTextLimits.js), so "this month's" is
+   false for Free and Plus, and false in the friendly-looking
+   direction: a student who reads "comes back at the start of next
+   month" waits for a reset that is not coming. aiNotes.jsx branched
+   correctly from the day tiers landed; this module did not, and the
+   guard that was supposed to catch it greped helpText.js.
+
+   ONE HELPER, NOT A TERNARY PER SENTENCE. Eleven sentences in this
+   file carry the period. Eleven independent branches is eleven
+   chances to get one wrong, and the wrong one is the one nobody
+   reads. `allowanceNoun` and the two RESET constants are the only
+   things here that know what a period is; everything else
+   interpolates them. */
+
+/* THREE ANSWERS, NOT TWO, and the third is the one that matters.
+
+   "Trial", "monthly" and DON'T KNOW are distinct — the failure copy
+   below is rendered from a bare error code and may have no state at
+   all. Reading an absent state as "monthly" is the fetchNote mistake
+   in a sentence: treating no evidence as a definitive answer. So an
+   unknown period says nothing about a period, which is a true
+   sentence in every case. Fail towards not promising. */
+const isTrial = (state) => !!state && state.perMonth === false;
+const isMonthly = (state) => !!state && state.perMonth === true;
+
+/** The allowance as a noun phrase: the ONE place "this month" is decided. */
+const allowanceNoun = (state) =>
+  isTrial(state) ? "your free AI study help" : isMonthly(state) ? "this month's AI study help" : "your AI study help";
+
+/** What happens next, or nothing at all when we cannot know. */
+const resetsSentence = (state) => (isTrial(state) ? TRIAL_DOES_NOT_RESET : isMonthly(state) ? MONTHLY_RESETS : "");
+
+/* The two sentences about what happens next. Constants because each is
+   said in two places (the exhausted notice and the readings refusal),
+   and two copies of a sentence is two chances for one to stay wrong. */
+const TRIAL_DOES_NOT_RESET =
+  "Your free credits are a one-off trial rather than a monthly allowance, so they don't reset.";
+const MONTHLY_RESETS = "It comes back at the start of next month.";
+
+/**
+ * The allowance line, in words. Takes the whole state rather than the
+ * fraction, because the PERIOD is as much a part of the sentence as the
+ * proportion and a bare number cannot carry it.
+ */
+export function describeAllowance(state) {
+  const of = allowanceNoun(state);
+  const f = Math.min(1, Math.max(0, (state && state.fraction) || 0));
+  if (f >= 1) return `You've used all of ${of}.`;
+  if (f >= 0.9) return `You've nearly used up ${of}.`;
+  if (f >= 0.75) return `You've used about three quarters of ${of}.`;
+  if (f >= 0.5) return `You've used about half of ${of}.`;
+  if (f >= 0.25) return `You've used about a quarter of ${of}.`;
+  if (f > 0) return `You've used a little of ${of}.`;
+  return `You haven't used any of ${of} yet.`;
 }
 
 /* ---------- before the work, not after ----------
@@ -135,36 +198,40 @@ export function describeAllowance(fraction) {
    this is shown BEFORE the input. */
 
 /** Shown next to an action that would take the last of the allowance. */
-export const LAST_ACTION_WARNING = "This would use the last of this month's AI study help.";
+export const lastActionWarning = (state) => `This would use the last of ${allowanceNoun(state)}.`;
 
 /**
  * What to say when there isn't enough left to do the thing.
  *
- * A free student is told what the plan ADDS. "You can't do that" sells
+ * A trial student is told what the plan ADDS. "You can't do that" sells
  * nothing and helps nobody; the point of a small free allowance is that
  * running out is the moment the upgrade makes sense, and that moment is
  * wasted on a dead end. A paying student is told when it resets and
  * nothing else -- selling someone the plan they already have is the
  * fastest way to make an app feel like it isn't listening.
+ *
+ * The trial branch says the credits do NOT come back, in as many words.
+ * It used to say the opposite, which was the worst available answer:
+ * the student has just run out, is being sold something, and is being
+ * reassured about a refill that does not exist.
  */
 export function describeExhausted(state) {
-  if (state && state.isFree) {
+  if (isTrial(state)) {
     return {
-      title: "You've used this month's free AI study help.",
-      detail:
-        "The AI plan gives you a lot more of it, plus recording and writing up your lectures. Your free allowance comes back at the start of next month either way.",
+      title: `You've used ${allowanceNoun(state)}.`,
+      detail: `The AI plan gives you a lot more of it, plus recording and writing up your lectures. ${TRIAL_DOES_NOT_RESET}`,
       action: "See what the AI plan includes",
     };
   }
   return {
-    title: "You've used all of this month's AI study help.",
-    detail: "It comes back at the start of next month. Everything else in the planner keeps working as normal.",
+    title: `You've used all of ${allowanceNoun(state)}.`,
+    detail: [resetsSentence(state), "Everything else in the planner keeps working as normal."].filter(Boolean).join(" "),
     action: null,
   };
 }
 
 /** The allowance line shown above each feature, before anything is typed. */
-export const allowanceLine = (state) => describeAllowance(state ? state.fraction : 0);
+export const allowanceLine = (state) => describeAllowance(state);
 
 /* ==================================================================
    Summarising a reading
@@ -252,17 +319,18 @@ export const READING_COPY = {
      wrong sentence here, because what a student can DO about a refusal
      is paste a shorter piece, and parts are what that advice is in.
 
-     Without this a free student who has used nothing all month, pastes
-     a long reading and is refused reads the counter as broken rather
-     than as spent — the interaction is baffling precisely because ten
-     credits is ONE shorter reading, not four of anything. */
-  cantAfford: ({ chunks, sectionsLeft, isFree }) => {
+     Without this a student who has spent nothing yet, pastes a long
+     reading and is refused reads the counter as broken rather than as
+     spent — the interaction is baffling precisely because ten credits
+     is ONE shorter reading, not four of anything. */
+  cantAfford: ({ chunks, sectionsLeft, perMonth }) => {
+    const state = { perMonth };
     const size =
       chunks > 1
-        ? `This reading is ${chunks} parts, and there's enough left this month for ${
+        ? `This reading is ${chunks} parts, and there's enough of ${allowanceNoun(state)} left for ${
             sectionsLeft === 0 ? "none of them" : sectionsLeft === 1 ? "one" : sectionsLeft
           }.`
-        : "There isn't enough of this month's AI study help left for this reading.";
+        : `There isn't enough of ${allowanceNoun(state)} left for this reading.`;
 
     /* The actionable half. If a single section still fits, saying so is
        worth more than anything else on the screen: it turns a dead end
@@ -272,12 +340,12 @@ export const READING_COPY = {
         ? "A section at a time still fits — paste a shorter piece and each one gets its own summary."
         : "";
 
-    if (isFree) {
+    if (isTrial(state)) {
       return {
         title: size,
         detail: [
           smaller,
-          "The AI plan covers readings this size in one go, along with recording and writing up your lectures. Your free allowance comes back at the start of next month either way.",
+          `The AI plan covers readings this size in one go, along with recording and writing up your lectures. ${TRIAL_DOES_NOT_RESET}`,
         ]
           .filter(Boolean)
           .join(" "),
@@ -288,7 +356,7 @@ export const READING_COPY = {
       title: size,
       /* Nothing about the plan. Selling someone what they already have
          is the fastest way to make an app feel like it isn't listening. */
-      detail: [smaller, "It comes back at the start of next month."].filter(Boolean).join(" "),
+      detail: [smaller, resetsSentence(state)].filter(Boolean).join(" "),
       action: null,
     };
   },

@@ -276,7 +276,12 @@ export const PERMANENT_FAILURE_CODES = new Set([
 
 const ERROR_MESSAGES = {
   no_access: "AI notes isn't enabled for your account yet.",
-  usage_exceeded: "You've used all your AI minutes for this month.",
+  /* NO PERIOD, and no "minutes". This map is keyed by an error code
+     with no tier in scope, so "this month" would be a promise it
+     cannot check -- and a trial account's credits never come back.
+     The allowance badge above the recorder states the shape (see
+     AI_NOTES_COPY.trialAllowance); this sentence states the fact. */
+  usage_exceeded: "You've used all your AI credits.",
   already_processing: "This recording is already being processed — try again shortly.",
   recording_too_long: "Recordings are limited to about 3 hours.",
   recording_missing: "We couldn't find that recording — please record it again.",

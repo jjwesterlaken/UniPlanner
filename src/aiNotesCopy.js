@@ -35,11 +35,20 @@ export const AI_NOTES_COPY = {
      short and worth giving -- writing the notes up costs the same
      whatever the length, so the credits aren't purely recording time. */
   /* THE ONE SENTENCE A TRIAL TIER NEEDS, and the reason it exists is
-     the word it must not contain. Every other allowance line in the app
-     says "this month", because every other allowance is monthly. A
-     free or Plus account's 60 credits are once ever, and letting a
-     student infer that from the ABSENCE of two words is how somebody
-     waits until November for a reset that is not coming. */
+     the word it must not contain. A free or Plus account's 60 credits
+     are once ever, and letting a student infer that from the ABSENCE
+     of two words is how somebody waits until November for a reset
+     that is not coming.
+
+     THE SECOND SENTENCE OF THIS COMMENT USED TO SAY "every other
+     allowance line in the app says 'this month', because every other
+     allowance is monthly." It was false when written: aiTextCopy.js
+     said it to trial accounts too, in seven bands and four other
+     sentences, and helpText.js said it twice. Believing this comment
+     is part of why nobody looked. The rule is enforced now rather
+     than asserted here -- test-help.mjs sweeps every module in src/
+     and test-ai-text-function.mjs renders every sentence for every
+     tier. */
   trialAllowance: (credits) =>
     `These ${credits} credits are a one-off trial rather than a monthly allowance — they don't reset. A credit is about a minute of recorded lecture.`,
 

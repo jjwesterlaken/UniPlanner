@@ -168,7 +168,7 @@ test("a refusal states the real numbers: how big it is and what's left", () => {
      baffling: ten credits is ONE shorter reading, not four of anything,
      and a student refused a long one after using nothing all month
      reads the counter as broken rather than as spent. */
-  const copy = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, isFree: true });
+  const copy = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, perMonth: false });
   assert.match(copy.title, /4 parts/, "the size of the reading is not stated");
   assert.match(copy.title, /one/, "what is left is not stated");
 });
@@ -176,10 +176,10 @@ test("a refusal states the real numbers: how big it is and what's left", () => {
 test("a refusal says a shorter paste still fits, when it does", () => {
   /* The actionable half. It turns a dead end into a smaller paste,
      which is the one thing the student can do about it. */
-  const some = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 2, isFree: true });
+  const some = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 2, perMonth: false });
   assert.match(some.detail, /section at a time/i);
 
-  const none = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 0, isFree: true });
+  const none = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 0, perMonth: false });
   assert.doesNotMatch(none.detail, /section at a time/i, "offered a smaller paste that would also be refused");
   assert.match(none.title, /none of them/i);
 });
@@ -189,17 +189,17 @@ test("both numbers in a refusal are parts, never units", () => {
      the first time an internal unit count reached a screen, and it
      would mean nothing to anyone. */
   for (const sectionsLeft of [0, 1, 3]) {
-    for (const isFree of [true, false]) {
-      const c = READING_COPY.cantAfford({ chunks: 4, sectionsLeft, isFree });
+    for (const perMonth of [true, false]) {
+      const c = READING_COPY.cantAfford({ chunks: 4, sectionsLeft, perMonth });
       assert.doesNotMatch(`${c.title} ${c.detail}`, /\bunits?\b/i);
     }
   }
 });
 
-test("only a free student is told what the plan adds", () => {
-  const free = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, isFree: true });
-  assert.ok(free.action, "a free student is told what the plan adds");
-  const paid = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, isFree: false });
+test("only a trial student is told what the plan adds", () => {
+  const free = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, perMonth: false });
+  assert.ok(free.action, "a trial student is told what the plan adds");
+  const paid = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, perMonth: true });
   /* Selling someone the plan they already have is the fastest way to
      make an app feel like it isn't listening. */
   assert.equal(paid.action, null);

@@ -67,7 +67,7 @@ export const HELP_TOPICS = {
     example:
       "Record a 50-minute lecture and it comes back as a summary written from what was actually said — the worked examples, the dates and figures, the lines the lecturer flagged as examinable — plus a set of study cards you tick before anything is saved. The note files itself into that course's folder.",
     cost:
-      "Every recording spends credits from a monthly allowance — a credit is about a minute of recorded lecture, and a recording shorter than three minutes still costs three. The app has to stay open while it records. Your audio is sent for transcription and deleted as soon as it has been transcribed.",
+      "Every recording spends credits from your AI allowance — a credit is about a minute of recorded lecture, and a recording shorter than three minutes still costs three. The app has to stay open while it records. Your audio is sent for transcription and deleted as soon as it has been transcribed.",
   },
 
   archive: {
@@ -89,7 +89,7 @@ export const HELP_TOPICS = {
     detail: [
       "“Review what's due” deliberately mixes cards from all your courses together instead of doing one subject at a time. That feels harder, and that is the point — switching between topics is what makes recall stick. Drill a single course when you are cramming for one exam, and interleave the rest of the time.",
       "Practice mode exists for the night before an exam, when nothing is “due” because you reviewed it all yesterday. It ignores the schedule and runs every card for a course — and it does NOT change when those cards next come up, so using it costs you nothing.",
-      "“Explain it back” during a review asks you to say the answer in your own words and marks it. It is the one part of the review that spends your monthly AI allowance.",
+      "“Explain it back” during a review asks you to say the answer in your own words and marks it. It is the one part of the review that spends your AI allowance.",
     ],
     cost:
       "Rating cards costs nothing and works offline. Only “Explain it back” spends anything: it costs one credit, and the free trial is 60 credits to spend once — so about 60 of them. A card rated Again also gets slightly harder to graduate, which is intended — it is the app noticing you find that one difficult.",

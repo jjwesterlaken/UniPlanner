@@ -1512,7 +1512,21 @@ something behind.
 tier's badge drops those two words and adds one sentence saying the
 credits do not reset — because letting a student infer that from an
 absence is how somebody waits until November for a reset that is not
-coming. A test forbids "a month" in any free-trial cost line.
+coming.
+
+**AND THAT SHIPPED HALF-DONE, which is the part to remember.** The
+AI-notes badge (`aiNotes.jsx`) branched on `perMonth` from day one;
+`aiTextCopy.js` — the module whose entire job is that sentence, on
+four screens — did not, and said "this month's" in all seven bands of
+the allowance line plus four other places. `aiNotesLogic.js` and
+`helpText.js` had one each. The guard that was supposed to prevent
+this greped three named topic ids in `helpText.js`, so it was green
+throughout; see the file-scoped-guard entry in the ledger below for
+what replaced it. **A period is now decided in exactly one place per
+module** (`allowanceNoun` / `resetsSentence` in `aiTextCopy.js`), and
+an UNKNOWN tier says nothing about a period at all rather than
+guessing monthly — the `fetchNote` three-outcomes rule, applied to a
+sentence.
 
 ## What the AI features cost, and the two numbers that were wrong
 
@@ -2142,6 +2156,32 @@ everybody, silently, with the symptom being "the app lost my notes".
 A marketing site is planned. It takes **`/` as a path change on the same
 origin**, with the app moving to **`/app`** — not a subdomain. Same
 origin means `localStorage` survives untouched.
+
+**`app.uniplannerapp.com` HAS BEEN PROPOSED AND RULED OUT, twice — it
+is the same mistake as changing the origin at all.** A subdomain is a
+different origin, `localStorage` is scoped per origin, and every local
+planner on every device is keyed to the hostname that stored it. So a
+subdomain strands exactly the data that cannot be migrated: the copy
+that exists before anyone makes an account, and the offline copy
+afterwards, both living on devices rather than on a server we can run
+a script against. It looks like a tidier URL and it is a silent data
+loss with the symptom "the app lost my notes". The reason it keeps
+coming back is that `app.` is what most products do — they do it
+because they had two origins from the start, not because moving to one
+is free. Jared ruled it out on 21 August 2026 and the reasoning is
+here so it does not have to be re-derived a third time.
+
+The consequence for **Supabase → Authentication → Redirect URLs**, so
+the allowlist is entered once: the entry that matters is
+`https://www.uniplannerapp.com/**`, which covers `/app` already and
+therefore does not need revisiting when the split lands. The bare
+origin is listed alongside it because Supabase matches exactly without
+a wildcard and `PASSWORD_RESET_REDIRECT` is pathless today. **Neither
+`capacitor://localhost` nor `http://localhost` belongs on that list**:
+`sync.js` gates `detectSessionInUrl` on `^https?:$`, so a recovery
+token delivered to a phone shell can never be consumed, and
+allowlisting a destination the app cannot read turns a working reset
+into a dead end.
 
 What that restructure will involve, so nobody reaches for `app.` out of
 habit:
@@ -2779,6 +2819,73 @@ comment instead of an assertion.
 The test for whether a guard is real is to break the thing it protects
 and watch it go red — restating a value gives you two copies to keep in
 step and a test that only checks one.
+
+### The sibling failure: a guard scoped to a FILE, not to a CLAIM
+
+Sixteenth instance, and it is worth its own heading because the fix is
+different. The value was not restated — the guard simply looked in one
+place while the claim lived in six.
+
+**The claim:** a trial tier's 60 credits are once ever, so no student
+on Free or Plus may be told an allowance is monthly. **The guard:** a
+regex over three named topic ids in `helpText.js`, matching the exact
+shape "free plan … a month". Narrow in three independent ways at once
+— one FILE, three IDS, one PHRASE — and it was green throughout while:
+
+- `aiTextCopy.js` said "this month's AI study help" in **all seven**
+  bands of the allowance line, in the last-action warning, in the
+  exhausted notice ("comes back at the start of next month"), in the
+  readings refusal, and in the `usage_exceeded` failure copy;
+- `aiNotesLogic.js` said "You've used all your AI minutes for this
+  month" — also with the pre-collapse currency still in it;
+- **`helpText.js` itself** said "spends your monthly AI allowance",
+  twice, under a fourth topic id and in a `detail` field.
+
+That last one is the sharpest part. The guard was in the right file
+and still missed it, because it had also enumerated which entries of
+that file to look at. `aiNotes.jsx` had branched on `perMonth`
+correctly since the day tiers landed, which is what made the whole
+thing look done.
+
+**The rule: scope a guard to the claim, not to the file that happened
+to hold it when you wrote the guard.** A claim can move house; a file
+list cannot follow it. Concretely, the two replacements here:
+
+- **Behavioural, over derived inputs.** Every allowance sentence
+  `aiTextCopy.js` can render, for every tier in `TIERS`, checked
+  against what `allowanceForTier` says. It cannot be evaded by a
+  sentence moving between functions — and a **completeness half**
+  (every export is rendered or excused BY NAME) means it cannot be
+  evaded by a new function either, which would have been the same
+  mistake one level down.
+- **A sweep over all of `src/`**, not one file, with each module that
+  mentions a month DECLARED with a reason — the device-store guard's
+  shape. A declaration of "branches on the tier" is checked (the file
+  must actually read `perMonth`), and a declaration of "this is the
+  sentence that DENIES a monthly allowance" is checked by removing
+  that one phrase and requiring the file to go quiet. Otherwise an
+  excuse is a rubber stamp anyone can write next to anything.
+
+**The audit that followed, since one instance is an anecdote.** Four
+more guards have this shape and none has bitten yet:
+
+| Guard | Reads | The claim is really about |
+|---|---|---|
+| the substitution-wording ban (`test-readings.mjs`) | `READING_COPY` + two modules | any user-facing wording, anywhere |
+| the "units" ban | three separate scoped greps | every screen |
+| the `color-mix()` ban (`test-dark-mode.mjs`) | `PlannerApp.jsx` | everything that ships — and the BUILT css/js is available as a target, which is why the provider-key grep reads `dist-web/app.js` |
+| `ai-text` has no storage client (`test-readings.mjs`) | `ai-text/index.ts` | the endpoint, which is **five files** — and the guard twelve lines above it already learned exactly that lesson for the table sweep |
+
+Widening them is cheap now and expensive after the third instance.
+Recorded rather than done, because none of them is currently false and
+a sweep of four guards is its own change.
+
+**And the near-miss worth keeping.** Mutation-checking the new guards
+meant editing files that already carried uncommitted work, and the
+revert reached for `git checkout scripts/test-help.mjs` — the exact
+command the section above records as having destroyed an hour of
+work. It was refused before it ran. The copy-aside rule is not a
+preference; write the `cp` first, every time.
 
 ## A byte-identical differential is a one-shot proof, not a standing guard
 

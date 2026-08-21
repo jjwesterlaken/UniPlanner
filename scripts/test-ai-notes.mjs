@@ -215,14 +215,14 @@ async function run() {
 
   await test("parseAiNotesError maps usage_exceeded to a clear sentence", () => {
     const msg = parseAiNotesError({ code: "usage_exceeded" }, 403);
-    assert.equal(msg, "You've used all your AI minutes for this month.");
+    assert.equal(msg, "You've used all your AI credits.");
   });
 
   await test("callAiNotes surfaces the server's error via a thrown Error", async () => {
     const fakeFetch = async () => ({
       ok: false,
       status: 403,
-      json: async () => ({ ok: false, code: "usage_exceeded", error: "You've used all your AI minutes for this month." }),
+      json: async () => ({ ok: false, code: "usage_exceeded", error: "You've used all your AI credits." }),
     });
     let thrown = null;
     try {
@@ -234,7 +234,7 @@ async function run() {
       thrown = err;
     }
     assert.ok(thrown, "expected callAiNotes to throw");
-    assert.equal(parseAiNotesError(thrown.body, thrown.status), "You've used all your AI minutes for this month.");
+    assert.equal(parseAiNotesError(thrown.body, thrown.status), "You've used all your AI credits.");
   });
 
   /* ---------- 4. failed transcription doesn't lose the recording ---------- */

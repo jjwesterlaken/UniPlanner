@@ -101,7 +101,6 @@ export function allowanceState({ tier, creditsUsed }) {
     used,
     remaining: Math.max(0, limit - used),
     fraction: limit > 0 ? Math.min(1, used / limit) : 1,
-    isFree: !perMonth,
   };
 }
 

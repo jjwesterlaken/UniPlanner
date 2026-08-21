@@ -31,6 +31,11 @@ import { TASK_CREDITS, creditsForTier, allowanceForTier } from "../src/aiTextLim
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appSrc = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
 
+/* The regex both halves share. "a month" and "monthly" and everything
+   between; deliberately blunt, because the fix for a false positive is
+   to reword copy that was ambiguous anyway. */
+const MONTHLY_CLAIM = /\b(this|next|per|a|each|every)\s+months?\b|\bmonthly\b/i;
+
 let passed = 0;
 let failed = 0;
 function test(name, fn) {
@@ -226,13 +231,107 @@ test("the AI costs are in the currency the SCREENS use, never in units", () => {
       `the free trial buys ${perExplain} explanations and ${id}'s copy does not say so`
     );
   }
-  for (const id of ["studyCards", "weakSpots", "practiceQuestions"]) {
+  /* WIDENED, and the widening is the point. This used to be a single
+     assertion over three topic ids' `cost` strings, matching the exact
+     shape "free plan … a month". It was narrow in three independent
+     ways at once — one FILE, three IDS, one PHRASE — and it missed a
+     violation in the same file under a fourth id ("spends your monthly
+     AI allowance"), never mind the five in aiTextCopy.js. Every topic,
+     every field, any monthly claim. */
+  for (const id of HELP_TOPIC_IDS) {
+    const t = HELP_TOPICS[id];
+    const all = [t.what, t.example, t.cost, ...[].concat(t.detail || [])].filter(Boolean).join(" ");
     assert.doesNotMatch(
-      HELP_TOPICS[id].cost,
-      /free (plan|trial)[^.]*\ba month\b/i,
-      `${id}'s cost line calls the free trial monthly — it is once ever, and waiting for a reset is a support ticket`
+      all,
+      MONTHLY_CLAIM,
+      `${id}'s help calls an allowance monthly. Help is one static string for every tier, and a trial ` +
+        "account's credits are once ever — say \"your AI allowance\" and let the badge state the shape"
     );
   }
+});
+
+
+test("NO MODULE CLAIMS AN ALLOWANCE IS MONTHLY WITHOUT BRANCHING ON THE TIER", () => {
+  /* THE GUARD THAT FAILED, GENERALISED. The narrow version above greped
+     helpText.js while the sentence it was written for lived in
+     aiTextCopy.js — five copies of it, plus one in aiNotesLogic.js and
+     two more in helpText.js itself. A guard scoped to a FILE can be
+     evaded by the claim moving house, and this claim had already moved
+     before anyone looked.
+
+     So this one sweeps all of src/. Any file whose stripped source
+     mentions a month must be DECLARED here with a reason, the same
+     shape as test-legal.mjs's device-store sweep — a new module that
+     says "resets every month" fails until somebody decides whether it
+     may. Comments are stripped first: this codebase has tripped a
+     source grep on its own explanatory prose five times, and the
+     modules below all STATE the rule they follow.
+
+     What it cannot see, said out loud: a sentence assembled at runtime
+     from fragments none of which contains the word. The behavioural
+     guard in test-ai-text-function.mjs covers exactly that for
+     aiTextCopy.js, by rendering every sentence for every tier. Between
+     them the hole is small and named. */
+  const DECLARED = {
+    "src/PlannerApp.jsx": { kind: "not an allowance", why: "the calendar's month navigation" },
+    "src/aiTextLimits.js": { kind: "not user-facing", why: "the MONTHLY tier table and the perMonth field itself" },
+    "src/aiNotes.jsx": { kind: "branches", why: "the allowance badge appends 'this month' only when perMonth" },
+    "src/aiNotesCopy.js": {
+      kind: "denies",
+      why: "trialAllowance is the sentence whose whole job is to deny a monthly allowance",
+      phrase: /one-off trial rather than a monthly allowance/i,
+    },
+    "src/aiTextCopy.js": { kind: "branches", why: "allowanceNoun and resetsSentence; rendered per tier in test-ai-text-function.mjs" },
+  };
+
+  const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? walk(p) : /\.(js|jsx)$/.test(e.name) ? [p] : [];
+    });
+
+  const srcDir = path.join(rootDir, "src");
+  const offenders = [];
+  for (const abs of walk(srcDir)) {
+    const rel = path.relative(rootDir, abs).split(path.sep).join("/");
+    const code = strip(fs.readFileSync(abs, "utf8"));
+    if (!MONTHLY_CLAIM.test(code)) {
+      assert.ok(
+        !DECLARED[rel],
+        `${rel} is declared here as mentioning a month and no longer does — delete the entry rather than leaving it`
+      );
+      continue;
+    }
+    const d = DECLARED[rel];
+    if (!d) {
+      offenders.push(rel);
+      continue;
+    }
+    /* The two declarations that are CLAIMS get checked; the two that are
+       "this isn't allowance copy" cannot be, and say so. Without this,
+       "branches" is a rubber stamp anyone can write next to anything. */
+    if (d.kind === "branches") {
+      assert.match(code, /perMonth|isTrial/, `${rel} is declared as branching on the tier and reads no such field`);
+    }
+    if (d.kind === "denies") {
+      /* Every month mention must be INSIDE the denial. Remove that one
+         phrase and the file must go quiet — otherwise a second, real
+         monthly claim is riding along behind the excuse. */
+      assert.ok(
+        !MONTHLY_CLAIM.test(code.replace(d.phrase, " ")),
+        `${rel} is excused for its denial sentence but mentions a month somewhere else too`
+      );
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `these modules mention a month and are not declared: ${offenders.join(", ")}. ` +
+      "A trial tier's credits are once ever, so 'this month' is a promise of a reset that never comes. " +
+      "Either branch on perMonth, or drop the period, then declare the file above with a reason."
+  );
 });
 
 test("practice questions and weak spots both state their precondition", () => {
