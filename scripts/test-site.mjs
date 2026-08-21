@@ -307,6 +307,133 @@ test("every store badge is behind a flag, and every flag names its condition", (
   }
 });
 
+/* ---------- the page itself ---------- */
+
+/* COMMENTS STRIPPED BEFORE ANY OF THE GREPS BELOW, and this is the
+   eighth time that has been necessary here. The page's own header
+   comment names fonts.googleapis.com in order to say why the fonts are
+   NOT loaded from it, and a check that trips over its own explanation
+   is measuring the prose.
+
+   HTML comments are safe to strip whole; in the script only BLOCK
+   comments are, because every URL in it contains a double slash and a
+   line-comment stripper would eat the code being checked. That
+   asymmetry is instance six, learned once and reused. */
+const stripHtmlComments = (t) => t.replace(/<!--[\s\S]*?-->/g, " ");
+const stripBlockComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ");
+const PAGE = stripHtmlComments(source("public/site/index.html"));
+const PAGE_JS = stripBlockComments(source("public/site/site.js"));
+/* One check needs the page WITH its comments — see the slot test. */
+const PAGE_RAW = source("public/site/index.html");
+
+test("THE PAGE MAKES NO THIRD-PARTY REQUEST — no host but this origin appears", () => {
+  /* The claim the privacy policy makes is about this ORIGIN, so a
+     marketing page pulling two fonts from Google would make it untrue
+     — and the mockup did exactly that, which is the one place the
+     markup departs from it.
+
+     Every external-looking URL is enumerated with a reason rather than
+     waved at, the same arrangement test-local-only.mjs uses: github.com
+     is a download HREF (no request until a click), and a mailto is not
+     a request at all. */
+  const allowed = [/^https:\/\/github\.com\//, /^mailto:/];
+  const urls = [...`${PAGE}\n${PAGE_JS}`.matchAll(/(?:https?:)?\/\/[^\s"'()<>]+/g)].map((m) => m[0]);
+  const external = urls.filter((u) => !allowed.some((re) => re.test(u)));
+  assert.deepEqual(external, [], `the page references external hosts: ${external.join(", ")}`);
+  for (const host of ["fonts.googleapis.com", "fonts.gstatic.com", "api.github.com", "googletagmanager", "analytics"]) {
+    assert.ok(!PAGE.includes(host), `the page still reaches ${host}`);
+  }
+  assert.ok(/@font-face/.test(PAGE), "the fonts are not self-hosted");
+  for (const f of ["inter.woff2", "newsreader.woff2"]) {
+    assert.ok(fs.existsSync(path.join(rootDir, "public/fonts", f)), `${f} is referenced but not committed`);
+  }
+});
+
+test("the page ships no service worker and no manifest of its own", () => {
+  /* Either would collide with the app's. A second worker at `/` is
+     precisely the breakage this page exists to CLEAN UP, recreated
+     deliberately; a manifest at `/` would make the browser offer to
+     install the marketing site as the app. */
+  assert.ok(!/serviceWorker\s*\.\s*register/.test(PAGE_JS), "the marketing page registers a service worker");
+  assert.ok(!/manifest\.webmanifest/.test(PAGE), "the marketing page links a web app manifest");
+});
+
+test("it releases the service worker that used to own `/`", () => {
+  /* Without this, an install from before the origin split keeps a
+     worker scoped to `/`, which now controls this page — and OFFLINE
+     that install opens the marketing site instead of the planner. It
+     has to be in the first version of the page, because the window it
+     covers is the transition itself. */
+  assert.match(PAGE_JS, /getRegistrations\(\)/, "nothing enumerates the existing registrations");
+  assert.match(PAGE_JS, /\br\.unregister\(\)/, "nothing actually unregisters anything");
+  assert.match(PAGE_JS, /^releaseTheOldWorker\(\);$/m, "the cleanup is defined but never called");
+  assert.match(PAGE_JS, /pathname === "\/"/, "the unregister is not scoped to the origin root");
+  assert.match(PAGE_JS, /scope\.origin === location\.origin/, "it would unregister workers from another origin");
+});
+
+test("every in-page link points at something that exists", () => {
+  /* The mockup's footer linked /terms, and there is no terms page. A
+     404 from the footer of a launch page is the cheapest possible
+     mistake to make and one of the more embarrassing to ship. */
+  const hrefs = [...PAGE.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+  const local = hrefs.filter((h) => h.startsWith("/") && !h.startsWith("//"));
+  const exists = {
+    "/privacy": "public/privacy.html",
+    "/delete-account": "public/delete-account.html",
+    "/icon-192.png": "public/icon-192.png",
+    "/apple-touch-icon.png": "public/apple-touch-icon.png",
+    "/fonts/inter.woff2": "public/fonts/inter.woff2",
+    "/fonts/newsreader.woff2": "public/fonts/newsreader.woff2",
+  };
+  for (const h of local) {
+    if (h === "/app") continue; // the planner, once the split lands
+    assert.ok(exists[h], `the page links ${h}, which nothing in public/ serves`);
+    assert.ok(fs.existsSync(path.join(rootDir, exists[h])), `${h} is linked but ${exists[h]} is missing`);
+  }
+  assert.ok(!local.includes("/terms"), "the footer still links /terms — no terms page exists");
+});
+
+test("the page's factual claims are ones the code can back", () => {
+  /* Three claims on a public page that are checkable here, and were
+     checked rather than assumed: the Sydney one against the privacy
+     policy, the in-app deletion one against the code that does it, and
+     the no-account one against the test that proves it. */
+  assert.match(source("public/privacy.html"), /ap-southeast-2|Sydney/, "the page says Sydney and the policy does not");
+  assert.ok(PAGE.includes("Stored in Sydney"), "the Sydney claim has gone from the page but stays in this test");
+  assert.ok(
+    fs.existsSync(path.join(rootDir, "src/accountDeletion.js")),
+    "the page promises one-tap account deletion and the module that does it is gone"
+  );
+  assert.match(source("src/PlannerApp.jsx"), /deleteAccount\(/, "nothing in the app calls deleteAccount");
+});
+
+test("the page renders its tiers and downloads from data, never from typed HTML", () => {
+  /* The mockup hard-coded two tiers, four download cards and a
+     "Download for Windows" button. All three are facts that live in
+     code — the tier table mirrors the server, the download names come
+     from the build config, the button depends on the visitor — and a
+     second copy in markup is a second copy to keep in step. */
+  for (const slot of ["data-pricing", "data-downloads", "data-store-badges", "data-hero-cta"]) {
+    assert.ok(PAGE_RAW.includes(slot), `the ${slot} slot is missing from the page`);
+  }
+  assert.ok(!/\$X\s*<small>/.test(PAGE), "a placeholder price is typed into the markup");
+  assert.ok(!/60 hours of lecture/.test(PAGE), "the page still claims 60 hours a month, which no tier gives");
+});
+
+test("the generated build facts really are what desktop/package.json says", () => {
+  /* THE DERIVATION, CHECKED. build-web.mjs writes site/build-facts.js
+     from desktop/package.json; if that generation silently stopped
+     working, the page would go on serving whatever was committed last
+     and every download button would 404 the day an artifact was
+     renamed. */
+  const facts = source("site/build-facts.js");
+  assert.ok(facts.includes(JSON.stringify(desktopPkg.repository.url)), "the repository URL is stale");
+  assert.ok(facts.includes(JSON.stringify(desktopPkg.build.productName)), "the product name is stale");
+  for (const [key, cfg] of [["nsis", desktopPkg.build.nsis], ["portable", desktopPkg.build.portable], ["linux", desktopPkg.build.linux]]) {
+    assert.ok(facts.includes(JSON.stringify(cfg.artifactName)), `the ${key} artifactName in build-facts.js is stale`);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
 if (passed === 0) {
