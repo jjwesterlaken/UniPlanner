@@ -2216,6 +2216,27 @@ async function run() {
 
   /* ---------- release signing: applied by script, secrets ignored ---------- */
 
+  await test("every test file is actually RUN by `npm test` — the list is derived, not remembered", () => {
+    /* THE ENUMERATION IN package.json IS A RESTATEMENT, and it drifts
+       the way every restatement here has: somebody adds
+       scripts/test-something.mjs, forgets the `&&`, and the suite is
+       green because it never ran. That is the same shape as the deploy
+       workflow that named one Edge Function while the repo had two.
+
+       Derived from the directory rather than typed. A new test file
+       fails this until it is wired in, which is the only moment anyone
+       is thinking about it. */
+    const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    const script = pkg.scripts.test;
+    const files = fs
+      .readdirSync(path.join(rootDir, "scripts"))
+      .filter((f) => /^test-.*\.mjs$/.test(f))
+      .sort();
+    assert.ok(files.length > 15, `only found ${files.length} test files — the glob is wrong, not the suite`);
+    const missing = files.filter((f) => !script.includes(f));
+    assert.deepEqual(missing, [], `these test files exist but \`npm test\` never runs them: ${missing.join(", ")}`);
+  });
+
   await test("the signing secrets are gitignored, and the entries cannot quietly vanish", () => {
     /* The keystore is close to irreversible to lose and CATASTROPHIC to
        publish: with the store passwords in key.properties beside it, a

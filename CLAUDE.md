@@ -1341,6 +1341,57 @@ guarded on the old columns still existing**, because 0013 removes what
 it reads and "re-runnable exactly once" is not re-runnable; a test
 applies the whole folder twice to prove it.
 
+## The marketing site: data first, design last
+
+`site/` holds everything the page READS — downloads, pricing, flags —
+and `scripts/test-site.mjs` guards it. The markup is built to Grace and
+Jared's approved mockup and is a design artefact; everything here is
+not, which is why it is separable and tested.
+
+**NO RELEASE URL IS WRITTEN DOWN.** `latest/download/<name>` is resolved
+by GitHub server-side at CLICK time, so a new release is picked up with
+no rebuild, no constant to bump, nothing to strand. The owner and repo
+come from `desktop/package.json`'s `repository` field — which
+electron-builder requires, so it cannot quietly vanish — and the asset
+names from that same file's `artifactName` templates.
+
+**THE ALTERNATIVE WAS A THIRD-PARTY REQUEST, and that is why it was not
+taken.** Fetching `api.github.com/releases/latest` works and is a
+request from the visitor's browser; the marketing site holds the same
+zero-third-party promise the app does. An `href` costs nothing until
+somebody clicks it. A test asserts `downloads.js` contains no `fetch`,
+no `XMLHttpRequest`, no `sendBeacon`, no `WebSocket`, no `EventSource`,
+and never names the API host.
+
+**THE PRICE OF THAT: asset names had to stop carrying `${version}`**, so
+the templates changed — and every download button 404s against the
+already-published v1.0.1, whose assets are version-named. **A release
+must be cut before the page is public.** `assetName` THROWS on a
+template that still has a substitution in it, because the alternative is
+a 404 on a link nothing in CI opens.
+
+**And two things fell out of looking:** `desktop/package.json` says
+1.0.0 while the published release is v1.0.1 — bumped for that release
+and reverted by a later commit — so the next tagged release would
+advertise a LOWER version to auto-update and do nothing, silently. And
+a macOS `.dmg` is published already; what is missing is signing, not a
+build. Unsigned, macOS refuses to open rather than warning, which is
+why Windows gets a note and Mac gets "coming soon".
+
+**Prices are placeholders behind a marker**, the way the UNMEASURED
+billing constant is: a test refuses to let the site ship a made-up
+figure, and a second asserts the flag and the numbers cannot disagree.
+The ALLOWANCES are not placeholders — they are asserted equal to the
+server's, because a page promising 900 credits while the server enforces
+450 is a promise made to somebody about to pay.
+
+**`SITE-DEPLOY.md` answers the origin question: the site and the split
+are one deploy**, and the three things that break if they are separated
+are an already-installed service worker still owning `/`, password
+reset landing on a marketing page, and installed PWAs opening the wrong
+thing. `SITE-ASSETS.md` is the screenshot spec — eight images, one
+sitting, on the moto g05 the Android build is verified on.
+
 ## Three product plans, and the correction inside each
 
 `PRODUCT-PLANS.md`. Plans, not builds. Sequencing: reading depth and
@@ -2701,12 +2752,19 @@ the same way: it hardcoded the value it was supposed to be guarding.
   document's section 11 predicts a token count so far from the
   alternative that one dashboard reading settles it.
 
+- The **`npm test` script** enumerated every suite by hand, so a new
+  `scripts/test-*.mjs` ran only if somebody remembered the `&&`. Found
+  by adding one and watching the suite stay green at twenty files while
+  twenty-one existed. Fifteenth instance, and the same shape as the
+  deploy workflow that named one Edge Function while the repo had two.
+  Now derived: the list is read from the directory and compared.
+
 - The **model string** `gpt-4o-mini` appears in both Edge Function
   adapters and in a measurement script. Twelfth instance, and unlike
   the browser/Deno mirrors this one is avoidable: both functions are
   Deno, in the same repository, and `ai-notes/_shared/` already exists.
 
-One is an anecdote. Fourteen is a rule: **derive a guard from its source
+One is an anecdote. Fifteen is a rule: **derive a guard from its source
 of truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the

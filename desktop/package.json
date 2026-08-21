@@ -40,7 +40,8 @@
       "identity": null
     },
     "dmg": {
-      "title": "University Planner"
+      "title": "University Planner",
+      "artifactName": "${productName}.${ext}"
     },
     "win": {
       "target": [
@@ -56,17 +57,18 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "University Planner",
-      "artifactName": "University Planner Setup ${version}.${ext}"
+      "artifactName": "${productName} Setup.${ext}"
     },
     "portable": {
-      "artifactName": "University Planner Portable ${version}.${ext}"
+      "artifactName": "${productName} Portable.${ext}"
     },
     "linux": {
       "target": [
         "AppImage"
       ],
       "icon": "build/icon.png",
-      "category": "Education"
+      "category": "Education",
+      "artifactName": "${productName}.${ext}"
     }
   }
 }
