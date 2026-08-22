@@ -967,6 +967,84 @@ async function run() {
     );
   });
 
+  /* ---------- one device at a time, on the trial tiers ---------- */
+
+  await test("the one-device rule covers exactly the tiers whose allowance is once ever", async () => {
+    /* A paid tier buys a MONTHLY allowance and where it is spent is the
+       student's business. Enforcing this on somebody who paid is the
+       error that costs a refund, so the branch is derived from the tier
+       table rather than from a list here. */
+    const d = await import(pathToFileURL(path.join(rootDir, "src/deviceIdentity.js")).href);
+    const limits = await import(pathToFileURL(path.join(rootDir, "src/aiTextLimits.js")).href);
+    for (const tier of limits.TIERS) {
+      assert.equal(
+        d.appliesTo(tier),
+        !limits.allowanceForTier(tier).perMonth,
+        `the one-device rule and the trial shape disagree about "${tier}"`
+      );
+    }
+  });
+
+  await test("a profile we could not read NEVER signs anybody out", async () => {
+    /* The fetchNote rule, applied to a session. A student on a train
+       going through a tunnel must not lose their planner because a
+       request failed — and "no rows came back" is what a dropped
+       connection, a 500 and an expired token all look like. */
+    const d = await import(pathToFileURL(path.join(rootDir, "src/deviceIdentity.js")).href);
+    for (const profile of [null, undefined]) {
+      const st = d.deviceStanding({ tier: "free", localId: "a", profile });
+      assert.equal(st.status, "unknown");
+      assert.equal(d.shouldSignOut(st), false, "an unreadable profile signed the student out");
+      assert.equal(d.shouldClaim(st), false, "an unreadable profile triggered a claim, overwriting a real one");
+    }
+  });
+
+  await test("a device that cannot identify itself is left alone, not signed out and not claiming", async () => {
+    /* getDeviceId() returns the literal "unknown-device" when
+       localStorage refuses. That string is the SAME on every device it
+       happens to, so treating it as an identity would let two of them
+       each read as holding the account — and treating it as absent
+       would re-claim on every check and write in a loop. */
+    const d = await import(pathToFileURL(path.join(rootDir, "src/deviceIdentity.js")).href);
+    const st = d.deviceStanding({ tier: "free", localId: d.UNIDENTIFIED, profile: { active_device_id: "someone-else" } });
+    assert.equal(st.status, "unknown");
+    assert.equal(d.shouldSignOut(st), false);
+    assert.equal(d.shouldClaim(st), false);
+
+    const sync = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+    assert.ok(
+      sync.includes(`return "${d.UNIDENTIFIED}"`),
+      "getDeviceId's fallback string changed and deviceIdentity.js still checks the old one"
+    );
+  });
+
+  await test("only a definitive claim by another device displaces this one", async () => {
+    const d = await import(pathToFileURL(path.join(rootDir, "src/deviceIdentity.js")).href);
+    const at = (profile, localId = "a") => d.deviceStanding({ tier: "free", localId, profile });
+    assert.equal(at({ active_device_id: null }).status, "unclaimed", "an unclaimed account should be claimed, not refused");
+    assert.equal(at({ active_device_id: "" }).status, "unclaimed");
+    assert.equal(at({ active_device_id: "a" }).status, "ours");
+    assert.equal(at({ active_device_id: "b" }).status, "displaced");
+    /* Storage cleared: we cannot prove we are the holder, but signing
+       someone out for that is worse than letting them re-claim, which
+       is what a genuine second sign-in would do anyway. */
+    assert.equal(at({ active_device_id: "b" }, null).status, "unclaimed");
+    assert.equal(d.shouldSignOut(at({ active_device_id: "b" })), true);
+    assert.equal(d.shouldSignOut(at({ active_device_id: "a" })), false);
+  });
+
+  await test("nothing mints a second device id — sync.js stays the only source", async () => {
+    /* Two ids for one device is two names for one fact, which is what
+       let isFree and perMonth drift apart. deviceIdentity.js is pure and
+       takes the id as an argument; the store it comes from is already
+       declared in the privacy documents. */
+    const src = fs.readFileSync(path.join(rootDir, "src/deviceIdentity.js"), "utf8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+    assert.ok(!/localStorage|Math\.random|Date\.now/.test(code), "deviceIdentity.js mints or stores an id of its own");
+    const stores = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+    assert.match(stores, /uni-planner-device-id/, "the device id store moved and nothing followed it");
+  });
+
   /* ---------- the native apps can actually reach the microphone ---------- */
 
   /* Fixtures mirror what `cap add ios` / `cap add android` actually

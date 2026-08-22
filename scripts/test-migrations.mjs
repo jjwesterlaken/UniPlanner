@@ -287,6 +287,17 @@ async function test(name, fn) {
   }
 }
 
+/* The app's own device id, lifted from sync.js rather than invented
+   here — the same arrangement as the uid() lift in the id-column guard,
+   and for the same reason: a literal would pin today's format and pass
+   the day the generator changed. */
+function newDeviceIdFromSource() {
+  const src = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+  const m = /^const rid = (\(\) => `[^`]+`);/m.exec(src);
+  assert.ok(m, "couldn't find sync.js's rid() helper — this guard is blind, fix the pattern");
+  return new Function(`return ${m[1]}`)()();
+}
+
 const USER = "'11111111-1111-1111-1111-111111111111'";
 const OTHER = "'22222222-2222-2222-2222-222222222222'";
 
@@ -1107,6 +1118,11 @@ async function run() {
     // Minted by newIdempotencyKey() precisely because it crosses into a
     // uuid column; the Edge Function validates it again before insert.
     "ai_notes_requests.idempotency_key": () => newIdempotencyKey(),
+    /* The one-device rule's identifier — and it is the id the app has
+       always minted for merges, not a second one. Lifted out of
+       sync.js's source the same way uid() is lifted out of
+       PlannerApp.jsx, so a change of FORMAT follows rather than pins. */
+    "profiles.active_device_id": () => newDeviceIdFromSource(),
     // Same generator, for the same reason.
     "semester_archives.id": () => newIdempotencyKey(),
     // Not an identifier but client-minted text crossing into a typed
@@ -1171,6 +1187,13 @@ async function run() {
         `insert into public.semester_archives (id, user_id, label, summary, data) values ('${v}', ${USER}, 'L', '{}', '{}')`,
       "client_errors.build_id": (v) =>
         `insert into public.client_errors (user_id, message, build_id) values (${USER}, 'boom', '${v}')`,
+      /* Not an insert, because the client cannot insert or update
+         profiles at all — 0008 revoked those and `tier` lives on that
+         table, so relaxing it would let a student set their own tier.
+         The real write path is the function, so the function is what
+         gets exercised: same question (does the column accept what the
+         client mints), asked of the only route that exists. */
+      "profiles.active_device_id": (v) => `select public.claim_device('${v}')`,
     };
     for (const [col, gen] of Object.entries(GENERATED_IDS)) {
       const value = gen();
@@ -1439,6 +1462,66 @@ async function run() {
     psqlOrThrow(db, `select * from public.add_trial_credits(${USER}, 60);`);
     psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
     assert.equal(count(db, "public.profiles", `user_id = ${USER}`), 0, "the trial counter survived account deletion");
+  });
+
+  await test("claim_device writes only the caller's own row, whoever asks", () => {
+    /* THE WHOLE REASON IT IS A FUNCTION. `profiles` holds `tier`, so
+       granting update on it to `authenticated` — the obvious way to let
+       a client record a device — would also let any student set their
+       own tier to the top one. A definer function that writes two named
+       columns is the narrow version of the same capability, and this is
+       the assertion that it really is narrow: the caller names no user,
+       so there is no parameter to point at somebody else. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    const mine = newDeviceIdFromSource();
+    const r = psql(db, `set test.uid = ${USER}; set role authenticated; select public.claim_device('${mine}');`);
+    assert.equal(r.ok, true, `claim_device refused an authenticated caller: ${(r.err || "").slice(0, 200)}`);
+
+    const check = psql(db, `select user_id, active_device_id from public.profiles order by user_id;`);
+    assert.equal(check.ok, true);
+    const claimed = check.out.split("\n").filter((l) => l.includes(mine));
+    assert.equal(claimed.length, 1, "claim_device wrote a device id onto more than one account, or onto none");
+  });
+
+  await test("the client still cannot write profiles directly — tier stays out of reach", () => {
+    /* The other half. If this ever passes, the allowance system is one
+       UPDATE away from being self-service. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    const r = psql(db, `set test.uid = ${USER}; set role authenticated; update public.profiles set tier = 'ai_max' where user_id = ${USER};`);
+    const tier = psql(db, `select tier from public.profiles where user_id = ${USER};`);
+    assert.ok(!/ai_max/.test(tier.out), "an authenticated client set its own tier — profiles is writable again");
+  });
+
+  await test("a signed-out caller cannot claim a device, and is told so rather than silently ignored", () => {
+    /* 0008's rule: make "no" and "nothing" different answers. With the
+       grant revoked, anon gets a permission error; with it granted, the
+       update would match no row and return an empty set — byte-identical
+       to a successful claim of nothing. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    const r = psql(db, `set role anon; select public.claim_device('dev-whatever');`);
+    assert.equal(r.ok, false, "anon may call claim_device — a signed-out caller gets silence instead of a refusal");
+    assert.match(r.err || "", /permission denied/i, `expected a permission error, got: ${(r.err || "").slice(0, 200)}`);
+  });
+
+  await test("0015 is re-runnable, and a re-apply does not forget which device holds the account", () => {
+    /* Re-runnable is not enough on its own: `add column if not exists`
+       is inert on a second pass, but a re-apply that reset the column
+       would sign every trial student out on the next deploy that
+       re-ran the folder. So the claim is planted first and checked
+       after. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    const mine = newDeviceIdFromSource();
+    psqlOrThrow(db, `set test.uid = ${USER}; set role authenticated; select public.claim_device('${mine}');`);
+    applyMigration(db, "0015_device_claim.sql");
+    assert.equal(
+      one(db, `select active_device_id from public.profiles where user_id = ${USER};`),
+      mine,
+      "re-applying 0015 dropped the active device — every trial student would be signed out by the next deploy"
+    );
   });
 
   await test("0014 is re-runnable (a second apply changes nothing and fails nothing)", () => {
