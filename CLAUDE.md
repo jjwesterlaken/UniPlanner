@@ -2963,6 +2963,37 @@ states plainly that it cannot see layout. A guard that names its hole
 is worth more than one that looks thorough, because the hole is where
 the next instance will arrive.
 
+**AND THE WAY THE RULE FAILS EVEN WHEN YOU FOLLOW IT: reading an
+artifact that is not the one your claim is about.** The overscroll
+investigation stalled for a day on "the build is current", and the
+evidence for that was **a different fix being visible on screen** —
+the safe-area work, which shipped in the commit *before* the one in
+question. That is a real artifact, honestly read, and it answers a
+different question. Four rebuilds reproduced the same result because a
+`git checkout` had aborted and every later command in the block ran
+against `main`.
+
+So the check has to name the change: not "is this build recent" but
+"is THIS rule in the running page". One line settled it —
+
+```js
+[...document.styleSheets]
+  .flatMap(s => { try { return [...s.cssRules]; } catch (e) { return []; } })
+  .filter(r => /html/.test(r.selectorText || "")).map(r => r.cssText)
+```
+
+— and it should have been the first thing run, not the fifth.
+
+**The mechanical half is worth its own line, because it is silent:
+`git checkout <branch>` ABORTS when an untracked file would be
+overwritten**, and in a multi-command block the failure scrolls away
+while everything after it runs on the old checkout. The trigger here
+was an untracked `mobile/package-lock.json` colliding with the
+branch's tracked one. Nothing looked broken; the build simply was not
+the build anyone thought it was. **Check the exit status of a checkout
+before trusting anything downstream of it** — `git rev-parse --short
+HEAD` after the checkout costs nothing and answers it.
+
 The limit worth stating: some artifacts are unreachable from a build
 machine. A WKWebView's computed styles, an encoder's output bitrate, a
 store's upload validator and an Edge Function secret are all beyond

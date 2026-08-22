@@ -442,7 +442,80 @@ that is covered by the table-driven test.
 
 ## D. Cosmetic
 
-### 4b. The overscroll gutter — **REOPENED. The CSS is correct and the bars are not the document.**
+### 4b. The overscroll gutter — **DIAGNOSED, AND FIXED BY A DELETION**
+
+**Confirmed on device at `1526913`:** the rule is present in
+`dist-web/app.css` AND in the shell's own `document.styleSheets`, and
+the bars are still there in dark mode. So `rgba(0, 0, 0, 0)` on the
+root is WebKit reporting the *used* value per CSS Backgrounds §2.11.2
+— the canvas is painted correctly and the overhang is the scroll
+view's own background. No CSS reaches it.
+
+**The remedy is one line of JSON, and it is a deletion.** Capacitor's
+`CAPBridgeViewController` — read from `@capacitor/ios@8.5.0`, not
+recalled:
+
+```swift
+if let backgroundColor = configuration.backgroundColor {
+    aWebView.backgroundColor = backgroundColor
+    aWebView.scrollView.backgroundColor = backgroundColor
+} else {
+    // Use the system background colors if background is not set by user
+    aWebView.backgroundColor = UIColor.systemBackground
+    aWebView.scrollView.backgroundColor = UIColor.systemBackground
+}
+```
+
+`UIColor.systemBackground` is a **dynamic colour**: it resolves per
+appearance and follows the device between light and dark on its own.
+A configured hex cannot. So **setting the key is strictly worse than
+not setting it**, and the fix is to remove it — no native code, no
+plugin, no bridge.
+
+`CAPInstanceDescriptor` reads `ios.backgroundColor` and falls back to
+the **top-level** `backgroundColor`, so both have to go or the dynamic
+branch is never reached. `android.backgroundColor` is read separately
+and is untouched.
+
+**What this costs, stated honestly, because it is not perfect:**
+
+| | today | after |
+|---|---|---|
+| phone in dark, app on System | white bars | dark, tracking the OS |
+| phone in light, app on System | invisible (the colours coincide) | invisible |
+| phone in light, app overridden to dark | white bars | **still light bars** |
+| exact colour | `#f5f5f4` always | `#000000` dark / `#ffffff` light, against `--page`'s `24 22 20` / `245 245 244` |
+
+Two residual imperfections, both deliberate. `systemBackground`
+follows the **system** appearance, not the in-app override — so the
+one case it does not fix is a student who has overridden the mode
+against their phone. Our default is System, so that is the minority of
+a minority, and it is strictly better than always-light. And the
+colours are near-matches rather than exact: near-black against
+`rgb(24,22,20)`, pure white against `#f5f5f4`. At the very edge of an
+overscroll that stops reading as *white bars* and starts reading as
+the ground, which is the whole of what this is for.
+
+**What perfection would cost, and why it was not taken.** Matching
+`--page` exactly and following the in-app mode needs the scroll view's
+background set from Swift, which means: native code in a project that
+is generated and gitignored (so a script applies it, the
+`native-permissions.mjs` pattern), plus a way for the web app to tell
+native the mode changed — a Capacitor plugin, or a message handler and
+the JS to drive it. That is real native code, a re-apply step, and a
+new bridge, for a colour at the edge of a bounce. **Not worth it
+before the closed test**, and it would still be available later if
+Grace ever objects to the near-match.
+
+**`overscroll-behavior` is out**, as expected: WebKit support starts
+at iOS 16 and the deployment floor is 15.0.
+
+**This is a PREDICTION from reading Capacitor's source, not a
+measurement.** One rebuild confirms it: with the phone in dark mode,
+overscroll to either end. If the bars are black rather than white, it
+worked.
+
+### 4b (as written when the CSS was still suspected)
 
 **The root fix landed and did not fix it.** On device, dark mode, with
 `98e4b71` present:

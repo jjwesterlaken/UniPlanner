@@ -307,18 +307,40 @@ async function run() {
     const tone50 = hexOf("tone-50");
 
     const cap = JSON.parse(fs.readFileSync(path.join(rootDir, "mobile/capacitor.config.json"), "utf8"));
-    for (const [where, value] of [
-      ["backgroundColor", cap.backgroundColor],
-      ["ios.backgroundColor", cap.ios && cap.ios.backgroundColor],
-      ["android.backgroundColor", cap.android && cap.android.backgroundColor],
-    ]) {
-      assert.equal(
-        (value || "").toLowerCase(),
-        page,
-        `capacitor.config.json ${where} is not the light --page (${page}). It cannot follow the theme, so it must ` +
-          "at least be right in the mode it can be right in — and html's themed background is what covers the other one"
-      );
-    }
+
+    /* iOS DELIBERATELY CONFIGURES NO BACKGROUND COLOUR, and this is the
+       assertion that keeps it that way.
+
+       Capacitor's CAPBridgeViewController does exactly this:
+
+           if let backgroundColor = configuration.backgroundColor {
+               aWebView.backgroundColor = backgroundColor
+               aWebView.scrollView.backgroundColor = backgroundColor
+           } else {
+               aWebView.backgroundColor = UIColor.systemBackground
+               aWebView.scrollView.backgroundColor = UIColor.systemBackground
+           }
+
+       `UIColor.systemBackground` is DYNAMIC — it resolves per
+       appearance and follows the device between light and dark. A
+       configured hex cannot, and the scroll view's background is what
+       WKWebView paints in the rubber-band overhang, which is where the
+       white bars came from. Setting the key is therefore strictly worse
+       than not setting it, and the fix is a deletion.
+
+       Note the fallback chain: iOS reads `ios.backgroundColor` and then
+       the TOP-LEVEL `backgroundColor`, so BOTH have to be absent or the
+       dynamic branch is never reached. Android reads its own key and is
+       unaffected, which is why it still equals the light token below. */
+    assert.equal(cap.backgroundColor, undefined, "a top-level backgroundColor is inherited by iOS and defeats UIColor.systemBackground");
+    assert.equal(cap.ios && cap.ios.backgroundColor, undefined, "ios.backgroundColor pins the overhang to one appearance");
+
+    assert.equal(
+      ((cap.android && cap.android.backgroundColor) || "").toLowerCase(),
+      page,
+      `capacitor.config.json android.backgroundColor is not the light --page (${page}). It cannot follow the ` +
+        "theme, so it must at least be right in the mode it can be right in"
+    );
 
     const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, "public/manifest.webmanifest"), "utf8"));
     assert.equal(manifest.background_color.toLowerCase(), page, "the PWA splash ground is not the light --page");
