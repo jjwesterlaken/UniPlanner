@@ -138,6 +138,11 @@ function useLectureRecorder() {
 
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
+  /* The candidate pickSupportedMimeType() chose, held so the stop
+     handler can carry its extension through. A ref rather than state:
+     nothing renders from it, and it must survive the closure that
+     outlives the panel. */
+  const pickedRef = useRef(null);
   /* An ARRAY now: "Both" holds a microphone stream and a display stream
      at once, and the display one carries a video track we never record
      but do keep alive (see startCapture). All of them have to be
@@ -357,6 +362,7 @@ function useLectureRecorder() {
 
     streamsRef.current = [micStream, sysStream].filter(Boolean);
     chunksRef.current = [];
+    pickedRef.current = picked;
     const recorder = new MediaRecorder(recordedStream, {
       mimeType: picked.mimeType,
       audioBitsPerSecond: RECORDER_AUDIO_BITS_PER_SECOND,
@@ -487,7 +493,17 @@ function useLectureRecorder() {
         );
         cleanupStream();
         // A UUID, not uid(): this value goes into a `uuid` column.
-        dispatch({ type: "stop", blob, mimeType, idempotencyKey: newIdempotencyKey(), estimatedDurationSeconds });
+        dispatch({
+          type: "stop",
+          blob,
+          mimeType,
+          /* The candidate that was picked, not a lookup on
+             recorder.mimeType — which a platform may return with extra
+             codec parameters that no exact-match map would recognise. */
+          extension: pickedRef.current && pickedRef.current.extension,
+          idempotencyKey: newIdempotencyKey(),
+          estimatedDurationSeconds,
+        });
         resolve();
       };
       recorder.stop();
@@ -996,6 +1012,7 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
         session,
         audioBlob: state.blob,
         mimeType: state.mimeType,
+        extension: state.extension,
         idempotencyKey: state.idempotencyKey,
       });
       const result = await callAiNotes({

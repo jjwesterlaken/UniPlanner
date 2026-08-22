@@ -157,22 +157,65 @@ export const RESUMMARISE_BILLED_CREDITS = Math.max(1, Math.ceil(SUMMARY_REQ / CR
 export const MAX_REQUEST_SECONDS = 3 * 3600;
 export const PROCESSING_STALE_MINUTES = 10;
 
-// Client records at 32kbps (see src/aiNotesLogic.js
-// RECORDER_AUDIO_BITS_PER_SECOND) — 3h of audio ≈ 43.2MB. Kept well
-// below the Storage free-tier 50MB/file ceiling, with headroom for
-// container/muxing overhead. If the client's recorded bitrate ever
-// changes, this constant and RECORDER_AUDIO_BITS_PER_SECOND must
-// change together.
-//
-// Verified this still holds for Groq specifically: Groq's documented
-// file-size caps (25MB free tier / 100MB dev tier) are stated for the
-// `file` (direct upload) parameter. Its own docs point to the `url`
-// parameter — which is what this app always uses (see groq.js) — as the
-// way to handle larger files, and don't list a separate ceiling for it.
-// No evidence was found requiring this cap to move; if a real long
-// recording is ever rejected by Groq in practice, this is the constant
-// to revisit (alongside whether chunking is needed instead).
-export const MAX_BODY_BYTES = 46_000_000;
+/* ---------- the upload ceiling, DERIVED FROM A MEASUREMENT ----------
+
+   IT WAS DERIVED FROM AN ASSUMPTION AND THE ASSUMPTION WAS WRONG. The
+   old figure came from "the client asks for 32 kbps, so 3h is 43.2MB,
+   round up for container overhead". The client does ask for 32 kbps and
+   Chrome delivers it — but iOS's Opus encoder FLOORS at about 51 kbps
+   whatever it is asked for, measured on device with
+   tools/measure-audio.html (row 1: 51 kbps; row 4, no bitrate
+   requested, 202 kbps — so the option is honoured, just not below a
+   floor).
+
+   At 51 kbps a two-hour lecture is 45.9MB against a 46MB ceiling: a
+   margin of 0.22%, which is no margin. Two hours is the stated use
+   case, so the ceiling has to be re-derived rather than nudged. */
+
+/* Measured, not assumed. One device, one iOS version — four samples
+   agreeing to 1.0%, which is what makes an extrapolation from a short
+   recording legitimate at all. Re-measure with tools/measure-audio.html
+   if the recorder's format or constraints change. */
+export const MEASURED_IOS_OPUS_BITS_PER_SECOND = 51_000;
+
+/* WHY 25% AND NOT 5%. The 1.0% spread is WITHIN one device: it says the
+   encoder is near-constant for a given platform, and nothing at all
+   about a different iPhone, a different iOS version, or content that
+   encodes harder. We have one measurement, so the headroom is covering
+   the unmeasured axes rather than the measured one. 25% absorbs a
+   meaningfully different encoder default without making the ceiling
+   meaningless — and the asymmetry decides it: too tight loses a
+   lecture, too loose costs a larger upload. */
+export const UPLOAD_HEADROOM = 1.25;
+
+/* WHAT THE DASHBOARD IS SET TO, as a constant rather than as folklore.
+
+   Storage enforces its own per-file limit and it is the LOWER of two
+   settings: a project-global limit and the bucket's own, which cannot
+   exceed the global. Free projects cap at 50MB; Pro allows far more.
+   BOTH have to be raised, in the dashboard, BEFORE this constant moves
+   — the same widening-goes-first rule the migrations follow. Raising
+   only the bucket does nothing, because the global still binds.
+
+   Keeping the number here is what lets MAX_BODY_BYTES stay correct at
+   every stage of that deployment instead of only at the end. */
+export const LECTURE_AUDIO_FILE_LIMIT_BYTES = 50_000_000;
+
+/* Our refusal must land BEFORE Storage's, or the student waits through
+   the whole upload for an error that explains nothing. This is the
+   room that buys. */
+const STORAGE_REFUSAL_MARGIN_BYTES = 2_000_000;
+
+/* Groq's documented file-size caps are stated for the `file` (direct
+   upload) parameter; its docs point at the `url` parameter — which is
+   what this app always uses, see groq.js — as the way to handle larger
+   files, with no separate ceiling stated. If a real long recording is
+   ever rejected by Groq, this is the constant to revisit alongside
+   whether chunking is needed instead. */
+export const MAX_BODY_BYTES = Math.min(
+  Math.ceil((MEASURED_IOS_OPUS_BITS_PER_SECOND * MAX_REQUEST_SECONDS * UPLOAD_HEADROOM) / 8),
+  LECTURE_AUDIO_FILE_LIMIT_BYTES - STORAGE_REFUSAL_MARGIN_BYTES
+);
 
 export const LECTURE_AUDIO_BUCKET = "lecture-audio";
 export const SIGNED_URL_TTL_SECONDS = 600; // 10 minutes

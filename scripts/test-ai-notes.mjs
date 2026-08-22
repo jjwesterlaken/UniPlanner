@@ -104,6 +104,11 @@ import {
   USD_PER_1M_SUMMARY_OUTPUT,
   TYPICAL_SUMMARY_OUTPUT_TOKENS,
   TYPICAL_SUMMARY_INPUT_TOKENS,
+  MAX_BODY_BYTES,
+  MAX_REQUEST_SECONDS,
+  MEASURED_IOS_OPUS_BITS_PER_SECOND,
+  UPLOAD_HEADROOM,
+  LECTURE_AUDIO_FILE_LIMIT_BYTES,
 } from "../supabase/functions/ai-notes/config.ts";
 import { deepgramAdapter } from "../supabase/functions/ai-notes/deepgram.js";
 import { groqAdapter, isSizeError } from "../supabase/functions/ai-notes/groq.js";
@@ -895,10 +900,119 @@ async function run() {
        that refuses at a different number than the server is either
        rejecting uploads the server would have taken, or waving through
        ones it will not. */
+    /* The REAL value, imported, not a literal matched out of the source.
+       It stopped being a literal the moment it was derived, and a regex
+       for one would now match nothing and pass vacuously — which is the
+       failure mode of every guard that reads a value it also assumes
+       the shape of. */
+    assert.equal(MAX_UPLOAD_BYTES_HINT, MAX_BODY_BYTES, "the mirrored upload ceiling has drifted from the server's");
+  });
+
+  await test("the object's extension is the recorder's own, not a second lookup", async () => {
+    /* THE isFree/perMonth SHAPE, one more time. CANDIDATE_MIME_TYPES
+       pairs each mime type with its extension; the client used to throw
+       that half away and re-derive it from EXTENSION_FOR_MIME, a map in
+       another file keyed by EXACT mime string with `|| "webm"` behind
+       it.
+
+       The failure that was waiting: iOS's mp4 candidate would be added
+       as "audio/mp4; codecs=mp4a.40.2" for the format comparison, no
+       key would match, and AAC bytes would be stored at a .webm path.
+       The server allowlists webm and Groq sniffs the container, so
+       nothing would fail — the path would just be a lie. */
+    const { uploadAudio } = await import(pathToFileURL(path.join(rootDir, "src/aiNotesClient.js")).href);
+    let stored = null;
+    const client = { storage: { from: () => ({ upload: async (p) => ((stored = p), { error: null }) }) } };
+    const args = { session: { user: { id: "u" } }, audioBlob: { size: 10 }, idempotencyKey: "k", supabaseClient: client };
+
+    await uploadAudio({ ...args, mimeType: "audio/mp4; codecs=mp4a.40.2", extension: "m4a" });
+    assert.equal(stored, "u/k.m4a", "a codec-parameterised mime type no longer stores under its own extension");
+
+    /* No fallback: a missing extension is a caller that did not carry
+       the recorder's choice through, and guessing is what produced the
+       lie. Refusing is louder and costs nothing — nothing is uploaded. */
+    stored = null;
+    await assert.rejects(() => uploadAudio({ ...args, mimeType: "audio/mp4" }), /file type is missing/i);
+    assert.equal(stored, null, "it uploaded anyway after refusing");
+
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotesClient.js"), "utf8");
+    assert.ok(!/EXTENSION_FOR_MIME\s*[=\[]/.test(src), "the second extension map is back");
+  });
+
+  await test("every recordable format the client offers is one the server allows", () => {
+    /* Both halves in one place now, so the only way to add a format is
+       to add the pair — and this is what stops the client offering one
+       the server's allowlist would reject at the folder listing. */
+    const logic = fs.readFileSync(path.join(rootDir, "src/aiNotesLogic.js"), "utf8");
+    const block = logic.slice(logic.indexOf("const CANDIDATE_MIME_TYPES"), logic.indexOf("]", logic.indexOf("const CANDIDATE_MIME_TYPES")));
+    const extensions = [...block.matchAll(/extension:\s*"([a-z0-9]+)"/g)].map((m) => m[1]);
+    assert.ok(extensions.length >= 3, `expected the candidate list, found ${extensions.length} entries`);
     const cfg = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/config.ts"), "utf8");
-    const m = /export const MAX_BODY_BYTES = ([0-9_]+);/.exec(cfg);
-    assert.ok(m, "MAX_BODY_BYTES is gone from the Edge Function config");
-    assert.equal(MAX_UPLOAD_BYTES_HINT, Number(m[1].replace(/_/g, "")), "the mirrored upload ceiling has drifted");
+    const allowed = /export const AUDIO_EXTENSIONS = \[([^\]]*)\]/.exec(cfg);
+    assert.ok(allowed, "AUDIO_EXTENSIONS is gone from the Edge Function config");
+    for (const ext of new Set(extensions)) {
+      assert.match(allowed[1], new RegExp(`"${ext}"`), `the client can record .${ext} and the server's allowlist refuses it`);
+    }
+  });
+
+  await test("the upload ceiling is DERIVED from the measured rate, not chosen", () => {
+    /* It was chosen once — 46MB, from "32 kbps x 3h, round up" — and
+       the 32 was an assumption the device disproved. A derived ceiling
+       moves when the measurement does; a chosen one needs somebody to
+       remember. */
+    const cfg = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/config.ts"), "utf8");
+    assert.ok(
+      !/export const MAX_BODY_BYTES = [0-9_]+;/.test(cfg),
+      "MAX_BODY_BYTES is a literal again — re-derive it from the measured bitrate and the longest supported recording"
+    );
+    const wanted = Math.ceil((MEASURED_IOS_OPUS_BITS_PER_SECOND * MAX_REQUEST_SECONDS * UPLOAD_HEADROOM) / 8);
+    assert.equal(MAX_BODY_BYTES, Math.min(wanted, LECTURE_AUDIO_FILE_LIMIT_BYTES - 2_000_000));
+  });
+
+  await test("the ceiling never exceeds what Storage will actually take", () => {
+    /* THE ORDERING THIS ENFORCES. Storage's per-file limit is the lower
+       of a project-global setting and the bucket's own, and both are
+       dashboard state. A ceiling above them would wave through uploads
+       that Storage rejects — which is precisely the failure the
+       client-side check was added to prevent, reintroduced one layer
+       up. So the dashboard is raised FIRST and this constant follows,
+       the same widening-goes-first rule the migrations use. */
+    assert.ok(
+      MAX_BODY_BYTES < LECTURE_AUDIO_FILE_LIMIT_BYTES,
+      `MAX_BODY_BYTES (${MAX_BODY_BYTES}) is at or above the bucket's own limit (${LECTURE_AUDIO_FILE_LIMIT_BYTES}) — ` +
+        "our refusal would arrive after Storage's, which is the slow one with no explanation"
+    );
+  });
+
+  await test("A TWO-HOUR LECTURE FITS — the use case, at the rate iOS really produces", () => {
+    /* The regression that mattered: at 51 kbps two hours is 45.9MB
+       against the old 46MB ceiling, a margin of 0.22%. Technically
+       inside it and practically not — a lecture that runs thirty
+       seconds long failed. Asserted with real slack rather than by
+       equality, because a ceiling that only just clears the use case is
+       the state this is fixing. */
+    /* ANCHORED TO THE MEASUREMENT, not to the constant. Computing both
+       sides from MEASURED_IOS_OPUS_BITS_PER_SECOND made this pass when
+       that constant was mutated back to the old 32 kbps assumption —
+       the mirror-equality blind spot, demonstrated: two copies moving
+       together is exactly what a comparison between them cannot see.
+
+       51_000 is a FACT ABOUT HARDWARE (tools/measure-audio.html row 1,
+       iPhone, 22 August 2026), not a restatement of code, so pinning it
+       is the point. Re-measuring changes this line and the constant in
+       one deliberate commit, which is the intent. */
+    const MEASURED_ON_DEVICE_BPS = 51_000;
+    assert.equal(
+      MEASURED_IOS_OPUS_BITS_PER_SECOND,
+      MEASURED_ON_DEVICE_BPS,
+      "the config's rate no longer matches what was measured on hardware — re-measure before changing it"
+    );
+    const twoHours = (MEASURED_ON_DEVICE_BPS * 2 * 3600) / 8;
+    assert.ok(
+      MAX_BODY_BYTES >= twoHours * 1.04,
+      `a two-hour lecture is ${Math.round(twoHours / 1e6)}MB and the ceiling is ${Math.round(MAX_BODY_BYTES / 1e6)}MB — ` +
+        "under 4% of slack is not enough for a lecture that overruns"
+    );
   });
 
   await test("a recording we cannot measure is uploaded, not refused", () => {

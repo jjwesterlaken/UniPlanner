@@ -179,7 +179,7 @@ export const RECORDER_AUDIO_BITS_PER_SECOND = 32000;
    bundle cannot import from supabase/functions, and test-ai-notes.mjs
    asserts this against MAX_BODY_BYTES for the same reason the billing
    hints are asserted against theirs. */
-export const MAX_UPLOAD_BYTES_HINT = 46_000_000;
+export const MAX_UPLOAD_BYTES_HINT = 48_000_000;
 
 /**
  * Why this recording cannot be uploaded, or null if it can.
@@ -788,6 +788,11 @@ export function recorderReducer(state, action) {
         status: "stopped",
         blob: action.blob,
         mimeType: action.mimeType,
+        /* The recorder's OWN choice, carried rather than re-derived.
+           CANDIDATE_MIME_TYPES pairs each mime type with its extension;
+           re-deriving it downstream from a second map is how a stored
+           object comes to disagree with its contents. */
+        extension: action.extension,
         idempotencyKey: action.idempotencyKey,
         estimatedDurationSeconds: action.estimatedDurationSeconds,
       };

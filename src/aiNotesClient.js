@@ -124,7 +124,24 @@ export async function fetchRecordingAccess(session, { supabaseClient = supabase,
   }
 }
 
-const EXTENSION_FOR_MIME = { "audio/webm;codecs=opus": "webm", "audio/webm": "webm", "audio/mp4": "m4a", "audio/aac": "aac" };
+/* EXTENSION_FOR_MIME IS GONE, and it was the isFree/perMonth shape
+   again: a second name for a fact CANDIDATE_MIME_TYPES already holds.
+
+   pickSupportedMimeType() returns `{ mimeType, extension }` — the pair
+   the recorder chose — and the extension half was thrown away, then
+   re-derived here from a map keyed by exact mime string with
+   `|| "webm"` behind it. Two consequences, and the second is the one
+   that would have bitten: the map had to be edited in step with a list
+   in another file, and a mime string that did not match a key EXACTLY
+   stored the object as .webm whatever it really contained. Adding
+   "audio/mp4; codecs=mp4a.40.2" — the string the iOS comparison wants —
+   would have written AAC bytes to a .webm path, which the server
+   allowlists and Groq sniffs, so nothing would have failed and the
+   stored path would simply have been a lie.
+
+   The extension now travels with the mime type it belongs to, so a
+   per-platform preference is a reorder of ONE array and nothing else
+   has to follow it. */
 
 /**
  * Uploads the recorded audio straight to a private Storage bucket
@@ -136,7 +153,7 @@ const EXTENSION_FOR_MIME = { "audio/webm;codecs=opus": "webm", "audio/webm": "we
  * lets a retry re-create the object at the same key if the Edge
  * Function ever reports `recording_missing`.
  */
-export async function uploadAudio({ session, audioBlob, mimeType, idempotencyKey, supabaseClient = supabase }) {
+export async function uploadAudio({ session, audioBlob, mimeType, extension, idempotencyKey, supabaseClient = supabase }) {
   /* The session check is not redundant with the client check. `supabase`
      is non-null for every user of the real build, signed in or not --
      `isConfigured` is about whether the project is set up, not about
@@ -156,7 +173,10 @@ export async function uploadAudio({ session, audioBlob, mimeType, idempotencyKey
     err.code = refusal.code;
     throw err;
   }
-  const extension = EXTENSION_FOR_MIME[mimeType] || "webm";
+  /* No fallback, deliberately. A missing extension means the caller
+     did not carry the recorder's own choice through, and guessing
+     "webm" is how the object comes to disagree with its contents. */
+  if (!extension) throw new Error("The recording's file type is missing — please try recording again.");
   const path = `${session.user.id}/${idempotencyKey}.${extension}`;
   const { error } = await supabaseClient.storage.from(BUCKET).upload(path, audioBlob, { contentType: mimeType, upsert: true });
   if (error) throw new Error(error.message || "Couldn't upload the recording.");

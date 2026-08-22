@@ -577,10 +577,28 @@ which.**
 
 That failure and the artifact rule are the same shape at different
 scales: reading a real artifact that answers a different question. It
-has now happened three times in one investigation — a snippet that
-was not the app's configuration, a build that was not the commit
-under test, and a graph hypothesis whose arithmetic matched a
-coincidence.
+happened three times in one investigation — a snippet that was not
+the app's configuration, a build that was not the commit under test,
+and a graph hypothesis whose arithmetic matched a coincidence.
+
+**THE ASYMMETRY BETWEEN THE THREE IS THE TRANSFERABLE PART, and it is
+not that some of us are more careful.** Two of them were acted on: the
+218 kbps figure was reported as a defect and a re-derivation of two
+ceilings was ordered from it, and the stale build sent four rebuilds
+after a fix that was already present. The third — the 48 kHz stereo
+graph — was written up as *the likeliest cause*, with the arithmetic
+that made it persuasive, and then **explicitly not built**, because
+the note said "that is a hypothesis, not a finding" and a control row
+was added to the harness instead. Rows 1, 2 and 3 disproved it in
+twenty seconds each.
+
+So the discipline that saved it was not scepticism about the
+mechanism — the mechanism was plausible and I believed it. It was
+**refusing to act on a plausible mechanism before a control had
+separated it from the alternative**, which costs one row out of six
+and is available every single time. A persuasive cause and a measured
+cause feel identical from the inside; the only thing that tells them
+apart is the run you did not need to do.
 
 **AND THE SECOND QUESTION: how much does this vary, before I
 extrapolate from it?** Three seconds justified a claim about three
