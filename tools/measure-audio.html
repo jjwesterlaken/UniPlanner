@@ -15,7 +15,9 @@
   td.n{text-align:right;font-variant-numeric:tabular-nums}
   .bad{color:#be123c;font-weight:600}
   .good{color:#047857;font-weight:600}
-  pre{background:#fff;border:1px solid #d6d3d1;border-radius:.5rem;padding:.6rem;font-size:11px;overflow:auto;white-space:pre-wrap}
+  textarea{width:100%;height:11rem;background:#fff;border:1px solid #d6d3d1;border-radius:.5rem;padding:.6rem;font:11px/1.35 ui-monospace,Menlo,monospace}
+  .row{display:flex;gap:.5rem;align-items:center;margin-top:.5rem;flex-wrap:wrap}
+  .meta{font-size:12px;color:#57534e}
   #status{margin-top:.75rem;font-weight:600}
 </style>
 </head>
@@ -35,7 +37,17 @@
   <th>configuration</th><th class="n">bytes</th><th class="n">seconds</th><th class="n">kbps</th><th>produced</th>
 </tr></thead><tbody></tbody></table>
 <h2 style="font-size:1rem">Copy this back</h2>
-<pre id="json">(not run yet)</pre>
+<!-- A TEXTAREA, NOT A <pre>, and a button rather than a long-press.
+     The first run came back with a trailing quote and an unclosed
+     brace: valid JSON, truncated in the copy. Selecting a long
+     scrollable <pre> by hand on a phone is exactly how that happens,
+     and a malformed block is easy to paste and hard to notice.
+     select() takes the whole value regardless of scroll position. -->
+<textarea id="json" readonly wrap="off">(not run yet)</textarea>
+<div class="row">
+  <button id="copy" type="button">Copy</button>
+  <span class="meta" id="meta"></span>
+</div>
 
 <script>
 /* eslint-disable */
@@ -45,6 +57,28 @@ var HIGHPASS_HZ = 80;           // src/audioSources.js ROOM_HIGHPASS_HZ
 var results = { userAgent: navigator.userAgent, requestedBps: REQUESTED_BPS, seconds: SECONDS, rows: [] };
 
 function el(id) { return document.getElementById(id); }
+
+/* Written after EVERY row, not once at the end, so a run interrupted by
+   a permission prompt or a crash still leaves a complete, parseable
+   block for the rows that did finish.
+
+   The byte count beside it is the point: a truncated paste is
+   indistinguishable from a complete one by eye, and impossible to
+   detect on the receiving end. With a stated length, a short paste is
+   obvious. The JSON.parse round-trip catches the other direction —
+   this page emitting something malformed in the first place. */
+function publish() {
+  const text = JSON.stringify(results, null, 2);
+  let status;
+  try {
+    JSON.parse(text);
+    status = `${text.length} characters — check this number after pasting`;
+  } catch (e) {
+    status = "THIS BLOCK IS MALFORMED — say so rather than pasting it";
+  }
+  el("json").value = text;
+  el("meta").textContent = status;
+}
 function say(t) { el("status").textContent = t; }
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
@@ -126,9 +160,31 @@ function addRow(name, r, note) {
   tb.appendChild(tr);
   results.rows.push({ name: name, kbps: kbps, bytes: r.bytes, ms: r.ms, producedType: r.producedType,
                       readbackBps: r.readbackBps, settings: r.settings });
+  publish();
 }
 
 el("secs").textContent = SECONDS;
+
+el("copy").onclick = async function () {
+  const ta = el("json");
+  ta.focus();
+  ta.select();
+  ta.setSelectionRange(0, ta.value.length); // iOS ignores select() alone
+  try {
+    await navigator.clipboard.writeText(ta.value);
+    el("meta").textContent = `copied ${ta.value.length} characters`;
+  } catch (e) {
+    /* Older WebViews, or a page without clipboard permission. The text
+       is selected either way, so the manual copy still works — and
+       saying so beats a button that silently does nothing. */
+    try {
+      document.execCommand("copy");
+      el("meta").textContent = `copied ${ta.value.length} characters`;
+    } catch (e2) {
+      el("meta").textContent = "selected — copy it by hand, and check the character count matches";
+    }
+  }
+};
 
 el("go").onclick = async function () {
   el("go").disabled = true;
@@ -178,7 +234,7 @@ el("go").onclick = async function () {
 
   mic.getTracks().forEach(function (t) { t.stop(); });
   say("Done. Copy the block below.");
-  el("json").textContent = JSON.stringify(results, null, 2);
+  publish();
 };
 </script>
 </body>

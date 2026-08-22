@@ -51,6 +51,7 @@ import {
   loadPreferredInput,
   savePreferredInput,
   ROOM_HIGHPASS_HZ,
+  MIC_SAMPLE_RATE,
   AUDIO_SOURCES,
 } from "./audioSources.js";
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
@@ -241,11 +242,67 @@ function useLectureRecorder() {
      single source (fall back to the raw stream, losing the filter and
      the meter — exactly the behaviour before this feature) and fatal
      for "Both", where mixing is the entire point. */
+  /* Asks for the rate, falls back to the platform default. Separated
+     out so the fallback is visible rather than buried in a ternary
+     inside a try that already swallows a different failure. */
+  const makeContext = (AudioCtx, sampleRate) => {
+    try {
+      return new AudioCtx({ sampleRate });
+    } catch (e) {
+      return new AudioCtx();
+    }
+  };
+
+  /* A mono destination, by whichever route the platform offers. The
+     constructor form takes the channel count directly; the factory does
+     not, so the property is set after. Either way a failure leaves the
+     default stereo node rather than no node at all. */
+  const monoDestination = (ctx) => {
+    try {
+      if (typeof MediaStreamAudioDestinationNode === "function") {
+        return new MediaStreamAudioDestinationNode(ctx, { channelCount: 1, channelCountMode: "explicit" });
+      }
+    } catch (e) {
+      /* fall through to the factory */
+    }
+    const dest = ctx.createMediaStreamDestination();
+    try {
+      dest.channelCount = 1;
+      dest.channelCountMode = "explicit";
+    } catch (e) {
+      /* a platform that refuses gets stereo, which is what it did before */
+    }
+    return dest;
+  };
+
   const buildGraph = ({ micStream, sysStream }) => {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtx();
-      const dest = ctx.createMediaStreamDestination();
+      /* THE GRAPH IS BUILT IN THE SHAPE WE ASKED THE MICROPHONE FOR.
+
+         micConstraints() requests 16 kHz mono — the rate Whisper works
+         at — and until now the recorder never saw that track. `new
+         AudioCtx()` takes the hardware default (48 kHz on iOS) and
+         `createMediaStreamDestination()` defaults to STEREO, so the
+         constraint was satisfied at the microphone and then discarded
+         one node later. The recorder was handed 48 kHz stereo on every
+         platform.
+
+         THIS IS NOT A BITRATE FIX, and the measurement is why. Rows
+         1/2/3 of tools/measure-audio.html came back 51 / 49 / 50 kbps
+         — raw mic, this graph, and a 16 kHz mono graph are
+         indistinguishable, because iOS's Opus encoder clamps around
+         50 kbps whatever it is fed. What this buys is that the code
+         stops misrepresenting what it does, and that six times fewer
+         samples go through a biquad filter on a phone for three hours.
+
+         BOTH SETTINGS DEGRADE RATHER THAN FAIL. A rate a platform
+         refuses throws NotSupportedError from the constructor, and a
+         recording that works at the wrong sample rate beats one that
+         does not happen — which is the same call buildGraph already
+         makes by returning null rather than throwing. */
+      const ctx = makeContext(AudioCtx, MIC_SAMPLE_RATE);
+      const dest = monoDestination(ctx);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
 

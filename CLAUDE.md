@@ -530,12 +530,21 @@ and I called the technique out as the one to reach for — *"construct
 the object, read what it actually applied, and the question is
 answered before any audio exists."*
 
-**The readback was true and the conclusion was wrong.** On a real
-iPhone, four 3-second recordings came back at 81,457 / 81,701 /
-82,228 / 82,270 bytes — a mean of **218 kbps, 6.8× what was
-requested**, while the property went on reporting 32000. WKWebView
-accepts the constructor option, stores it, reports it faithfully, and
-the encoder ignores it.
+**The readback was true and the conclusion was wrong — but not by as
+much as first recorded, and the correction is its own lesson.** Four
+3-second console recordings came back at 81,457 / 81,701 / 82,228 /
+82,270 bytes: a mean of 218 kbps, apparently 6.8× what was requested.
+**That snippet omitted `audioBitsPerSecond` entirely**, so it measured
+the platform DEFAULT and attributed it to the app. The harness proves
+it: row 4 asks for no bitrate and gets 202 kbps with a readback of
+192000, which is the same measurement repeated deliberately.
+
+**There was no 6.8× defect.** What the harness actually found is
+milder and still real: 32 kbps requested produces **51 kbps** on iOS,
+so WKWebView neither ignores the option nor honours it — it floors
+Opus at roughly 50 kbps. The readback still says 32000. So the rule
+below stands at 1.6× rather than 7×, which is the size that matters
+for the ceilings and not for the principle.
 
 So the technique is still worth reaching for, with its scope stated:
 **a readback tells you what the API ACCEPTED. It cannot tell you what
@@ -555,6 +564,24 @@ quality or size hint, of anything a `getSettings()` reports back about
 hardware. Where the two could differ and the difference would cost
 something, measure the output.
 
+**AND THE THIRD, WHICH COST A DAY AND WAS ASKED LAST: is the thing I
+measured the thing I am about to change?** The 218 kbps figure was
+real, reproducible, and about a `MediaRecorder` constructed WITHOUT
+`audioBitsPerSecond` — while the app constructs one with it. A control
+that reproduces the production configuration is what turns a number
+into evidence about production, and it is one extra row. The harness
+has that row on purpose (row 1 is the app's configuration, row 4 is
+the default), and the two differ by 4×. **Measure the configuration
+you ship, and include the one you do not, so the pair says which is
+which.**
+
+That failure and the artifact rule are the same shape at different
+scales: reading a real artifact that answers a different question. It
+has now happened three times in one investigation — a snippet that
+was not the app's configuration, a build that was not the commit
+under test, and a graph hypothesis whose arithmetic matched a
+coincidence.
+
 **AND THE SECOND QUESTION: how much does this vary, before I
 extrapolate from it?** Three seconds justified a claim about three
 hours here only because four separate runs agreed to within **1.0%**,
@@ -568,23 +595,30 @@ extrapolation is available**; a single number cannot tell you whether
 it is representative, and the cost of a second and third run is
 usually minutes.
 
-**The cost of the wrong conclusion:** `MAX_BODY_BYTES` (46 MB) and the
+**The cost of the real figure:** `MAX_BODY_BYTES` (46 MB) and the
 `lecture-audio` bucket's 50 MB per-file limit are both derived from
-32 kbps × 3 hours ≈ 43 MB, and I recorded them as standing when they
-do not. At 218 kbps a two-hour lecture is ~196 MB and fails at the
-Storage upload — nothing billed, which is the right direction, and the
-lecture gone, which is not. The re-derivation and the options are in
+32 kbps × 3 hours ≈ 43 MB. At 51 kbps a three-hour lecture is ~68 MB
+and fails at the Storage upload — nothing billed, which is the right
+direction, and the lecture gone, which is not. **A two-hour lecture is
+45 MB and already fits**, which is worth knowing because two hours is
+the stated use case and three is the outer bound. The options are in
 `IOS-READINESS.md` §1a.
 
-**And the likeliest cause is ours, not Apple's**, which is the second
-lesson. `micConstraints` asks for mono at 16 kHz — but the recorder is
-never given that track. `buildGraph` constructs `new AudioCtx()` with
-no options and a default `createMediaStreamDestination()`, which on
-iOS is a 48 kHz context and a **stereo** destination, and that is the
-stream `MediaRecorder` gets. 48 kHz stereo over 16 kHz mono is 6×;
-the discrepancy is 6.8×. Chrome's encoder honours the bitrate and
-therefore masks the graph's shape on every other platform. **Where an
-encoder ignores the bitrate, the graph's shape becomes the bitrate.**
+**AND MY OWN HYPOTHESIS WAS WRONG TOO, which is the part to keep.** I
+proposed that the cause was ours: `micConstraints` asks for 16 kHz
+mono, `buildGraph` builds a default 48 kHz **stereo** context, and the
+recorder is handed the graph's output rather than the mic track — 6×
+the input data against a 6.8× discrepancy, which is the kind of
+arithmetic that feels like a diagnosis. Rows 1, 2 and 3 of the harness
+are raw mic, that graph, and a 16 kHz mono graph: **51 / 49 / 50 kbps,
+indistinguishable.** iOS's Opus encoder clamps regardless of what it
+is fed. A coincidence between two ratios is not a mechanism, and the
+only thing that separated them was running all three.
+
+The graph was fixed anyway, as its own item, because the constraint
+really is being discarded and the code really did misrepresent what it
+does — but *not* as a bitrate fix, and the distinction is why it is
+recorded separately.
 
 **Audio format, by contrast, is genuinely a non-issue** — verified on
 the same device: iOS reports `isTypeSupported("audio/webm;codecs=opus")`
