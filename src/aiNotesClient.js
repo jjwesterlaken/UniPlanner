@@ -9,6 +9,8 @@
 import { supabase, backend } from "./sync.js";
 import { allowanceForTier } from "./aiTextLimits.js";
 import { MINIMUM_BILLED_CREDITS_HINT, uploadRefusal } from "./aiNotesLogic.js";
+import { deviceStanding } from "./deviceIdentity.js";
+import { getDeviceId } from "./sync.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 
@@ -40,13 +42,29 @@ export async function fetchUsage(session, { supabaseClient = supabase, isDemo = 
      the friendly-looking direction and the wrong one. */
   const { data: profile, error: profileErr } = await supabaseClient
     .from("profiles")
-    .select("tier, trial_credits_used")
+    /* The device columns ride along on a read that already happens, so
+       the one-device rule costs no extra query — the same argument that
+       put the trial counter on `profiles` rather than in `ai_usage`.
+       It also puts the check exactly where the allowance is SPENT,
+       which is the thing the rule exists to protect. */
+    .select("tier, trial_credits_used, active_device_id, active_device_at")
     .eq("user_id", session.user.id)
     .maybeSingle();
   if (profileErr || !profile) return { creditsUsed: 0, tier: null, unavailable: true };
 
+  /* Reported, never acted on here. A client module that signed someone
+     out as a side effect of reading a counter would be impossible to
+     reason about; the caller decides, and the four outcomes survive
+     intact all the way up. */
+  const standing = deviceStanding({ tier: profile.tier, localId: getDeviceId(), profile });
+
   if (!allowanceForTier(profile.tier).perMonth) {
-    return { creditsUsed: Number(profile.trial_credits_used) || 0, tier: profile.tier, unavailable: false };
+    return {
+      creditsUsed: Number(profile.trial_credits_used) || 0,
+      tier: profile.tier,
+      unavailable: false,
+      standing,
+    };
   }
 
   const { data, error } = await supabaseClient
@@ -58,8 +76,8 @@ export async function fetchUsage(session, { supabaseClient = supabase, isDemo = 
   /* A FAILED READ IS "UNKNOWN", NEVER "NONE LEFT". Same rule as
      fetchNote and the archive list: the badge disappears rather than
      telling a student on a train that they are out of credits. */
-  if (error) return { creditsUsed: 0, tier: profile.tier, unavailable: true };
-  return { creditsUsed: (data && data.credits_used) || 0, tier: profile.tier, unavailable: false };
+  if (error) return { creditsUsed: 0, tier: profile.tier, unavailable: true, standing };
+  return { creditsUsed: (data && data.credits_used) || 0, tier: profile.tier, unavailable: false, standing };
 }
 
 /**

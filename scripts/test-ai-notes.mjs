@@ -1045,6 +1045,74 @@ async function run() {
     assert.match(stores, /uni-planner-device-id/, "the device id store moved and nothing followed it");
   });
 
+  await test("the displacement copy describes ping-pong, not a lockout", async () => {
+    /* THE RULING: lockout would mean the free tier can strand somebody's
+       data, which is a worse failure than annoyance — and the annoyance
+       is what Plus is for. So the copy must not imply a harder limit
+       than is enforced, and it must lead with the planner still being
+       there, because a student who opens the app to a sign-in screen
+       assumes their work is gone. */
+    const c = AI_NOTES_COPY.displacedByAnotherDevice;
+    const all = `${c.title} ${c.detail}`;
+    assert.match(all, /still on this device|nothing has been lost/i, "it does not say the planner survived");
+    assert.match(all, /sign (in|back in) again/i, "it does not say they can come back — that is the whole shape of the rule");
+    assert.doesNotMatch(
+      all,
+      /can'?t|cannot|not allowed|only one device|blocked|denied/i,
+      "the copy implies a harder limit than is enforced — re-signing in is allowed and always works"
+    );
+    /* Explaining it before it happens is the difference between a rule
+       and an ambush. */
+    assert.match(AI_NOTES_COPY.oneDeviceExplainer, /one device at a time/i);
+    assert.doesNotMatch(AI_NOTES_COPY.oneDeviceExplainer, /can'?t|cannot|not allowed/i);
+  });
+
+  await test("fetchUsage reports the standing and never acts on it", async () => {
+    /* A client module that signed somebody out as a side effect of
+       reading a counter would be impossible to reason about, and it
+       would put the decision somewhere the caller cannot see. */
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotesClient.js"), "utf8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+    assert.match(code, /standing/, "fetchUsage no longer reports where this device stands");
+    assert.ok(!/signOut|setSession\(null\)/.test(code), "the client module signs the student out itself");
+  });
+
+  await test("a failed profile read carries no standing, so nothing downstream can act on it", async () => {
+    /* The four outcomes have to survive the trip. If an unreadable
+       profile came back with a standing of any kind, the caller would
+       have something to branch on that means nothing. */
+    const { fetchUsage } = await import(pathToFileURL(path.join(rootDir, "src/aiNotesClient.js")).href);
+    const failing = {
+      from: () => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "boom" } }) }) }),
+      }),
+    };
+    const usage = await fetchUsage({ user: { id: "u" } }, { supabaseClient: failing, isDemo: false });
+    assert.equal(usage.unavailable, true);
+    assert.equal(usage.standing, undefined, "an unreadable profile produced a standing to branch on");
+  });
+
+  await test("claimDevice fails to UNAVAILABLE, never to a claim nobody made", async () => {
+    /* Signing a student out because an RPC failed in a tunnel is the
+       same bug as tombstoning a note because a fetch 500'd. */
+    const { backend } = await import(pathToFileURL(path.join(rootDir, "src/sync.js")).href);
+    assert.equal(typeof backend.claimDevice, "function", "the backend has no claimDevice");
+    const r = await backend.claimDevice({ session: null, deviceId: null });
+    assert.equal(r.unavailable, true);
+    const src = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+    /* BOTH implementations, found rather than assumed to be one: the
+       demo backend has no server to claim on and the real one does, and
+       a slice from the first match would have checked only demo — which
+       is the mode nobody is in. */
+    const blocks = [...src.matchAll(/async claimDevice\([\s\S]*?\n  \},/g)].map((m) => m[0]);
+    assert.equal(blocks.length, 2, `expected a claimDevice on each backend, found ${blocks.length}`);
+    for (const b of blocks) {
+      assert.match(b, /return \{ unavailable: true \}/, "a claimDevice that cannot answer no longer degrades to unavailable");
+      assert.ok(!/signOut|displaced/.test(b), "claimDevice decides something it should only report");
+    }
+    assert.match(src, /rpc\("claim_device"/, "nothing calls the function migration 0015 created");
+  });
+
   /* ---------- the native apps can actually reach the microphone ---------- */
 
   /* Fixtures mirror what `cap add ios` / `cap add android` actually

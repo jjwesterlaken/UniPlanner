@@ -73,6 +73,35 @@ export const AI_NOTES_COPY = {
       "This is a bug on our side rather than anything you did, and it is being worked on.",
   }),
 
+  /* SIGNED OUT BY ANOTHER DEVICE, and the copy has one job beyond
+     explaining: not to imply a harder limit than is enforced.
+
+     What actually happens is ping-pong. The displaced device signs out
+     and keeps its planner — localStorage is untouched — and signing
+     back in claims the account again, which signs the other one out.
+     Lockout would mean the free tier could strand somebody's data,
+     which is a worse failure than annoyance; the annoyance is the
+     thing Plus is for. So the copy says "the other device is signed
+     out now", not "you cannot use two devices", and it says the
+     planner is still here before it says anything else — a student who
+     opens the app to a sign-in screen assumes their work is gone.
+
+     No number of devices is quoted, because "one" invites the reading
+     that a second sign-in is refused, and it is not. */
+  displacedByAnotherDevice: {
+    title: "You signed in somewhere else.",
+    detail:
+      "Your planner is still on this device and nothing has been lost. " +
+      "A free account is used on one device at a time, so signing in over there signed this one out. " +
+      "Sign in again here whenever you like — that will sign the other one out instead.",
+    action: "Sign in again",
+  },
+
+  /* Shown BEFORE it happens, on the account screen, so the first time a
+     student meets the rule is not the time it interrupts them. */
+  oneDeviceExplainer:
+    "A free account is used on one device at a time. Signing in somewhere else signs this one out — your planner stays on each device either way, and you can sign back in here whenever you want.",
+
   minimumBilling: (credits) =>
     `A credit is about a minute of recorded lecture, and a recording costs at least ${credits}. Writing the notes up costs us about the same whether a recording is two minutes or twenty, so a very short one still uses ${credits} credits.`,
 
