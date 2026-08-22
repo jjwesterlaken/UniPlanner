@@ -39,6 +39,8 @@ import {
   RESUMMARISE_BILLED_CREDITS_HINT,
   recoveryFailureKind,
   RECOVERY_MISSING_CODES,
+  uploadRefusal,
+  MAX_UPLOAD_BYTES_HINT,
 } from "../src/aiNotesLogic.js";
 /* The client's copy of the monthly limit moved to aiTextLimits.js when
    the two currencies collapsed into one — one mirror instead of two.
@@ -885,6 +887,84 @@ async function run() {
     const v2 = { semesters: {}, meta: { updatedAt: "2024-01-01T00:00:00.000Z", aiConsent: { version: 2, acceptedAt: "2024-01-15T00:00:00.000Z" } } };
     assert.equal(mergeData(v1, v2).meta.aiConsent.version, 2);
     assert.equal(mergeData(v2, v1).meta.aiConsent.version, 2);
+  });
+
+  await test("the upload ceiling on the client is the one the server enforces", () => {
+    /* The allowed kind of restatement -- a browser bundle cannot import
+       from supabase/functions -- so the EQUALITY is the guard. A client
+       that refuses at a different number than the server is either
+       rejecting uploads the server would have taken, or waving through
+       ones it will not. */
+    const cfg = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/config.ts"), "utf8");
+    const m = /export const MAX_BODY_BYTES = ([0-9_]+);/.exec(cfg);
+    assert.ok(m, "MAX_BODY_BYTES is gone from the Edge Function config");
+    assert.equal(MAX_UPLOAD_BYTES_HINT, Number(m[1].replace(/_/g, "")), "the mirrored upload ceiling has drifted");
+  });
+
+  await test("a recording we cannot measure is uploaded, not refused", () => {
+    /* Absence is not evidence -- the fetchNote rule applied to a size.
+       Refusing a blob whose size we could not read would turn a missing
+       number into a lost lecture, and the server still has its own
+       ceiling behind this. */
+    assert.equal(uploadRefusal(undefined), null);
+    assert.equal(uploadRefusal(0), null);
+    assert.equal(uploadRefusal(NaN), null);
+    assert.equal(uploadRefusal(Infinity), null);
+    assert.equal(uploadRefusal(MAX_UPLOAD_BYTES_HINT), null, "exactly at the ceiling is allowed, as the server allows it");
+    const over = uploadRefusal(MAX_UPLOAD_BYTES_HINT + 1);
+    assert.equal(over.code, "recording_too_large");
+  });
+
+  await test("the size refusal says nothing was charged, and does not tell a student to record less", () => {
+    /* A student who has just lost an hour assumes it cost them unless
+       told otherwise -- the same rule the ai_failed copy follows. And a
+       two-hour lecture is the use case, so advice to record less of one
+       is the app admitting it does not do the thing it is for. */
+    const copy = AI_NOTES_COPY.tooLarge({ bytes: 196_000_000, limit: MAX_UPLOAD_BYTES_HINT });
+    const all = `${copy.title} ${copy.detail}`;
+    assert.match(all, /nothing was charged/i, "a size failure that does not say it was free reads as a charge");
+    assert.match(all, /196 MB/, "it does not say how big the recording actually was");
+    assert.doesNotMatch(all, /record(ing)? (for )?(less|shorter)|shorter recording|split/i,
+      "the copy tells the student to record less — a two-hour lecture is the use case");
+  });
+
+  await test("BOTH gates refuse an oversize recording, and the boundary one is not the screen's", async () => {
+    /* The gate belongs at the boundary as well as on the screen: a
+       UI-only check is one refactor away from leaking, and the refactor
+       need not touch the client. Asserted by calling uploadAudio with a
+       storage client that THROWS if it is ever reached. */
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    /* Sliced on LANDMARKS rather than a byte count: a fixed window is a
+       guard that silently stops covering the thing it was aimed at as
+       soon as a comment grows. */
+    const start = src.indexOf("const runUpload =");
+    const end = src.indexOf("const result = await callAiNotes", start);
+    assert.ok(start >= 0 && end > start, "runUpload's shape changed — this guard is reading the wrong region");
+    const run = src.slice(start, end);
+    const check = run.indexOf("uploadRefusal");
+    const park = run.indexOf("setPendingRecovery");
+    assert.ok(check >= 0, "runUpload no longer checks the size");
+    assert.ok(park >= 0, "runUpload no longer parks the recovery key — this guard is reading the wrong region");
+    assert.ok(
+      check < park,
+      "the size check runs AFTER the recovery key is parked — that leaves a retry card for an upload that can never succeed"
+    );
+
+    /* And the boundary refuses independently, proved by handing it a
+       storage client that throws if it is ever reached. */
+    const { uploadAudio } = await import(pathToFileURL(path.join(rootDir, "src/aiNotesClient.js")).href);
+    const exploding = { storage: { from: () => ({ upload: async () => { throw new Error("reached the network"); } }) } };
+    await assert.rejects(
+      () => uploadAudio({
+        session: { user: { id: "u" } },
+        audioBlob: { size: MAX_UPLOAD_BYTES_HINT + 1 },
+        mimeType: "audio/webm",
+        idempotencyKey: "k",
+        supabaseClient: exploding,
+      }),
+      (err) => err.code === "recording_too_large",
+      "uploadAudio does not refuse an oversize blob on its own — a UI-only gate is one refactor from leaking"
+    );
   });
 
   /* ---------- the native apps can actually reach the microphone ---------- */

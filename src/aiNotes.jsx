@@ -20,6 +20,7 @@ import {
   buildConsentPatch,
   pickSupportedMimeType,
   RECORDER_AUDIO_BITS_PER_SECOND,
+  uploadRefusal,
   MINIMUM_BILLED_CREDITS_HINT,
   describeRecorderError,
   parseAiNotesError,
@@ -905,6 +906,16 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
   const [selectedCards, setSelectedCards] = useState(null);
 
   const runUpload = async () => {
+    /* BEFORE the key is parked, deliberately. Parking first would leave
+       a recovery card pointing at a recording that can never be
+       uploaded — the student would be offered a retry that fails
+       identically every time, which is worse than a clean refusal. */
+    const refusal = uploadRefusal(state.blob && state.blob.size);
+    if (refusal) {
+      const copy = AI_NOTES_COPY.tooLarge(refusal);
+      dispatch({ type: "uploadFailed", code: refusal.code, message: `${copy.title} ${copy.detail}` });
+      return;
+    }
     dispatch({ type: "upload" });
     /* Park the key in the synced blob BEFORE the upload, not after: the
        whole point is to survive the app closing, and the window where

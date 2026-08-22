@@ -161,6 +161,44 @@ export function newIdempotencyKey(cryptoObj = typeof globalThis !== "undefined" 
 // with it, since that constant assumes this bitrate.
 export const RECORDER_AUDIO_BITS_PER_SECOND = 32000;
 
+/* THE UPLOAD CEILING, MIRRORED — and it is checked HERE now, not only
+   by the server.
+
+   Nothing on the client validated the recorded size, so the only
+   limits were the Edge Function's MAX_BODY_BYTES and the bucket's own
+   per-file cap. On a platform whose encoder ignores the requested
+   bitrate (iOS: ~218 kbps against 32 kbps asked -- see
+   IOS-READINESS.md 1a) a two-hour lecture is ~196 MB, and the student
+   waits through as much of that upload as their connection allows
+   before Storage rejects it with a message that explains nothing.
+
+   Nothing is billed either way -- the ordering has always held -- but
+   a refusal in one second beats the same refusal after eight minutes
+   of uploading, and it can say what happened. The check is the same
+   number the server enforces, so the EQUALITY is the guard: a browser
+   bundle cannot import from supabase/functions, and test-ai-notes.mjs
+   asserts this against MAX_BODY_BYTES for the same reason the billing
+   hints are asserted against theirs. */
+export const MAX_UPLOAD_BYTES_HINT = 46_000_000;
+
+/**
+ * Why this recording cannot be uploaded, or null if it can.
+ *
+ * Pure, and it returns a REASON rather than a boolean so the caller
+ * has something to say. `{ code, bytes, limit }` — the wording lives in
+ * aiNotesCopy.js, like every other failure here.
+ *
+ * An unknown or zero size returns null deliberately: the point is to
+ * catch a recording that is definitively too big, and refusing one we
+ * cannot measure would turn a missing number into a lost lecture. Same
+ * rule as fetchNote's three outcomes — absence is not evidence.
+ */
+export function uploadRefusal(bytes, limit = MAX_UPLOAD_BYTES_HINT) {
+  if (typeof bytes !== "number" || !isFinite(bytes) || bytes <= 0) return null;
+  if (bytes <= limit) return null;
+  return { code: "recording_too_large", bytes, limit };
+}
+
 // THE MONTHLY LIMIT MOVED to src/aiTextLimits.js, which is now the
 // client's copy of the whole currency rather than of the text half.
 // Two mirrors of one number is one mirror too many, and this one spent

@@ -538,19 +538,35 @@ accepts the constructor option, stores it, reports it faithfully, and
 the encoder ignores it.
 
 So the technique is still worth reaching for, with its scope stated:
-**a readback tells you what the API ACCEPTED, which is a real question
-and a cheap one. It cannot tell you what the encoder DID.** For
-anything downstream of a codec, a driver or an OS service, the only
-evidence is the produced bytes. The tell is whether the property is
-one the platform *implements* or one it merely *stores*, and nothing
-about reading it can distinguish those two.
+**a readback tells you what the API ACCEPTED. It cannot tell you what
+the implementation DID.** Both are real questions; only the first is
+cheap.
 
-Note also what made the three-second sample usable: the spread across
-four runs was **1.0%**, so the rate is near-constant rather than
-content-dependent, and extrapolating to three hours is sound. With a
-variable-rate encoder those four numbers would have justified nothing.
-**Check the spread before trusting a short sample** — one recording
-would have been an anecdote.
+**THE QUESTION TO ASK, before trusting any property you read back: is
+this a value the platform IMPLEMENTS, or one it merely STORES?** Every
+API that takes a hint can answer both ways, an accepted setting and an
+honoured one are indistinguishable from the caller's side, and reading
+the property harder does not separate them. Whenever the answer is
+produced downstream of something we do not control — a codec, a
+driver, a GPU, an OS service, another process — the readback is a
+receipt for the request and the output is the only evidence of the
+result. Ask it of `willReadFrequently`, of `preferredFormat`, of any
+quality or size hint, of anything a `getSettings()` reports back about
+hardware. Where the two could differ and the difference would cost
+something, measure the output.
+
+**AND THE SECOND QUESTION: how much does this vary, before I
+extrapolate from it?** Three seconds justified a claim about three
+hours here only because four separate runs agreed to within **1.0%**,
+which is what established that the rate was near-constant rather than
+content-dependent. One sample would have justified nothing at all, and
+four samples spread across 40% would have justified nothing either —
+they would have said "it depends what you record", which is a
+different finding needing a different experiment. **Take enough
+samples to see the spread, and let the spread decide whether
+extrapolation is available**; a single number cannot tell you whether
+it is representative, and the cost of a second and third run is
+usually minutes.
 
 **The cost of the wrong conclusion:** `MAX_BODY_BYTES` (46 MB) and the
 `lecture-audio` bucket's 50 MB per-file limit are both derived from

@@ -52,6 +52,27 @@ export const AI_NOTES_COPY = {
   trialAllowance: (credits) =>
     `These ${credits} credits are a one-off trial rather than a monthly allowance — they don't reset. A credit is about a minute of recorded lecture.`,
 
+  /* THE SIZE REFUSAL, and the hard part of it is what NOT to say.
+
+     "Record for less time" is the advice that fits in one line and it
+     is the wrong product: a two-hour lecture is the use case, and
+     telling a student to record less of their lecture is telling them
+     the app does not do the thing they installed it for. So the copy
+     says what happened, says plainly that nothing was charged (a
+     student who has just lost an hour assumes it cost them unless
+     told otherwise -- the same rule the ai_failed copy follows), and
+     does not pretend there is a good workaround.
+
+     The sizes are stated in MB because that is the unit a phone shows
+     a student everywhere else. */
+  tooLarge: ({ bytes, limit }) => ({
+    title: "That recording is too large to upload.",
+    detail:
+      `It came to ${Math.round(bytes / 1e6)} MB and the limit is ${Math.round(limit / 1e6)} MB. ` +
+      "Nothing was charged and nothing was sent — the recording never left the device. " +
+      "This is a bug on our side rather than anything you did, and it is being worked on.",
+  }),
+
   minimumBilling: (credits) =>
     `A credit is about a minute of recorded lecture, and a recording costs at least ${credits}. Writing the notes up costs us about the same whether a recording is two minutes or twenty, so a very short one still uses ${credits} credits.`,
 

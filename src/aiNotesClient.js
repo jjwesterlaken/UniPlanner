@@ -8,7 +8,8 @@
 
 import { supabase, backend } from "./sync.js";
 import { allowanceForTier } from "./aiTextLimits.js";
-import { MINIMUM_BILLED_CREDITS_HINT } from "./aiNotesLogic.js";
+import { MINIMUM_BILLED_CREDITS_HINT, uploadRefusal } from "./aiNotesLogic.js";
+import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 
 const BUCKET = "lecture-audio";
@@ -126,6 +127,17 @@ export async function uploadAudio({ session, audioBlob, mimeType, idempotencyKey
      refusal and would have put the audio on the wire first if the path
      had ever been built differently. */
   if (!supabaseClient || !session || !session.user) throw new Error("AI notes needs a real signed-in account.");
+  /* THE SIZE GATE AT THE BOUNDARY, not only on the screen. The caller
+     checks too, so this never fires in the normal flow — which is
+     exactly the arrangement the signed-out AI gates use, and for the
+     same reason: a UI-only check is one refactor away from leaking,
+     and the refactor need not touch this file. */
+  const refusal = uploadRefusal(audioBlob && audioBlob.size);
+  if (refusal) {
+    const err = new Error(AI_NOTES_COPY.tooLarge(refusal).title);
+    err.code = refusal.code;
+    throw err;
+  }
   const extension = EXTENSION_FOR_MIME[mimeType] || "webm";
   const path = `${session.user.id}/${idempotencyKey}.${extension}`;
   const { error } = await supabaseClient.storage.from(BUCKET).upload(path, audioBlob, { contentType: mimeType, upsert: true });
