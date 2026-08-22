@@ -533,15 +533,30 @@ is intended.
 The full audit is `IOS-READINESS.md`; these are the parts that need a
 device rather than a decision.
 
-13. **The bitrate readback, inside the shell.** Construct the
-    `MediaRecorder` and read `recorder.audioBitsPerSecond` back. Desktop
-    Safari on macOS returns **32000** (Jared, 22 August 2026), which is
-    what `MAX_BODY_BYTES` and the bucket's 50 MB per-file ceiling are
-    both derived from. **iOS is a separate finding**: if WKWebView
-    clamps it to its own default, a two-hour lecture is rejected at the
-    Storage upload — nothing billed, the lecture gone — and the
-    fallback ladder is in `IOS-READINESS.md` §1a. Thirty seconds, and
-    it answers the question before any audio exists.
+13. **The bitrate matrix — `public/measure-audio.html`.** THE ONE THAT
+    BLOCKS SUBMISSION. Open it in the shell (or Safari on the phone),
+    tap Run, and talk normally for about two and a half minutes; it
+    records six configurations for 20 s each and divides real bytes by
+    real elapsed time. Copy the JSON block back.
+
+    **Do not substitute a property readback.** `audioBitsPerSecond`
+    reads back as 32000 on iOS and the encoder produces ~218 kbps
+    anyway — a readback measures what the API accepted, not what the
+    encoder did. That mistake is written up in `CLAUDE.md`.
+
+    What the rows answer: 1 vs 2, whether our own WebAudio graph is
+    the cause (it builds a 48 kHz **stereo** destination and that, not
+    the mic track, is what the recorder gets); 2 vs 3, whether a mono
+    16 kHz graph fixes it; 1 vs 4, whether the bitrate option does
+    anything at all; 5 and 6, whether the AAC path honours it where
+    Opus does not. The options and the recommendation are in
+    `IOS-READINESS.md` §1a.
+
+13a. **Once a fix is in: record two hours for real**, and check the
+    blob size against the ceiling. A 20-second sample sized the
+    problem; only a real lecture proves the fix, and this is the one
+    number that decides whether a student can use the app for what
+    they installed it for.
 14. **Sign in from `capacitor://localhost`.** The one failure that
     breaks everything else: it is a custom-scheme origin making HTTPS
     requests to Supabase, and nothing off-device can confirm it works.

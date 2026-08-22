@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Audio bitrate measurement</title>
+<style>
+  body{font:15px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:1rem;background:#f5f5f4;color:#1c1917}
+  h1{font-size:1.1rem;margin:0 0 .25rem}
+  p{margin:.5rem 0;color:#57534e}
+  button{font:inherit;padding:.7rem 1.1rem;border-radius:.6rem;border:0;background:#0f766e;color:#fff}
+  button[disabled]{opacity:.5}
+  table{border-collapse:collapse;width:100%;margin-top:1rem;font-size:13px}
+  th,td{border-bottom:1px solid #d6d3d1;padding:.35rem .3rem;text-align:left;vertical-align:top}
+  td.n{text-align:right;font-variant-numeric:tabular-nums}
+  .bad{color:#be123c;font-weight:600}
+  .good{color:#047857;font-weight:600}
+  pre{background:#fff;border:1px solid #d6d3d1;border-radius:.5rem;padding:.6rem;font-size:11px;overflow:auto;white-space:pre-wrap}
+  #status{margin-top:.75rem;font-weight:600}
+</style>
+</head>
+<body>
+<h1>Audio bitrate measurement</h1>
+<p>
+  Answers what the encoder actually <em>produced</em>, not what the constructor
+  accepted. Records <b id="secs">20</b> seconds per configuration and divides real
+  bytes by real elapsed time. Nothing is uploaded and nothing is stored — the
+  blobs are discarded as each row is measured.
+</p>
+<p><b>Talk normally at the phone throughout</b>, at roughly the distance you would
+  put it on a lecture desk. Silence compresses to nothing and would flatter every row.</p>
+<button id="go">Run the measurements</button>
+<div id="status"></div>
+<table id="out"><thead><tr>
+  <th>configuration</th><th class="n">bytes</th><th class="n">seconds</th><th class="n">kbps</th><th>produced</th>
+</tr></thead><tbody></tbody></table>
+<h2 style="font-size:1rem">Copy this back</h2>
+<pre id="json">(not run yet)</pre>
+
+<script>
+/* eslint-disable */
+var SECONDS = 20;
+var REQUESTED_BPS = 32000;      // src/aiNotesLogic.js RECORDER_AUDIO_BITS_PER_SECOND
+var HIGHPASS_HZ = 80;           // src/audioSources.js ROOM_HIGHPASS_HZ
+var results = { userAgent: navigator.userAgent, requestedBps: REQUESTED_BPS, seconds: SECONDS, rows: [] };
+
+function el(id) { return document.getElementById(id); }
+function say(t) { el("status").textContent = t; }
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+/* The production constraints, copied deliberately rather than imported:
+   this page must run with no build step, inside the shell. */
+function micConstraints() {
+  return { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1, sampleRate: 16000 };
+}
+
+/* The production graph (buildGraph in src/aiNotes.jsx), and two variants.
+   `opts` lets us ask for a 16 kHz context and a mono destination, which
+   is the change under test. */
+function buildGraph(micStream, opts) {
+  var AudioCtx = window.AudioContext || window.webkitAudioContext;
+  var ctx = opts && opts.sampleRate ? new AudioCtx({ sampleRate: opts.sampleRate }) : new AudioCtx();
+  var dest = ctx.createMediaStreamDestination();
+  if (opts && opts.mono) { dest.channelCount = 1; dest.channelCountMode = "explicit"; dest.channelInterpretation = "speakers"; }
+  var src = ctx.createMediaStreamSource(micStream);
+  var hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = HIGHPASS_HZ;
+  src.connect(hp);
+  hp.connect(dest);
+  return { ctx: ctx, stream: dest.stream };
+}
+
+function settingsOf(stream) {
+  var t = stream.getAudioTracks()[0];
+  if (!t || !t.getSettings) return {};
+  var s = t.getSettings();
+  return { channelCount: s.channelCount, sampleRate: s.sampleRate };
+}
+
+/* One measurement. Returns real bytes over REAL elapsed milliseconds —
+   the recorder's own clock, not the setTimeout we asked for. */
+function record(stream, mimeType, bps) {
+  return new Promise(function (resolve, reject) {
+    var opts = { mimeType: mimeType };
+    if (bps) opts.audioBitsPerSecond = bps;
+    var rec;
+    try { rec = new MediaRecorder(stream, opts); } catch (e) { reject(e); return; }
+    var chunks = [], started = 0;
+    rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onerror = function (e) { reject(e.error || new Error("recorder error")); };
+    rec.onstop = function () {
+      var ms = Date.now() - started;
+      var blob = new Blob(chunks, { type: chunks.length ? chunks[0].type : mimeType });
+      resolve({
+        bytes: blob.size,
+        ms: ms,
+        producedType: blob.type || "(none)",
+        readbackBps: rec.audioBitsPerSecond,
+        settings: settingsOf(stream),
+      });
+    };
+    started = Date.now();
+    rec.start();
+    setTimeout(function () { try { rec.stop(); } catch (e) { reject(e); } }, SECONDS * 1000);
+  });
+}
+
+function addRow(name, r, note) {
+  var tb = el("out").querySelector("tbody");
+  var tr = document.createElement("tr");
+  if (!r) {
+    tr.innerHTML = "<td>" + name + "</td><td colspan=4>" + (note || "not supported") + "</td>";
+    tb.appendChild(tr);
+    return;
+  }
+  var kbps = Math.round((r.bytes * 8) / (r.ms / 1000) / 1000);
+  var cls = kbps > REQUESTED_BPS / 1000 * 1.5 ? "bad" : "good";
+  tr.innerHTML =
+    "<td>" + name + "</td>" +
+    "<td class=n>" + r.bytes.toLocaleString() + "</td>" +
+    "<td class=n>" + (r.ms / 1000).toFixed(1) + "</td>" +
+    '<td class="n ' + cls + '">' + kbps + "</td>" +
+    "<td>" + r.producedType + "<br><small>" + (r.settings.channelCount || "?") + " ch, " +
+      (r.settings.sampleRate || "?") + " Hz · readback " + r.readbackBps + "</small></td>";
+  tb.appendChild(tr);
+  results.rows.push({ name: name, kbps: kbps, bytes: r.bytes, ms: r.ms, producedType: r.producedType,
+                      readbackBps: r.readbackBps, settings: r.settings });
+}
+
+el("secs").textContent = SECONDS;
+
+el("go").onclick = async function () {
+  el("go").disabled = true;
+  var mic;
+  try {
+    mic = await navigator.mediaDevices.getUserMedia({ audio: micConstraints() });
+  } catch (e) {
+    say("Microphone refused: " + (e && e.name));
+    return;
+  }
+
+  var AudioCtx = window.AudioContext || window.webkitAudioContext;
+  var probe = new AudioCtx();
+  results.defaultContextSampleRate = probe.sampleRate;
+  results.micTrackSettings = settingsOf(mic);
+  try { probe.close(); } catch (e) {}
+
+  /* THE MATRIX. Each row isolates one suspect:
+       1 vs 2   does OUR WebAudio graph cause it, or the encoder?
+       2 vs 3   does a 16 kHz mono graph fix it?
+       1 vs 4   does audioBitsPerSecond do ANYTHING on this platform?
+       5, 6     does the AAC path honour the bitrate where Opus does not? */
+  var plan = [
+    { name: "1. raw mic → webm/opus @32k", type: "audio/webm;codecs=opus", bps: REQUESTED_BPS, graph: null },
+    { name: "2. production graph → webm/opus @32k", type: "audio/webm;codecs=opus", bps: REQUESTED_BPS, graph: {} },
+    { name: "3. mono 16 kHz graph → webm/opus @32k", type: "audio/webm;codecs=opus", bps: REQUESTED_BPS, graph: { sampleRate: 16000, mono: true } },
+    { name: "4. raw mic → webm/opus, NO bitrate asked", type: "audio/webm;codecs=opus", bps: null, graph: null },
+    { name: "5. raw mic → mp4/aac @32k", type: "audio/mp4", bps: REQUESTED_BPS, graph: null },
+    { name: "6. mono 16 kHz graph → mp4/aac @32k", type: "audio/mp4", bps: REQUESTED_BPS, graph: { sampleRate: 16000, mono: true } },
+  ];
+
+  for (var i = 0; i < plan.length; i++) {
+    var step = plan[i];
+    if (!MediaRecorder.isTypeSupported(step.type)) { addRow(step.name, null, "isTypeSupported false"); continue; }
+    say("Recording " + (i + 1) + " of " + plan.length + " — keep talking…");
+    var g = null, stream = mic;
+    try {
+      if (step.graph) { g = buildGraph(mic, step.graph); stream = g.stream; }
+      var r = await record(stream, step.type, step.bps);
+      addRow(step.name, r);
+    } catch (e) {
+      addRow(step.name, null, "failed: " + (e && (e.name || e.message)));
+    }
+    if (g) { try { await g.ctx.close(); } catch (e) {} }
+    await sleep(400);
+  }
+
+  mic.getTracks().forEach(function (t) { t.stop(); });
+  say("Done. Copy the block below.");
+  el("json").textContent = JSON.stringify(results, null, 2);
+};
+</script>
+</body>
+</html>

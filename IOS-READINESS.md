@@ -69,8 +69,8 @@ becomes `${SITE_URL}/app` after the split — one derived edit in
 
 | | Item | Severity |
 |---|---|---|
-| 1 | Audio format | **Not an issue** — already iOS-ready end to end |
-| 1a | Recorded **bitrate** | **CLOSED — measured.** WebKit returns 32000; both ceilings stand. Desktop WebKit; re-check in the shell |
+| **1a** | **Recorded bitrate on iOS** | **OPEN — BLOCKS SUBMISSION.** ~218 kbps against a 32 kbps assumption. A 2-hour lecture is ~196 MB and fails on upload |
+| 1 | Audio format | **CLOSED — verified on device.** iOS records `audio/webm; codecs=opus`, the same container and codec as Android |
 | 1b | `lecture-audio` bucket MIME restriction | **Would block every iOS upload.** Almost certainly fine; one dashboard click confirms |
 | 2 | In-app account deletion | **Not an issue** — exists and satisfies 5.1.1(v) |
 | 3a | `ITSAppUsesNonExemptEncryption` | **CLOSED — built.** Declared `<false/>` by `native-permissions.mjs` |
@@ -213,10 +213,23 @@ a worse conversation than not declaring it.
 
 ## C. What works but is broken at runtime — the band that actually matters
 
-### 1. Audio format: the expectation was wrong, the path is already right
+### 1. Audio format — **CLOSED, VERIFIED ON DEVICE**
 
-This was flagged as the most severe item and it is a non-issue. The
-whole chain already handles iOS, and every link was checked:
+**No divergence.** In WKWebView on a real iPhone,
+`isTypeSupported("audio/webm;codecs=opus")` is **true**, and a real
+recording produces `mimeType: "audio/webm; codecs=opus"` with data. iOS
+records the same container and the same codec as Android, so the
+fallback ladder never has to leave its first rung and the
+format-handling concern is void.
+
+Worth keeping: the ladder and the server's extension discovery were
+built for a divergence that turned out not to exist. They cost nothing
+and they are still correct — the point was never that iOS *would*
+differ, but that the code could not know. What is now settled is that
+`m4a` and `aac` are dead paths in practice rather than in principle.
+
+The audit as originally written, kept because the chain it traces is
+what made the answer cheap to confirm:
 
 | Link | What it does |
 |---|---|
@@ -229,59 +242,131 @@ whole chain already handles iOS, and every link was checked:
 
 Nothing to build. Two adjacent risks, though, and the first is real.
 
-#### 1a. The recorded bitrate — **CLOSED, MEASURED 22 August 2026**
+#### 1a. The recorded bitrate — **OPEN, AND THE HIGHEST-SEVERITY ITEM ON iOS**
 
-**WebKit honours `audioBitsPerSecond`.** Desktop Safari on macOS, real
-origin, `recorder.audioBitsPerSecond` read back after construction:
-**32000**. Not ignored, not clamped. `MAX_BODY_BYTES` and the 50 MB
-bucket ceiling stand exactly as derived — no re-derivation, no shorter
-maximum recording, no segmentation at the recorder.
+**It blocks submission.** A 2-hour lecture — the use case — cannot be
+uploaded from an iPhone today.
 
-Two things to carry from it. **It is desktop WebKit**, so the same
-thirty-second readback is worth repeating inside the shell on the
-first iOS run; if iOS differs from macOS that is its own finding, and
-the fallback ladder below is what it would trigger. And **the check
-was a property readback rather than a recording** — construct the
-object, read what it actually applied, and the question is answered
-before any audio exists. That is the cheaper move to reach for first.
+##### The correction: a readback measured the request, not the output
 
-The original reasoning is kept below, because it is what made the
-measurement worth taking.
+`recorder.audioBitsPerSecond` reads back as **32000** on iOS, exactly as
+asked. Four 3-second recordings on a real iPhone produced:
 
-#### 1a (as written before the measurement)
+| | bytes |
+|---|---|
+| | 81,457 |
+| | 81,701 |
+| | 82,228 |
+| | 82,270 |
 
-`aiNotes.jsx:304` passes `audioBitsPerSecond: 32000`. **Two separate
-ceilings are derived from that number and nothing else:**
+Mean **81,914 bytes over 3 s = 218 kbps**, which is **6.8× what was
+requested**. Two details make that number trustworthier than a
+three-second sample usually is: the spread across four runs is **1.0%**,
+so the encoder is running at a near-constant rate rather than varying
+with content, and treating a generous 2 KB of it as fixed container
+header still leaves 213 kbps — the same order.
 
-- `MAX_BODY_BYTES = 46_000_000` in `ai-notes/config.ts`, whose comment
-  says so explicitly and says the two constants must move together;
-- the `lecture-audio` bucket's **50 MB per-file limit**, set by hand
-  per `SUPABASE-SETUP.md` and justified in the same sentence.
+So WKWebView **accepts the constructor option, reports it faithfully,
+and the encoder ignores it.** The property readback confirmed what was
+accepted. Only the produced bytes confirm what was applied. That
+correction is recorded in `CLAUDE.md` next to the technique it
+qualifies, because the technique is still right — it is just answering
+a different question than the one I claimed for it.
 
-Chrome honours `audioBitsPerSecond`. **Safari's MediaRecorder is not
-obliged to, and I have no evidence either way.** If it encodes AAC at
-its own default:
+##### What it costs at the ceilings we have
 
-| Actual bitrate | 3-hour lecture | Against the 50 MB bucket limit |
-|---|---|---|
-| 32 kbps (assumed) | ~43 MB | fits, as designed |
-| 64 kbps | ~86 MB | **rejected at Storage** |
-| 128 kbps | ~173 MB | **rejected at Storage** |
+| rate | 1 h | 2 h | 3 h |
+|---|---|---|---|
+| 32 kbps (assumed) | 14 MB | 29 MB | **43 MB** |
+| **218 kbps (measured)** | **98 MB** | **196 MB** | **294 MB** |
 
-The failure is at the Storage upload, which happens **before** the
-Edge Function is called — so nothing is billed and no allowance is
-spent. It fails towards keeping the money and losing the lecture,
-which is the right direction, but a student who records a two-hour
-lecture and is told the upload failed has still lost it.
+Read the other way, the two ceilings encode an assumption about the
+rate: `MAX_BODY_BYTES` (46 MB) is **34 kbps** over three hours, and the
+bucket's 50 MB per-file limit is **37 kbps**. Both are ~6× below what
+iOS produces.
 
-**This is a measurement, not a fix.** Record five minutes on the
-device and read `blob.size`. At 32 kbps that is ~1.2 MB. If it is
-materially larger, `RECORDER_AUDIO_BITS_PER_SECOND`, `MAX_BODY_BYTES`
-and the bucket's file-size limit all move together — and the honest
-answer may be that iOS needs a lower explicit bitrate or that the cap
-needs raising, which is a decision, not a constant to nudge. It is
-the single highest-value thing to learn from the first device
-session, and it takes five minutes.
+**The failure today is late and uninformative**, which is its own
+finding: nothing checks the blob size on the client, so the student
+waits through as much of a 196 MB upload as their connection allows,
+Storage rejects it, and they are told "Couldn't upload the recording"
+with no reason. Nothing is billed — the ordering holds — but the
+lecture is gone and the message explains nothing.
+
+##### The hypothesis to test first, because it is ours, not Apple's
+
+`micConstraints` asks for `channelCount: 1, sampleRate: 16000`. **The
+recorder never sees that track.** `buildGraph` in `src/aiNotes.jsx`
+does `new AudioCtx()` with no options and `createMediaStreamDestination()`
+with no channel configuration — on iOS that is a **48 kHz context and a
+stereo destination** — and *that* stream is what `MediaRecorder` is
+constructed with.
+
+48 kHz stereo against 16 kHz mono is 6× the input data, and the
+discrepancy is 6.8×. Chrome's Opus encoder honours `audioBitsPerSecond`,
+so on Android and every desktop the output is 32 kbps whatever the graph
+feeds it — which is exactly why this has never shown up anywhere else.
+Where the encoder ignores the bitrate, **the graph's shape becomes the
+bitrate.**
+
+That is a hypothesis, not a finding. `public/measure-audio.html` settles
+it: six configurations, 20 seconds each, real bytes over real elapsed
+time. Rows 1 vs 2 say whether our graph is the cause; 2 vs 3 whether a
+mono 16 kHz graph fixes it; 1 vs 4 whether `audioBitsPerSecond` does
+anything at all; 5 and 6 whether the AAC path honours it where Opus does
+not.
+
+##### The options, costed
+
+| | work | what it fixes | what it leaves |
+|---|---|---|---|
+| **D. Fix the graph** (not on the original list) | ~2 lines + a fallback | the rate at source, on every platform | nothing, if it works — untested |
+| **E. Prefer `audio/mp4` on iOS** | a per-platform reorder of `CANDIDATE_MIME_TYPES` | the rate, if AAC honours the bitrate | server already accepts `m4a`; costs nothing to try |
+| **A. Raise both ceilings** | one constant + a dashboard setting + Pro | the rejection | a **294 MB single PUT with no resume** |
+| **C. Recorder segmentation** | large, on the billing path | the rejection *and* the no-resume upload | boundary gaps, N transcriptions to stitch |
+| **B. Re-encode client-side** | largest | the rate | a WASM dependency, a CSP change, minutes of phone CPU |
+
+**Why A is not sufficient on its own**, even though Pro is happening
+anyway: `supabase.storage.upload` is a single PUT with **no resumable
+upload**, so a 294 MB body that drops at 90% restarts from zero. At a
+realistic 5 Mbps up that is an 8-minute window with no fault tolerance,
+and on cellular it is ~300 MB of someone's data plan spent without
+being asked. It is also well past anything anyone has asked Groq to
+fetch from a signed URL. Raising a ceiling so a legitimate recording is
+never rejected by our own arithmetic is right; making 294 MB the normal
+case is not.
+
+**Why B is last.** A WASM Opus encoder is ~300 KB, needs a worker, needs
+`wasm-unsafe-eval` added to a CSP that was deliberately tightened, needs
+`test-local-only.mjs` revisited, and puts minutes of CPU between the
+student and their notes — in a bundle whose whole shape is "no
+framework, nothing third-party at runtime".
+
+##### Recommendation
+
+**Fix the input, not the ceiling. In order:**
+
+1. **Run `public/measure-audio.html` on the phone.** Six rows, about
+   two and a half minutes of talking.
+2. **If row 3 lands near 32 kbps: take D.** Two lines in `buildGraph`
+   — `new AudioCtx({ sampleRate: 16000 })` and a mono destination —
+   with a fallback to the default context if Safari refuses the rate,
+   since a graph that throws is fatal for "Both". Ship that.
+3. **If row 3 does not but rows 5/6 do: take E** as well or instead,
+   preferring `audio/mp4` where AAC honours the bitrate.
+4. **Take A regardless, as the backstop**, sized to whatever D and E
+   actually produce plus real headroom — because iOS gives us no direct
+   control over the rate, so the ceiling must never be the thing that
+   fails a legitimate two-hour lecture.
+5. **Add the client-side size check in the same pass**, whatever wins:
+   compare `blob.size` against the ceiling *before* the upload starts,
+   and say what happened. A refusal in one second beats the same refusal
+   after eight minutes of uploading.
+6. **C only if 2 and 3 both fail.** It is the right answer to "the rate
+   cannot be brought down", and the wrong first answer to "the rate is
+   wrong because of something we do".
+
+**Not on the list, by ruling: capping the maximum recording length.** A
+two-hour lecture is the use case.
 
 #### 1b. The bucket's MIME restriction — invisible from the repository
 

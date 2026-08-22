@@ -520,34 +520,63 @@ build**, and worth remembering when the marketing site is written:
 browsers only ever offer loopback alongside a screen or tab share, and
 macOS Chrome only alongside a tab. Electron asks the OS directly.
 
-**MEASURED, NOT ASSUMED: WebKit honours `audioBitsPerSecond`.** Desktop
-Safari on macOS, real origin, `recorder.audioBitsPerSecond` read back
-after construction: **32000**. Not ignored, not clamped to a default.
-Jared, 22 August 2026.
+### A READBACK MEASURES WHAT WAS ACCEPTED. ONLY THE BYTES MEASURE WHAT WAS APPLIED.
 
-That matters more than it looks, because **two ceilings rest on that
-one number and neither is ours to fudge**:
-`MAX_BODY_BYTES` (46 MB) and the `lecture-audio` bucket's 50 MB
-per-file limit are both derived from 32 kbps × 3 hours ≈ 43 MB. If
-Safari had encoded AAC at its own default, a two-hour lecture would
-have been rejected at the Storage upload — nothing billed, which is
-the right direction, and the lecture gone, which is not. Both
-constants stand as derived: no re-derivation, no shorter maximum
-recording, no segmentation at the recorder.
+This is the correction, and it matters more than the thing it
+corrects. On 22 August I recorded that WebKit honours
+`audioBitsPerSecond`, on the evidence that
+`recorder.audioBitsPerSecond` reads back **32000** after construction,
+and I called the technique out as the one to reach for — *"construct
+the object, read what it actually applied, and the question is
+answered before any audio exists."*
 
-**It is DESKTOP WebKit, and iOS is a separate finding.** The readback
-costs thirty seconds and should be repeated in the shell once the
-first iOS build runs; if iOS differs from macOS here that is its own
-result and the fallback ladder is in `IOS-READINESS.md`. The reason
-for saying so rather than generalising is the same one the platform
-asymmetries keep teaching: iOS needed no routing permission where
-Android needed two, and had a version floor instead. Assuming the
-mirror is how both of those were nearly missed.
+**The readback was true and the conclusion was wrong.** On a real
+iPhone, four 3-second recordings came back at 81,457 / 81,701 /
+82,228 / 82,270 bytes — a mean of **218 kbps, 6.8× what was
+requested**, while the property went on reporting 32000. WKWebView
+accepts the constructor option, stores it, reports it faithfully, and
+the encoder ignores it.
 
-The habit worth keeping: **the check that settled this was a property
-readback, not a recording.** Construct the object, read what it
-actually applied, and the question is answered before any audio
-exists. Reach for that before reaching for a five-minute experiment.
+So the technique is still worth reaching for, with its scope stated:
+**a readback tells you what the API ACCEPTED, which is a real question
+and a cheap one. It cannot tell you what the encoder DID.** For
+anything downstream of a codec, a driver or an OS service, the only
+evidence is the produced bytes. The tell is whether the property is
+one the platform *implements* or one it merely *stores*, and nothing
+about reading it can distinguish those two.
+
+Note also what made the three-second sample usable: the spread across
+four runs was **1.0%**, so the rate is near-constant rather than
+content-dependent, and extrapolating to three hours is sound. With a
+variable-rate encoder those four numbers would have justified nothing.
+**Check the spread before trusting a short sample** — one recording
+would have been an anecdote.
+
+**The cost of the wrong conclusion:** `MAX_BODY_BYTES` (46 MB) and the
+`lecture-audio` bucket's 50 MB per-file limit are both derived from
+32 kbps × 3 hours ≈ 43 MB, and I recorded them as standing when they
+do not. At 218 kbps a two-hour lecture is ~196 MB and fails at the
+Storage upload — nothing billed, which is the right direction, and the
+lecture gone, which is not. The re-derivation and the options are in
+`IOS-READINESS.md` §1a.
+
+**And the likeliest cause is ours, not Apple's**, which is the second
+lesson. `micConstraints` asks for mono at 16 kHz — but the recorder is
+never given that track. `buildGraph` constructs `new AudioCtx()` with
+no options and a default `createMediaStreamDestination()`, which on
+iOS is a 48 kHz context and a **stereo** destination, and that is the
+stream `MediaRecorder` gets. 48 kHz stereo over 16 kHz mono is 6×;
+the discrepancy is 6.8×. Chrome's encoder honours the bitrate and
+therefore masks the graph's shape on every other platform. **Where an
+encoder ignores the bitrate, the graph's shape becomes the bitrate.**
+
+**Audio format, by contrast, is genuinely a non-issue** — verified on
+the same device: iOS reports `isTypeSupported("audio/webm;codecs=opus")`
+true and produces `audio/webm; codecs=opus`, the same container and
+codec as Android. The fallback ladder to `m4a`/`aac` and the server's
+extension discovery were built for a divergence that does not exist.
+They cost nothing and stay; the point was never that iOS would differ,
+only that the code could not know.
 
 ### Android needs TWO audio permissions, and the second one is invisible
 
