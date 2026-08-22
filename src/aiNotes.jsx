@@ -1107,8 +1107,18 @@ export function RecordingIndicator({ recording, onOpen, liftedForNav = false }) 
        and "I can't stop it" is a privacy problem before it is a
        usability one. */
     <div
-      className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-3 pointer-events-none"
-      style={liftedForNav ? { paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 4.25rem)" } : undefined}
+      className="fixed inset-x-0 bottom-0 z-40 flex justify-center pointer-events-none"
+      /* The bottom inset is UNCONDITIONAL now. It used to apply only
+         when the indicator was lifted over the tab bar, so on a layout
+         without that bar the pill sat in the home-indicator strip. The
+         nav's own inset covers the lifted case either way, so this
+         costs nothing where it was already right. px-3 is in the style
+         for the same reason main's px-4 is: the inset must add. */
+      style={{
+        paddingLeft: "calc(0.75rem + env(safe-area-inset-left, 0px))",
+        paddingRight: "calc(0.75rem + env(safe-area-inset-right, 0px))",
+        paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + ${liftedForNav ? "4.25rem" : "0.75rem"})`,
+      }}
     >
       <div className="pointer-events-auto flex w-full max-w-md items-center gap-2 rounded-xl border border-stone-200 bg-surface/95 px-3 py-2 shadow-lg backdrop-blur">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onOpen}>

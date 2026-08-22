@@ -1,10 +1,15 @@
 # iOS readiness: what is already wrong, in severity order
 
-Audit only. Nothing in this document has been built. Written against
-the repository at `1a6f732`, before the first `cap add ios` on any
-machine — so every claim here comes from source, and the things that
-can only be answered by a device are listed as such rather than
-guessed at.
+Written against the repository at `1a6f732`, before the first
+`cap add ios` on any machine — so every claim here came from source,
+and the things that could only be answered by a device were listed as
+such rather than guessed at.
+
+**Updated 22 August 2026 with three items closed.** Item 1a was
+measured and the constants stand; items 3a and 3b are built; item 4 is
+built. What each now says is marked **CLOSED** in place, with the
+original reasoning kept — the reasoning is why the next person will
+trust the next answer.
 
 **The headline: nothing blocks the compile.** There are no Capacitor
 plugins, no native source, no Podfile customisation and no
@@ -65,13 +70,13 @@ becomes `${SITE_URL}/app` after the split — one derived edit in
 | | Item | Severity |
 |---|---|---|
 | 1 | Audio format | **Not an issue** — already iOS-ready end to end |
-| 1a | Recorded **bitrate** on iOS | **Blocks a long lecture.** Unverified; one device measurement settles it |
+| 1a | Recorded **bitrate** | **CLOSED — measured.** WebKit returns 32000; both ceilings stand. Desktop WebKit; re-check in the shell |
 | 1b | `lecture-audio` bucket MIME restriction | **Would block every iOS upload.** Almost certainly fine; one dashboard click confirms |
 | 2 | In-app account deletion | **Not an issue** — exists and satisfies 5.1.1(v) |
-| 3a | `ITSAppUsesNonExemptEncryption` missing | Upload friction on every build |
-| 3b | `NSPhotoLibraryUsageDescription` missing | **Potential crash-on-launch-of-a-feature.** Unverified |
-| 3c | `PrivacyInfo.xcprivacy` | **Possible automated rejection.** Unverified |
-| 4 | Safe area — top and sides | Cosmetic, but it is what the store screenshots show |
+| 3a | `ITSAppUsesNonExemptEncryption` | **CLOSED — built.** Declared `<false/>` by `native-permissions.mjs` |
+| 3b | `NSPhotoLibraryUsageDescription` | **CLOSED — built.** Declared, on the fail-towards-declaring argument |
+| 3c | `PrivacyInfo.xcprivacy` | **Possible automated rejection.** Still unverified — needs the generated folder |
+| 4 | Safe area — top and sides | **CLOSED — built.** Top, left and right added; sizing still needs a device |
 | 5 | `capacitor://localhost` | Understood, no work; one consequence to communicate |
 | 6 | Capacitor plugins | **None, and that is correct.** Do not add any |
 | 7 | iPad | A decision, not a defect |
@@ -117,7 +122,16 @@ secret so it can live in the script.
 
 ## B. What blocks or risks review
 
-### 3a. `ITSAppUsesNonExemptEncryption` is absent
+### 3a. `ITSAppUsesNonExemptEncryption` — **CLOSED, BUILT**
+
+Declared `<false/>` in `mobile/scripts/native-permissions.mjs`, which
+re-applies after every `cap add` and `cap sync`. One detail worth
+knowing: **a plist boolean is an empty element**, and written as
+`<string>false</string>` iOS reads a non-empty string as TRUE — so the
+declaration would say the opposite of what was meant, silently. The
+test asserts the value element's tag name, not its text.
+
+The original reasoning:
 
 Not a rejection. What it does is stop **every** TestFlight and App
 Store Connect upload to ask the export-compliance question by hand.
@@ -126,7 +140,13 @@ answer is always the same. One boolean key, set once, in
 `native-permissions.mjs` beside the two usage strings — that is where
 plist edits live and it re-runs after every `cap add`.
 
-### 3b. `NSPhotoLibraryUsageDescription` — and this one needs a decision
+### 3b. `NSPhotoLibraryUsageDescription` — **CLOSED, BUILT**
+
+Declared, on the fail-towards-declaring argument below. It can be
+removed later if the iOS build proves PHPicker is always used — but
+removing it needs the evidence, not the reasoning.
+
+The original reasoning, which is the argument for why:
 
 `native-permissions.mjs`'s own comment reasons that the reading
 summariser's photo input needs only the **camera** string, because
@@ -208,7 +228,26 @@ whole chain already handles iOS, and every link was checked:
 
 Nothing to build. Two adjacent risks, though, and the first is real.
 
-#### 1a. The recorded bitrate — unverified, and it is what the size caps rest on
+#### 1a. The recorded bitrate — **CLOSED, MEASURED 22 August 2026**
+
+**WebKit honours `audioBitsPerSecond`.** Desktop Safari on macOS, real
+origin, `recorder.audioBitsPerSecond` read back after construction:
+**32000**. Not ignored, not clamped. `MAX_BODY_BYTES` and the 50 MB
+bucket ceiling stand exactly as derived — no re-derivation, no shorter
+maximum recording, no segmentation at the recorder.
+
+Two things to carry from it. **It is desktop WebKit**, so the same
+thirty-second readback is worth repeating inside the shell on the
+first iOS run; if iOS differs from macOS that is its own finding, and
+the fallback ladder below is what it would trigger. And **the check
+was a property readback rather than a recording** — construct the
+object, read what it actually applied, and the question is answered
+before any audio exists. That is the cheaper move to reach for first.
+
+The original reasoning is kept below, because it is what made the
+measurement worth taking.
+
+#### 1a (as written before the measurement)
 
 `aiNotes.jsx:304` passes `audioBitsPerSecond: 32000`. **Two separate
 ceilings are derived from that number and nothing else:**
@@ -317,7 +356,31 @@ that is covered by the table-driven test.
 
 ## D. Cosmetic
 
-### 4. Safe areas — the bottom is done, the top and sides are not
+### 4. Safe areas — **CLOSED, BUILT** (the bottom was done; the top and sides were not)
+
+Added: `safe-area-inset-top` on the sticky header (padding on the
+header, not its inner row, so the background fills the inset and only
+the content moves down), and `safe-area-inset-left`/`-right` on the
+header, `<main>` and the phone nav for landscape on a notched device.
+The recording indicator's bottom inset is now unconditional — it used
+to apply only when lifted over the tab bar, so on a layout without
+that bar the pill sat in the home-indicator strip.
+
+Where a Tailwind gutter already existed (`px-4` on `<main>`, `px-3` on
+the indicator) the inset had to **add** to it rather than replace it,
+so those moved into the inline style as `calc(1rem + env(...))`. A
+plain `padding-left` in a later rule silently takes the gutter away.
+
+A guard in `test-dark-mode.mjs` now **finds** every viewport-pinned
+element in `src/*.jsx` rather than checking a list of three, and
+requires the inset for whichever edge it pins to; the two centred
+modals and the editor's in-panel toolbar are declared with reasons
+that are themselves checked. **What it cannot see: layout.** Whether
+the padding is the right size, whether `contentInset: "always"`
+double-insets on top of it, and whether the pill clears the home
+indicator all still need a device — see below and `MOBILE-BUILD.md`.
+
+The original reasoning:
 
 `viewport-fit=cover` is in `public/index.html:5`, which is the
 prerequisite and is present. The **bottom** is handled in all three
@@ -396,9 +459,10 @@ these would be a restatement of nothing.
 
 | Unknown | How it is settled |
 |---|---|
-| Does Safari's `MediaRecorder` honour `audioBitsPerSecond`? | Record 5 min on the device, read `blob.size` |
+| ~~Does Safari's `MediaRecorder` honour `audioBitsPerSecond`?~~ | **Answered: yes, 32000, desktop WebKit.** Repeat the readback in the shell |
 | Does `lecture-audio` carry a MIME restriction? | One dashboard click |
 | Does Capacitor 8's `cap add ios` scaffold `PrivacyInfo.xcprivacy`? | Look in `mobile/ios/App/` after the first `cap add` |
+| Is the safe-area padding the right SIZE, and does `contentInset` double-inset? | Look at it on the device; the insets are applied, the sizing is not provable from source |
 | Which file picker does WKWebView present on iOS 15 for `accept="image/*"`? | Tap all three photo routes on a device. Or add the usage string and stop caring |
 | Does `contentInset: "always"` double-inset with `viewport-fit=cover`? | A/B on the device |
 | Does `localStorage` on `capacitor://localhost` survive an app update and storage pressure? | The aeroplane-mode item already on `MOBILE-BUILD.md`, never run on any platform |
@@ -414,16 +478,20 @@ in this order:
 1. **Smoke: does it load, and does a Supabase sign-in work from
    `capacitor://localhost`.** If that fails nothing else on this list
    matters.
-2. **Record five minutes and read the blob size.** Settles 1a, which
-   is the only item on this list that can lose a student's lecture.
-3. **The plist keys** — `ITSAppUsesNonExemptEncryption`,
-   `NSPhotoLibraryUsageDescription`, and whatever the privacy-manifest
-   check turns up. Into `mobile/scripts/native-permissions.mjs`,
-   because that is where plist edits live and it re-runs after every
-   `cap add`, which is the whole reason it exists.
-4. **Safe area: top and sides.**
+2. **Read back `recorder.audioBitsPerSecond` in the shell.** Thirty
+   seconds. Desktop WebKit says 32000; this confirms iOS agrees, and a
+   disagreement is its own finding rather than a surprise later.
+3. **Check for `PrivacyInfo.xcprivacy`** in the generated
+   `mobile/ios/App/` — the one plist-adjacent item that could not be
+   settled without the folder. The other three keys are already
+   applied by `npm run settings`.
+4. **Look at the safe areas on the device**, and settle
+   `contentInset: "always"` versus `"never"` — one of the two is right
+   and source cannot say which. The insets themselves are in.
 5. **Decide iPhone-only vs universal**, before screenshots are taken
    rather than after.
 
-Steps 3 and 4 are the only ones that are code, and together they are
-perhaps thirty lines.
+Steps 2 through 4 are now checks rather than code: the plist keys and
+the safe-area insets are built and mutation-checked, so what is left
+on this list is confirming them against real hardware and one Xcode
+folder that does not exist yet.

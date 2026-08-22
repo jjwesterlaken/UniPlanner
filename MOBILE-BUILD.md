@@ -528,6 +528,40 @@ is intended.
     following an instruction rather than code enforcing a rule, so it is
     exactly the behaviour that needs a real run.
 
+### iOS only — the items the readiness audit left open
+
+The full audit is `IOS-READINESS.md`; these are the parts that need a
+device rather than a decision.
+
+13. **The bitrate readback, inside the shell.** Construct the
+    `MediaRecorder` and read `recorder.audioBitsPerSecond` back. Desktop
+    Safari on macOS returns **32000** (Jared, 22 August 2026), which is
+    what `MAX_BODY_BYTES` and the bucket's 50 MB per-file ceiling are
+    both derived from. **iOS is a separate finding**: if WKWebView
+    clamps it to its own default, a two-hour lecture is rejected at the
+    Storage upload — nothing billed, the lecture gone — and the
+    fallback ladder is in `IOS-READINESS.md` §1a. Thirty seconds, and
+    it answers the question before any audio exists.
+14. **Sign in from `capacitor://localhost`.** The one failure that
+    breaks everything else: it is a custom-scheme origin making HTTPS
+    requests to Supabase, and nothing off-device can confirm it works.
+    Do this first.
+15. **`PrivacyInfo.xcprivacy`** — look in the generated
+    `mobile/ios/App/` and see whether Capacitor 8 scaffolds one. If it
+    does not, the app-level answer is simple (no tracking, no
+    required-reason API called from native code), but it has to exist.
+    This is the item most likely to produce an automated App Store
+    Connect email rather than a human rejection.
+16. **The safe areas, and `contentInset`.** The insets are applied —
+    top on the header, left and right for landscape, bottom
+    unconditional on the recording indicator — and a guard finds every
+    viewport-pinned element rather than checking a list. What source
+    cannot answer is whether the padding is the right SIZE, and whether
+    `contentInset: "always"` in `capacitor.config.json` double-insets
+    on top of it. Look at the header under the Dynamic Island, then try
+    `"never"` and keep whichever is right. Do this before the store
+    screenshots, since the screenshots are what expose it.
+
 ### Handwriting — removed
 
 The two iPad items that used to sit here (Apple Pencil pressure, and a

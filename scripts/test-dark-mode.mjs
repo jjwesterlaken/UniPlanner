@@ -263,6 +263,103 @@ async function run() {
     assert.ok(!/mode:/.test(app.slice(app.indexOf("const DEFAULT = {"), app.indexOf("// Accept older saved data"))), "the mode leaked into the synced document");
   });
 
+  await test("EVERY viewport-pinned element accounts for the safe area on the edge it touches", () => {
+    /* viewport-fit=cover is in index.html, which is what makes the page
+       extend under the status bar, the Dynamic Island and the home
+       indicator. Anything pinned to a viewport edge has to put it back,
+       or it paints into a cutout.
+
+       The bottom was handled in three places from the day the phone nav
+       landed. THE TOP WAS HANDLED NOWHERE, and neither were the sides,
+       which is what a notched device in LANDSCAPE eats into. Found by
+       the iOS readiness audit (IOS-READINESS.md item 4), before the
+       first compile.
+
+       THE ELEMENTS ARE FOUND, NOT LISTED. A hardcoded list of three is
+       the guard that goes stale the moment a fourth floating control
+       lands — and this file already carries one guard of that shape
+       (the color-mix grep reads PlannerApp.jsx while the claim is about
+       everything that ships; see the ledger). Every .jsx in src/ is
+       scanned, so a new fixed bar fails here until somebody decides.
+
+       WHAT IT CANNOT SEE, said out loud: it reads classes and inline
+       styles, not layout. It cannot tell whether the resulting padding
+       is the RIGHT size, whether contentInset in capacitor.config.json
+       double-insets on top of it, or whether the pill actually clears
+       the home indicator. Those need a device and they are on
+       MOBILE-BUILD.md. This guard covers the failure that is invisible
+       until then: an edge nobody thought about at all. */
+    const jsx = fs
+      .readdirSync(path.join(rootDir, "src"))
+      .filter((n) => n.endsWith(".jsx"))
+      .map((n) => ["src/" + n, fs.readFileSync(path.join(rootDir, "src", n), "utf8")]);
+
+    /* A full-screen scrim (`inset-0`) is deliberately not in the axis
+       rules: whether it needs an inset depends on what it contains, so
+       it is declared instead. Keyed by a distinctive slice of the
+       className, with a reason, and the reason CHECKED — an excuse
+       nobody verifies is a rubber stamp. */
+    const EXCUSED = [
+      {
+        match: "sticky top-0 z-10 rounded-lg",
+        why: "the note editor's toolbar: sticky INSIDE a panel, in content flow, never at the viewport edge",
+        /* Weak by nature — source cannot prove where an element sits.
+           What is checkable is that it is a rounded card rather than an
+           edge-to-edge bar, which no viewport chrome in this app is. */
+        check: (tag) => /rounded/.test(tag) && !/inset-x-0|w-screen/.test(tag),
+      },
+      {
+        match: "fixed inset-0 z-50 flex items-center justify-center",
+        why: "a centered modal over a scrim: the scrim SHOULD cover the cutout, and the card is centred and width-bounded so it cannot reach one",
+        check: (tag) => /items-center/.test(tag) && /justify-center/.test(tag),
+      },
+    ];
+
+    // Which inset an edge class demands. inset-0 is excused, not ruled.
+    const AXES = [
+      { cls: /\btop-0\b/, needs: ["top"] },
+      { cls: /\bbottom-0\b/, needs: ["bottom"] },
+      { cls: /\binset-x-0\b/, needs: ["left", "right"] },
+    ];
+
+    let checked = 0;
+    const excusesUsed = new Set();
+    for (const [file, src] of jsx) {
+      /* The whole opening tag, so the className and the inline style are
+         both in scope: an inset written in `style` is the only way to
+         express env() from React, and reading the class alone would
+         report every correct element as broken. */
+      for (const m of src.matchAll(/<[A-Za-z][^<>]*className="([^"]*\b(?:fixed|sticky)\b[^"]*)"[^<>]*>/gs)) {
+        const [tag, classes] = m;
+        const excuse = EXCUSED.find((e) => classes.includes(e.match));
+        if (excuse) {
+          excusesUsed.add(excuse.match);
+          assert.ok(excuse.check(tag), `${file}: the excuse for "${excuse.match}" no longer describes it — ${excuse.why}`);
+          continue;
+        }
+        if (/\binset-0\b/.test(classes)) {
+          assert.fail(`${file}: a full-screen element is neither ruled nor declared: ${classes}`);
+        }
+        const needed = AXES.filter((a) => a.cls.test(classes)).flatMap((a) => a.needs);
+        assert.ok(needed.length > 0, `${file}: a ${/fixed/.test(classes) ? "fixed" : "sticky"} element pins to no edge this guard understands: ${classes}`);
+        for (const axis of needed) {
+          assert.match(
+            tag,
+            new RegExp(`safe-area-inset-${axis}`),
+            `${file}: this element is pinned to the ${axis} and does not account for the safe area there — ` +
+              `viewport-fit=cover means it will paint under a cutout. Classes: ${classes}`
+          );
+        }
+        checked += 1;
+      }
+    }
+
+    assert.ok(checked >= 3, `expected the header, the phone nav and the recording indicator at least; found ${checked}`);
+    for (const e of EXCUSED) {
+      assert.ok(excusesUsed.has(e.match), `nothing matches the excuse "${e.match}" any more — delete it rather than leaving it`);
+    }
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

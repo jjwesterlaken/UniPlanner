@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
@@ -117,6 +118,9 @@ import {
   patchInfoPlist,
   applyNativePermissions,
   CAMERA_USAGE_DESCRIPTION,
+  PHOTO_LIBRARY_USAGE_DESCRIPTION,
+  IOS_PHOTO_LIBRARY_PLIST_KEY,
+  IOS_ENCRYPTION_PLIST_KEY,
   IOS_CAMERA_PLIST_KEY,
   patchAndroidManifest,
   MIC_USAGE_DESCRIPTION,
@@ -969,14 +973,64 @@ async function run() {
     assert.ok(rootDict.includes(IOS_CAMERA_PLIST_KEY), "the camera key landed in a nested dict, where iOS will not read it");
   });
 
-  await test("applyNativePermissions reports both usage strings in one pass", () => {
-    /* Two patches over one file: a second pass that read the ORIGINAL
-       xml would silently drop the first key. */
-    const src = fs.readFileSync(path.join(rootDir, "mobile/scripts/native-permissions.mjs"), "utf8");
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-    assert.match(code, /patchInfoPlist\(mic\.xml, CAMERA_USAGE_DESCRIPTION, IOS_CAMERA_PLIST_KEY\)/,
-      "the camera patch no longer chains off the microphone patch's output — one of the two keys will be lost");
-    assert.equal(typeof applyNativePermissions, "function");
+  await test("applyNativePermissions writes EVERY iOS declaration, in the root dict, in one pass", () => {
+    /* THE REAL FUNCTION OVER A REAL FILE, not a regex over its source.
+
+       This used to pin the exact expression that chained the camera
+       patch onto the microphone patch's output — a guard scoped to the
+       SHAPE OF THE CODE rather than to the claim, which is the pattern
+       that has now bitten this repository twice (prepare-native's strip
+       regex, and the help copy's "a month"). Adding a third and fourth
+       key rewrote that expression, and the guard would have had to be
+       rewritten with it while proving nothing new.
+
+       Applying the function to a fixture proves the thing that matters:
+       four keys, all present, all in the ROOT dict, each followed by a
+       value of the right KIND. It cannot be evaded by a rewrite, and it
+       fails if a fold ever reads the original xml again — which is the
+       bug the old one was aimed at. */
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "uni-plist-"));
+    const plistPath = path.join(dir, "ios", "App", "App", "Info.plist");
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, CAP_INFO_PLIST);
+
+    const report = applyNativePermissions(dir);
+    assert.equal(report.ios.status, "patched");
+
+    const doc = parseXml(fs.readFileSync(plistPath, "utf8"), "Info.plist");
+    const rootDict = doc.documentElement.getElementsByTagName("dict")[0];
+    const children = [...rootDict.children];
+    const valueOf = (key) => {
+      const i = children.findIndex((el) => el.tagName === "key" && el.textContent === key);
+      assert.ok(i >= 0, `${key} is missing from the root dict — iOS will not read it anywhere else`);
+      return children[i + 1];
+    };
+
+    for (const [key, text] of [
+      [IOS_PLIST_KEY, MIC_USAGE_DESCRIPTION],
+      [IOS_CAMERA_PLIST_KEY, CAMERA_USAGE_DESCRIPTION],
+      [IOS_PHOTO_LIBRARY_PLIST_KEY, PHOTO_LIBRARY_USAGE_DESCRIPTION],
+    ]) {
+      const v = valueOf(key);
+      assert.equal(v.tagName, "string", `${key} must be a string`);
+      assert.equal(v.textContent, text, `${key} carries the wrong wording`);
+    }
+
+    /* A plist boolean is an EMPTY ELEMENT. Written as <string>false</string>
+       iOS reads a non-empty string as TRUE, so the declaration would say
+       the opposite of what was meant and every upload would still
+       prompt — or worse, claim non-exempt encryption we do not use. */
+    const flag = valueOf(IOS_ENCRYPTION_PLIST_KEY);
+    assert.equal(flag.tagName, "false", `${IOS_ENCRYPTION_PLIST_KEY} must be <false/>, not a string`);
+    assert.equal(flag.textContent, "", "a plist boolean carries no text");
+
+    // Everything Capacitor generated survives, and re-running is inert.
+    assert.ok(children.some((el) => el.tagName === "key" && el.textContent === "CFBundleDisplayName"));
+    const before = fs.readFileSync(plistPath, "utf8");
+    const again = applyNativePermissions(dir);
+    assert.equal(again.ios.status, "unchanged", "cap sync would append a second copy of every key");
+    assert.equal(fs.readFileSync(plistPath, "utf8"), before);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   await test("the reading photo input offers the library and files, not only the camera", () => {

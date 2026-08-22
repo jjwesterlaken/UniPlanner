@@ -520,6 +520,35 @@ build**, and worth remembering when the marketing site is written:
 browsers only ever offer loopback alongside a screen or tab share, and
 macOS Chrome only alongside a tab. Electron asks the OS directly.
 
+**MEASURED, NOT ASSUMED: WebKit honours `audioBitsPerSecond`.** Desktop
+Safari on macOS, real origin, `recorder.audioBitsPerSecond` read back
+after construction: **32000**. Not ignored, not clamped to a default.
+Jared, 22 August 2026.
+
+That matters more than it looks, because **two ceilings rest on that
+one number and neither is ours to fudge**:
+`MAX_BODY_BYTES` (46 MB) and the `lecture-audio` bucket's 50 MB
+per-file limit are both derived from 32 kbps × 3 hours ≈ 43 MB. If
+Safari had encoded AAC at its own default, a two-hour lecture would
+have been rejected at the Storage upload — nothing billed, which is
+the right direction, and the lecture gone, which is not. Both
+constants stand as derived: no re-derivation, no shorter maximum
+recording, no segmentation at the recorder.
+
+**It is DESKTOP WebKit, and iOS is a separate finding.** The readback
+costs thirty seconds and should be repeated in the shell once the
+first iOS build runs; if iOS differs from macOS here that is its own
+result and the fallback ladder is in `IOS-READINESS.md`. The reason
+for saying so rather than generalising is the same one the platform
+asymmetries keep teaching: iOS needed no routing permission where
+Android needed two, and had a version floor instead. Assuming the
+mirror is how both of those were nearly missed.
+
+The habit worth keeping: **the check that settled this was a property
+readback, not a recording.** Construct the object, read what it
+actually applied, and the question is answered before any audio
+exists. Reach for that before reaching for a five-minute experiment.
+
 ### Android needs TWO audio permissions, and the second one is invisible
 
 `RECORD_AUDIO` alone looks sufficient: the runtime prompt appears, the
