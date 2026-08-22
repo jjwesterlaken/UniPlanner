@@ -442,7 +442,73 @@ that is covered by the table-driven test.
 
 ## D. Cosmetic
 
-### 4b. The overscroll gutter — **CLOSED, and it was a root-element defect**
+### 4b. The overscroll gutter — **REOPENED. The CSS is correct and the bars are not the document.**
+
+**The root fix landed and did not fix it.** On device, dark mode, with
+`98e4b71` present:
+
+```
+getComputedStyle(document.documentElement).backgroundColor → "rgba(0, 0, 0, 0)"
+getComputedStyle(document.body).backgroundColor            → "rgb(24, 22, 20)"
+```
+
+Checked from this end, in order:
+
+- the rule is in `src/input.css`;
+- it survives minification — `dist-web/app.css` contains
+  `body,html{height:100%;background-color:rgb(var(--page))}`;
+- **nothing overrides it.** Tailwind's preflight sets `line-height`,
+  `tab-size` and a font stack on `html` and no background at all;
+- and in **real Chromium, loading the built page**, the root computes
+  to `rgb(24, 22, 20)` in dark and `rgb(245, 245, 244)` in light. That
+  is `scripts/test-computed-ground.mjs`, and it goes red if the rule
+  stops reaching the root.
+
+So the rule reaches `html` in a spec-compliant engine. Two things could
+still explain the device reading, and **one line tells them apart** —
+run this in the shell before anything else is built:
+
+```js
+[...document.styleSheets]
+  .flatMap(s => { try { return [...s.cssRules]; } catch (e) { return []; } })
+  .filter(r => /html/.test(r.selectorText || ""))
+  .map(r => r.cssText)
+```
+
+**If the rule is absent, the shell is running an older bundle.** Worth
+checking specifically because the stated evidence for the build being
+current — "the clipping fix is visible" — is evidence for `dbab56b`,
+the safe-area commit, which is the one *before* the root background.
+`cap sync` copies from `mobile/www`, which `prepare-native` rebuilds
+from `dist-web`, so a `build:web` that did not run leaves both stale
+together.
+
+**If the rule is present, the reading is correct and the bars are not
+the document.** CSS Backgrounds §2.11.2: when the root element has a
+background, it is propagated to the canvas and *"the root element does
+not paint this background again, i.e. the used value of its background
+is transparent."* Blink reports the computed value there; WebKit
+reports the used one. On that reading `rgba(0, 0, 0, 0)` is what
+success looks like — the ground went to the canvas — and `body`
+showing the real colour is the corroboration, because body only paints
+its own background once html has one to propagate.
+
+Which would mean **the white bars are outside the canvas entirely**:
+WKWebView's own scroll-view background in the rubber-band overhang,
+and that is `capacitor.config.json`'s hardcoded `#f5f5f4` — the
+unthemeable colour already recorded two sections down as a limitation.
+No CSS can reach it. The remedies are all native:
+
+| | what it takes | cost |
+|---|---|---|
+| set the web view's background from native | a few lines in the generated iOS project, applied by `mobile/scripts/` like the plist keys | has to be re-applied after every `cap add`, and it has to learn the theme — which means reading the same localStorage key from native, or a bridge call on mode change |
+| `overscroll-behavior: none` on the document | already set for `y` on body; needs to reach the root, and WebKit support starts at **iOS 16** against our 15.0 floor | free where supported, nothing below it, and it removes the bounce rather than colouring it |
+| accept it | nothing | white bars at both ends for dark-mode students on an overscroll |
+
+**Nothing built until the one-liner comes back**, because the two
+explanations have no remedy in common.
+
+### 4b (as written when it was believed to be a root-element defect)
 
 Reported off the first iOS build: white bars at the top and bottom,
 visible only when overscrolling to either end, with the header and nav

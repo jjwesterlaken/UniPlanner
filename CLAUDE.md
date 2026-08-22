@@ -2916,6 +2916,60 @@ The test for whether a guard is real is to break the thing it protects
 and watch it go red — restating a value gives you two copies to keep in
 step and a test that only checks one.
 
+### THE ARTIFACT IS THE EVIDENCE. THE SOURCE IS A CLAIM ABOUT IT.
+
+Five times now — and this is the rule they add up to, distinct from
+the restatement ledger above. There the guard restated its subject.
+Here the guard read the **source** when the **built or running
+artifact** was available, and the two disagreed:
+
+| what the source said | what the artifact did |
+|---|---|
+| `npm test` listed the suites | it ran **20 of 21** — `test-site.mjs` had never executed |
+| `coverage/` was gitignored | **30 tracked JSON files** had been committed through three merges |
+| the plist patch wrote a boolean | a `<string>false</string>` would have read as **true** on the device |
+| the light ground and the shell colour were "both light" | they were **byte-identical**, which is what hid an unthemed root entirely |
+| `html, body { background-color }` was in `input.css` **and** in `dist-web/app.css`, overridden by nothing | the device computed the root as `rgba(0, 0, 0, 0)` |
+
+The last one is the sharpest, because every available source check
+passed. The rule was in the stylesheet, it survived minification, no
+later rule touched `html`, and the variable resolved — and none of
+that is the same claim as *the root element paints a background*.
+
+**So: where a guard can read the built artifact instead of the
+source, it should.** Concretely, in rough order of how much they
+prove:
+
+1. **The running page.** `scripts/test-computed-ground.mjs` loads
+   `dist-web/index.html` in real Chromium and reads
+   `getComputedStyle`. `test-app-smoke.mjs`, `test-blocks-neutral.mjs`
+   and `test-local-only.mjs` mount the real bundle in jsdom. The e2e
+   journeys drive the real app against the real backend.
+2. **The built bundle.** The provider-key grep reads
+   `dist-web/app.js`, not `src/`, precisely so a leak through any path
+   is visible. The cache name is hashed from the built bytes.
+3. **The real function over a real fixture.** `applyNativePermissions`
+   is run against a scaffolded plist and the result is PARSED, so the
+   value's element type is checked rather than its text.
+4. **The filesystem and the index.** The `npm test` list is read from
+   the directory; the tracked-file probe asks git what is tracked
+   rather than reading `.gitignore`.
+
+And the counterpart, which is what makes this a rule rather than a
+preference: **a source-level guard should say what it cannot see.**
+`test-computed-ground.mjs` cannot answer for WebKit and says so;
+`test-dark-mode.mjs`'s safe-area sweep reads classes and styles and
+states plainly that it cannot see layout. A guard that names its hole
+is worth more than one that looks thorough, because the hole is where
+the next instance will arrive.
+
+The limit worth stating: some artifacts are unreachable from a build
+machine. A WKWebView's computed styles, an encoder's output bitrate, a
+store's upload validator and an Edge Function secret are all beyond
+anything in `npm test`. For those the artifact check is a hardware or
+dashboard step, and it belongs on `MOBILE-BUILD.md`'s list rather than
+being approximated by a source grep that would pass either way.
+
 ### The sibling failure: a guard scoped to a FILE, not to a CLAIM
 
 Sixteenth instance, and it is worth its own heading because the fix is
