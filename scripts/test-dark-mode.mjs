@@ -263,6 +263,73 @@ async function run() {
     assert.ok(!/mode:/.test(app.slice(app.indexOf("const DEFAULT = {"), app.indexOf("// Accept older saved data"))), "the mode leaked into the synced document");
   });
 
+  await test("the ROOT element carries the ground, not only body — the overscroll gutter", () => {
+    /* THE iOS BUG, and the reason it took a device. `body` was themed
+       from the day the tokens landed, and in a normal browser that is
+       enough: with no background on the root element, body's
+       PROPAGATES to the document canvas, which fills the overscroll
+       gutter. WKWebView's rubber-band overhang reads the ROOT
+       element's own background instead, so it fell through to the web
+       view's hardcoded colour — white bars at both ends of a dark app.
+
+       Asserted on the BUILT css, not the source, because that is what
+       ships and because Tailwind's preflight is in the same cascade. */
+    const css = fs.readFileSync(path.join(rootDir, "dist-web/app.css"), "utf8");
+    const ground = /(^|})([^{}]*\bhtml\b[^{}]*)\{([^}]*background-color:\s*rgb\(var\(--page\)\)[^}]*)\}/;
+    assert.match(css, ground, "html has no themed background — the overscroll gutter falls through to the shell's colour");
+    assert.match(css, /body[^{}]*\{[^}]*background-color:\s*rgb\(var\(--page\)\)/, "body lost its themed ground");
+  });
+
+  await test("THE SHELL COLOURS ARE DERIVED FROM THE LIGHT TOKENS, since they cannot follow the theme", () => {
+    /* Three files outside the token system hardcode a ground colour:
+       the Capacitor config (the web view's background, which is what
+       showed through the overscroll gutter), and the manifest's
+       background_color and theme_color. NONE of them can follow a
+       theme — they are static JSON and a static meta tag read before
+       any script runs.
+
+       So light is the only defensible value, and the guard is that
+       they EQUAL the light tokens rather than merely resembling them.
+       That matters because the resemblance is what hid the bug: the
+       Capacitor colour and light `--page` are byte-identical, so the
+       unthemed ground was invisible in light mode and wrong only in
+       dark. Pin the equality and a change to the light ground goes red
+       here naming the file, instead of re-creating the coincidence
+       somewhere new. */
+    const css = fs.readFileSync(path.join(rootDir, "src/input.css"), "utf8");
+    const light = css.slice(css.indexOf(":root {"), css.indexOf(':root[data-theme="dark"]'));
+    const hexOf = (token) => {
+      const m = new RegExp(`--${token}:\\s*(\\d+) (\\d+) (\\d+)`).exec(light);
+      assert.ok(m, `--${token} is gone from the light palette`);
+      return "#" + [m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("");
+    };
+    const page = hexOf("page");
+    const tone50 = hexOf("tone-50");
+
+    const cap = JSON.parse(fs.readFileSync(path.join(rootDir, "mobile/capacitor.config.json"), "utf8"));
+    for (const [where, value] of [
+      ["backgroundColor", cap.backgroundColor],
+      ["ios.backgroundColor", cap.ios && cap.ios.backgroundColor],
+      ["android.backgroundColor", cap.android && cap.android.backgroundColor],
+    ]) {
+      assert.equal(
+        (value || "").toLowerCase(),
+        page,
+        `capacitor.config.json ${where} is not the light --page (${page}). It cannot follow the theme, so it must ` +
+          "at least be right in the mode it can be right in — and html's themed background is what covers the other one"
+      );
+    }
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(rootDir, "public/manifest.webmanifest"), "utf8"));
+    assert.equal(manifest.background_color.toLowerCase(), page, "the PWA splash ground is not the light --page");
+    assert.equal(manifest.theme_color.toLowerCase(), tone50, "the manifest theme colour is not the light --tone-50");
+
+    const html = fs.readFileSync(path.join(rootDir, "public/index.html"), "utf8");
+    const meta = /<meta name="theme-color" content="([^"]+)"/.exec(html);
+    assert.ok(meta, "the theme-color meta is gone");
+    assert.equal(meta[1].toLowerCase(), tone50, "the theme-color meta disagrees with the light --tone-50");
+  });
+
   await test("EVERY viewport-pinned element accounts for the safe area on the edge it touches", () => {
     /* viewport-fit=cover is in index.html, which is what makes the page
        extend under the status bar, the Dynamic Island and the home

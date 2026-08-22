@@ -1067,6 +1067,28 @@ lightens further. Eight palettes × two modes hand-written would be 64
 values to keep in step. Plain rgb()/rgba(), because iOS 15 — the
 deployment floor — has no `color-mix()`.
 
+**THE GROUND GOES ON `html` AS WELL AS `body`, and the reason is a
+device finding.** `body` was themed from the start, and in a normal
+browser that is sufficient: with no background on the root element,
+body's background **propagates to the document canvas**, which fills
+the overscroll gutter. WKWebView's rubber-band overhang reads the
+**root element's own** background instead, found it transparent, and
+fell through to the web view's hardcoded `#f5f5f4` — white bars at
+both ends of a dark app, on Jared's first iOS build.
+
+**Why nobody saw it in light mode, which is the part to carry:**
+`--page` in light mode is `245 245 244`, and that is byte-identical to
+the `#f5f5f4` hardcoded in `mobile/capacitor.config.json` and the
+manifest. The unthemed ground and the light theme agreed exactly, so
+the defect was real in both modes and visible in one. **A coincidence
+between a themed value and an unthemed one hides the unthemed one
+completely** — and the fix for that class is to pin the coincidence:
+the three shell colours are now asserted EQUAL to the light tokens,
+derived from `input.css`, so changing the light ground goes red naming
+the file. They cannot follow a theme (static JSON, and a meta tag read
+before any script runs), so being right in the one mode they can be
+right in is the whole of what is available.
+
 **THE PAPER DOES NOT FLIP — and the reason has since changed, which
 matters.** The original constraint was handwriting: strokes carried
 their own stored colour, so a dark sheet meant rewriting a student's

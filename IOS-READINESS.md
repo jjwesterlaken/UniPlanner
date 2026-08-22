@@ -77,6 +77,7 @@ becomes `${SITE_URL}/app` after the split — one derived edit in
 | 3b | `NSPhotoLibraryUsageDescription` | **CLOSED — built.** Declared, on the fail-towards-declaring argument |
 | 3c | `PrivacyInfo.xcprivacy` | **Possible automated rejection.** Still unverified — needs the generated folder |
 | 4 | Safe area — top and sides | **CLOSED — built.** Top, left and right added; sizing still needs a device |
+| 4b | Overscroll gutter shows a light ground | **CLOSED — built.** `html` had no themed background; fixed at the root, so no `contentInset` A/B needed |
 | 5 | `capacitor://localhost` | Understood, no work; one consequence to communicate |
 | 6 | Capacitor plugins | **None, and that is correct.** Do not add any |
 | 7 | iPad | A decision, not a defect |
@@ -355,6 +356,50 @@ that is covered by the table-driven test.
 ---
 
 ## D. Cosmetic
+
+### 4b. The overscroll gutter — **CLOSED, and it was a root-element defect**
+
+Reported off the first iOS build: white bars at the top and bottom,
+visible only when overscrolling to either end, with the header and nav
+correctly inset. Diagnosed and fixed at the root, so the
+`contentInset` A/B is not needed for this.
+
+**Was the root themed?** `body` was, `html` was not. In a normal
+browser that is enough — with no background on the root element,
+body's **propagates to the document canvas**, which is what fills the
+overscroll gutter, so every desktop browser was already correct in
+dark mode. WKWebView's rubber-band overhang reads the **root
+element's own** background instead, found it transparent, and fell
+through to the web view's background: a hardcoded `#f5f5f4` in
+`mobile/capacitor.config.json`.
+
+**Would it show in light mode?** No — and the reason is the finding.
+`--page` in light mode is `245 245 244`, which is **exactly**
+`#f5f5f4`. The unthemed native ground and the light theme's page
+colour coincide to the byte, so the defect was real in both modes and
+visible in only one. That coincidence is why it survived every
+desktop check and every light-mode device.
+
+**The fix** is one line: `html, body { background-color:
+rgb(var(--page)); }`. Both are the same variable, so light mode is
+byte-identical and body simply paints its own ground instead of
+propagating it.
+
+**Three static colours still cannot follow the theme**, and that is a
+limitation rather than a bug: `capacitor.config.json`'s three
+`backgroundColor` values, and the manifest's `background_color` and
+`theme_color` with the matching `<meta name="theme-color">`. They are
+static JSON and a meta tag read before any script runs. Light is the
+only defensible value for each, so a test now asserts they **equal**
+the light tokens, derived from `input.css` — turning the coincidence
+that hid this into a checked relationship. Change the light ground and
+the shell files go red by name.
+
+What that leaves: the web view's colour is still what paints the very
+first frame, so a dark-mode student gets a light flash at launch. That
+is a launch-screen problem, not an overscroll one, and it is smaller
+than what was fixed — recorded here rather than fixed, because the
+only remedies are native.
 
 ### 4. Safe areas — **CLOSED, BUILT** (the bottom was done; the top and sides were not)
 
