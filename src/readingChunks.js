@@ -20,7 +20,7 @@
    blurring the two.
    ================================================================== */
 
-import { TASK_UNITS } from "./aiTextLimits.js";
+import { TASK_CREDITS, PHOTO_BATCH_CREDITS } from "./aiTextLimits.js";
 
 /* MIRRORS supabase/functions/ai-text/config.ts. Both are asserted equal
    by a test rather than trusted to a comment — see the restatement rule
@@ -146,15 +146,17 @@ export function chunkReading(text, { maxChars = CHUNK_MAX_CHARS, maxChunks = MAX
  * other tasks, because the cost is variable and nothing on screen would
  * otherwise hint that a longer reading costs four times as much.
  *
- * `units` is internal and never rendered; aiTextCopy.js turns `chunks`
- * into words. See the units rule at the top of that file.
+ * `credits` is what it will cost. It is not rendered as a raw number
+ * here — aiTextCopy.js turns `chunks` into parts, because parts are
+ * what a refusal's advice is in ("paste a shorter piece") — but a
+ * credit is a sayable quantity now: one minute of recorded lecture.
  */
 export function estimateReading(text, opts = {}) {
   const split = chunkReading(text, opts);
   if (!split.ok) return { ok: false, ...split, chars: normalise(text).trim().length };
   const chunks = split.chunks.length;
-  const units = chunks * (TASK_UNITS.summarise || 0) + (chunks > 1 ? TASK_UNITS.merge || 0 : 0);
-  return { ok: true, chars: normalise(text).trim().length, chunks, units, chunkTexts: split.chunks };
+  const credits = chunks * (TASK_CREDITS.summarise || 0) + (chunks > 1 ? TASK_CREDITS.merge || 0 : 0);
+  return { ok: true, chars: normalise(text).trim().length, chunks, credits, chunkTexts: split.chunks };
 }
 
 /* ------------------------------------------------------------------ */
@@ -187,13 +189,23 @@ export function batchPhotos(count, { perChunk = PHOTOS_PER_CHUNK, maxPhotos = MA
   return { ok: true, batches };
 }
 
-/** The photo estimate, in the same shape estimateReading returns. */
+/**
+ * The photo estimate, in the same shape estimateReading returns.
+ *
+ * A batch is priced by PHOTO_BATCH_CREDITS rather than by
+ * TASK_CREDITS.summarise, even though the two are equal today. They are
+ * equal because the photo price is HELD pending the model decision, not
+ * because a batch of photographed pages costs what a text chunk costs —
+ * it costs about eleven times as much on the model we call. Reading the
+ * held constant is what makes lifting the hold change this number
+ * instead of requiring somebody to notice this line.
+ */
 export function estimatePhotos(count, opts = {}) {
   const split = batchPhotos(count, opts);
   if (!split.ok) return { ok: false, ...split };
   const chunks = split.batches.length;
-  const units = chunks * (TASK_UNITS.summarise || 0) + (chunks > 1 ? TASK_UNITS.merge || 0 : 0);
-  return { ok: true, count, chunks, units, batches: split.batches };
+  const credits = chunks * (PHOTO_BATCH_CREDITS || 0) + (chunks > 1 ? TASK_CREDITS.merge || 0 : 0);
+  return { ok: true, count, chunks, credits, batches: split.batches };
 }
 
 /**

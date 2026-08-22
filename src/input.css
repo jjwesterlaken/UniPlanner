@@ -82,8 +82,34 @@
 }
 
 html, body { height: 100%; }
+
+/* THE GROUND IS SET ON BOTH, and `html` is the one that was missing.
+
+   `body`'s background was themed from the day the tokens landed, and
+   in a normal browser that is enough: with no background on the root
+   element, body's PROPAGATES to the document canvas, which is what
+   fills the overscroll gutter. Every desktop browser was therefore
+   correct in dark mode, which is most of why this survived.
+
+   WKWebView's rubber-band overhang reads the ROOT element's own
+   background, not the propagated canvas, so with `html` transparent it
+   fell through to the web view's background — a hardcoded `#f5f5f4` in
+   mobile/capacitor.config.json. White bars at both ends of an
+   overscroll, on a dark app. Found on Jared's first iOS build.
+
+   WHY NOBODY SAW IT IN LIGHT MODE, which is the part worth keeping:
+   `--page` in light mode is `245 245 244`, and that is EXACTLY
+   `#f5f5f4`. The unthemed native ground and the light theme's page
+   colour coincide to the byte, so the defect is real in both modes and
+   visible in only one. A test now pins that equality rather than
+   leaving it to luck — see test-dark-mode.mjs.
+
+   Setting it on `html` costs nothing anywhere else: the two values are
+   the same variable, so light mode is unchanged and body simply paints
+   its own background instead of propagating it. */
+html, body { background-color: rgb(var(--page)); }
+
 body {
-  background-color: rgb(var(--page));
   -webkit-text-size-adjust: 100%;
   overscroll-behavior-y: none;
 }

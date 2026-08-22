@@ -35,7 +35,7 @@ import { newIdempotencyKey } from "../src/aiNotesLogic.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -157,6 +157,28 @@ function psql(db, sql) {
   return { ok: result.status === 0, out: result.stdout.trim(), err: result.stderr.trim() };
 }
 
+/* Two psql processes at once, which is the only way to demonstrate a
+   lost update: it needs two sessions holding two snapshots. `exec` is
+   synchronous by design (everything else here is a single statement
+   batch), so this is its async twin, with the same su-as-postgres
+   handling. */
+function psqlAsync(db, sql) {
+  const connection = useExistingServer ? [] : ["-h", sockDir];
+  const args = [...connection, "-d", db, "-v", "ON_ERROR_STOP=1", "-X", "-q", "-t", "-A", "-f", "-"];
+  const [cmd, cmdArgs] = unprivilegedUser
+    ? ["su", [unprivilegedUser, "-c", [bin("psql"), ...args].map((a) => `'${a}'`).join(" ")]]
+    : [bin("psql"), args];
+  return new Promise((resolve) => {
+    const child = spawn(cmd, cmdArgs, { stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("close", (code) => resolve({ ok: code === 0, out: out.trim(), err: err.trim() }));
+    child.stdin.end(sql);
+  });
+}
+
 function psqlOrThrow(db, sql) {
   const r = psql(db, sql);
   if (!r.ok) throw new Error(r.err || r.out);
@@ -185,10 +207,19 @@ const SUPABASE_STUBS = `
   do $$ begin
     if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
     if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+    -- service_role is the one the Edge Functions authenticate as, and it
+    -- was MISSING here until 0011 named it in a grant. A migration that
+    -- referenced it would have failed on this shim while applying
+    -- perfectly to the real project -- the same "the stand-in is weaker
+    -- than production" lesson as the default privileges below, running
+    -- in the opposite direction: there the shim let a bad migration
+    -- pass, here it would have failed a good one. Both are the shim
+    -- restating the environment instead of matching it.
+    if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
   end $$;
 
   alter default privileges in schema public grant all on tables to anon, authenticated;
-  grant usage on schema public to anon, authenticated;
+  grant usage on schema public to anon, authenticated, service_role;
 
   create schema if not exists auth;
   create table auth.users (id uuid primary key default gen_random_uuid(), email text);
@@ -256,6 +287,17 @@ async function test(name, fn) {
   }
 }
 
+/* The app's own device id, lifted from sync.js rather than invented
+   here — the same arrangement as the uid() lift in the id-column guard,
+   and for the same reason: a literal would pin today's format and pass
+   the day the generator changed. */
+function newDeviceIdFromSource() {
+  const src = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+  const m = /^const rid = (\(\) => `[^`]+`);/m.exec(src);
+  assert.ok(m, "couldn't find sync.js's rid() helper — this guard is blind, fix the pattern");
+  return new Function(`return ${m[1]}`)()();
+}
+
 const USER = "'11111111-1111-1111-1111-111111111111'";
 const OTHER = "'22222222-2222-2222-2222-222222222222'";
 
@@ -263,7 +305,13 @@ function seedTwoUsers(db, { withPlannerData = true } = {}) {
   psqlOrThrow(
     db,
     `insert into auth.users (id) values (${USER}), (${OTHER});
-     insert into public.ai_usage (user_id, month, minutes_used) values (${USER}, '2026-08', 12), (${OTHER}, '2026-08', 5);
+     /* No usage COLUMN named here on purpose. This helper is used by
+        tests that stop at 0001 or 0002, before 0012 adds credits_used —
+        and by tests that run every migration, after 0013 has dropped
+        minutes_used. Naming either one makes the helper wrong at one end
+        of that range. What every caller actually needs is a row that
+        exists and belongs to a user. */
+     insert into public.ai_usage (user_id, month) values (${USER}, '2026-08'), (${OTHER}, '2026-08');
      insert into public.ai_notes_requests (idempotency_key, user_id, status, result) values
        (gen_random_uuid(), ${USER}, 'done', '{"transcript":"my lecture"}'),
        (gen_random_uuid(), ${OTHER}, 'done', '{"transcript":"their lecture"}');
@@ -666,15 +714,16 @@ async function run() {
   });
 
   await test("a new COLUMN needs no deletion change, unlike a new table", () => {
-    // delete_my_account_data() clears ai_usage wholesale, so the text
+    // delete_my_account_data() clears ai_usage wholesale, so the whole
     // allowance goes with it. Asserted rather than assumed, because the
     // distinction between "column" and "table" is exactly the kind of
-    // thing that gets remembered wrongly.
+    // thing that gets remembered wrongly — and it is what let the two
+    // currencies collapse into one without touching deletion at all.
     const db = freshDb();
     for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) applyMigration(db, file);
     psqlOrThrow(db, `insert into auth.users (id) values (${USER});
-                     insert into public.ai_usage (user_id, month, minutes_used, text_units_used)
-                       values (${USER}, '2026-08', 10, 7);`);
+                     insert into public.ai_usage (user_id, month, credits_used)
+                       values (${USER}, '2026-08', 17);`);
     psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
     assert.equal(count(db, "public.ai_usage", `user_id = ${USER}`), 0);
   });
@@ -896,7 +945,7 @@ async function run() {
     ok(`select data from public.planner_data where user_id = ${USER};`);
     ok(`insert into public.planner_data (user_id, data) values (${USER}, '{"a":1}') on conflict (user_id) do update set data = '{"a":2}';`);
     ok(`select tier from public.profiles where user_id = ${USER};`);
-    ok(`select minutes_used from public.ai_usage where user_id = ${USER};`);
+    ok(`select credits_used from public.ai_usage where user_id = ${USER};`);
     ok(`insert into public.semester_archives (id, user_id, label, summary, data) values ('eeeeeeee-0000-0000-0000-000000000001', ${USER}, 'L', '{}', '{}');`);
     ok(`select label from public.semester_archives where user_id = ${USER};`);
     ok(`delete from public.semester_archives where id = 'eeeeeeee-0000-0000-0000-000000000001';`);
@@ -1069,6 +1118,11 @@ async function run() {
     // Minted by newIdempotencyKey() precisely because it crosses into a
     // uuid column; the Edge Function validates it again before insert.
     "ai_notes_requests.idempotency_key": () => newIdempotencyKey(),
+    /* The one-device rule's identifier — and it is the id the app has
+       always minted for merges, not a second one. Lifted out of
+       sync.js's source the same way uid() is lifted out of
+       PlannerApp.jsx, so a change of FORMAT follows rather than pins. */
+    "profiles.active_device_id": () => newDeviceIdFromSource(),
     // Same generator, for the same reason.
     "semester_archives.id": () => newIdempotencyKey(),
     // Not an identifier but client-minted text crossing into a typed
@@ -1133,6 +1187,13 @@ async function run() {
         `insert into public.semester_archives (id, user_id, label, summary, data) values ('${v}', ${USER}, 'L', '{}', '{}')`,
       "client_errors.build_id": (v) =>
         `insert into public.client_errors (user_id, message, build_id) values (${USER}, 'boom', '${v}')`,
+      /* Not an insert, because the client cannot insert or update
+         profiles at all — 0008 revoked those and `tier` lives on that
+         table, so relaxing it would let a student set their own tier.
+         The real write path is the function, so the function is what
+         gets exercised: same question (does the column accept what the
+         client mints), asked of the only route that exists. */
+      "profiles.active_device_id": (v) => `select public.claim_device('${v}')`,
     };
     for (const [col, gen] of Object.entries(GENERATED_IDS)) {
       const value = gen();
@@ -1178,6 +1239,301 @@ async function run() {
     // The re-run must also re-close the grant the test above re-opened
     // in its own db; here it simply asserts revoke is idempotent.
     assert.equal(one(db, `select has_table_privilege('authenticated', 'public.semester_archives', 'update')::text;`), "false");
+  });
+
+  /* ---------- 0011: the allowance increment is atomic ---------- */
+
+  const withUsage = () => {
+    const db = withArchives();
+    psqlOrThrow(
+      db,
+      `insert into auth.users (id) values (${USER});
+       insert into public.ai_usage (user_id, month, credits_used)
+         values (${USER}, '2026-08', 0);`
+    );
+    return db;
+  };
+  const minutes = (db) =>
+    Number(one(db, `select credits_used::text from public.ai_usage where user_id = ${USER} and month = '2026-08';`));
+
+  await test("THE LOST UPDATE, demonstrated: a read-modify-write drops one of two concurrent bills", async () => {
+    /* This asserts the BUG, not the fix, and it is here so the next
+       test means something. Without it, "two concurrent calls add up"
+       could be passing because the two calls never actually overlapped
+       — a green test proving nothing, which is the failure mode every
+       concurrency test has.
+
+       Session A reads 0, sleeps, writes 0 + 3. Session B reads 0 (A has
+       not written yet), sleeps, blocks on A's row lock, and then writes
+       its own stale 0 + 3. Total 3, not 6. */
+    const db = withUsage();
+    const readModifyWrite = (cost) => `
+      begin;
+      do $$
+      declare v numeric;
+      begin
+        select credits_used into v from public.ai_usage where user_id = ${USER} and month = '2026-08';
+        perform pg_sleep(0.4);
+        update public.ai_usage set credits_used = v + ${cost} where user_id = ${USER} and month = '2026-08';
+      end $$;
+      commit;`;
+    const both = await Promise.all([psqlAsync(db, readModifyWrite(3)), psqlAsync(db, readModifyWrite(3))]);
+    for (const r of both) assert.ok(r.ok, `a session failed: ${r.err}`);
+    assert.equal(
+      minutes(db),
+      3,
+      "the two sessions did not overlap, so this test is not demonstrating anything — raise the sleep"
+    );
+  });
+
+  await test("add_ai_credits keeps both concurrent bills, because the addition happens under the row lock", async () => {
+    /* The fix, under exactly the interleaving above. MUTATION CHECK:
+       change `ai_usage.minutes_used + excluded.minutes_used` to
+       `excluded.minutes_used` in 0011 and this reads 3. */
+    const db = withUsage();
+    const atomic = `
+      begin;
+      select pg_sleep(0.4);
+      select * from public.add_ai_credits(${USER}, '2026-08', 3);
+      commit;`;
+    const both = await Promise.all([psqlAsync(db, atomic), psqlAsync(db, atomic)]);
+    for (const r of both) assert.ok(r.ok, `a session failed: ${r.err}`);
+    assert.equal(minutes(db), 6, "one of two concurrent bills was lost");
+  });
+
+  await test("add_ai_credits creates the month's row when there isn't one, and adds to it when there is", async () => {
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-09', 3);`);
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-09', 2);`);
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-09', 51);`);
+    assert.equal(
+      one(db, `select credits_used::text from public.ai_usage where month = '2026-09';`),
+      "56",
+      "the single counter must accumulate across every kind of action"
+    );
+    assert.equal(one(db, `select count(*)::text from public.ai_usage where month = '2026-09';`), "1", "one row per user per month");
+  });
+
+  await test("add_ai_credits returns the totals it just wrote, so no caller reports a stale figure", () => {
+    const db = withUsage();
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-08', 4);`);
+    assert.equal(one(db, `select new_credits::text from public.add_ai_credits(${USER}, '2026-08', 7);`), "11");
+    // Adding nothing returns the running total rather than zero — which
+    // is what makes the returned figure usable as "what to show now".
+    assert.equal(one(db, `select new_credits::text from public.add_ai_credits(${USER}, '2026-08', 0);`), "11");
+  });
+
+  await test("only service_role may call add_ai_credits — the caller names the user_id", () => {
+    /* A function's platform default is EXECUTE TO PUBLIC, which is the
+       same default-grant trap 0008 found on the tables one layer down.
+       It matters more here than on a table: this takes p_user_id as an
+       argument, so an execute grant to `authenticated` would read
+       "spend anybody's allowance". */
+    const db = withArchives();
+    const sig = "public.add_ai_credits(uuid, text, numeric)";
+    for (const role of ["anon", "authenticated", "public"]) {
+      assert.equal(
+        one(db, `select has_function_privilege('${role}', '${sig}', 'execute')::text;`),
+        "false",
+        `${role} can call add_ai_credits`
+      );
+    }
+    assert.equal(one(db, `select has_function_privilege('service_role', '${sig}', 'execute')::text;`), "true");
+  });
+
+  await test("0012's backfill carries the two old counters into the one new one", () => {
+    /* The migration a real project will run once, on rows that already
+       hold a month's spend. Applied at 0011 depth so the old columns are
+       still there — which is the state every existing account is in. */
+    const db = freshDb();
+    for (const f of fs.readdirSync(migrationsDir).filter((x) => x.endsWith(".sql")).sort()) {
+      if (f.startsWith("0012") || f.startsWith("0013")) break;
+      applyMigration(db, f);
+    }
+    psqlOrThrow(
+      db,
+      `insert into auth.users (id) values (${USER});
+       insert into public.ai_usage (user_id, month, minutes_used, text_units_used)
+         values (${USER}, '2026-08', 40, 12), (${USER}, '2026-07', 0, 0);`
+    );
+    applyMigration(db, "0012_one_currency.sql");
+    assert.equal(
+      one(db, `select credits_used::text from public.ai_usage where month = '2026-08';`),
+      "52",
+      "the backfill lost a month's spend — a text unit was already worth about a credit, so the sum carries"
+    );
+    assert.equal(one(db, `select credits_used::text from public.ai_usage where month = '2026-07';`), "0");
+  });
+
+  await test("0012 is re-runnable, even after 0013 has taken the columns it reads", () => {
+    /* THE FAILURE THIS CATCHES is specific and easy to ship: 0012's
+       backfill names minutes_used, 0013 drops it, and a re-apply of the
+       whole folder then dies on a column that is supposed to be gone.
+       Re-runnable exactly once is not re-runnable. */
+    const db = withUsage();
+    applyMigration(db, "0012_one_currency.sql");
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-08', 5);`);
+    assert.equal(minutes(db), 5, "the re-applied function stopped adding");
+    assert.equal(
+      one(db, `select has_function_privilege('authenticated', 'public.add_ai_credits(uuid, text, numeric)', 'execute')::text;`),
+      "false",
+      "the re-run must re-close the grant, not just create the function"
+    );
+  });
+
+  /* ---------- 0014: per-tier allowances and the lifetime trial ---------- */
+
+  await test("the trial counter is on the ACCOUNT, with no month in it", () => {
+    /* The whole shape. ai_usage is keyed (user_id, month) and a lifetime
+       allowance has no month; a sentinel month would be invisible to
+       every query that filters on the current one, which reports the
+       trial as unspent forever. */
+    const db = withArchives();
+    assert.equal(
+      one(db, `select data_type from information_schema.columns
+                where table_schema='public' and table_name='profiles' and column_name='trial_credits_used';`),
+      "numeric"
+    );
+    assert.equal(
+      one(db, `select count(*)::text from information_schema.columns
+                where table_schema='public' and table_name='profiles' and column_name like '%month%';`),
+      "0",
+      "profiles grew a month column — the trial is not a monthly allowance and must not gain one"
+    );
+  });
+
+  await test("add_trial_credits ADDS, and a new month does not reset it", () => {
+    /* The property the lifetime trial IS. A month rolling over must not
+       touch this counter, and the way that breaks is somebody keying it
+       by month "for consistency" with ai_usage. */
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
+    psqlOrThrow(db, `select * from public.add_trial_credits(${USER}, 20);`);
+    psqlOrThrow(db, `select * from public.add_trial_credits(${USER}, 25);`);
+    assert.equal(one(db, `select trial_credits_used::text from public.profiles where user_id = ${USER};`), "45");
+    /* Spending in a different MONTH lands on the same counter, because
+       there is no month to land in. */
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-09', 7);`);
+    assert.equal(
+      one(db, `select trial_credits_used::text from public.profiles where user_id = ${USER};`),
+      "45",
+      "the monthly counter wrote into the lifetime one, or the reverse"
+    );
+    assert.equal(one(db, `select new_trial_credits::text from public.add_trial_credits(${USER}, 0);`), "45");
+  });
+
+  await test("NO ROLLOVER: a fresh month starts at nothing, and cannot inherit a balance", () => {
+    /* True by construction — a new month simply has no row — and
+       asserted anyway, because the way it stops being true is somebody
+       adding "carry over what you didn't use", which is three lines and
+       would turn a semester's prepayment into one month's spending. */
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-08', 400);`);
+    assert.equal(one(db, `select count(*)::text from public.ai_usage where user_id = ${USER} and month = '2026-09';`), "0");
+    psqlOrThrow(db, `select * from public.add_ai_credits(${USER}, '2026-09', 5);`);
+    assert.equal(
+      one(db, `select credits_used::text from public.ai_usage where user_id = ${USER} and month = '2026-09';`),
+      "5",
+      "a new month inherited last month's spend, or its unused balance"
+    );
+    assert.equal(one(db, `select credits_used::text from public.ai_usage where user_id = ${USER} and month = '2026-08';`), "400");
+  });
+
+  await test("only service_role may spend somebody's trial", () => {
+    const db = withArchives();
+    const sig = "public.add_trial_credits(uuid, numeric)";
+    for (const role of ["anon", "authenticated", "public"]) {
+      assert.equal(one(db, `select has_function_privilege('${role}', '${sig}', 'execute')::text;`), "false", `${role} can spend a trial`);
+    }
+    assert.equal(one(db, `select has_function_privilege('service_role', '${sig}', 'execute')::text;`), "true");
+  });
+
+  await test("deleting an account takes the trial counter with it — the hole, asserted", () => {
+    /* NOT a bug being fixed. delete_my_account_data() empties profiles,
+       so delete-and-resignup resets the lifetime trial. There is no
+       clean fix that keeps both promises, the hole costs about four
+       cents per abuse and needs a fresh confirmed email each time, and
+       it is accepted deliberately. Asserted so nobody later "fixes" it
+       by retaining a per-email counter after a deletion request. */
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
+    psqlOrThrow(db, `select * from public.add_trial_credits(${USER}, 60);`);
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
+    assert.equal(count(db, "public.profiles", `user_id = ${USER}`), 0, "the trial counter survived account deletion");
+  });
+
+  await test("claim_device writes only the caller's own row, whoever asks", () => {
+    /* THE WHOLE REASON IT IS A FUNCTION. `profiles` holds `tier`, so
+       granting update on it to `authenticated` — the obvious way to let
+       a client record a device — would also let any student set their
+       own tier to the top one. A definer function that writes two named
+       columns is the narrow version of the same capability, and this is
+       the assertion that it really is narrow: the caller names no user,
+       so there is no parameter to point at somebody else. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    const mine = newDeviceIdFromSource();
+    const r = psql(db, `set test.uid = ${USER}; set role authenticated; select public.claim_device('${mine}');`);
+    assert.equal(r.ok, true, `claim_device refused an authenticated caller: ${(r.err || "").slice(0, 200)}`);
+
+    const check = psql(db, `select user_id, active_device_id from public.profiles order by user_id;`);
+    assert.equal(check.ok, true);
+    const claimed = check.out.split("\n").filter((l) => l.includes(mine));
+    assert.equal(claimed.length, 1, "claim_device wrote a device id onto more than one account, or onto none");
+  });
+
+  await test("the client still cannot write profiles directly — tier stays out of reach", () => {
+    /* The other half. If this ever passes, the allowance system is one
+       UPDATE away from being self-service. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    const r = psql(db, `set test.uid = ${USER}; set role authenticated; update public.profiles set tier = 'ai_max' where user_id = ${USER};`);
+    const tier = psql(db, `select tier from public.profiles where user_id = ${USER};`);
+    assert.ok(!/ai_max/.test(tier.out), "an authenticated client set its own tier — profiles is writable again");
+  });
+
+  await test("a signed-out caller cannot claim a device, and is told so rather than silently ignored", () => {
+    /* 0008's rule: make "no" and "nothing" different answers. With the
+       grant revoked, anon gets a permission error; with it granted, the
+       update would match no row and return an empty set — byte-identical
+       to a successful claim of nothing. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    const r = psql(db, `set role anon; select public.claim_device('dev-whatever');`);
+    assert.equal(r.ok, false, "anon may call claim_device — a signed-out caller gets silence instead of a refusal");
+    assert.match(r.err || "", /permission denied/i, `expected a permission error, got: ${(r.err || "").slice(0, 200)}`);
+  });
+
+  await test("0015 is re-runnable, and a re-apply does not forget which device holds the account", () => {
+    /* Re-runnable is not enough on its own: `add column if not exists`
+       is inert on a second pass, but a re-apply that reset the column
+       would sign every trial student out on the next deploy that
+       re-ran the folder. So the claim is planted first and checked
+       after. */
+    const db = withArchives();
+    seedTwoUsers(db);
+    const mine = newDeviceIdFromSource();
+    psqlOrThrow(db, `set test.uid = ${USER}; set role authenticated; select public.claim_device('${mine}');`);
+    applyMigration(db, "0015_device_claim.sql");
+    assert.equal(
+      one(db, `select active_device_id from public.profiles where user_id = ${USER};`),
+      mine,
+      "re-applying 0015 dropped the active device — every trial student would be signed out by the next deploy"
+    );
+  });
+
+  await test("0014 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id) values (${USER});`);
+    psqlOrThrow(db, `select * from public.add_trial_credits(${USER}, 12);`);
+    applyMigration(db, "0014_per_tier_allowance.sql");
+    assert.equal(one(db, `select trial_credits_used::text from public.profiles where user_id = ${USER};`), "12", "the re-apply reset a lifetime counter");
+    assert.equal(
+      one(db, `select has_function_privilege('authenticated', 'public.add_trial_credits(uuid, numeric)', 'execute')::text;`),
+      "false"
+    );
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

@@ -6,8 +6,9 @@
    bundle for leaked secrets). */
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
@@ -34,12 +35,18 @@ import {
   INITIAL_RECORDER_STATE,
   newIdempotencyKey,
   TRANSLATION_LANGUAGES,
-  MONTHLY_MINUTES_LIMIT_HINT,
-  MINIMUM_BILLED_MINUTES_HINT,
-  RESUMMARISE_BILLED_MINUTES_HINT,
+  MINIMUM_BILLED_CREDITS_HINT,
+  RESUMMARISE_BILLED_CREDITS_HINT,
   recoveryFailureKind,
   RECOVERY_MISSING_CODES,
+  uploadRefusal,
+  MAX_UPLOAD_BYTES_HINT,
 } from "../src/aiNotesLogic.js";
+/* The client's copy of the monthly limit moved to aiTextLimits.js when
+   the two currencies collapsed into one — one mirror instead of two.
+   Aliased so the mirror test below compares two DIFFERENT bindings and
+   cannot become a tautology. */
+import { MONTHLY_CREDITS_LIMIT as CLIENT_MONTHLY_CREDITS_LIMIT } from "../src/aiTextLimits.js";
 import { AI_NOTES_COPY } from "../src/aiNotesCopy.js";
 import { fetchUsage, callAiNotes } from "../src/aiNotesClient.js";
 import { mergeData, COLLECTIONS, purgeOldTombstones } from "../src/sync.js";
@@ -80,7 +87,7 @@ import {
   checkRequestGuards,
   selectTranscriber,
   minutesFromSeconds,
-  billedMinutes,
+  billedCredits,
   isUuid,
   sanitizeCourse,
   normalizeTranslateTo,
@@ -89,9 +96,9 @@ import {
   TRANSLATION_CODES,
   MAX_COURSE_LENGTH,
   SUMMARY_MAX_TOKENS,
-  MONTHLY_MINUTES_LIMIT,
-  MINIMUM_BILLED_MINUTES,
-  RESUMMARISE_BILLED_MINUTES,
+  MONTHLY_CREDITS_LIMIT,
+  MINIMUM_BILLED_CREDITS,
+  RESUMMARISE_BILLED_CREDITS,
   USD_PER_TRANSCRIBED_MINUTE,
   USD_PER_1M_SUMMARY_INPUT,
   USD_PER_1M_SUMMARY_OUTPUT,
@@ -113,6 +120,9 @@ import {
   patchInfoPlist,
   applyNativePermissions,
   CAMERA_USAGE_DESCRIPTION,
+  PHOTO_LIBRARY_USAGE_DESCRIPTION,
+  IOS_PHOTO_LIBRARY_PLIST_KEY,
+  IOS_ENCRYPTION_PLIST_KEY,
   IOS_CAMERA_PLIST_KEY,
   patchAndroidManifest,
   MIC_USAGE_DESCRIPTION,
@@ -211,14 +221,14 @@ async function run() {
 
   await test("parseAiNotesError maps usage_exceeded to a clear sentence", () => {
     const msg = parseAiNotesError({ code: "usage_exceeded" }, 403);
-    assert.equal(msg, "You've used all your AI minutes for this month.");
+    assert.equal(msg, "You've used all your AI credits.");
   });
 
   await test("callAiNotes surfaces the server's error via a thrown Error", async () => {
     const fakeFetch = async () => ({
       ok: false,
       status: 403,
-      json: async () => ({ ok: false, code: "usage_exceeded", error: "You've used all your AI minutes for this month." }),
+      json: async () => ({ ok: false, code: "usage_exceeded", error: "You've used all your AI credits." }),
     });
     let thrown = null;
     try {
@@ -230,7 +240,7 @@ async function run() {
       thrown = err;
     }
     assert.ok(thrown, "expected callAiNotes to throw");
-    assert.equal(parseAiNotesError(thrown.body, thrown.status), "You've used all your AI minutes for this month.");
+    assert.equal(parseAiNotesError(thrown.body, thrown.status), "You've used all your AI credits.");
   });
 
   /* ---------- 4. failed transcription doesn't lose the recording ---------- */
@@ -391,15 +401,10 @@ async function run() {
   /* ---------- demo/no-account mode doesn't crash ---------- */
 
   await test("fetchUsage never crashes with no session or no Supabase client", async () => {
-    assert.deepEqual(await fetchUsage(null), { minutesUsed: 0, unavailable: true });
-    assert.deepEqual(
-      await fetchUsage({ user: { id: "u1" } }, { supabaseClient: null, isDemo: false }),
-      { minutesUsed: 0, unavailable: true }
-    );
-    assert.deepEqual(
-      await fetchUsage({ user: { id: "u1" } }, { supabaseClient: {}, isDemo: true }),
-      { minutesUsed: 0, unavailable: true }
-    );
+    const nothing = { creditsUsed: 0, tier: null, unavailable: true };
+    assert.deepEqual(await fetchUsage(null), nothing);
+    assert.deepEqual(await fetchUsage({ user: { id: "u1" } }, { supabaseClient: null, isDemo: false }), nothing);
+    assert.deepEqual(await fetchUsage({ user: { id: "u1" } }, { supabaseClient: {}, isDemo: true }), nothing);
   });
 
   /* ---------- the guard that decides whether we pay money ---------- */
@@ -408,8 +413,8 @@ async function run() {
     const g = checkRequestGuards({
       estimatedDurationSeconds: 5,
       receivedBytes: 100_000_000,
-      minutesUsedThisMonth: 0,
-      monthlyLimitMinutes: 300,
+      creditsUsedThisMonth: 0,
+      monthlyLimitCredits: 300,
       maxRequestSeconds: 3 * 3600,
       maxBodyBytes: 46_000_000,
     });
@@ -421,8 +426,8 @@ async function run() {
     const g = checkRequestGuards({
       estimatedDurationSeconds: 4 * 3600,
       receivedBytes: 1000,
-      minutesUsedThisMonth: 0,
-      monthlyLimitMinutes: 300,
+      creditsUsedThisMonth: 0,
+      monthlyLimitCredits: 300,
       maxRequestSeconds: 3 * 3600,
       maxBodyBytes: 46_000_000,
     });
@@ -434,8 +439,8 @@ async function run() {
     const g = checkRequestGuards({
       estimatedDurationSeconds: 600, // 10 minutes
       receivedBytes: 1000,
-      minutesUsedThisMonth: 295,
-      monthlyLimitMinutes: 300,
+      creditsUsedThisMonth: 295,
+      monthlyLimitCredits: 300,
       maxRequestSeconds: 3 * 3600,
       maxBodyBytes: 46_000_000,
     });
@@ -447,8 +452,8 @@ async function run() {
     const g = checkRequestGuards({
       estimatedDurationSeconds: 600,
       receivedBytes: 1_000_000,
-      minutesUsedThisMonth: 0,
-      monthlyLimitMinutes: 300,
+      creditsUsedThisMonth: 0,
+      monthlyLimitCredits: 300,
       maxRequestSeconds: 3 * 3600,
       maxBodyBytes: 46_000_000,
     });
@@ -493,14 +498,14 @@ async function run() {
   /* ---------- what a recording costs, not how long it is ---------- */
 
   await test("a short recording bills the minimum, because summarising is charged per request", () => {
-    assert.equal(billedMinutes(60, MINIMUM_BILLED_MINUTES), MINIMUM_BILLED_MINUTES);
-    assert.equal(billedMinutes(30, MINIMUM_BILLED_MINUTES), MINIMUM_BILLED_MINUTES);
+    assert.equal(billedCredits(60, MINIMUM_BILLED_CREDITS), MINIMUM_BILLED_CREDITS);
+    assert.equal(billedCredits(30, MINIMUM_BILLED_CREDITS), MINIMUM_BILLED_CREDITS);
   });
 
   await test("a recording longer than the minimum bills its real length", () => {
-    assert.equal(billedMinutes(50 * 60, MINIMUM_BILLED_MINUTES), 50);
+    assert.equal(billedCredits(50 * 60, MINIMUM_BILLED_CREDITS), 50);
     // Exactly at the floor, neither branch rounds it anywhere.
-    assert.equal(billedMinutes(MINIMUM_BILLED_MINUTES * 60, MINIMUM_BILLED_MINUTES), MINIMUM_BILLED_MINUTES);
+    assert.equal(billedCredits(MINIMUM_BILLED_CREDITS * 60, MINIMUM_BILLED_CREDITS), MINIMUM_BILLED_CREDITS);
   });
 
   await test("a provider that reports no duration bills zero, NOT the minimum", () => {
@@ -508,8 +513,8 @@ async function run() {
        three minutes for it would hide a fault the logs exist to surface,
        and it is bounded by how often a provider breaks rather than by
        anything a user chooses. */
-    assert.equal(billedMinutes(0, MINIMUM_BILLED_MINUTES), 0);
-    assert.equal(billedMinutes(undefined, MINIMUM_BILLED_MINUTES), 0);
+    assert.equal(billedCredits(0, MINIMUM_BILLED_CREDITS), 0);
+    assert.equal(billedCredits(undefined, MINIMUM_BILLED_CREDITS), 0);
   });
 
   await test("the allowance is projected with the same floor that billing charges", () => {
@@ -518,11 +523,11 @@ async function run() {
     const guard = checkRequestGuards({
       estimatedDurationSeconds: 60,
       receivedBytes: 1000,
-      minutesUsedThisMonth: MONTHLY_MINUTES_LIMIT - 1,
-      monthlyLimitMinutes: MONTHLY_MINUTES_LIMIT,
+      creditsUsedThisMonth: MONTHLY_CREDITS_LIMIT - 1,
+      monthlyLimitCredits: MONTHLY_CREDITS_LIMIT,
       maxRequestSeconds: 3 * 3600,
       maxBodyBytes: 46_000_000,
-      minimumBilledMinutes: MINIMUM_BILLED_MINUTES,
+      minimumBilledCredits: MINIMUM_BILLED_CREDITS,
     });
     assert.equal(guard.ok, false);
     assert.equal(guard.code, "usage_exceeded");
@@ -549,8 +554,8 @@ async function run() {
       1_000_000;
 
     const cost = (recordings, realMinutesEach) => {
-      const billedEach = Math.max(realMinutesEach, MINIMUM_BILLED_MINUTES);
-      const fit = Math.floor(MONTHLY_MINUTES_LIMIT / billedEach);
+      const billedEach = Math.max(realMinutesEach, MINIMUM_BILLED_CREDITS);
+      const fit = Math.floor(MONTHLY_CREDITS_LIMIT / billedEach);
       const n = Math.min(recordings, fit);
       return n * realMinutesEach * TRANSCRIBE_PER_MINUTE + n * SUMMARISE_PER_REQUEST;
     };
@@ -563,13 +568,13 @@ async function run() {
       `a month of one-minute recordings costs $${pathological.toFixed(3)} against $${realistic.toFixed(
         3
       )} for a full timetable. The minimum billed increment is meant to keep these within 25% of ` +
-        "each other — re-derive MINIMUM_BILLED_MINUTES, don't relax this number."
+        "each other — re-derive MINIMUM_BILLED_CREDITS, don't relax this number."
     );
 
     // And confirm the floor is what's doing it, rather than the assertion
     // passing for some unrelated reason.
     const withoutFloor = (() => {
-      const n = MONTHLY_MINUTES_LIMIT; // 300 one-minute recordings
+      const n = MONTHLY_CREDITS_LIMIT; // 300 one-minute recordings
       return n * 1 * TRANSCRIBE_PER_MINUTE + n * SUMMARISE_PER_REQUEST;
     })();
     assert.ok(
@@ -587,7 +592,7 @@ async function run() {
        times the floor pay for one summary?
 
        Stated as an inequality against the derived cost rather than as
-       "MINIMUM_BILLED_MINUTES === 4", because pinning the answer is how
+       "MINIMUM_BILLED_CREDITS === 4", because pinning the answer is how
        a guard stops noticing the input. Make the prompt deeper, raise
        TYPICAL_SUMMARY_OUTPUT_TOKENS to match, and this fails until
        someone decides what the floor should be. */
@@ -598,10 +603,10 @@ async function run() {
     const requiredFloor = Math.ceil(summaryCost / USD_PER_TRANSCRIBED_MINUTE);
 
     assert.ok(
-      MINIMUM_BILLED_MINUTES >= requiredFloor,
+      MINIMUM_BILLED_CREDITS >= requiredFloor,
       `one summary costs $${summaryCost.toFixed(5)}, which is ${requiredFloor} billed minutes, but the floor is ` +
-        `${MINIMUM_BILLED_MINUTES}. A short recording now costs more to summarise than it is charged for — ` +
-        "raise MINIMUM_BILLED_MINUTES to at least " + requiredFloor + ", or make the summariser cheaper."
+        `${MINIMUM_BILLED_CREDITS}. A short recording now costs more to summarise than it is charged for — ` +
+        "raise MINIMUM_BILLED_CREDITS to at least " + requiredFloor + ", or make the summariser cheaper."
     );
 
     /* And the ceiling has to be above the typical, with room. A ceiling
@@ -670,18 +675,22 @@ async function run() {
        The minimum matters most: it is what a student watches their
        allowance move by, so a drift makes the number on screen disagree
        with the number being charged. */
-    assert.equal(MINIMUM_BILLED_MINUTES_HINT, MINIMUM_BILLED_MINUTES);
+    assert.equal(MINIMUM_BILLED_CREDITS_HINT, MINIMUM_BILLED_CREDITS);
     /* The retry's price is shown before the student commits, so a drift
        here means the screen promises one figure and the server charges
        another. A browser bundle cannot import from supabase/functions,
        so the mirror is allowed — the equality is what makes it a guard
        rather than a comment. */
     assert.equal(
-      RESUMMARISE_BILLED_MINUTES_HINT,
-      RESUMMARISE_BILLED_MINUTES,
+      RESUMMARISE_BILLED_CREDITS_HINT,
+      RESUMMARISE_BILLED_CREDITS,
       "the retry cost on screen disagrees with the retry cost charged"
     );
-    assert.equal(MONTHLY_MINUTES_LIMIT_HINT, MONTHLY_MINUTES_LIMIT);
+    assert.equal(
+      CLIENT_MONTHLY_CREDITS_LIMIT,
+      MONTHLY_CREDITS_LIMIT,
+      "the allowance on screen disagrees with the allowance enforced"
+    );
   });
 
   /* ---------- recordings file themselves ---------- */
@@ -880,6 +889,230 @@ async function run() {
     assert.equal(mergeData(v2, v1).meta.aiConsent.version, 2);
   });
 
+  await test("the upload ceiling on the client is the one the server enforces", () => {
+    /* The allowed kind of restatement -- a browser bundle cannot import
+       from supabase/functions -- so the EQUALITY is the guard. A client
+       that refuses at a different number than the server is either
+       rejecting uploads the server would have taken, or waving through
+       ones it will not. */
+    const cfg = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/config.ts"), "utf8");
+    const m = /export const MAX_BODY_BYTES = ([0-9_]+);/.exec(cfg);
+    assert.ok(m, "MAX_BODY_BYTES is gone from the Edge Function config");
+    assert.equal(MAX_UPLOAD_BYTES_HINT, Number(m[1].replace(/_/g, "")), "the mirrored upload ceiling has drifted");
+  });
+
+  await test("a recording we cannot measure is uploaded, not refused", () => {
+    /* Absence is not evidence -- the fetchNote rule applied to a size.
+       Refusing a blob whose size we could not read would turn a missing
+       number into a lost lecture, and the server still has its own
+       ceiling behind this. */
+    assert.equal(uploadRefusal(undefined), null);
+    assert.equal(uploadRefusal(0), null);
+    assert.equal(uploadRefusal(NaN), null);
+    assert.equal(uploadRefusal(Infinity), null);
+    assert.equal(uploadRefusal(MAX_UPLOAD_BYTES_HINT), null, "exactly at the ceiling is allowed, as the server allows it");
+    const over = uploadRefusal(MAX_UPLOAD_BYTES_HINT + 1);
+    assert.equal(over.code, "recording_too_large");
+  });
+
+  await test("the size refusal says nothing was charged, and does not tell a student to record less", () => {
+    /* A student who has just lost an hour assumes it cost them unless
+       told otherwise -- the same rule the ai_failed copy follows. And a
+       two-hour lecture is the use case, so advice to record less of one
+       is the app admitting it does not do the thing it is for. */
+    const copy = AI_NOTES_COPY.tooLarge({ bytes: 196_000_000, limit: MAX_UPLOAD_BYTES_HINT });
+    const all = `${copy.title} ${copy.detail}`;
+    assert.match(all, /nothing was charged/i, "a size failure that does not say it was free reads as a charge");
+    assert.match(all, /196 MB/, "it does not say how big the recording actually was");
+    assert.doesNotMatch(all, /record(ing)? (for )?(less|shorter)|shorter recording|split/i,
+      "the copy tells the student to record less — a two-hour lecture is the use case");
+  });
+
+  await test("BOTH gates refuse an oversize recording, and the boundary one is not the screen's", async () => {
+    /* The gate belongs at the boundary as well as on the screen: a
+       UI-only check is one refactor away from leaking, and the refactor
+       need not touch the client. Asserted by calling uploadAudio with a
+       storage client that THROWS if it is ever reached. */
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
+    /* Sliced on LANDMARKS rather than a byte count: a fixed window is a
+       guard that silently stops covering the thing it was aimed at as
+       soon as a comment grows. */
+    const start = src.indexOf("const runUpload =");
+    const end = src.indexOf("const result = await callAiNotes", start);
+    assert.ok(start >= 0 && end > start, "runUpload's shape changed — this guard is reading the wrong region");
+    const run = src.slice(start, end);
+    const check = run.indexOf("uploadRefusal");
+    const park = run.indexOf("setPendingRecovery");
+    assert.ok(check >= 0, "runUpload no longer checks the size");
+    assert.ok(park >= 0, "runUpload no longer parks the recovery key — this guard is reading the wrong region");
+    assert.ok(
+      check < park,
+      "the size check runs AFTER the recovery key is parked — that leaves a retry card for an upload that can never succeed"
+    );
+
+    /* And the boundary refuses independently, proved by handing it a
+       storage client that throws if it is ever reached. */
+    const { uploadAudio } = await import(pathToFileURL(path.join(rootDir, "src/aiNotesClient.js")).href);
+    const exploding = { storage: { from: () => ({ upload: async () => { throw new Error("reached the network"); } }) } };
+    await assert.rejects(
+      () => uploadAudio({
+        session: { user: { id: "u" } },
+        audioBlob: { size: MAX_UPLOAD_BYTES_HINT + 1 },
+        mimeType: "audio/webm",
+        idempotencyKey: "k",
+        supabaseClient: exploding,
+      }),
+      (err) => err.code === "recording_too_large",
+      "uploadAudio does not refuse an oversize blob on its own — a UI-only gate is one refactor from leaking"
+    );
+  });
+
+  /* ---------- one device at a time, on the trial tiers ---------- */
+
+  await test("the one-device rule covers exactly the tiers whose allowance is once ever", async () => {
+    /* A paid tier buys a MONTHLY allowance and where it is spent is the
+       student's business. Enforcing this on somebody who paid is the
+       error that costs a refund, so the branch is derived from the tier
+       table rather than from a list here. */
+    const d = await import(pathToFileURL(path.join(rootDir, "src/deviceIdentity.js")).href);
+    const limits = await import(pathToFileURL(path.join(rootDir, "src/aiTextLimits.js")).href);
+    for (const tier of limits.TIERS) {
+      assert.equal(
+        d.appliesTo(tier),
+        !limits.allowanceForTier(tier).perMonth,
+        `the one-device rule and the trial shape disagree about "${tier}"`
+      );
+    }
+  });
+
+  await test("a profile we could not read NEVER signs anybody out", async () => {
+    /* The fetchNote rule, applied to a session. A student on a train
+       going through a tunnel must not lose their planner because a
+       request failed — and "no rows came back" is what a dropped
+       connection, a 500 and an expired token all look like. */
+    const d = await import(pathToFileURL(path.join(rootDir, "src/deviceIdentity.js")).href);
+    for (const profile of [null, undefined]) {
+      const st = d.deviceStanding({ tier: "free", localId: "a", profile });
+      assert.equal(st.status, "unknown");
+      assert.equal(d.shouldSignOut(st), false, "an unreadable profile signed the student out");
+      assert.equal(d.shouldClaim(st), false, "an unreadable profile triggered a claim, overwriting a real one");
+    }
+  });
+
+  await test("a device that cannot identify itself is left alone, not signed out and not claiming", async () => {
+    /* getDeviceId() returns the literal "unknown-device" when
+       localStorage refuses. That string is the SAME on every device it
+       happens to, so treating it as an identity would let two of them
+       each read as holding the account — and treating it as absent
+       would re-claim on every check and write in a loop. */
+    const d = await import(pathToFileURL(path.join(rootDir, "src/deviceIdentity.js")).href);
+    const st = d.deviceStanding({ tier: "free", localId: d.UNIDENTIFIED, profile: { active_device_id: "someone-else" } });
+    assert.equal(st.status, "unknown");
+    assert.equal(d.shouldSignOut(st), false);
+    assert.equal(d.shouldClaim(st), false);
+
+    const sync = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+    assert.ok(
+      sync.includes(`return "${d.UNIDENTIFIED}"`),
+      "getDeviceId's fallback string changed and deviceIdentity.js still checks the old one"
+    );
+  });
+
+  await test("only a definitive claim by another device displaces this one", async () => {
+    const d = await import(pathToFileURL(path.join(rootDir, "src/deviceIdentity.js")).href);
+    const at = (profile, localId = "a") => d.deviceStanding({ tier: "free", localId, profile });
+    assert.equal(at({ active_device_id: null }).status, "unclaimed", "an unclaimed account should be claimed, not refused");
+    assert.equal(at({ active_device_id: "" }).status, "unclaimed");
+    assert.equal(at({ active_device_id: "a" }).status, "ours");
+    assert.equal(at({ active_device_id: "b" }).status, "displaced");
+    /* Storage cleared: we cannot prove we are the holder, but signing
+       someone out for that is worse than letting them re-claim, which
+       is what a genuine second sign-in would do anyway. */
+    assert.equal(at({ active_device_id: "b" }, null).status, "unclaimed");
+    assert.equal(d.shouldSignOut(at({ active_device_id: "b" })), true);
+    assert.equal(d.shouldSignOut(at({ active_device_id: "a" })), false);
+  });
+
+  await test("nothing mints a second device id — sync.js stays the only source", async () => {
+    /* Two ids for one device is two names for one fact, which is what
+       let isFree and perMonth drift apart. deviceIdentity.js is pure and
+       takes the id as an argument; the store it comes from is already
+       declared in the privacy documents. */
+    const src = fs.readFileSync(path.join(rootDir, "src/deviceIdentity.js"), "utf8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+    assert.ok(!/localStorage|Math\.random|Date\.now/.test(code), "deviceIdentity.js mints or stores an id of its own");
+    const stores = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+    assert.match(stores, /uni-planner-device-id/, "the device id store moved and nothing followed it");
+  });
+
+  await test("the displacement copy describes ping-pong, not a lockout", async () => {
+    /* THE RULING: lockout would mean the free tier can strand somebody's
+       data, which is a worse failure than annoyance — and the annoyance
+       is what Plus is for. So the copy must not imply a harder limit
+       than is enforced, and it must lead with the planner still being
+       there, because a student who opens the app to a sign-in screen
+       assumes their work is gone. */
+    const c = AI_NOTES_COPY.displacedByAnotherDevice;
+    const all = `${c.title} ${c.detail}`;
+    assert.match(all, /still on this device|nothing has been lost/i, "it does not say the planner survived");
+    assert.match(all, /sign (in|back in) again/i, "it does not say they can come back — that is the whole shape of the rule");
+    assert.doesNotMatch(
+      all,
+      /can'?t|cannot|not allowed|only one device|blocked|denied/i,
+      "the copy implies a harder limit than is enforced — re-signing in is allowed and always works"
+    );
+    /* Explaining it before it happens is the difference between a rule
+       and an ambush. */
+    assert.match(AI_NOTES_COPY.oneDeviceExplainer, /one device at a time/i);
+    assert.doesNotMatch(AI_NOTES_COPY.oneDeviceExplainer, /can'?t|cannot|not allowed/i);
+  });
+
+  await test("fetchUsage reports the standing and never acts on it", async () => {
+    /* A client module that signed somebody out as a side effect of
+       reading a counter would be impossible to reason about, and it
+       would put the decision somewhere the caller cannot see. */
+    const src = fs.readFileSync(path.join(rootDir, "src/aiNotesClient.js"), "utf8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+    assert.match(code, /standing/, "fetchUsage no longer reports where this device stands");
+    assert.ok(!/signOut|setSession\(null\)/.test(code), "the client module signs the student out itself");
+  });
+
+  await test("a failed profile read carries no standing, so nothing downstream can act on it", async () => {
+    /* The four outcomes have to survive the trip. If an unreadable
+       profile came back with a standing of any kind, the caller would
+       have something to branch on that means nothing. */
+    const { fetchUsage } = await import(pathToFileURL(path.join(rootDir, "src/aiNotesClient.js")).href);
+    const failing = {
+      from: () => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "boom" } }) }) }),
+      }),
+    };
+    const usage = await fetchUsage({ user: { id: "u" } }, { supabaseClient: failing, isDemo: false });
+    assert.equal(usage.unavailable, true);
+    assert.equal(usage.standing, undefined, "an unreadable profile produced a standing to branch on");
+  });
+
+  await test("claimDevice fails to UNAVAILABLE, never to a claim nobody made", async () => {
+    /* Signing a student out because an RPC failed in a tunnel is the
+       same bug as tombstoning a note because a fetch 500'd. */
+    const { backend } = await import(pathToFileURL(path.join(rootDir, "src/sync.js")).href);
+    assert.equal(typeof backend.claimDevice, "function", "the backend has no claimDevice");
+    const r = await backend.claimDevice({ session: null, deviceId: null });
+    assert.equal(r.unavailable, true);
+    const src = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+    /* BOTH implementations, found rather than assumed to be one: the
+       demo backend has no server to claim on and the real one does, and
+       a slice from the first match would have checked only demo — which
+       is the mode nobody is in. */
+    const blocks = [...src.matchAll(/async claimDevice\([\s\S]*?\n  \},/g)].map((m) => m[0]);
+    assert.equal(blocks.length, 2, `expected a claimDevice on each backend, found ${blocks.length}`);
+    for (const b of blocks) {
+      assert.match(b, /return \{ unavailable: true \}/, "a claimDevice that cannot answer no longer degrades to unavailable");
+      assert.ok(!/signOut|displaced/.test(b), "claimDevice decides something it should only report");
+    }
+    assert.match(src, /rpc\("claim_device"/, "nothing calls the function migration 0015 created");
+  });
+
   /* ---------- the native apps can actually reach the microphone ---------- */
 
   /* Fixtures mirror what `cap add ios` / `cap add android` actually
@@ -966,14 +1199,64 @@ async function run() {
     assert.ok(rootDict.includes(IOS_CAMERA_PLIST_KEY), "the camera key landed in a nested dict, where iOS will not read it");
   });
 
-  await test("applyNativePermissions reports both usage strings in one pass", () => {
-    /* Two patches over one file: a second pass that read the ORIGINAL
-       xml would silently drop the first key. */
-    const src = fs.readFileSync(path.join(rootDir, "mobile/scripts/native-permissions.mjs"), "utf8");
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-    assert.match(code, /patchInfoPlist\(mic\.xml, CAMERA_USAGE_DESCRIPTION, IOS_CAMERA_PLIST_KEY\)/,
-      "the camera patch no longer chains off the microphone patch's output — one of the two keys will be lost");
-    assert.equal(typeof applyNativePermissions, "function");
+  await test("applyNativePermissions writes EVERY iOS declaration, in the root dict, in one pass", () => {
+    /* THE REAL FUNCTION OVER A REAL FILE, not a regex over its source.
+
+       This used to pin the exact expression that chained the camera
+       patch onto the microphone patch's output — a guard scoped to the
+       SHAPE OF THE CODE rather than to the claim, which is the pattern
+       that has now bitten this repository twice (prepare-native's strip
+       regex, and the help copy's "a month"). Adding a third and fourth
+       key rewrote that expression, and the guard would have had to be
+       rewritten with it while proving nothing new.
+
+       Applying the function to a fixture proves the thing that matters:
+       four keys, all present, all in the ROOT dict, each followed by a
+       value of the right KIND. It cannot be evaded by a rewrite, and it
+       fails if a fold ever reads the original xml again — which is the
+       bug the old one was aimed at. */
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "uni-plist-"));
+    const plistPath = path.join(dir, "ios", "App", "App", "Info.plist");
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, CAP_INFO_PLIST);
+
+    const report = applyNativePermissions(dir);
+    assert.equal(report.ios.status, "patched");
+
+    const doc = parseXml(fs.readFileSync(plistPath, "utf8"), "Info.plist");
+    const rootDict = doc.documentElement.getElementsByTagName("dict")[0];
+    const children = [...rootDict.children];
+    const valueOf = (key) => {
+      const i = children.findIndex((el) => el.tagName === "key" && el.textContent === key);
+      assert.ok(i >= 0, `${key} is missing from the root dict — iOS will not read it anywhere else`);
+      return children[i + 1];
+    };
+
+    for (const [key, text] of [
+      [IOS_PLIST_KEY, MIC_USAGE_DESCRIPTION],
+      [IOS_CAMERA_PLIST_KEY, CAMERA_USAGE_DESCRIPTION],
+      [IOS_PHOTO_LIBRARY_PLIST_KEY, PHOTO_LIBRARY_USAGE_DESCRIPTION],
+    ]) {
+      const v = valueOf(key);
+      assert.equal(v.tagName, "string", `${key} must be a string`);
+      assert.equal(v.textContent, text, `${key} carries the wrong wording`);
+    }
+
+    /* A plist boolean is an EMPTY ELEMENT. Written as <string>false</string>
+       iOS reads a non-empty string as TRUE, so the declaration would say
+       the opposite of what was meant and every upload would still
+       prompt — or worse, claim non-exempt encryption we do not use. */
+    const flag = valueOf(IOS_ENCRYPTION_PLIST_KEY);
+    assert.equal(flag.tagName, "false", `${IOS_ENCRYPTION_PLIST_KEY} must be <false/>, not a string`);
+    assert.equal(flag.textContent, "", "a plist boolean carries no text");
+
+    // Everything Capacitor generated survives, and re-running is inert.
+    assert.ok(children.some((el) => el.tagName === "key" && el.textContent === "CFBundleDisplayName"));
+    const before = fs.readFileSync(plistPath, "utf8");
+    const again = applyNativePermissions(dir);
+    assert.equal(again.ios.status, "unchanged", "cap sync would append a second copy of every key");
+    assert.equal(fs.readFileSync(plistPath, "utf8"), before);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   await test("the reading photo input offers the library and files, not only the camera", () => {
@@ -2186,7 +2469,7 @@ async function run() {
        the workflow can be deleted along with the workflow.
 
        WHY THIS GUARD AND NOT A BETTER MIRROR TEST. The mirror test
-       compares the server's MINIMUM_BILLED_MINUTES to the client's
+       compares the server's MINIMUM_BILLED_CREDITS to the client's
        hint. Both moved together when a parked billing change leaked
        onto main inside a documentation-only pull request, so it stayed
        green throughout. A test that compares two copies to each other
@@ -2213,16 +2496,88 @@ async function run() {
 
   /* ---------- release signing: applied by script, secrets ignored ---------- */
 
+  await test("every test file is actually RUN by `npm test` — the list is derived, not remembered", () => {
+    /* THE ENUMERATION IN package.json IS A RESTATEMENT, and it drifts
+       the way every restatement here has: somebody adds
+       scripts/test-something.mjs, forgets the `&&`, and the suite is
+       green because it never ran. That is the same shape as the deploy
+       workflow that named one Edge Function while the repo had two.
+
+       Derived from the directory rather than typed. A new test file
+       fails this until it is wired in, which is the only moment anyone
+       is thinking about it. */
+    const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    const script = pkg.scripts.test;
+    const files = fs
+      .readdirSync(path.join(rootDir, "scripts"))
+      .filter((f) => /^test-.*\.mjs$/.test(f))
+      .sort();
+    assert.ok(files.length > 15, `only found ${files.length} test files — the glob is wrong, not the suite`);
+    const missing = files.filter((f) => !script.includes(f));
+    assert.deepEqual(missing, [], `these test files exist but \`npm test\` never runs them: ${missing.join(", ")}`);
+  });
+
   await test("the signing secrets are gitignored, and the entries cannot quietly vanish", () => {
     /* The keystore is close to irreversible to lose and CATASTROPHIC to
        publish: with the store passwords in key.properties beside it, a
        committed pair signs malicious updates as us. `git add -A` is the
        normal way work is committed in this repo, so the ignore entries
-       are load-bearing, not hygiene. */
+       are load-bearing, not hygiene.
+
+       transcript.txt joins them for a different reason and the same
+       mechanism: measure-summary-depth.mjs takes a transcript as a path
+       argument, so the obvious place to put a REAL lecture is the
+       repository root, and that file is a student's content and a
+       lecturer's copyrighted delivery. */
     const ignore = fs.readFileSync(path.join(rootDir, ".gitignore"), "utf8");
-    for (const entry of ["*.jks", "*.keystore", "key.properties"]) {
+    for (const entry of ["*.jks", "*.keystore", "key.properties", "transcript.txt"]) {
       assert.ok(ignore.split("\n").some((l) => l.trim() === entry), `.gitignore no longer ignores ${entry}`);
     }
+  });
+
+  await test("git REALLY ignores a keystore at each of those paths, not just the entry text", () => {
+    /* THE FAILURE THE TEXT CHECK ABOVE CANNOT SEE. An entry can be
+       present and still not bite: a later negation un-ignores it, a
+       pattern lands in the wrong section, or somebody "tidies"
+       `key.properties` into `/key.properties` and it stops matching
+       `mobile/key.properties` -- which is the exact path a Capacitor
+       build puts it at. The text assertion goes green through all three.
+
+       So this asks GIT, on the real paths a real build creates, which
+       is the difference between restating the file and checking the
+       thing the file exists to do. `git check-ignore -q` exits 0 when a
+       path is ignored and 1 when it is not; the paths need not exist. */
+    const probes = [
+      "mobile/key.properties",
+      "key.properties",
+      "mobile/android/key.properties",
+      "uniplanner-upload.jks",
+      "mobile/android/app/uniplanner-upload.jks",
+      "release.keystore",
+      "transcript.txt",
+      /* Build output, not a secret — but it reached main three times
+         through the same mechanism the entries above exist to stop:
+         `git add -A` after a coverage run, with nothing ignoring c8's
+         per-process temp files. Probed here because this is the test
+         that asks git rather than reading the file. */
+      "coverage/tmp/coverage-1-2-0.json",
+    ];
+    const inRepo = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: rootDir, encoding: "utf8" });
+    assert.equal(
+      inRepo.status,
+      0,
+      "not a git checkout, so this cannot run — and it must not SKIP: a guard that " +
+        "quietly stops running is how a keystore gets committed"
+    );
+    for (const probe of probes) {
+      const r = spawnSync("git", ["check-ignore", "-q", "--no-index", probe], { cwd: rootDir, encoding: "utf8" });
+      assert.equal(r.status, 0, `git does NOT ignore ${probe} — the .gitignore entry is present but not doing its job`);
+    }
+    /* And the inverse, so this cannot pass by ignoring everything: a
+       file that MUST stay tracked is not ignored. Without it, a stray
+       `*` in .gitignore turns every assertion above green. */
+    const r = spawnSync("git", ["check-ignore", "-q", "--no-index", "package.json"], { cwd: rootDir, encoding: "utf8" });
+    assert.notEqual(r.status, 0, ".gitignore now ignores package.json — the patterns are far too broad");
   });
 
   await test("the release signing config is applied by script, and survives what regeneration does", async () => {
@@ -2303,12 +2658,34 @@ async function run() {
     assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: failing, isDemo: true }), { unknown: true });
   });
 
-  await test("a tier that was really read gates in both directions", async () => {
+  await test("an allowance that was really read gates in both directions", async () => {
+    /* IT IS NO LONGER A TIER CHECK. Every tier can record — a free
+       account has the lifetime trial — so what gates is whether there
+       is allowance left for one recording. A free account with an
+       untouched trial records; a free account that has spent it does
+       not; a paid account with a full month does not either. */
     const { fetchRecordingAccess } = await import("../src/aiNotesClient.js");
     const session = { user: { id: "u1" } };
-    const withTier = (tier) => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { tier }, error: null }) }) }) }) });
-    assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: withTier("ai"), isDemo: false }), { canRecord: true });
-    assert.deepEqual(await fetchRecordingAccess(session, { supabaseClient: withTier("free"), isDemo: false }), { canRecord: false });
+    const account = (tier, trialUsed = 0, monthUsed = 0) => ({
+      from: (table) => ({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({ maybeSingle: async () => ({ data: { credits_used: monthUsed }, error: null }) }),
+            maybeSingle: async () =>
+              table === "profiles"
+                ? { data: { tier, trial_credits_used: trialUsed }, error: null }
+                : { data: { credits_used: monthUsed }, error: null },
+          }),
+        }),
+      }),
+    });
+    const ask = (c) => fetchRecordingAccess(session, { supabaseClient: c, isDemo: false });
+    assert.equal((await ask(account("free", 0))).canRecord, true, "an untouched trial must be able to record");
+    assert.equal((await ask(account("free", 59))).canRecord, false, "a spent trial must not");
+    assert.equal((await ask(account("plus", 0))).canRecord, true, "Plus shares the same trial");
+    assert.equal((await ask(account("ai", 0, 0))).canRecord, true);
+    assert.equal((await ask(account("ai", 0, 899))).canRecord, false, "a spent month must not");
+    assert.equal((await ask(account("ai_max", 0, 899))).canRecord, true, "Max has more of the same month");
   });
 
   await test("the recorder consults the gate, and only a definitive no removes the controls", () => {

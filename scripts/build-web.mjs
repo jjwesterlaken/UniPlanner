@@ -63,6 +63,48 @@ execFileSync(
 //    Copied recursively so subfolders like public/fonts come across too.
 fs.cpSync("public", OUT, { recursive: true });
 
+/* ---------- the marketing site's build facts ----------
+
+   THE PAGE NEEDS FOUR THINGS THAT LIVE IN desktop/package.json: the
+   repository (for the download host), the product name and the three
+   artifactName templates (for the asset names). A browser module
+   cannot import that file, and typing the values into the page is the
+   restatement that produces a 404 on a download button the day
+   somebody renames an artifact.
+
+   So they are GENERATED here, every build, from the one source. A test
+   asserts the generated file matches what it was generated from, which
+   is what makes this a derivation rather than a copy with extra steps. */
+{
+  const desktop = JSON.parse(fs.readFileSync("desktop/package.json", "utf8"));
+  const facts = fs.readFileSync("site/build-facts.js", "utf8");
+  const filled = facts
+    .replace(/export const REPOSITORY_URL = "[^"]*";/, `export const REPOSITORY_URL = ${JSON.stringify(desktop.repository.url)};`)
+    .replace(/export const PRODUCT_NAME = "[^"]*";/, `export const PRODUCT_NAME = ${JSON.stringify(desktop.build.productName)};`)
+    .replace(
+      /export const ARTIFACT_NAMES = \{[\s\S]*?\n\};/,
+      "export const ARTIFACT_NAMES = " +
+        JSON.stringify(
+          {
+            nsis: desktop.build.nsis.artifactName,
+            portable: desktop.build.portable.artifactName,
+            linux: desktop.build.linux.artifactName,
+          },
+          null,
+          2
+        ) +
+        ";"
+    );
+  if (filled !== facts) fs.writeFileSync("site/build-facts.js", filled);
+
+  /* The site's own modules ride along beside its page. Copied rather
+     than bundled: three small ES modules a browser loads directly, and
+     a bundler here would be a build step nobody needs. */
+  for (const f of ["downloads.js", "pricing.js", "flags.js", "build-facts.js"]) {
+    fs.copyFileSync(path.join("site", f), path.join(OUT, "site", f));
+  }
+}
+
 // 4. Stamp the build id into the service worker and the page.
 //
 //    THIS IS HOW USERS RECEIVE UPDATES. The cache name in sw.js is

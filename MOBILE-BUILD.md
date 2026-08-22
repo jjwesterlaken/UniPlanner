@@ -165,6 +165,17 @@ keyAlias=upload
 keyPassword=THE_KEY_PASSWORD
 ```
 
+**`keyAlias` must match whatever `-alias` you actually used in step 1.**
+The two are `upload` above because that is what the command above
+generates, and they have to agree or Gradle fails at signing time with an
+error about a missing key rather than a mismatched one. If your keystore
+came from different instructions — Jared's was made with
+`-alias uniplanner` — then `keyAlias` is that name, and the step-1
+command here is what a FRESH keystore should use rather than a
+description of one you already have. Nothing in the repo can check this:
+`key.properties` is gitignored and the keystore lives outside the repo
+entirely, which is the whole point of both.
+
 Use the absolute path to wherever step 1 put the keystore (forward
 slashes work on Windows too: `C:/Users/jjwes/keystores/...`).
 
@@ -516,6 +527,55 @@ is intended.
     message naming the page, not a garbage summary. This is the model
     following an instruction rather than code enforcing a rule, so it is
     exactly the behaviour that needs a real run.
+
+### iOS only — the items the readiness audit left open
+
+The full audit is `IOS-READINESS.md`; these are the parts that need a
+device rather than a decision.
+
+13. **The bitrate matrix — `public/measure-audio.html`.** THE ONE THAT
+    BLOCKS SUBMISSION. Open it in the shell (or Safari on the phone),
+    tap Run, and talk normally for about two and a half minutes; it
+    records six configurations for 20 s each and divides real bytes by
+    real elapsed time. Copy the JSON block back.
+
+    **Do not substitute a property readback.** `audioBitsPerSecond`
+    reads back as 32000 on iOS and the encoder produces ~218 kbps
+    anyway — a readback measures what the API accepted, not what the
+    encoder did. That mistake is written up in `CLAUDE.md`.
+
+    What the rows answer: 1 vs 2, whether our own WebAudio graph is
+    the cause (it builds a 48 kHz **stereo** destination and that, not
+    the mic track, is what the recorder gets); 2 vs 3, whether a mono
+    16 kHz graph fixes it; 1 vs 4, whether the bitrate option does
+    anything at all; 5 and 6, whether the AAC path honours it where
+    Opus does not. The options and the recommendation are in
+    `IOS-READINESS.md` §1a.
+
+13a. **Once a fix is in: record two hours for real**, and check the
+    blob size against the ceiling. A 20-second sample sized the
+    problem; only a real lecture proves the fix, and this is the one
+    number that decides whether a student can use the app for what
+    they installed it for.
+14. **Sign in from `capacitor://localhost`.** The one failure that
+    breaks everything else: it is a custom-scheme origin making HTTPS
+    requests to Supabase, and nothing off-device can confirm it works.
+    Do this first.
+15. **`PrivacyInfo.xcprivacy`** — look in the generated
+    `mobile/ios/App/` and see whether Capacitor 8 scaffolds one. If it
+    does not, the app-level answer is simple (no tracking, no
+    required-reason API called from native code), but it has to exist.
+    This is the item most likely to produce an automated App Store
+    Connect email rather than a human rejection.
+16. **The safe areas, and `contentInset`.** The insets are applied —
+    top on the header, left and right for landscape, bottom
+    unconditional on the recording indicator — and a guard finds every
+    viewport-pinned element rather than checking a list. What source
+    cannot answer is whether the padding is the right SIZE, and whether
+    `contentInset: "always"` in `capacitor.config.json` double-insets
+    on top of it. Look at the header under the Dynamic Island, then try
+    `"never"` and keep whichever is right. Do this before the store
+    screenshots, since the screenshots are what expose it.
 
 ### Handwriting — removed
 

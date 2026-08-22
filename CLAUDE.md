@@ -520,6 +520,80 @@ build**, and worth remembering when the marketing site is written:
 browsers only ever offer loopback alongside a screen or tab share, and
 macOS Chrome only alongside a tab. Electron asks the OS directly.
 
+### A READBACK MEASURES WHAT WAS ACCEPTED. ONLY THE BYTES MEASURE WHAT WAS APPLIED.
+
+This is the correction, and it matters more than the thing it
+corrects. On 22 August I recorded that WebKit honours
+`audioBitsPerSecond`, on the evidence that
+`recorder.audioBitsPerSecond` reads back **32000** after construction,
+and I called the technique out as the one to reach for — *"construct
+the object, read what it actually applied, and the question is
+answered before any audio exists."*
+
+**The readback was true and the conclusion was wrong.** On a real
+iPhone, four 3-second recordings came back at 81,457 / 81,701 /
+82,228 / 82,270 bytes — a mean of **218 kbps, 6.8× what was
+requested**, while the property went on reporting 32000. WKWebView
+accepts the constructor option, stores it, reports it faithfully, and
+the encoder ignores it.
+
+So the technique is still worth reaching for, with its scope stated:
+**a readback tells you what the API ACCEPTED. It cannot tell you what
+the implementation DID.** Both are real questions; only the first is
+cheap.
+
+**THE QUESTION TO ASK, before trusting any property you read back: is
+this a value the platform IMPLEMENTS, or one it merely STORES?** Every
+API that takes a hint can answer both ways, an accepted setting and an
+honoured one are indistinguishable from the caller's side, and reading
+the property harder does not separate them. Whenever the answer is
+produced downstream of something we do not control — a codec, a
+driver, a GPU, an OS service, another process — the readback is a
+receipt for the request and the output is the only evidence of the
+result. Ask it of `willReadFrequently`, of `preferredFormat`, of any
+quality or size hint, of anything a `getSettings()` reports back about
+hardware. Where the two could differ and the difference would cost
+something, measure the output.
+
+**AND THE SECOND QUESTION: how much does this vary, before I
+extrapolate from it?** Three seconds justified a claim about three
+hours here only because four separate runs agreed to within **1.0%**,
+which is what established that the rate was near-constant rather than
+content-dependent. One sample would have justified nothing at all, and
+four samples spread across 40% would have justified nothing either —
+they would have said "it depends what you record", which is a
+different finding needing a different experiment. **Take enough
+samples to see the spread, and let the spread decide whether
+extrapolation is available**; a single number cannot tell you whether
+it is representative, and the cost of a second and third run is
+usually minutes.
+
+**The cost of the wrong conclusion:** `MAX_BODY_BYTES` (46 MB) and the
+`lecture-audio` bucket's 50 MB per-file limit are both derived from
+32 kbps × 3 hours ≈ 43 MB, and I recorded them as standing when they
+do not. At 218 kbps a two-hour lecture is ~196 MB and fails at the
+Storage upload — nothing billed, which is the right direction, and the
+lecture gone, which is not. The re-derivation and the options are in
+`IOS-READINESS.md` §1a.
+
+**And the likeliest cause is ours, not Apple's**, which is the second
+lesson. `micConstraints` asks for mono at 16 kHz — but the recorder is
+never given that track. `buildGraph` constructs `new AudioCtx()` with
+no options and a default `createMediaStreamDestination()`, which on
+iOS is a 48 kHz context and a **stereo** destination, and that is the
+stream `MediaRecorder` gets. 48 kHz stereo over 16 kHz mono is 6×;
+the discrepancy is 6.8×. Chrome's encoder honours the bitrate and
+therefore masks the graph's shape on every other platform. **Where an
+encoder ignores the bitrate, the graph's shape becomes the bitrate.**
+
+**Audio format, by contrast, is genuinely a non-issue** — verified on
+the same device: iOS reports `isTypeSupported("audio/webm;codecs=opus")`
+true and produces `audio/webm; codecs=opus`, the same container and
+codec as Android. The fallback ladder to `m4a`/`aac` and the server's
+extension discovery were built for a divergence that does not exist.
+They cost nothing and stay; the point was never that iOS would differ,
+only that the code could not know.
+
 ### Android needs TWO audio permissions, and the second one is invisible
 
 `RECORD_AUDIO` alone looks sufficient: the runtime prompt appears, the
@@ -1038,6 +1112,28 @@ lightens further. Eight palettes × two modes hand-written would be 64
 values to keep in step. Plain rgb()/rgba(), because iOS 15 — the
 deployment floor — has no `color-mix()`.
 
+**THE GROUND GOES ON `html` AS WELL AS `body`, and the reason is a
+device finding.** `body` was themed from the start, and in a normal
+browser that is sufficient: with no background on the root element,
+body's background **propagates to the document canvas**, which fills
+the overscroll gutter. WKWebView's rubber-band overhang reads the
+**root element's own** background instead, found it transparent, and
+fell through to the web view's hardcoded `#f5f5f4` — white bars at
+both ends of a dark app, on Jared's first iOS build.
+
+**Why nobody saw it in light mode, which is the part to carry:**
+`--page` in light mode is `245 245 244`, and that is byte-identical to
+the `#f5f5f4` hardcoded in `mobile/capacitor.config.json` and the
+manifest. The unthemed ground and the light theme agreed exactly, so
+the defect was real in both modes and visible in one. **A coincidence
+between a themed value and an unthemed one hides the unthemed one
+completely** — and the fix for that class is to pin the coincidence:
+the three shell colours are now asserted EQUAL to the light tokens,
+derived from `input.css`, so changing the light ground goes red naming
+the file. They cannot follow a theme (static JSON, and a meta tag read
+before any script runs), so being right in the one mode they can be
+right in is the whole of what is available.
+
 **THE PAPER DOES NOT FLIP — and the reason has since changed, which
 matters.** The original constraint was handwriting: strokes carried
 their own stored colour, so a dark sheet meant rewriting a student's
@@ -1271,6 +1367,401 @@ whose transcript the sweep has taken is `transcript_expired` — a
 definitive answer, not a guess — and also bills nothing. The retry is
 offered ON the failure screen, because a student sitting on a failed
 summary should not have to go looking for the remedy.
+
+## One currency: a credit is a minute of recorded lecture
+
+`supabase/functions/_shared/credits.ts`, migrations 0012 and 0013,
+`src/aiTextLimits.js`.
+
+There used to be two — minutes for audio, weighted units for text — and
+the split is what hid the photographed-reading mispricing for months.
+A photo batch was billed in the currency the expensive thing it
+resembled did not use, so **there was nowhere for the comparison to
+happen**: "3 units" and "50 minutes" cannot be put beside each other by
+any screen or any test. One currency makes the comparison unavoidable
+rather than impossible.
+
+**A LECTURE MINUTE IS THE UNIT because it is the only quantity in this
+app a student already has an intuition for.** "This reading costs about
+as much as a 25-minute lecture" is a sentence somebody can act on. That
+is also why the old rule survives in an altered form: `aiTextCopy.js`
+existed to keep the word "units" off every screen, and the test still
+forbids it — but credits ARE sayable, so help may quote them. What is
+banned is the internal weight that meant nothing.
+
+**EVERY WEIGHT IS DERIVED FROM A PRICE.** `TASK_CREDITS` is computed
+from each task's own input and output ceilings at the published rates,
+divided by what a credit costs, so a raised `MAX_TOKENS` re-prices its
+task instead of leaving a number nobody re-derived. That is the exact
+failure `TYPICAL_SUMMARY_OUTPUT_TOKENS` produced at 5.9x reality while
+setting the price of the product. Two tests hold it: one asserts no
+literal weight exists in the config, the other re-runs `usdForTask` and
+compares. Only `merge` moved, 1 -> 2, because output is four times the
+price of input and its output ceiling equals `summarise`'s — the old
+reasoning about its smaller input was true and stopped deciding
+anything.
+
+**`round`, not `ceil`, with a floor of 1.** Every text action lands
+near a boundary, so ceiling would charge 2 for something costing 1.04 —
+a 92% surcharge for a rounding hair. The floor is what stops any action
+being free, because a free provider call is one a loop can make.
+
+**THE ALLOWANCE IS UNCHANGED BY THE COLLAPSE, deliberately.** 450 is
+300 audio minutes plus 150 text units, and a text unit was already
+worth about a credit. This pass changed the CURRENCY, not the
+entitlement; the per-tier table is its own piece of work, because an
+entitlement change hidden inside a currency change is one nobody can
+review.
+
+**THE PHOTO BATCH PRICE IS HELD, and the hold is tested.** Derived
+honestly it is ~34 credits on the model we call and ~6 on the one
+recommended; setting either before the model decision lands is a
+visible lie or an invisible subsidy. `PHOTO_BATCH_CREDITS` sits beside
+the reasoning in three places (server config, client mirror,
+`estimatePhotos`), and a test goes red if it moves — so lifting it
+sends whoever did it to COST-MODEL.md 12.7's two gates.
+
+**Two model strings, not one.** `_shared/model.ts` holds
+`SUMMARY_MODEL` and `VISION_MODEL`, both `gpt-4o-mini` today, chosen
+per MEDIUM at the adapter (`hasImages`). One string would drag text and
+lectures wherever the photo path goes, which section 12.5 prices at
+6.6x and 6.3x worse. Twelfth restatement-ledger entry closed.
+
+**0012 WIDENS, 0013 NARROWS, and the order is apply-deploy-verify-
+apply.** 0012 adds `credits_used`, backfills it as the sum of the two
+old counters, and adds `add_ai_credits`; the old columns and
+`add_ai_usage` stay so a function deployed either side of it works.
+0013 drops them and must not be applied until the deploy has landed —
+0008's lesson, in the direction that bites. **0012's backfill is
+guarded on the old columns still existing**, because 0013 removes what
+it reads and "re-runnable exactly once" is not re-runnable; a test
+applies the whole folder twice to prove it.
+
+## The marketing site: data first, design last
+
+`site/` holds everything the page READS — downloads, pricing, flags —
+and `scripts/test-site.mjs` guards it. The markup is built to Grace and
+Jared's approved mockup and is a design artefact; everything here is
+not, which is why it is separable and tested.
+
+**NO RELEASE URL IS WRITTEN DOWN.** `latest/download/<name>` is resolved
+by GitHub server-side at CLICK time, so a new release is picked up with
+no rebuild, no constant to bump, nothing to strand. The owner and repo
+come from `desktop/package.json`'s `repository` field — which
+electron-builder requires, so it cannot quietly vanish — and the asset
+names from that same file's `artifactName` templates.
+
+**THE ALTERNATIVE WAS A THIRD-PARTY REQUEST, and that is why it was not
+taken.** Fetching `api.github.com/releases/latest` works and is a
+request from the visitor's browser; the marketing site holds the same
+zero-third-party promise the app does. An `href` costs nothing until
+somebody clicks it. A test asserts `downloads.js` contains no `fetch`,
+no `XMLHttpRequest`, no `sendBeacon`, no `WebSocket`, no `EventSource`,
+and never names the API host.
+
+**THE PRICE OF THAT: asset names had to stop carrying `${version}`**, so
+the templates changed — and every download button 404s against the
+already-published v1.0.1, whose assets are version-named. **A release
+must be cut before the page is public.** `assetName` THROWS on a
+template that still has a substitution in it, because the alternative is
+a 404 on a link nothing in CI opens.
+
+**And two things fell out of looking:** `desktop/package.json` says
+1.0.0 while the published release is v1.0.1 — bumped for that release
+and reverted by a later commit — so the next tagged release would
+advertise a LOWER version to auto-update and do nothing, silently. And
+a macOS `.dmg` is published already; what is missing is signing, not a
+build. Unsigned, macOS refuses to open rather than warning, which is
+why Windows gets a note and Mac gets "coming soon".
+
+**Prices are placeholders behind a marker**, the way the UNMEASURED
+billing constant is: a test refuses to let the site ship a made-up
+figure, and a second asserts the flag and the numbers cannot disagree.
+The ALLOWANCES are not placeholders — they are asserted equal to the
+server's, because a page promising 900 credits while the server enforces
+450 is a promise made to somebody about to pay.
+
+**`SITE-DEPLOY.md` answers the origin question: the site and the split
+are one deploy**, and the three things that break if they are separated
+are an already-installed service worker still owning `/`, password
+reset landing on a marketing page, and installed PWAs opening the wrong
+thing. `SITE-ASSETS.md` is the screenshot spec — eight images, one
+sitting, on the moto g05 the Android build is verified on.
+
+## Three product plans, and the correction inside each
+
+`PRODUCT-PLANS.md`. Plans, not builds. Sequencing: reading depth and
+output language before the AAB; file upload during the closed test.
+
+**Reading depth: the ceiling is the suspect and the PROMPT is the
+cause.** `ai-text`'s summarise prompt is a schema and one sentence —
+exactly the state `ai-notes` was in when its output read "helpful but
+shallower than I'd like". That was fixed by telling the model what
+belongs IN each section, measured at **+189% words per key point with
+the entry count barely moving and the ceiling untouched**. Raising
+`MAX_TOKENS` without fixing the prompt buys permission to be verbose,
+and we pay for the tokens. Do the prompt first, measure, and raise the
+ceiling only if the output is really hitting it. 2,000 -> 4,000 takes a
+16-page reading from 14 to 24 credits — nothing on a 900-credit month,
+**40% of the 60-credit trial**, which is the number that decides it.
+
+Two things that are easy to get wrong there: a chunk does not know it is
+one of four, so depth scaling is per CHUNK and the MERGE is what must
+not flatten four deep summaries into one thin one — its prompt has no
+depth instruction at all today. And subheadings are a RENDERING
+decision, not a schema one: `keyPoints` is already the bullets, and a
+sixth field touches every screen and every saved note.
+
+**Output language: the cost moves the wrong way from what you'd
+expect.** CJK output is ~1 token per character against English's ~4.2
+chars/token, so at a fixed token ceiling CJK gets ~72% as much TEXT for
+the same price — the cost does not rise, the output shrinks. Credits are
+derived from the ceiling, so a Chinese summary costs exactly what an
+English one costs, which is the right answer and comes free from
+ceiling-derived weights. The interaction worth knowing: CJK plus the
+depth work is the case most likely to hit the ceiling, and hitting it
+is a hard failure that is still billed.
+
+Explain-it-back is the exception: it must answer in the language the
+STUDENT wrote in, ignoring the setting, because marking someone's
+Spanish explanation in Korean is worse than useless. A prompt clause,
+not a setting.
+
+**File upload: 41x on input tokens, ~10x in CREDITS, and the difference
+matters.** Extracted text is 905 tokens a page against 36,835 as an
+image — but a whole reading is 138 credits photographed and 14
+extracted, because the OUTPUT ceiling is identical either way and output
+is four times the price of input. **Assuming input dominates is the same
+error that made the photo model look 5x better than it is.** Ten times
+is still the largest saving available anywhere in this app, and it
+routes students off the most expensive path for the most common case.
+
+Client-side extraction is not a performance choice: `ai-text` has no
+storage client at all and a test pins that, because the day someone adds
+one the privacy policy and the consent both become false. The fallback
+threshold is per PAGE (~100 chars), never per document, and it is never
+automatic — falling from extraction to the vision path without saying so
+spends 40x what the student expected.
+
+## The tiers, and why the trial is a SHAPE rather than a number
+
+`supabase/functions/_shared/credits.ts` holds the table, migration 0014
+holds the counter it needs, `_shared/allowance.ts` holds the branch.
+
+| Tier | Allowance |
+|---|---|
+| Free | 60 credits, **once ever** |
+| Plus | 60 credits, the same trial — Plus buys sync, not AI |
+| Study AI | 900 credits a month |
+| Study AI Max | 3,000 credits a month |
+
+**A PER-MONTH FREE ALLOWANCE IS THE ONE COST LINE THAT GROWS WITHOUT
+BOUND AS SIGNUPS DO.** Ten thousand signed-up-and-forgot accounts is ten
+thousand allowances every month, forever, for people not using the app.
+A lifetime trial costs those same accounts exactly once. That is the
+whole reason `perMonth` exists beside the number instead of a fourth
+row in a table of monthly figures.
+
+**The counter is a column on `profiles`, not a row in `ai_usage`.**
+`ai_usage` is keyed `(user_id, month)` and a lifetime allowance has no
+month; a sentinel month would be invisible to every query filtering on
+the current one, which reports the trial as unspent forever — the
+friendly-looking direction and the wrong one. `profiles` is already
+read at the tier lookup, so a trial tier costs no extra query: its
+counter rides along on the row that was fetched anyway.
+
+**THE BRANCH LIVES IN ONE PLACE** (`_shared/allowance.ts`). Two copies
+of "which counter does this tier use" is two chances to write a trial
+spend into `ai_usage`, which leaves `trial_credits_used` at zero so the
+once-ever allowance quietly refills on the first of every month and
+nothing anywhere looks wrong. A test asserts a trial tier calls
+`add_trial_credits` and never `add_ai_credits`.
+
+**An unknown tier gets the TRIAL.** A typo in the dashboard costs sixty
+credits; defaulting the other way costs three thousand a month per
+mistyped account.
+
+**RECORDING IS NO LONGER GATED ON A PAID TIER, and that is the diff to
+look at twice.** It used to refuse anything but `ai`. Every tier now has
+an allowance and the ALLOWANCE is the gate, because a trial that cannot
+produce one set of lecture notes cannot sell lecture notes. What still
+refuses is an account with no `profiles` row — an anomaly, not a tier.
+
+**NO ROLLOVER, and it is true by construction rather than by a rule.**
+A new month has no `ai_usage` row, the limit is re-read from the tier
+per request, and unused credits are stored nowhere, so there is nothing
+to carry. The way that stops being true is somebody adding "carry over
+what you didn't use", which is about three lines and would convert a
+semester's prepayment into a single month's spending power against
+revenue already collected and inside the store's refund window. A test
+asserts a fresh month starts at nothing.
+
+**THE HOLE, ACCEPTED DELIBERATELY: `delete_my_account_data()` empties
+`profiles`, so delete-and-resignup resets the trial.** There is no clean
+fix that keeps both promises — retaining a per-email counter after a
+deletion request is retaining personal data after a deletion request.
+It costs ~4 cents an abuse and needs a fresh confirmed email each time.
+A test asserts the deletion, so nobody later "fixes" it by keeping
+something behind.
+
+**The allowance line says "this month" only when it is true.** A trial
+tier's badge drops those two words and adds one sentence saying the
+credits do not reset — because letting a student infer that from an
+absence is how somebody waits until November for a reset that is not
+coming.
+
+**AND THAT SHIPPED HALF-DONE, which is the part to remember.** The
+AI-notes badge (`aiNotes.jsx`) branched on `perMonth` from day one;
+`aiTextCopy.js` — the module whose entire job is that sentence, on
+four screens — did not, and said "this month's" in all seven bands of
+the allowance line plus four other places. `aiNotesLogic.js` and
+`helpText.js` had one each. The guard that was supposed to prevent
+this greped three named topic ids in `helpText.js`, so it was green
+throughout; see the file-scoped-guard entry in the ledger below for
+what replaced it. **A period is now decided in exactly one place per
+module** (`allowanceNoun` / `resetsSentence` in `aiTextCopy.js`), and
+an UNKNOWN tier says nothing about a period at all rather than
+guessing monthly — the `fetchNote` three-outcomes rule, applied to a
+sentence.
+
+## What the AI features cost, and the two numbers that were wrong
+
+`COST-MODEL.md` is the document; `scripts/measure-cost-model.mjs` prints
+every figure in it from the real prompt strings and a real tokenizer, so
+a prompt change can be re-costed rather than re-argued. It needs
+`npm i --no-save gpt-tokenizer` and is deliberately outside `npm test`.
+
+Three things worth carrying without opening it:
+
+**A photographed reading is the most expensive action in the app, and
+the code believes the opposite.** `ai-text/config.ts` justifies pricing a
+batch of four photos the same as a 20,000-character text chunk by
+quoting gpt-4o's image tokenisation — 85 base + 170 a tile. We call
+**gpt-4o-mini**, which bills images at **2,833 + 5,667** because its text
+tokens are so cheap that OpenAI charges images at a token multiple; an
+image on the mini model costs about twice what it costs on gpt-4o. So a
+batch costs ~12x a text chunk, not slightly less, and a 16-page reading
+costs **2.2x an entire hour of recorded, transcribed, summarised and
+translated lecture** while billing 8.7% of a month's text units.
+**CONFIRMED from OpenAI's vision guide, 20 August 2026** — it was
+written as the one figure the build container could not reach.
+
+**Sending smaller photos is not a lever, and that is settled.** The
+tiler scales the *shortest* side to 768px in BOTH directions, so a
+portrait page is 6 tiles whatever it was downscaled to. `maxEdge`
+changes the picture quality and not the bill.
+
+**THE LEVER IS THE MODEL, and it plausibly inverts the finding.** The
+newer mini and nano models do not tile: they cover the image in 32x32
+patches, cap it at a patch budget (1,536 on the mini tier) and apply a
+per-model multiplier. Our page comes out around **2,385 tokens instead
+of 36,835 — fifteen times fewer** — so even at three times the
+per-token price photos land ~5x cheaper than today, which would make
+them cheaper than lectures rather than 2.2x dearer. **Do not re-weight
+the photo batch against the current model:** re-weighting to 12 and
+then moving would tell students a batch costs 12 when it costs 1, which
+is a worse error than the one being fixed because it is visible and it
+is ours. Model and weight are ONE decision.
+
+**The re-summarise retry had no failure precondition — FIXED.** Step 4b
+checked that the row exists, is yours, and holds a transcript, never
+that the summary failed, so a successful three-hour lecture could be
+re-summarised for the whole retention window at a flat 2 billed minutes
+against a real $0.0072 — $0.0036 a billed minute where every real
+recording costs $0.0007, and $10 of provider spend from one recording
+at a 3,000-minute cap. **The fix was the precondition, not the price:**
+`RESUMMARISE_BILLED_MINUTES` is derived correctly, but for a *typical
+short* summary, and a three-hour transcript is 21x that input.
+
+It requires `summary_failed = true`, checked BEFORE the transcript —
+a successful note has nothing to retry whether or not the sweep has
+since taken its transcript, and answering "expired" there is a true
+sentence about the wrong question. It returns its own code
+(`already_summarised`), which does not breach the identical-rejection
+rule: that rule is about not-found versus not-yours, and this branch is
+only reachable once ownership is proven. The bonus falls out free —
+the success path writes `summary_failed = false`, so it is **one retry
+per failure** rather than an open door.
+
+**THE ALLOWANCE INCREMENT IS ATOMIC — migration 0011.** Both functions
+did `select minutes_used` then `upsert { minutes_used: read + cost }`,
+so two overlapping requests both read N and both wrote N + cost and one
+of them was free. `add_ai_usage` does the `+` under the row lock that
+`ON CONFLICT DO UPDATE` takes, and returns the post-increment totals so
+the fraction a student is shown is the database's rather than one
+computed here from a stale read.
+
+**What deliberately did NOT move is the READ.** It still precedes the
+provider call, which is what makes a missing column (0006) and an
+exhausted allowance both fail having spent nothing. Folding the check
+into the increment — "add it and tell me if I went over" — would move
+the refusal to after the money was spent. So the bounded race remains
+and is named: two requests can both pass the check at N and both be
+billed, exceeding the cap by one request's cost. Same class as the
+estimated-duration overshoot, which is also left alone. What is fixed
+is the strictly worse bug, where the second request was never billed.
+
+The test worth knowing by name is **"THE LOST UPDATE, demonstrated"**:
+it runs the OLD read-modify-write in two concurrent psql sessions and
+asserts the total is 3 rather than 6. Without it, "two concurrent calls
+add up" could pass because the two calls never overlapped — a green
+test proving nothing, which is how every concurrency test fails.
+
+**THE PHOTO MODEL IS PRICED (section 12), and the recommendation is
+conditional.** Move the photo path — and only the photo path — to
+`gpt-5.4-nano` at `detail: "original"` and `maxEdge` 1024, weight a
+batch at 6 credits, and keep text and lectures on `gpt-4o-mini`.
+
+Three things in that sentence are load-bearing:
+
+- **The output price, not the image price, is what decides it.**
+  `gpt-5.4-mini` is only 1.4-1.8x better overall because its output is
+  $4.50/1M against $0.60 — on a 2,000-token ceiling the summary costs
+  more than the four photographed pages it is about. The 5x prize is
+  on nano.
+- **`maxEdge` is a lever again.** Under tiling the shortest side is
+  normalised to 768 in both directions, so it does nothing. Under
+  patches the budget is a CAP, not a target, so cost falls linearly
+  with what we send: 1536 -> 1024 halves the image tokens. Free to
+  change, worth nothing on the model we run today, which is why it
+  belongs in the same decision.
+- **Per MEDIUM, not per task.** Photos and pasted text are the same
+  `summarise` task, and moving the task would make a text chunk 6.6x
+  worse and a lecture 6.3x worse on mini. So there are two model
+  strings, which raises rather than lowers the priority of the
+  `_shared/` move: `SUMMARY_MODEL` and `VISION_MODEL`.
+
+**Priced honestly on the model we run TODAY, the feature is unusable:**
+four photographed pages cost eleven text chunks, so a 16-page reading
+is ~133 credits of a 150-unit month. Weight 3 is not a mispricing to
+correct — the model move is what makes the feature exist at a price
+anyone can say out loud. **Do not re-weight against a model we are
+about to leave.**
+
+**And it waits on one measurement**, because two published rates and
+one behaviour are third-hand: there is an unresolved report of a
+1920x1080 PNG billing ~66,000 prompt tokens on `gpt-5.4-mini` where the
+documented arithmetic says ~2,400, and we send exactly that shape — a
+base64 data URL from a canvas. Section 12.7 has the three-call test and
+what each outcome means. That is *verify the evidence before endorsing
+the remedy*, pointed at a remedy of my own.
+
+**And the brief that commissioned it had three things wrong**, which is
+the part to carry. It authorised switching Groq to Turbo (already
+Turbo) and raising `MONTHLY_MINUTES_LIMIT` from 30 to 200 (it is
+**300**, so that would have cut the closed test's allowance by a
+third) — neither change was made. And it stated that `gpt-4o-mini`
+carries a published sunset; it does not appear on OpenAI's
+deprecations page at all, upcoming or past, and the tracker the brief
+came from had conflated it with the audio and realtime variants.
+
+All three came from remembered or third-hand figures. Enter a constant
+against the code, and a provider's rate against the provider.
+
+**THE DEPRECATION TRAP TO REMEMBER, since it is the one that is real:
+`gpt-4.1-nano` and `o4-mini` shut down 23 October 2026.** They are the
+two names that come up first when someone goes looking for something
+smaller and cheaper than what we run, and both have a date on them.
 
 ## Rotating a credential means auditing where it is configured
 
@@ -1762,6 +2253,32 @@ A marketing site is planned. It takes **`/` as a path change on the same
 origin**, with the app moving to **`/app`** — not a subdomain. Same
 origin means `localStorage` survives untouched.
 
+**`app.uniplannerapp.com` HAS BEEN PROPOSED AND RULED OUT, twice — it
+is the same mistake as changing the origin at all.** A subdomain is a
+different origin, `localStorage` is scoped per origin, and every local
+planner on every device is keyed to the hostname that stored it. So a
+subdomain strands exactly the data that cannot be migrated: the copy
+that exists before anyone makes an account, and the offline copy
+afterwards, both living on devices rather than on a server we can run
+a script against. It looks like a tidier URL and it is a silent data
+loss with the symptom "the app lost my notes". The reason it keeps
+coming back is that `app.` is what most products do — they do it
+because they had two origins from the start, not because moving to one
+is free. Jared ruled it out on 21 August 2026 and the reasoning is
+here so it does not have to be re-derived a third time.
+
+The consequence for **Supabase → Authentication → Redirect URLs**, so
+the allowlist is entered once: the entry that matters is
+`https://www.uniplannerapp.com/**`, which covers `/app` already and
+therefore does not need revisiting when the split lands. The bare
+origin is listed alongside it because Supabase matches exactly without
+a wildcard and `PASSWORD_RESET_REDIRECT` is pathless today. **Neither
+`capacitor://localhost` nor `http://localhost` belongs on that list**:
+`sync.js` gates `detectSessionInUrl` on `^https?:$`, so a recovery
+token delivered to a phone shell can never be consumed, and
+allowlisting a destination the app cannot read turns a working reset
+into a dead end.
+
 What that restructure will involve, so nobody reaches for `app.` out of
 habit:
 
@@ -1847,7 +2364,35 @@ record.
 
 ### Pending, in order, once someone is at a desk
 
-**Only two genuine leftovers remain, both minor and both post-launch.**
+**One item is BLOCKING and must happen before the next function
+deploy**, then two minor post-launch leftovers.
+
+0. **The currency deploy, in this order and no other.** 0011 has been
+   superseded by 0012 but both still apply cleanly, so run them in
+   sequence.
+
+   1. **Apply 0011 and 0012.** Both WIDEN — each creates a function
+      the new code calls — so they go before the deploy, the 0003/0004
+      direction rather than 0008's. If the code ships first, every
+      bill fails: `supabaseAdmin.rpc` returns "function does not
+      exist", logged loudly at the billing stage without failing the
+      request, so the student gets their work and we charge nothing.
+      Safe for them, expensive for us, and invisible unless somebody
+      reads the logs.
+   2. **Deploy both Edge Functions.**
+   3. **Verify** a real action bills `credits_used`:
+      `select * from ai_usage order by updated_at desc limit 5;`
+   4. **Apply 0013**, which NARROWS: it drops `minutes_used`,
+      `text_units_used` and `add_ai_usage`. Not before step 3.
+
+   **0014 goes with 0012**, in step 1: it WIDENS too (a column and a
+   function the new code calls), and the code that reads
+   `profiles.trial_credits_used` ships in the same deploy.
+
+   Privilege check after 0012:
+   `select has_function_privilege('service_role',
+   'public.add_ai_credits(uuid, text, numeric)', 'execute');` returning
+   true, and the same for `authenticated` returning false.
 Everything else on this list has been applied and verified; the record
 of what each migration did is kept below the line because the ordering
 lessons are load-bearing, not because the work is outstanding.
@@ -2182,6 +2727,31 @@ costume: a remedy sized to an anecdote is sized to the wrong thing.
 A floor, a cap and a threshold all need the shape of the data, not the
 existence of the problem.
 
+## Commit or stash before you mutate a file to check a guard
+
+The mutation rule — break the thing on purpose and watch the test go
+red — is the only way to know a guard is real, and it has a sharp edge
+that has now cost work: **`git checkout <file>` reverts to the last
+COMMIT, not to what was in the working tree a second ago.** Used to undo
+a deliberate mutation on a file that also carried an hour of uncommitted
+change, it silently throws the change away and restores something that
+builds, which is the worst combination — no error, no conflict, and a
+file that looks plausible.
+
+That is what happened to `src/aiTextLimits.js` during the currency
+collapse: mutated to check the mirror test, reverted with
+`git checkout`, and the whole rewrite went with it. Caught by the next
+`npm test` build failure, which is luck rather than process — the same
+edit in a file the bundler does not touch would have reached a commit.
+
+The rule, and it costs nothing: **before mutating a file, either commit
+the real work or copy the file aside**, and revert from the copy. This
+codebase already does the copy-aside version for migrations and
+configs (`cp x /tmp/... && ... && cp /tmp/... x`); the failure was
+reaching for `git checkout` on the one file whose work was not yet
+committed. Never revert a mutation with a command that reads from git
+unless the file's real state is already IN git.
+
 ## Branch from `main`, verified — and a mirror test cannot see a decision
 
 Two failures from one mistake, both worth keeping.
@@ -2280,6 +2850,17 @@ the same way: it hardcoded the value it was supposed to be guarding.
   updates zero rows without it — the state production was actually in,
   shown to be defence-in-depth and not a hole.
 
+- **The same stand-in, running the other way: it had no `service_role`
+  at all.** Every migration up to 0010 happened not to name the role,
+  so nothing noticed. 0011 grants execute on `add_ai_usage` to it, and
+  the whole suite went red with `role "service_role" does not exist` —
+  a *correct* migration failing against a shim that was missing a
+  piece of the platform. Fourteenth instance, and worth keeping beside
+  the default-privileges one because they are the same fault pointing
+  in opposite directions: there the shim let a bad migration pass,
+  here it would have failed a good one. A stand-in that restates the
+  environment is wrong in whichever direction it happens to differ.
+
 - The grant audit's own **"the app's own queries still work" test**
   enumerated those queries by hand, from reading the client. It
   included `planner_data`'s upsert and omitted `ai_notes`, so 0008
@@ -2296,7 +2877,30 @@ the same way: it hardcoded the value it was supposed to be guarding.
   `requiredForBand` in the test, so a change to the bands or the
   rounding targets goes red naming the figure that moved.
 
-One is an anecdote. Eleven is a rule: **derive a guard from its source
+- The **image-token comment** in `ai-text/config.ts` restated a
+  published rate — for **the wrong model**. It shows its arithmetic,
+  which is what makes it look like a derivation, and every step is
+  right except the two constants at the top: they are gpt-4o's, and we
+  call gpt-4o-mini. Thirteenth instance, and the first where the
+  restated value belonged to something we do not use. A guard would
+  have had nothing to read: the rate lives at the provider, not in this
+  repository. What is available instead is the *consequence* — the
+  document's section 11 predicts a token count so far from the
+  alternative that one dashboard reading settles it.
+
+- The **`npm test` script** enumerated every suite by hand, so a new
+  `scripts/test-*.mjs` ran only if somebody remembered the `&&`. Found
+  by adding one and watching the suite stay green at twenty files while
+  twenty-one existed. Fifteenth instance, and the same shape as the
+  deploy workflow that named one Edge Function while the repo had two.
+  Now derived: the list is read from the directory and compared.
+
+- The **model string** `gpt-4o-mini` appears in both Edge Function
+  adapters and in a measurement script. Twelfth instance, and unlike
+  the browser/Deno mirrors this one is avoidable: both functions are
+  Deno, in the same repository, and `ai-notes/_shared/` already exists.
+
+One is an anecdote. Fifteen is a rule: **derive a guard from its source
 of truth, don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the
@@ -2311,6 +2915,158 @@ comment instead of an assertion.
 The test for whether a guard is real is to break the thing it protects
 and watch it go red — restating a value gives you two copies to keep in
 step and a test that only checks one.
+
+### THE ARTIFACT IS THE EVIDENCE. THE SOURCE IS A CLAIM ABOUT IT.
+
+Five times now — and this is the rule they add up to, distinct from
+the restatement ledger above. There the guard restated its subject.
+Here the guard read the **source** when the **built or running
+artifact** was available, and the two disagreed:
+
+| what the source said | what the artifact did |
+|---|---|
+| `npm test` listed the suites | it ran **20 of 21** — `test-site.mjs` had never executed |
+| `coverage/` was gitignored | **30 tracked JSON files** had been committed through three merges |
+| the plist patch wrote a boolean | a `<string>false</string>` would have read as **true** on the device |
+| the light ground and the shell colour were "both light" | they were **byte-identical**, which is what hid an unthemed root entirely |
+| `html, body { background-color }` was in `input.css` **and** in `dist-web/app.css`, overridden by nothing | the device computed the root as `rgba(0, 0, 0, 0)` |
+
+The last one is the sharpest, because every available source check
+passed. The rule was in the stylesheet, it survived minification, no
+later rule touched `html`, and the variable resolved — and none of
+that is the same claim as *the root element paints a background*.
+
+**So: where a guard can read the built artifact instead of the
+source, it should.** Concretely, in rough order of how much they
+prove:
+
+1. **The running page.** `scripts/test-computed-ground.mjs` loads
+   `dist-web/index.html` in real Chromium and reads
+   `getComputedStyle`. `test-app-smoke.mjs`, `test-blocks-neutral.mjs`
+   and `test-local-only.mjs` mount the real bundle in jsdom. The e2e
+   journeys drive the real app against the real backend.
+2. **The built bundle.** The provider-key grep reads
+   `dist-web/app.js`, not `src/`, precisely so a leak through any path
+   is visible. The cache name is hashed from the built bytes.
+3. **The real function over a real fixture.** `applyNativePermissions`
+   is run against a scaffolded plist and the result is PARSED, so the
+   value's element type is checked rather than its text.
+4. **The filesystem and the index.** The `npm test` list is read from
+   the directory; the tracked-file probe asks git what is tracked
+   rather than reading `.gitignore`.
+
+And the counterpart, which is what makes this a rule rather than a
+preference: **a source-level guard should say what it cannot see.**
+`test-computed-ground.mjs` cannot answer for WebKit and says so;
+`test-dark-mode.mjs`'s safe-area sweep reads classes and styles and
+states plainly that it cannot see layout. A guard that names its hole
+is worth more than one that looks thorough, because the hole is where
+the next instance will arrive.
+
+**AND THE WAY THE RULE FAILS EVEN WHEN YOU FOLLOW IT: reading an
+artifact that is not the one your claim is about.** The overscroll
+investigation stalled for a day on "the build is current", and the
+evidence for that was **a different fix being visible on screen** —
+the safe-area work, which shipped in the commit *before* the one in
+question. That is a real artifact, honestly read, and it answers a
+different question. Four rebuilds reproduced the same result because a
+`git checkout` had aborted and every later command in the block ran
+against `main`.
+
+So the check has to name the change: not "is this build recent" but
+"is THIS rule in the running page". One line settled it —
+
+```js
+[...document.styleSheets]
+  .flatMap(s => { try { return [...s.cssRules]; } catch (e) { return []; } })
+  .filter(r => /html/.test(r.selectorText || "")).map(r => r.cssText)
+```
+
+— and it should have been the first thing run, not the fifth.
+
+**The mechanical half is worth its own line, because it is silent:
+`git checkout <branch>` ABORTS when an untracked file would be
+overwritten**, and in a multi-command block the failure scrolls away
+while everything after it runs on the old checkout. The trigger here
+was an untracked `mobile/package-lock.json` colliding with the
+branch's tracked one. Nothing looked broken; the build simply was not
+the build anyone thought it was. **Check the exit status of a checkout
+before trusting anything downstream of it** — `git rev-parse --short
+HEAD` after the checkout costs nothing and answers it.
+
+The limit worth stating: some artifacts are unreachable from a build
+machine. A WKWebView's computed styles, an encoder's output bitrate, a
+store's upload validator and an Edge Function secret are all beyond
+anything in `npm test`. For those the artifact check is a hardware or
+dashboard step, and it belongs on `MOBILE-BUILD.md`'s list rather than
+being approximated by a source grep that would pass either way.
+
+### The sibling failure: a guard scoped to a FILE, not to a CLAIM
+
+Sixteenth instance, and it is worth its own heading because the fix is
+different. The value was not restated — the guard simply looked in one
+place while the claim lived in six.
+
+**The claim:** a trial tier's 60 credits are once ever, so no student
+on Free or Plus may be told an allowance is monthly. **The guard:** a
+regex over three named topic ids in `helpText.js`, matching the exact
+shape "free plan … a month". Narrow in three independent ways at once
+— one FILE, three IDS, one PHRASE — and it was green throughout while:
+
+- `aiTextCopy.js` said "this month's AI study help" in **all seven**
+  bands of the allowance line, in the last-action warning, in the
+  exhausted notice ("comes back at the start of next month"), in the
+  readings refusal, and in the `usage_exceeded` failure copy;
+- `aiNotesLogic.js` said "You've used all your AI minutes for this
+  month" — also with the pre-collapse currency still in it;
+- **`helpText.js` itself** said "spends your monthly AI allowance",
+  twice, under a fourth topic id and in a `detail` field.
+
+That last one is the sharpest part. The guard was in the right file
+and still missed it, because it had also enumerated which entries of
+that file to look at. `aiNotes.jsx` had branched on `perMonth`
+correctly since the day tiers landed, which is what made the whole
+thing look done.
+
+**The rule: scope a guard to the claim, not to the file that happened
+to hold it when you wrote the guard.** A claim can move house; a file
+list cannot follow it. Concretely, the two replacements here:
+
+- **Behavioural, over derived inputs.** Every allowance sentence
+  `aiTextCopy.js` can render, for every tier in `TIERS`, checked
+  against what `allowanceForTier` says. It cannot be evaded by a
+  sentence moving between functions — and a **completeness half**
+  (every export is rendered or excused BY NAME) means it cannot be
+  evaded by a new function either, which would have been the same
+  mistake one level down.
+- **A sweep over all of `src/`**, not one file, with each module that
+  mentions a month DECLARED with a reason — the device-store guard's
+  shape. A declaration of "branches on the tier" is checked (the file
+  must actually read `perMonth`), and a declaration of "this is the
+  sentence that DENIES a monthly allowance" is checked by removing
+  that one phrase and requiring the file to go quiet. Otherwise an
+  excuse is a rubber stamp anyone can write next to anything.
+
+**The audit that followed, since one instance is an anecdote.** Four
+more guards have this shape and none has bitten yet:
+
+| Guard | Reads | The claim is really about |
+|---|---|---|
+| the substitution-wording ban (`test-readings.mjs`) | `READING_COPY` + two modules | any user-facing wording, anywhere |
+| the "units" ban | three separate scoped greps | every screen |
+| the `color-mix()` ban (`test-dark-mode.mjs`) | `PlannerApp.jsx` | everything that ships — and the BUILT css/js is available as a target, which is why the provider-key grep reads `dist-web/app.js` |
+| `ai-text` has no storage client (`test-readings.mjs`) | `ai-text/index.ts` | the endpoint, which is **five files** — and the guard twelve lines above it already learned exactly that lesson for the table sweep |
+
+Widening them is cheap now and expensive after the third instance.
+Recorded rather than done, because none of them is currently false and
+a sweep of four guards is its own change.
+
+**And the near-miss worth keeping.** Mutation-checking the new guards
+meant editing files that already carried uncommitted work, and the
+revert reached for `git checkout scripts/test-help.mjs` — the exact
+command the section above records as having destroyed an hour of
+work. It was refused before it ran. The copy-aside rule is not a
+preference; write the `cp` first, every time.
 
 ## A byte-identical differential is a one-shot proof, not a standing guard
 

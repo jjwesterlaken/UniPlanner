@@ -20,8 +20,8 @@ import {
   buildConsentPatch,
   pickSupportedMimeType,
   RECORDER_AUDIO_BITS_PER_SECOND,
-  MONTHLY_MINUTES_LIMIT_HINT,
-  MINIMUM_BILLED_MINUTES_HINT,
+  uploadRefusal,
+  MINIMUM_BILLED_CREDITS_HINT,
   describeRecorderError,
   parseAiNotesError,
   PERMANENT_FAILURE_CODES,
@@ -38,7 +38,7 @@ import {
   defaultCardSelection,
   folderForRecording,
   DEFAULT_CARDS_SELECTED,
-  RESUMMARISE_BILLED_MINUTES_HINT,
+  RESUMMARISE_BILLED_CREDITS_HINT,
 } from "./aiNotesLogic.js";
 import {
   describeCapabilities,
@@ -55,6 +55,7 @@ import {
 } from "./audioSources.js";
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
 import { noteCache } from "./noteCache.js";
+import { MONTHLY_CREDITS_LIMIT } from "./aiTextLimits.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes, callResummarise } from "./aiNotesClient.js";
 import { nowISO, supabase } from "./sync.js";
@@ -78,16 +79,26 @@ function UsageBadge({ session }) {
   }, [session && session.user.id]);
 
   if (!usage || usage.unavailable) return null;
-  const near = usage.minutesUsed >= MONTHLY_MINUTES_LIMIT_HINT * 0.9;
+  /* THE SHAPE, NOT JUST THE NUMBER. A trial tier's 60 credits are
+     once-ever, so the words "this month" would be a lie that reads as a
+     promise — a student who waits for a reset that never comes is a
+     support ticket, and an angry one. The tier decides both halves. */
+  const { credits: limit, perMonth } = allowanceForTier(usage.tier);
+  const near = usage.creditsUsed >= limit * 0.9;
   return (
     <div className={`mb-3 rounded-lg px-3 py-2 text-xs ${near ? "bg-amber-50 text-amber-800" : "bg-stone-100 text-stone-500"}`}>
       <div className="flex items-center gap-1.5">
         {near && <TriangleAlert size={13} />}
-        {Math.round(usage.minutesUsed)} of {MONTHLY_MINUTES_LIMIT_HINT} AI minutes used this month
+        {Math.round(usage.creditsUsed)} of {limit} AI credits used{perMonth ? " this month" : ""}
       </div>
+      {!perMonth && (
+        /* Said once, plainly, rather than left to be inferred from the
+           absence of "this month". */
+        <p className="mt-1 opacity-80">{AI_NOTES_COPY.trialAllowance(limit)}</p>
+      )}
       {/* Disclosed here rather than discovered by watching the counter
           jump after a two-minute recording. */}
-      <p className="mt-1 opacity-80">{AI_NOTES_COPY.minimumBilling(MINIMUM_BILLED_MINUTES_HINT)}</p>
+      <p className="mt-1 opacity-80">{AI_NOTES_COPY.minimumBilling(MINIMUM_BILLED_CREDITS_HINT)}</p>
     </div>
   );
 }
@@ -684,7 +695,9 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
         message:
           err && err.code === "transcript_expired"
             ? AI_NOTES_COPY.summaryFailed.retryExpired()
-            : AI_NOTES_COPY.summaryFailed.retryFailed,
+            : err && err.code === "already_summarised"
+              ? AI_NOTES_COPY.summaryFailed.retryAlreadyDone
+              : AI_NOTES_COPY.summaryFailed.retryFailed,
       });
     }
   };
@@ -724,7 +737,7 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
         {onRetrySummary && (
           <div className="space-y-2 rounded-lg border border-stone-200 p-3">
             <p className="text-xs text-stone-600">
-              {AI_NOTES_COPY.summaryFailed.retryCost(RESUMMARISE_BILLED_MINUTES_HINT)}
+              {AI_NOTES_COPY.summaryFailed.retryCost(RESUMMARISE_BILLED_CREDITS_HINT)}
             </p>
             {retryState.status === "error" && (
               <p role="status" className="text-xs text-rose-700">
@@ -893,6 +906,16 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
   const [selectedCards, setSelectedCards] = useState(null);
 
   const runUpload = async () => {
+    /* BEFORE the key is parked, deliberately. Parking first would leave
+       a recovery card pointing at a recording that can never be
+       uploaded — the student would be offered a retry that fails
+       identically every time, which is worse than a clean refusal. */
+    const refusal = uploadRefusal(state.blob && state.blob.size);
+    if (refusal) {
+      const copy = AI_NOTES_COPY.tooLarge(refusal);
+      dispatch({ type: "uploadFailed", code: refusal.code, message: `${copy.title} ${copy.detail}` });
+      return;
+    }
     dispatch({ type: "upload" });
     /* Park the key in the synced blob BEFORE the upload, not after: the
        whole point is to survive the app closing, and the window where
@@ -1095,8 +1118,18 @@ export function RecordingIndicator({ recording, onOpen, liftedForNav = false }) 
        and "I can't stop it" is a privacy problem before it is a
        usability one. */
     <div
-      className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-3 pointer-events-none"
-      style={liftedForNav ? { paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 4.25rem)" } : undefined}
+      className="fixed inset-x-0 bottom-0 z-40 flex justify-center pointer-events-none"
+      /* The bottom inset is UNCONDITIONAL now. It used to apply only
+         when the indicator was lifted over the tab bar, so on a layout
+         without that bar the pill sat in the home-indicator strip. The
+         nav's own inset covers the lifted case either way, so this
+         costs nothing where it was already right. px-3 is in the style
+         for the same reason main's px-4 is: the inset must add. */
+      style={{
+        paddingLeft: "calc(0.75rem + env(safe-area-inset-left, 0px))",
+        paddingRight: "calc(0.75rem + env(safe-area-inset-right, 0px))",
+        paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + ${liftedForNav ? "4.25rem" : "0.75rem"})`,
+      }}
     >
       <div className="pointer-events-auto flex w-full max-w-md items-center gap-2 rounded-xl border border-stone-200 bg-surface/95 px-3 py-2 shadow-lg backdrop-blur">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onOpen}>

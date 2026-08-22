@@ -203,6 +203,33 @@ async function run() {
       assert.ok(html.includes("<body"), `${shell}/index.html lost its body`);
       assert.ok(html.includes("app.js"), `${shell}/index.html no longer loads the app`);
     }
+
+    /* THE tools/ SPLIT, asserted in both directions.
+
+       measure-audio.html asks for the microphone, and a public copy of
+       it on the app's own origin undercuts the nothing-leaves-the-device
+       positioning for no benefit. But it only answers anything from
+       INSIDE WKWebView, so it cannot just be deleted.
+
+       So the rule is structural rather than a filename exclusion list:
+       public/ is what ships to the web, tools/ is what only the
+       packaged shells get, and prepare-native copies the second in.
+       Both halves are checked, because either one alone is satisfiable
+       by deleting the file. */
+    const tools = fs.readdirSync(path.join(rootDir, "tools"));
+    assert.ok(tools.length > 0, "tools/ is empty — if the diagnostics were removed, remove this guard too");
+    for (const name of tools) {
+      assert.ok(
+        !fs.existsSync(path.join(rootDir, "dist-web", name)),
+        `${name} reached the WEB build — tools/ is for the packaged shells only`
+      );
+      for (const shell of ["desktop/www", "mobile/www"]) {
+        assert.ok(
+          fs.existsSync(path.join(rootDir, shell, name)),
+          `${name} did not reach ${shell} — it cannot answer anything outside the shell`
+        );
+      }
+    }
   });
 
   await test("index.html keeps the markers prepare-native strips between", () => {

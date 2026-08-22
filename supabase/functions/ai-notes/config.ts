@@ -18,7 +18,21 @@ export const PROVIDER_API_KEY_ENV = {
   groq: "GROQ_API_KEY",
 };
 
-export const MONTHLY_MINUTES_LIMIT = 300;
+/* THE ALLOWANCE IS ONE POOL NOW, and it lives in _shared/credits.ts
+   because it is no longer a property of the audio feature: a credit is
+   a minute of recorded lecture, and every text action is priced in the
+   same currency. Re-exported here so this file still answers "what does
+   a month hold" for the code that asks it.
+
+   ai-notes keeps its own `tier === "ai"` gate, so a free account never
+   reaches the recording path whatever its credit balance says. The
+   lifetime trial that changes that is the next piece of work. */
+export {
+  MONTHLY_CREDITS_LIMIT,
+  FREE_CREDITS_LIMIT,
+  creditsForTier,
+  USD_PER_CREDIT,
+} from "../_shared/credits.ts";
 
 /* ---------- what the providers charge, and how much they are asked for ----
 
@@ -40,48 +54,25 @@ export const MONTHLY_MINUTES_LIMIT = 300;
    has been: it is now measured (see below) rather than assumed, which is
    what let the floor be re-derived instead of guessed at. Everything
    else here is a published price. */
-export const USD_PER_TRANSCRIBED_MINUTE = 0.04 / 60; // Groq whisper-large-v3-turbo, ~$0.04/hour
-export const USD_PER_1M_SUMMARY_INPUT = 0.15; // gpt-4o-mini
-export const USD_PER_1M_SUMMARY_OUTPUT = 0.6; // gpt-4o-mini
+/* THE RATES AND THE MEASURED SUMMARY FIGURES MOVED TO
+   _shared/credits.ts, where the currency is defined, because ai-text
+   needs exactly the same numbers to price a text action and a browser
+   bundle is not the only thing that can end up with two copies. Two
+   Deno functions in one repository sharing a directory is the case
+   with no excuse.
 
-/* A SHORT recording's summary, which is what the floor exists to cover:
-   a one-minute clip and a fifty-minute lecture cost nearly the same to
-   summarise, so the floor is priced against the short one.
+   Re-exported rather than restated: same bindings, one definition, and
+   every existing importer keeps working. */
+export {
+  USD_PER_TRANSCRIBED_MINUTE,
+  USD_PER_1M_INPUT as USD_PER_1M_SUMMARY_INPUT,
+  USD_PER_1M_OUTPUT as USD_PER_1M_SUMMARY_OUTPUT,
+  TYPICAL_SUMMARY_OUTPUT_TOKENS,
+  TYPICAL_SUMMARY_INPUT_TOKENS,
+  USD_PER_SUMMARY_REQUEST,
+} from "../_shared/credits.ts";
 
-   MEASURED rather than guessed. scripts/measure-summary-depth.mjs on a
-   real 4,772-character recording with a translation, 15 August 2026:
-
-     plain prompt    475 output tokens
-     depth prompt  1,203 output tokens
-
-   THE OLD FIGURE HERE WAS 2,800 AND IT WAS A GUESS -- 5.9x the
-   measurement. That matters more than the depth change itself, because
-   both of the increases this file previously carried were arithmetic on
-   it: a floor of 4 minutes and a ceiling of 12,000 tokens, neither of
-   which the real numbers ask for. A constant nobody had measured was
-   quietly setting the price of the product. */
-export const TYPICAL_SUMMARY_OUTPUT_TOKENS = 1203;
-export const TYPICAL_SUMMARY_INPUT_TOKENS = 1600;
-
-/* THE ONE FIGURE STILL ESTIMATED, and why it cannot change the answer.
-   The measurement script did not report the API's own prompt_tokens, so
-   this is derived from the sample's character count at ~4 chars/token
-   (4,772-char transcript plus the 1,636-char prompt). It is now printed
-   by the script and should be replaced with the reported value on the
-   next run.
-
-   It is stated plainly rather than flagged, because it cannot flip the
-   decision: input is a quarter the price of output per token, so it is
-   ~25% of the summary cost, and the floor it implies (1.44 minutes) has
-   more than 2x headroom under the 3 that ships. Doubling this constant
-   outright still lands under 3. The flag guards constants that DECIDE
-   something; this one does not reach far enough to.
-
-   NOTE FOR WHOEVER EDITS THIS FILE: the word the deploy greps for is a
-   MACHINE MARKER, not vocabulary. Writing it in a sentence -- even to
-   say something is not it -- blocks the function deploy. That happened
-   while writing this very comment. Say "unverified" or "estimated" in
-   prose and keep the marker for the thing it marks.
+import { USD_PER_CREDIT as CREDIT, USD_PER_SUMMARY_REQUEST as SUMMARY_REQ } from "../_shared/credits.ts";
 
 /* ---------- the minimum a recording can cost ----------
 
@@ -90,54 +81,59 @@ export const TYPICAL_SUMMARY_INPUT_TOKENS = 1600;
    by the note schema (overview, key points, 8-15 terms, assessable, open
    questions), not by how long the recording was. A one-minute clip
    produces very nearly the same summary cost as a fifty-minute lecture.
-   So "300 minutes" priced as 300 minutes of transcription is wrong by
+   So an allowance priced purely as minutes of transcription is wrong by
    roughly the number of recordings, not the number of minutes.
 
-   The arithmetic is COMPUTED from the constants above rather than
-   restated here. At the measured values:
+   At the measured values in _shared/credits.ts:
 
-     transcription                                   $0.000667 / minute
+     one credit (a minute of recorded lecture)       ~ $0.000686
      summarising, typical  1,203 out + 1,600 in      ~ $0.00096
      summarising, ceiling  8,000 out (SUMMARY_MAX_TOKENS) ~ $0.0050
 
-   $0.00096 / $0.000667 = 1.44 minutes of transcription buys what one
-   typical summary costs, so the floor needs to be 2.
+   One typical summary costs about 1.4 credits, so the floor needs to
+   be 2.
 
-   IT STAYS AT 3, UNCHANGED BY THE DEPTH WORK. Three billed minutes buy
-   $0.0020 against a $0.00096 summary -- 2.08x cover. Even a short
-   LECTURE clip running twice as dense as the measured sample needs only
-   2.53 minutes. The deeper prompt costs more per request and still does
-   not reach the floor that was already there.
+   IT STAYS AT 3, and the currency collapse did not move it. Three
+   credits buy about $0.0021 against a $0.00096 summary — a bit over 2x
+   cover. Even a short LECTURE clip running twice as dense as the
+   measured sample stays under it.
 
-   The proposal to raise it to 4 came from the 2,800-token guess above.
-   Re-derived from the measurement, there is no billing change to make.
+   The proposal to raise it to 4 came from a 2,800-token guess at the
+   summariser's output that turned out to be 5.9x reality. Re-derived
+   from the measurement there was no billing change to make, and there
+   still is not.
 
    What it does to the pathological month (as many one-minute clips as
    the allowance permits) against a real timetable:
 
                                  transcription  summarising   total
      no floor, 300 clips            $0.20         $0.69       $0.89
-     floor of 4, 75 clips           $0.050        $0.173      $0.223
+     floor of 3, 100 clips          $0.067        $0.096      $0.163
      a real timetable
      (6 x 50-minute lectures)       $0.20         $0.014      $0.214
 
-   4.2x over the intended cost becomes 1.04x. Against the summariser's
-   CEILING rather than a typical response the residual is larger, and
-   that is left deliberately: covering it needs a floor around 11
-   minutes, which would charge a student recording a ten-minute tutorial
-   segment for more than they used. The ceiling is also the case that
-   FAILS rather than returning notes (see openai.ts), so it is not a
-   mode anyone can usefully sit in.
+   Against the summariser's CEILING rather than a typical response the
+   residual is larger, and that is left deliberately: covering it needs
+   a floor around 11, which would charge a student recording a
+   ten-minute tutorial segment for more than they used. The ceiling is
+   also the case that FAILS rather than returning notes (see openai.ts),
+   so it is not a mode anyone can usefully sit in.
 
    Every figure above is computed by scripts/test-ai-notes.mjs from the
    constants, so this table is a description of the arithmetic and not
-   the arithmetic itself. */
-export const MINIMUM_BILLED_MINUTES = 3;
+   the arithmetic itself.
 
-/* What a RE-SUMMARISE costs the student, in the same minutes everything
-   else is billed in.
+   NOTE FOR WHOEVER EDITS THIS FILE: the word the deploy greps for is a
+   MACHINE MARKER, not vocabulary. Writing it in a sentence -- even to
+   say something is not it -- blocks the function deploy. That happened
+   once, while writing a comment explaining the marker. Say "unverified"
+   or "estimated" in prose and keep the marker for the thing it marks. */
+export const MINIMUM_BILLED_CREDITS = 3;
 
-   The student has already paid for the transcription — those minutes
+/* What a RE-SUMMARISE costs, in the one currency everything is billed
+   in now.
+
+   The student has already paid for the transcription — those credits
    were spent on the transcription provider and billed at the time, and
    the retry does not repeat them: no audio, no transcription call, no
    new provider minutes. What a retry really spends is one summariser
@@ -145,16 +141,19 @@ export const MINIMUM_BILLED_MINUTES = 3;
 
    DERIVED, not chosen. A typed number here would be the price of the
    product set by somebody's guess, which is precisely the mistake
-   TYPICAL_SUMMARY_OUTPUT_TOKENS made at 5.9x reality. Rounded UP to a
-   whole minute because minutes are the unit a student sees. */
-export const USD_PER_SUMMARY_REQUEST =
-  (TYPICAL_SUMMARY_INPUT_TOKENS / 1_000_000) * USD_PER_1M_SUMMARY_INPUT +
-  (TYPICAL_SUMMARY_OUTPUT_TOKENS / 1_000_000) * USD_PER_1M_SUMMARY_OUTPUT;
+   TYPICAL_SUMMARY_OUTPUT_TOKENS made at 5.9x reality. Rounded UP,
+   unlike the text weights, because this is the one action a student
+   takes when they have already been charged once for the same lecture
+   and rounding that one down is the wrong direction to be generous in.
 
-export const RESUMMARISE_BILLED_MINUTES = Math.max(
-  1,
-  Math.ceil(USD_PER_SUMMARY_REQUEST / USD_PER_TRANSCRIBED_MINUTE)
-);
+   IT IS DERIVED FOR A TYPICAL SHORT SUMMARY, and that is worth knowing
+   before anyone reuses the figure: a three-hour transcript is 21x that
+   input, so a retry of one really costs about 10 credits rather than 2.
+   The answer to that was the failure precondition in index.ts — one
+   retry per failure, and only after a failure — not a bigger number
+   that would overcharge every ordinary retry. */
+export const RESUMMARISE_BILLED_CREDITS = Math.max(1, Math.ceil(SUMMARY_REQ / CREDIT));
+
 export const MAX_REQUEST_SECONDS = 3 * 3600;
 export const PROCESSING_STALE_MINUTES = 10;
 
@@ -220,7 +219,7 @@ export const MAX_COURSE_LENGTH = 80;
 
    gpt-4o-mini defaults to its full 16,384-token output, which is the
    quiet cost risk: transcription is ~$0.04/hour, but 300 short recordings
-   in a month (the allowance is 300 MINUTES, so that is reachable) at 16k
+   in a month (the allowance is 450 CREDITS, so that is reachable) at 16k
    output tokens each is several dollars of summarising against twenty
    cents of transcription -- the summariser, not Whisper, would set the
    price of the product.
@@ -251,5 +250,20 @@ export const SUMMARY_MAX_TOKENS = 8000;
    describe without asking the server. */
 export const RESUMMARISE_EXPIRED_MESSAGE =
   "We no longer have the transcript for this lecture, so it can't be summarised again. Nothing has been charged for this attempt.";
+/* The retry's third ending, and it is a REFUSAL rather than a failure.
+
+   Reachable two ways. A stale screen: the student has the failure
+   screen open, the retry succeeded on another device, they tap again.
+   And a client that asks for a retry on a lecture that never failed,
+   which is what the precondition in index.ts exists to refuse — see the
+   long note there for what it used to cost.
+
+   It says the summary is there, because that is the good news, and it
+   says nothing was charged, because a refusal never charges and a
+   student who has already paid for this lecture once is owed the
+   arithmetic every time it is mentioned. */
+export const RESUMMARISE_NOT_FAILED_MESSAGE =
+  "This lecture already has its summary, so there's nothing to write again. Nothing has been charged.";
+
 export const RESUMMARISE_FAILED_MESSAGE =
   "We couldn't write the summary this time. Nothing has been charged for this attempt, and your transcript is still here — you can try again.";

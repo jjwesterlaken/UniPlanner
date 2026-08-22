@@ -75,6 +75,20 @@ const cfgBundle = await build({
 });
 fs.writeFileSync(path.join(tmpDir, "cfg.mjs"), cfgBundle.outputFiles[0].text);
 
+/* The currency itself, bundled separately so a test can re-run the
+   derivation the config performs rather than trusting its output. */
+const creditsBundle = await build({
+  entryPoints: [path.join(rootDir, "supabase/functions/_shared/credits.ts")],
+  bundle: true,
+  format: "esm",
+  platform: "neutral",
+  write: false,
+});
+fs.writeFileSync(path.join(tmpDir, "credits.mjs"), creditsBundle.outputFiles[0].text);
+
+const cfg = await import(pathToUrl(path.join(tmpDir, "cfg.mjs")));
+const credits = await import(pathToUrl(path.join(tmpDir, "credits.mjs")));
+
 const fnPath = path.join(tmpDir, "fn.mjs");
 fs.writeFileSync(fnPath, bundle.outputFiles[0].text);
 
@@ -94,8 +108,9 @@ const USER = "11111111-1111-4111-8111-111111111111";
  * A fake database that records the order of everything, so the ordering
  * property can be asserted rather than read.
  */
-function makeAdmin({ tier = "ai", unitsUsed = 0, usageError = null, billError = null, trace } = {}) {
+function makeAdmin({ tier = "ai", creditsUsed = 0, usageError = null, billError = null, trace } = {}) {
   const seen = [];
+  let banked = creditsUsed;
   const table = (name) => {
     const filters = [];
     const chain = {
@@ -108,10 +123,16 @@ function makeAdmin({ tier = "ai", unitsUsed = 0, usageError = null, billError = 
       maybeSingle: async () => {
         seen.push({ op: "select", table: name, filters: filters.map(([c]) => c) });
         if (trace) trace.push(`db:select:${name}`);
-        if (name === "profiles") return { data: tier ? { tier } : null, error: null };
+        if (name === "profiles") {
+          /* `creditsUsed` means "this much spent", whichever counter
+             this tier actually uses — so the fixture reads the same at
+             every call site and the SHAPE is what varies, which is the
+             thing under test. */
+          return { data: tier ? { tier, trial_credits_used: banked } : null, error: null };
+        }
         if (name === "ai_usage") {
           if (usageError) return { data: null, error: usageError };
-          return { data: { text_units_used: unitsUsed }, error: null };
+          return { data: { credits_used: creditsUsed }, error: null };
         }
         return { data: null, error: null };
       },
@@ -123,9 +144,27 @@ function makeAdmin({ tier = "ai", unitsUsed = 0, usageError = null, billError = 
     };
     return chain;
   };
+  /* Billing is an RPC since migration 0011: the `+` happens under the
+     row lock ON CONFLICT DO UPDATE takes, rather than in this
+     function's memory where two overlapping requests both read N and
+     both write N + cost. The fake ADDS, because the SQL does — a fake
+     that assigned would let a regression to the read-modify-write pass
+     unnoticed, which is the "a fake that returns nothing makes
+     everything downstream agree" trap in a new costume. */
+  const rpc = async (fn, args) => {
+    seen.push({ op: "rpc", fn, payload: args });
+    if (trace) trace.push(`db:rpc:${fn}`);
+    if (billError) return { data: null, error: billError };
+    banked += Number(args.p_credits || 0);
+    return {
+      data: [fn === "add_trial_credits" ? { new_trial_credits: banked } : { new_credits: banked }],
+      error: null,
+    };
+  };
   return {
     seen,
     from: table,
+    rpc,
     auth: { getUser: async () => ({ data: { user: { id: USER } }, error: null }) },
   };
 }
@@ -237,34 +276,90 @@ async function main() {
        TEXT_TIERS without a smaller limit hands free accounts 150 units
        -- generous-looking right up to the invoice -- and each constant
        checked in isolation would pass throughout. */
-    const cfg = await import(pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
+    /* Every tier is allowed in now, so what this checks is that being
+       allowed in never means inheriting somebody else's number, and
+       that the TRIAL tiers are trials — a smaller figure on a
+       once-ever counter, not a smaller monthly one. */
     for (const tier of cfg.TEXT_TIERS) {
-      const limit = cfg.limitForTier(tier);
-      assert.ok(limit > 0, `${tier} is allowed in with no allowance at all`);
-      if (tier !== "ai") {
+      const { credits, perMonth } = cfg.allowanceForTier(tier);
+      assert.ok(credits > 0, `${tier} is allowed in with no allowance at all`);
+      assert.equal(
+        perMonth,
+        !cfg.isTrialTier(tier),
+        `"${tier}" has the wrong SHAPE of allowance — a trial that renews monthly is not a trial`
+      );
+      if (cfg.isTrialTier(tier)) {
         assert.ok(
-          limit < cfg.MONTHLY_TEXT_UNITS_LIMIT,
-          `"${tier}" is in TEXT_TIERS but limitForTier gives it ${limit}, the same as the paid tier. ` +
+          credits < cfg.allowanceForTier("ai").credits,
+          `"${tier}" is a trial tier but gets ${credits}, which is not less than the cheapest paid month. ` +
             "The gate and the limit are two halves of one decision."
         );
       }
     }
-    assert.equal(cfg.limitForTier("free"), 10, "the free allowance is a decided number, not a default");
+    assert.equal(cfg.creditsForTier("free"), cfg.TRIAL_CREDITS, "the free allowance is a decided number, not a default");
+    assert.equal(cfg.creditsForTier("plus"), cfg.TRIAL_CREDITS, "Plus buys sync, not AI — it shares the trial");
+    assert.ok(
+      cfg.allowanceForTier("ai_max").credits > cfg.allowanceForTier("ai").credits,
+      "Max is not more than Study AI, which is the only thing it is"
+    );
+    /* An unknown tier gets the TRIAL, not a paid month. A typo in the
+       dashboard costs sixty credits; the other direction costs three
+       thousand a month per mistyped account. */
+    assert.equal(cfg.creditsForTier("stduy-ai"), cfg.TRIAL_CREDITS);
+    assert.equal(cfg.allowanceForTier("stduy-ai").perMonth, false);
   });
 
-  await test("a free account gets the features, at the free allowance", async () => {
-    const admin = makeAdmin({ tier: "free", unitsUsed: 0 });
+  await test("a free account gets the features, at the TRIAL allowance", async () => {
+    const admin = makeAdmin({ tier: "free", creditsUsed: 0 });
     const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
     assert.equal(res.status, 200);
-    // 1 of 10, not 1 of 150 — the fraction is what the app shows.
-    assert.equal((await res.json()).allowanceUsed, 1 / 10);
+    // 1 of 60, not 1 of 900 — the fraction is what the app shows.
+    assert.equal((await res.json()).allowanceUsed, cfg.TASK_CREDITS.explain / cfg.TRIAL_CREDITS);
   });
 
-  await test("a free account is stopped at the free limit, not the paid one", async () => {
+  await test("a trial tier bills the LIFETIME counter, never the monthly one", async () => {
+    /* The bug this exists to catch is silent and expensive: writing a
+       trial spend into ai_usage leaves trial_credits_used at zero, so
+       the once-ever allowance quietly refills on the first of every
+       month and nothing anywhere looks wrong. */
+    const admin = makeAdmin({ tier: "free", creditsUsed: 0 });
+    await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
+    const rpcs = admin.seen.filter((x) => x.op === "rpc");
+    assert.equal(rpcs.length, 1);
+    assert.equal(rpcs[0].fn, "add_trial_credits", "a trial spend went to the monthly counter");
+    assert.equal(rpcs[0].payload.p_user_id, USER);
+    assert.ok(!("p_month" in rpcs[0].payload), "a lifetime counter must not be keyed by month");
+  });
+
+  await test("a paid tier bills the MONTHLY counter, and a fresh month starts at nothing", async () => {
+    /* NO ROLLOVER, asserted rather than trusted to the (user_id, month)
+       key. It is true by construction today — a new month simply has no
+       row — and the way it stops being true is somebody adding "carry
+       over what you didn't use", which is about three lines and would
+       convert a semester's prepayment into one month's spending power. */
+    const admin = makeAdmin({ tier: "ai", creditsUsed: 0 });
+    await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
+    const bill = admin.seen.find((x) => x.op === "rpc");
+    assert.equal(bill.fn, "add_ai_credits");
+    assert.equal(bill.payload.p_month, "2026-08", "the monthly counter must be keyed by the month it is spent in");
+
+    const nextMonth = makeAdmin({ tier: "ai", creditsUsed: 0 });
+    const res = await run(
+      { task: "explain", topic: "t", text: "hi" },
+      { supabaseAdmin: nextMonth, summarizer: okSummarizer(EXPLAIN_OK) }
+    );
+    assert.equal(
+      (await res.json()).allowanceUsed,
+      cfg.TASK_CREDITS.explain / cfg.allowanceForTier("ai").credits,
+      "a month with no row must start at nothing — neither carrying a balance nor inheriting a debt"
+    );
+  });
+
+  await test("a free account is stopped at the trial limit, not the paid one", async () => {
     const summarizer = okSummarizer(EXPLAIN_OK);
     const res = await run(
       { task: "explain", topic: "t", text: "hi" },
-      { supabaseAdmin: makeAdmin({ tier: "free", unitsUsed: 10 }), summarizer }
+      { supabaseAdmin: makeAdmin({ tier: "free", creditsUsed: cfg.TRIAL_CREDITS }), summarizer }
     );
     assert.equal((await res.json()).code, "usage_exceeded");
     assert.equal(summarizer.calls, 0);
@@ -292,7 +387,7 @@ async function main() {
   /* ---------- THE ORDERING ---------- */
 
   await test("the allowance is READ before the provider is CALLED", async () => {
-    /* The load-bearing one. Migration 0006 adds text_units_used; if the
+    /* The load-bearing one. Migration 0006 adds credits_used; if the
        provider ran first, a missing column would mean money spent and
        then an error shown for work that was really done. */
     const trace = [];
@@ -307,14 +402,14 @@ async function main() {
     assert.ok(
       readAt < calledAt,
       `the provider was called before the allowance was read (${trace.join(" -> ")}). ` +
-        "That ordering is what makes a missing text_units_used column fail free."
+        "That ordering is what makes a missing credits_used column fail free."
     );
   });
 
-  await test("a missing text_units_used column fails having spent nothing", async () => {
+  await test("a missing credits_used column fails having spent nothing", async () => {
     const summarizer = okSummarizer(EXPLAIN_OK);
     const admin = makeAdmin({
-      usageError: { code: "42703", message: 'column ai_usage.text_units_used does not exist' },
+      usageError: { code: "42703", message: 'column ai_usage.credits_used does not exist' },
     });
     const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer });
     assert.equal(res.status, 500);
@@ -327,7 +422,7 @@ async function main() {
     const summarizer = okSummarizer(EXPLAIN_OK);
     const res = await run(
       { task: "explain", topic: "t", text: "hi" },
-      { supabaseAdmin: makeAdmin({ unitsUsed: 150 }), summarizer }
+      { supabaseAdmin: makeAdmin({ creditsUsed: cfg.MONTHLY_CREDITS_LIMIT }), summarizer }
     );
     assert.equal(res.status, 403);
     assert.equal((await res.json()).code, "usage_exceeded");
@@ -335,13 +430,19 @@ async function main() {
   });
 
   await test("a task is refused when its own weight won't fit, not merely when the limit is reached", async () => {
-    // summarise costs 3. At 148 used there is room for explain but not
-    // for this, and checking the limit rather than the cost would let it
-    // through and overspend.
+    /* Left with room for an explain but not for a summarise. Checking
+       the limit rather than the COST would let this through and
+       overspend. Derived from the real weights so a re-priced task
+       re-runs the arithmetic instead of leaving a stale literal. */
     const summarizer = okSummarizer({ overview: "o" });
+    const nearlyFull = cfg.MONTHLY_CREDITS_LIMIT - cfg.TASK_CREDITS.summarise + 1;
+    assert.ok(
+      nearlyFull + cfg.TASK_CREDITS.explain <= cfg.MONTHLY_CREDITS_LIMIT,
+      "the fixture no longer leaves room for the cheaper task, so this proves nothing"
+    );
     const res = await run(
       { task: "summarise", text: "a note" },
-      { supabaseAdmin: makeAdmin({ unitsUsed: 148 }), summarizer }
+      { supabaseAdmin: makeAdmin({ creditsUsed: nearlyFull }), summarizer }
     );
     assert.equal((await res.json()).code, "usage_exceeded");
     assert.equal(summarizer.calls, 0);
@@ -352,30 +453,71 @@ async function main() {
   await test("billing is scoped to the caller's own row, on both keys", async () => {
     const admin = makeAdmin();
     await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: okSummarizer(EXPLAIN_OK) });
-    const bill = admin.seen.find((s) => s.op === "upsert" && s.table === "ai_usage");
+    const bill = admin.seen.find((s) => s.op === "rpc" && s.fn === "add_ai_credits");
     assert.ok(bill, "nothing was billed");
-    assert.equal(bill.payload.user_id, USER, "the service-role client bypasses RLS — this scope is the only check");
-    assert.equal(bill.payload.month, "2026-08");
-    assert.equal(bill.payload.text_units_used, 1, "explain costs 1");
+    assert.equal(bill.payload.p_user_id, USER, "the service-role client bypasses RLS — this scope is the only check");
+    assert.equal(bill.payload.p_month, "2026-08");
+    assert.equal(bill.payload.p_credits, 1, "explain costs 1");
+    assert.equal(typeof bill.payload.p_credits, "number", "a text task must bill a number of credits");
   });
 
-  await test("each task bills its own weight", async () => {
-    for (const [task, body, cost, out] of [
-      ["explain", { topic: "t", text: "hi" }, 1, EXPLAIN_OK],
-      ["weakspots", { topics: [{ term: "a", lapses: 3 }] }, 1, { topics: [{ term: "a", why: "w", try: "t" }] }],
-      ["practice", { cards: [{ term: "a", content: "b" }] }, 2, { questions: [{ q: "?", a: "!" }] }],
-      ["summarise", { text: "a note" }, 3, { overview: "o" }],
-      /* 1, not 3. A merge takes four short summaries where summarise
-         takes 20,000 characters, so pricing it as a summarise would
-         overcharge for a step the student only needs because their
-         reading was long. */
-      ["merge", { parts: [{ overview: "a" }, { overview: "b" }] }, 1, { overview: "o" }],
+  await test("each task bills its own weight, and the weight is the derived one", async () => {
+    /* THE COST COMES FROM cfg, NOT FROM A TABLE HERE. It used to be a
+       literal beside each task, which is a restatement of the thing
+       being tested: the day a weight was re-derived, this test would
+       have gone red for being right. Now it asserts the BILL matches the
+       DERIVATION, which is the property that matters, and a separate
+       assertion keeps the derivation itself honest. */
+    for (const [task, body, out] of [
+      ["explain", { topic: "t", text: "hi" }, EXPLAIN_OK],
+      ["weakspots", { topics: [{ term: "a", lapses: 3 }] }, { topics: [{ term: "a", why: "w", try: "t" }] }],
+      ["practice", { cards: [{ term: "a", content: "b" }] }, { questions: [{ q: "?", a: "!" }] }],
+      ["summarise", { text: "a note" }, { overview: "o" }],
+      ["merge", { parts: [{ overview: "a" }, { overview: "b" }] }, { overview: "o" }],
     ]) {
       const admin = makeAdmin();
       await run({ task, ...body }, { supabaseAdmin: admin, summarizer: okSummarizer(out) });
-      const bill = admin.seen.find((s) => s.op === "upsert");
-      assert.equal(bill.payload.text_units_used, cost, `${task} billed ${bill.payload.text_units_used}, expected ${cost}`);
+      const bill = admin.seen.find((s) => s.op === "rpc");
+      const cost = cfg.TASK_CREDITS[task];
+      assert.ok(cost > 0, `${task} is priced at nothing`);
+      assert.equal(bill.payload.p_credits, cost, `${task} billed ${bill.payload.p_credits}, expected ${cost}`);
     }
+  });
+
+  await test("a task's weight really is round(its own cost / a credit), not a number somebody typed", async () => {
+    /* The other half of the test above, and the one that would catch a
+       literal creeping back in. `usdForTask` is the endpoint's own
+       arithmetic; this re-runs it and checks the published table agrees.
+       A raised MAX_TOKENS now re-prices its task, which is exactly what
+       did not happen when TYPICAL_SUMMARY_OUTPUT_TOKENS sat at 5.9x
+       reality while setting the price of the product. */
+    for (const task of cfg.TASKS) {
+      const expected = Math.max(1, Math.round(cfg.usdForTask(task) / credits.USD_PER_CREDIT));
+      assert.equal(cfg.TASK_CREDITS[task], expected, `${task} is priced at ${cfg.TASK_CREDITS[task]}, derived says ${expected}`);
+    }
+    /* And the ordering the derivation implies, stated so a silent
+       inversion is visible: nothing costs less than an explanation, and
+       a full-length summarise is the dearest of the five. */
+    assert.equal(Math.min(...cfg.TASKS.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.explain);
+    assert.equal(Math.max(...cfg.TASKS.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.summarise);
+  });
+
+  await test("THE PHOTO BATCH PRICE IS HELD, and says what unblocks it", async () => {
+    /* Not derived, and deliberately so. On the model we call today a
+       batch of four photographed pages costs about 34 credits — an A4
+       page is 36,835 input tokens at 2,833 base + 5,667 a tile — and on
+       the model COST-MODEL.md 12.7 recommends it costs about 6. Setting
+       either before that decision lands is a visible lie or an
+       invisible subsidy.
+
+       This test is the reason lifting the hold has to be deliberate:
+       change PHOTO_BATCH_CREDITS and it goes red, which sends whoever
+       did it to the two gates. */
+    assert.equal(
+      cfg.PHOTO_BATCH_CREDITS,
+      cfg.TASK_CREDITS.summarise,
+      "the photo batch price moved — if that is the model change, update this test and the two mirrors in the same commit"
+    );
   });
 
   await test("a failed provider call bills nothing, because nothing was produced", async () => {
@@ -405,7 +547,7 @@ async function main() {
       { supabaseAdmin: admin, summarizer: { complete: async () => "not json at all" } }
     );
     assert.equal(res.status, 502);
-    assert.equal(admin.seen.filter((s) => s.op === "upsert").length, 1, "spent tokens went unbilled");
+    assert.equal(admin.seen.filter((s) => s.op === "rpc").length, 1, "spent tokens went unbilled");
   });
 
   await test("a charged failure and a free failure are DIFFERENT codes", async () => {
@@ -451,8 +593,8 @@ async function main() {
     const sys = messages.find((m) => m.role === "system");
     assert.match(sys.content, /NOT CLEARLY LEGIBLE, DO NOT GUESS/, "the legibility refusal left the prompt");
     // Billed as ONE summarise -- the same weight as one text chunk.
-    const bill = admin.seen.find((x) => x.op === "upsert");
-    assert.equal(bill.payload.text_units_used, 3, "a photo batch is not priced as one summarise");
+    const bill = admin.seen.find((x) => x.op === "rpc");
+    assert.equal(bill.payload.p_credits, 3, "a photo batch is not priced as one summarise");
   });
 
   await test("mixed media and oversize batches are refused before anything is spent", async () => {
@@ -486,7 +628,7 @@ async function main() {
     const body = await res.json();
     assert.equal(body.code, "pages_unreadable");
     assert.deepEqual(body.pages, [1, 3], "the pages the student can act on never reached them");
-    assert.equal(admin.seen.filter((x) => x.op === "upsert").length, 1, "the refusal was not billed — billing follows spend");
+    assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 1, "the refusal was not billed — billing follows spend");
   });
 
   await test("ai-text has NO storage client, so photos cannot have a server-side home", async () => {
@@ -508,11 +650,10 @@ async function main() {
 
        Derived from TASKS rather than listing the tasks here, so the
        fifth one was covered the moment it was added. */
-    const cfg = await import(pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
     for (const task of cfg.TASKS) {
       assert.ok(cfg.MAX_TOKENS[task] > 0, `${task} has no output ceiling`);
       assert.ok(cfg.MAX_INPUT_CHARS[task] > 0, `${task} has no input cap`);
-      assert.ok(cfg.TASK_UNITS[task] > 0, `${task} bills nothing`);
+      assert.ok(cfg.TASK_CREDITS[task] > 0, `${task} bills nothing`);
     }
   });
 
@@ -521,7 +662,7 @@ async function main() {
        the new task specifically: the sequence is a property of the
        handler, but a task that took a different path through it would
        not be covered by an assertion about `explain`. */
-    const admin = makeAdmin({ usageError: { code: "42703", message: "column ai_usage.text_units_used does not exist" } });
+    const admin = makeAdmin({ usageError: { code: "42703", message: "column ai_usage.credits_used does not exist" } });
     let called = false;
     const res = await run(
       { task: "merge", parts: [{ overview: "a" }, { overview: "b" }] },
@@ -591,11 +732,19 @@ async function main() {
   });
 
   await test("the response carries a fraction, never a unit count", async () => {
-    const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: makeAdmin({ unitsUsed: 29 }), summarizer: okSummarizer(EXPLAIN_OK) });
+    const before = 29;
+    const res = await run(
+      { task: "explain", topic: "t", text: "hi" },
+      { supabaseAdmin: makeAdmin({ creditsUsed: before }), summarizer: okSummarizer(EXPLAIN_OK) }
+    );
     const json = await res.json();
-    assert.equal(json.allowanceUsed, 30 / 150);
-    assert.equal(json.units, undefined);
-    assert.equal(json.unitsUsed, undefined);
+    assert.equal(json.allowanceUsed, (before + cfg.TASK_CREDITS.explain) / cfg.MONTHLY_CREDITS_LIMIT);
+    /* A COUNT still never crosses the wire, even though credits are
+       sayable now. The fraction is what survives a tier whose limit this
+       endpoint does not know has just changed; the count reaches the
+       student through the client-side pre-flight estimate. */
+    assert.equal(json.credits, undefined);
+    assert.equal(json.creditsUsed, undefined);
   });
 
   /* ---------- prompts ---------- */
@@ -660,45 +809,146 @@ async function main() {
        becomes the guard. A comment would not have caught this. */
     const server = await import(pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
     const client = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
-    assert.deepEqual(client.TASK_UNITS, server.TASK_UNITS);
+    assert.deepEqual(client.TASK_CREDITS, server.TASK_CREDITS);
     assert.deepEqual(client.TEXT_TIERS, server.TEXT_TIERS);
-    assert.equal(client.MONTHLY_TEXT_UNITS_LIMIT, server.MONTHLY_TEXT_UNITS_LIMIT);
-    assert.equal(client.FREE_TEXT_UNITS_LIMIT, server.FREE_TEXT_UNITS_LIMIT);
+    assert.equal(client.MONTHLY_CREDITS_LIMIT, server.MONTHLY_CREDITS_LIMIT);
+    assert.equal(client.FREE_CREDITS_LIMIT, server.FREE_CREDITS_LIMIT);
     for (const tier of server.TEXT_TIERS) {
-      assert.equal(client.limitForTier(tier), server.limitForTier(tier), `limitForTier disagrees for "${tier}"`);
+      assert.equal(client.creditsForTier(tier), server.creditsForTier(tier), `creditsForTier disagrees for "${tier}"`);
     }
   });
 
   await test("a student learns an action is unaffordable before doing the work", async () => {
     const { allowanceState, canAfford, isLastAction } = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
 
-    // A free account with 9 of 10 used can still explain (1) but not
-    // summarise (3). Knowing that BEFORE the text box is the point.
-    const nearlyOut = allowanceState({ tier: "free", unitsUsed: 9 });
+    /* Derived from the trial size rather than typed, so re-sizing the
+       trial re-runs the arithmetic instead of leaving a stale 9 here.
+       One credit left: an explanation (1) fits, a summarise (3) and a
+       practice set (2) do not. Knowing that BEFORE the text box is the
+       point. */
+    const { TRIAL_CREDITS, TASK_CREDITS } = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    const nearlyOut = allowanceState({ tier: "free", creditsUsed: TRIAL_CREDITS - TASK_CREDITS.explain });
     assert.equal(canAfford(nearlyOut, "explain"), true);
     assert.equal(canAfford(nearlyOut, "summarise"), false);
     assert.equal(canAfford(nearlyOut, "practice"), false);
 
     // "This is the last one" is specific, not a vague low-fuel light.
     assert.equal(isLastAction(nearlyOut, "explain"), true);
-    assert.equal(isLastAction(allowanceState({ tier: "free", unitsUsed: 0 }), "explain"), false);
+    assert.equal(isLastAction(allowanceState({ tier: "free", creditsUsed: 0 }), "explain"), false);
 
-    const spent = allowanceState({ tier: "free", unitsUsed: 10 });
+    const spent = allowanceState({ tier: "free", creditsUsed: TRIAL_CREDITS });
     assert.equal(spent.remaining, 0);
     assert.equal(canAfford(spent, "explain"), false);
-    assert.equal(spent.isFree, true, "the upgrade wording depends on knowing which tier is out");
+    assert.equal(spent.perMonth, false, "the upgrade wording depends on knowing which tier is out");
   });
 
-  await test("a free account at its limit is told what the plan adds, not only what it can't do", async () => {
+  await test("a trial account at its limit is told what the plan adds, not only what it can't do", async () => {
     const { describeExhausted } = await import(pathToUrl(path.join(rootDir, "src/aiTextCopy.js")));
-    const free = describeExhausted({ isFree: true });
-    assert.match(free.detail, /AI plan/i, "a free user out of allowance must learn what upgrading gives them");
+    const free = describeExhausted({ perMonth: false });
+    assert.match(free.detail, /AI plan/i, "a trial user out of allowance must learn what upgrading gives them");
     assert.ok(
       /lecture|record|more/i.test(free.detail),
       "saying only 'you have run out' is the version that sells nothing and helps nobody"
     );
-    const paid = describeExhausted({ isFree: false });
+    const paid = describeExhausted({ perMonth: true });
     assert.ok(!/AI plan/i.test(paid.detail), "a paying student must not be sold the plan they already have");
+  });
+
+  await test("NO TIER IS TOLD THE WRONG PERIOD — every allowance sentence, every tier", async () => {
+    /* THE BUG THIS EXISTS FOR, because it shipped: a trial tier's 60
+       credits are once ever, and every sentence in aiTextCopy.js said
+       "this month's" and "comes back at the start of next month". The
+       guard that was supposed to catch it greped helpText.js — a guard
+       scoped to a FILE rather than to a CLAIM, which the claim then
+       evaded by living somewhere else.
+
+       So this one is scoped to the claim: it runs EVERY sentence the
+       module can render, for EVERY tier the table knows about, and
+       checks the period against what allowanceForTier actually says.
+       It cannot be evaded by a sentence moving between functions, and
+       the completeness check below means it cannot be evaded by a new
+       function either. */
+    const copy = await import(pathToUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    const limits = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
+
+    /* Every export that can render an allowance sentence, mapped to a
+       call that renders ALL of it — every band, every section count. */
+    const RENDERERS = {
+      allowanceLine: (st) => [0, 0.3, 0.6, 0.8, 0.95, 1].map((fraction) => copy.allowanceLine({ ...st, fraction })),
+      describeAllowance: (st) => [0, 0.5, 1].map((fraction) => copy.describeAllowance({ ...st, fraction })),
+      lastActionWarning: (st) => [copy.lastActionWarning(st)],
+      describeExhausted: (st) => {
+        const c = copy.describeExhausted(st);
+        return [c.title, c.detail, c.action];
+      },
+      describeTextFailure: (st) =>
+        Object.keys(copy.AI_TEXT_FAILURES).flatMap((code) => {
+          const c = copy.describeTextFailure(code, st);
+          return [c.title, c.detail];
+        }),
+      READING_COPY: (st) =>
+        [0, 1, 3].flatMap((sectionsLeft) =>
+          [1, 4].flatMap((chunks) => {
+            const c = copy.READING_COPY.cantAfford({ chunks, sectionsLeft, perMonth: st.perMonth });
+            return [c.title, c.detail, c.action];
+          })
+        ),
+    };
+
+    /* THE COMPLETENESS HALF. Listing the renderers by hand would repeat
+       the original mistake one level down — the seventh function added
+       next month would be unchecked and nothing would say so. Every
+       export is either rendered above or excused BY NAME with a reason,
+       so a new one fails until somebody decides which it is. */
+    const NOT_ALLOWANCE_COPY = {
+      AI_TEXT_FAILURES: "the raw table; describeTextFailure renders every entry of it above",
+    };
+    for (const name of Object.keys(copy)) {
+      assert.ok(
+        RENDERERS[name] || NOT_ALLOWANCE_COPY[name],
+        `aiTextCopy.js exports "${name}" and this guard neither renders nor excuses it — ` +
+          "add it to RENDERERS, or to NOT_ALLOWANCE_COPY with a reason it cannot say a period"
+      );
+    }
+
+    const MONTHLY_WORDS = /\b(this|next|per|each|every|a)\s+month\b|\bmonthly\b/i;
+    for (const tier of limits.TIERS) {
+      const { perMonth } = limits.allowanceForTier(tier);
+      const state = limits.allowanceState({ tier, creditsUsed: 0 });
+      assert.equal(state.perMonth, perMonth, `allowanceState dropped the shape for "${tier}"`);
+
+      for (const [name, render] of Object.entries(RENDERERS)) {
+        for (const line of render(state).filter(Boolean)) {
+          if (perMonth) continue;
+          /* "a monthly allowance" is permitted in the ONE sentence whose
+             job is to deny it — "a one-off trial rather than a monthly
+             allowance". Matched as that whole phrase, not waved through
+             by a keyword, so any other monthly claim still fails. */
+          const denial = /one-off trial rather than a monthly allowance/i;
+          assert.ok(
+            !MONTHLY_WORDS.test(line.replace(denial, " ")),
+            `${tier} is a trial tier (once ever) and ${name} tells it: "${line}"`
+          );
+        }
+      }
+    }
+
+    /* The positive half, because absence is not a promise: a trial tier
+       must be told IN AS MANY WORDS that the credits do not come back.
+       Inferring it from two missing words is how somebody waits until
+       November for a reset that is not coming. */
+    for (const tier of limits.TRIAL_TIERS) {
+      const state = limits.allowanceState({ tier, creditsUsed: limits.TRIAL_CREDITS });
+      assert.match(
+        copy.describeExhausted(state).detail,
+        /don't reset|do not reset|one-off/i,
+        `${tier} runs out and is not told the credits do not come back`
+      );
+    }
+
+    // An unknown period promises nothing rather than guessing monthly.
+    const unknown = copy.describeTextFailure("usage_exceeded");
+    assert.ok(!MONTHLY_WORDS.test(`${unknown.title} ${unknown.detail}`), "an unknown tier is told its allowance is monthly");
   });
 
   await test("the endpoint URL is built from config, not a bundler-specific global", async () => {
@@ -766,8 +1016,16 @@ async function main() {
        the SOURCE: a convenience read of ai_notes added later would be
        invisible to every behavioural test here, and would reintroduce
        exactly the class of bug ai-notes shipped. */
-    const tables = [...src.matchAll(/\.from\(\s*"([^"]+)"/g)].map((m) => m[1]);
-    assert.ok(tables.length >= 2, `expected the profiles and ai_usage queries, found ${tables.length}`);
+    /* THE ALLOWANCE READ MOVED to _shared/allowance.ts when tiers
+       arrived, so the guard follows it: this property is about what the
+       ENDPOINT can reach, and a helper it calls is part of that reach.
+       Checking index.ts alone would have gone quietly green over a
+       shrinking surface, which is the same shape as a guard that
+       resolves an RPC to nothing. */
+    const shared = fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/allowance.ts"), "utf8");
+    const tables = [...`${src}\n${shared}`.matchAll(/\.from\(\s*"([^"]+)"/g)].map((m) => m[1]);
+    assert.ok(tables.includes("profiles"), "the tier lookup has gone");
+    assert.ok(tables.includes("ai_usage"), "the allowance read has gone");
     for (const t of tables) {
       assert.ok(
         ["profiles", "ai_usage"].includes(t),
@@ -778,11 +1036,31 @@ async function main() {
   });
 
   await test("every ai_usage statement is scoped to a user, by filter or by payload", async () => {
-    const statements = src.split(/;\s*\n/).filter((st) => st.includes('.from("ai_usage")') || st.includes('from("ai_usage")'));
-    assert.ok(statements.length >= 2, `expected the read and the write, found ${statements.length}`);
+    /* Both halves moved to _shared/allowance.ts when tiers arrived, so
+       the guard reads that file too. Since 0011 the WRITE is an RPC
+       rather than an upsert, and since 0014 there are TWO of them — a
+       monthly counter and a lifetime one — so a check that only looked
+       for `.from("X").upsert` would find nothing to inspect and pass
+       with an empty set. The count is asserted so losing a half goes
+       red rather than quiet. */
+    const sharedSrc = fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/allowance.ts"), "utf8");
+    const statements = `${src}\n${sharedSrc}`
+      .split(/;\s*\n/)
+      .filter((st) => st.includes('from("ai_usage")') || st.includes('rpc("add_ai_credits"') || st.includes('rpc("add_trial_credits"'));
+    /* Two, not three: the monthly and lifetime writes are the two arms
+       of one ternary, so they share a statement. That is the point of
+       the marker loop below — counting statements would have made this
+       assertion a fact about formatting. */
+    assert.ok(statements.length >= 2, `expected the read and the writes, found ${statements.length}`);
+    for (const marker of ['from("ai_usage")', 'rpc("add_ai_credits"', 'rpc("add_trial_credits"']) {
+      assert.ok(
+        statements.some((st) => st.includes(marker)),
+        `${marker} has disappeared — one part of the allowance path is no longer being checked`
+      );
+    }
     for (const st of statements) {
       assert.ok(
-        st.includes('eq("user_id"') || /user_id:\s*userId/.test(st),
+        st.includes('eq("user_id"') || /user_id:\s*userId/.test(st) || /p_user_id:\s*userId/.test(st),
         `an ai_usage statement is unscoped — the service-role client bypasses RLS:\n${st.trim().slice(0, 200)}`
       );
     }

@@ -13,11 +13,13 @@
 
 import { corsHeaders, jsonResponse } from "./_shared/cors.ts";
 import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
+import { readAllowance, billAllowance } from "../_shared/allowance.ts";
+import { allowanceForTier, TIERS } from "../_shared/credits.ts";
 import { requiredEnvNames, missingEnv, envPresence, failureLine, stageLine } from "./diagnostics.js";
 import {
   checkRequestGuards,
   selectTranscriber,
-  billedMinutes,
+  billedCredits,
   isUuid,
   sanitizeCourse,
   normalizeTranslateTo,
@@ -28,9 +30,8 @@ import { openaiAdapter } from "./openai.ts";
 import {
   TRANSCRIPTION_PROVIDER,
   PROVIDER_API_KEY_ENV,
-  MONTHLY_MINUTES_LIMIT,
-  RESUMMARISE_BILLED_MINUTES,
-  MINIMUM_BILLED_MINUTES,
+  RESUMMARISE_BILLED_CREDITS,
+  MINIMUM_BILLED_CREDITS,
   MAX_REQUEST_SECONDS,
   MAX_BODY_BYTES,
   PROCESSING_STALE_MINUTES,
@@ -43,6 +44,7 @@ import {
   REQUEST_RETENTION_DAYS,
   ORPHAN_SWEEP_HOURS,
   RESUMMARISE_EXPIRED_MESSAGE,
+  RESUMMARISE_NOT_FAILED_MESSAGE,
   RESUMMARISE_FAILED_MESSAGE,
 } from "./config.ts";
 
@@ -238,7 +240,9 @@ Deno.serve(async (req: Request) => {
     logStage(stage);
     const { data: profile, error: profileErr } = await supabaseAdmin
       .from("profiles")
-      .select("tier")
+      // The trial counter rides along: for a trial tier it IS the
+      // allowance, so fetching it here costs nothing and saves a query.
+      .select("tier, trial_credits_used")
       .eq("user_id", userId)
       .maybeSingle();
 
@@ -255,9 +259,23 @@ Deno.serve(async (req: Request) => {
       logFailure("tier_lookup", new Error("no profiles row for this user — the signup trigger may not have run"));
       return errorResponse("tier_lookup", "no_access", "AI notes isn't enabled for your account yet.", 403);
     }
-    if (profile.tier !== "ai") {
-      logStage("tier_lookup", { outcome: "not_entitled" });
-      return errorResponse("tier_lookup", "no_access", "AI notes isn't enabled for your account yet.", 403);
+    /* RECORDING IS NO LONGER GATED ON A PAID TIER, and this is the diff
+       to look at twice. It used to refuse anything but `ai`; now every
+       tier has an allowance and the ALLOWANCE is the gate — a free
+       account gets the 60-credit lifetime trial, which is what lets the
+       trial demonstrate the thing being sold. A trial that cannot
+       produce one set of lecture notes cannot sell lecture notes.
+
+       What still refuses: an account with no profiles row at all. That
+       is an anomaly (the signup trigger should always have made one),
+       not a tier, and treating it as "spend the default allowance"
+       would hand a free allowance to a state we do not understand.
+
+       An UNKNOWN tier gets the trial rather than a paid allowance —
+       see allowanceForTier. A typo in the dashboard costs sixty
+       credits; the other direction costs three thousand a month. */
+    if (!TIERS.includes(profile.tier)) {
+      logStage("tier_lookup", { outcome: "unknown_tier", tier: String(profile.tier).slice(0, 32) });
     }
 
     // 4. Parse the (small, JSON-only) request body.
@@ -316,7 +334,7 @@ Deno.serve(async (req: Request) => {
       logStage(stage);
       const { data: existing, error: lookupErr } = await supabaseAdmin
         .from("ai_notes_requests")
-        .select("result, status")
+        .select("result, status, summary_failed")
         .eq("idempotency_key", idempotencyKey)
         .eq("user_id", userId)
         .maybeSingle();
@@ -330,6 +348,51 @@ Deno.serve(async (req: Request) => {
         // which; the response must not.
         logFailure(stage, new Error("no row for this key and user"), { key: String(idempotencyKey).slice(0, 64) });
         return rejectIdempotencyKey();
+      }
+
+      /* THE PRECONDITION, and its absence was the most expensive hole
+         in the app.
+
+         This branch used to require only that the row exists, is yours,
+         and holds a transcript. It never asked whether the summary had
+         actually FAILED — so a SUCCESSFUL lecture could be re-summarised
+         over and over for the whole retention window, at a flat
+         RESUMMARISE_BILLED_CREDITS each. Costed in COST-MODEL.md: a
+         three-hour transcript back through the summariser is $0.0072
+         against 2 billed minutes, which is $0.0036 a billed minute
+         where every real recording costs $0.0007. At a 3,000-minute cap
+         that is $10 of provider spend from one recording, and it was
+         the single most expensive legal way to spend an allowance.
+
+         THE FIX IS THE PRECONDITION, NOT THE PRICE.
+         RESUMMARISE_BILLED_CREDITS is derived correctly — from a
+         TYPICAL SHORT summary, which is what a retry of a normal
+         recording is. What was wrong was that the action could be taken
+         when there was nothing to retry.
+
+         It is checked BEFORE the transcript, because the two answers
+         are about different things: a successful note has nothing to
+         retry whether or not the sweep has since taken its transcript,
+         and answering "expired" there would be a true sentence about
+         the wrong question.
+
+         A DISTINCT CODE, and this does not break the identical-
+         rejection rule. That rule is about not-found versus not-yours,
+         which must be indistinguishable or the endpoint becomes an
+         oracle for keys. This branch is only reachable once ownership
+         is PROVEN, so it tells the owner a fact about their own row.
+
+         Note the second property this buys, free: a successful retry
+         writes summary_failed = false, so it is one retry per failure
+         rather than an open door. */
+      if (existing.summary_failed !== true) {
+        logStage(stage, { outcome: "nothing_to_retry", status: existing.status });
+        return errorResponse(
+          stage,
+          "already_summarised",
+          RESUMMARISE_NOT_FAILED_MESSAGE,
+          409
+        );
       }
 
       const transcript = (existing.result && (existing.result as Record<string, unknown>).transcript) || "";
@@ -348,20 +411,15 @@ Deno.serve(async (req: Request) => {
       // costs nothing. Same ordering ai-text's traced fake pins.
       stage = "allowance";
       const monthKey = currentMonthKey();
-      const { data: usageRow, error: usageErr } = await supabaseAdmin
-        .from("ai_usage")
-        .select("minutes_used")
-        .eq("user_id", userId)
-        .eq("month", monthKey)
-        .maybeSingle();
-      if (usageErr) {
-        logFailure(stage, usageErr);
+      const allowance = await readAllowance(supabaseAdmin, { userId, profile, month: monthKey });
+      if (!allowance.ok) {
+        logFailure(stage, allowance.error);
         return errorResponse(stage, "server_error", "Something went wrong. Please try again.", 500);
       }
-      const usedThisMonth = usageRow?.minutes_used || 0;
-      if (usedThisMonth + RESUMMARISE_BILLED_MINUTES > MONTHLY_MINUTES_LIMIT) {
+      const usedThisMonth = allowance.used;
+      if (usedThisMonth + RESUMMARISE_BILLED_CREDITS > allowance.limit) {
         logStage(stage, { outcome: "over_limit" });
-        return errorResponse(stage, "monthly_limit", "You've used your AI minutes for this month.", 429);
+        return errorResponse(stage, "monthly_limit", "You've used your AI credits for this month.", 429);
       }
 
       stage = "resummarise";
@@ -382,12 +440,19 @@ Deno.serve(async (req: Request) => {
       }
 
       stage = "billing";
-      const billed = RESUMMARISE_BILLED_MINUTES;
-      logStage(stage, { minutes: billed, resummarise: true });
-      await supabaseAdmin.from("ai_usage").upsert(
-        { user_id: userId, month: monthKey, minutes_used: usedThisMonth + billed, updated_at: new Date().toISOString() },
-        { onConflict: "user_id,month" }
-      );
+      const billed = RESUMMARISE_BILLED_CREDITS;
+      logStage(stage, { credits: billed, resummarise: true });
+      // Atomic, for the reason spelled out at the fresh-recording bill
+      // below. `usedThisMonth` stays where it is — it is the allowance
+      // CHECK, which precedes the provider call and must.
+      const retryBill = await billAllowance(supabaseAdmin, { userId, profile, month: monthKey, credits: billed });
+      if (!retryBill.ok) {
+        logFailure(stage, retryBill.error, {
+          credits: billed,
+          resummarise: true,
+          hint: "are migrations 0012 and 0014 applied?",
+        });
+      }
 
       const retried = { ok: true, transcript, summaryFailed: false, original: summary.original, translated: summary.translated };
       await supabaseAdmin
@@ -397,7 +462,7 @@ Deno.serve(async (req: Request) => {
         .eq("user_id", userId);
 
       scheduleCleanup();
-      return jsonResponse({ ok: true, result: retried, minutesBilled: billed });
+      return jsonResponse({ ok: true, result: retried, creditsBilled: billed });
     }
 
     // 5. Race-safe idempotency claim.
@@ -500,22 +565,21 @@ Deno.serve(async (req: Request) => {
     // 7. Duration/allowance guard — the logic that decides whether we pay
     // money, exercised directly by scripts/test-ai-notes.mjs.
     const month = currentMonthKey();
-    const { data: usageRow } = await supabaseAdmin
-      .from("ai_usage")
-      .select("minutes_used")
-      .eq("user_id", userId)
-      .eq("month", month)
-      .maybeSingle();
-    const minutesUsedThisMonth = usageRow?.minutes_used || 0;
+    const allowance = await readAllowance(supabaseAdmin, { userId, profile, month });
+    if (!allowance.ok) {
+      logFailure("size_guard", allowance.error);
+      return errorResponse("size_guard", "server_error", "Something went wrong. Please try again.", 500);
+    }
+    const creditsUsedThisMonth = allowance.used;
 
     const guard = checkRequestGuards({
       estimatedDurationSeconds: estimatedDurationSeconds || 0,
       receivedBytes,
-      minutesUsedThisMonth,
-      monthlyLimitMinutes: MONTHLY_MINUTES_LIMIT,
+      creditsUsedThisMonth,
+      monthlyLimitCredits: allowance.limit,
       maxRequestSeconds: MAX_REQUEST_SECONDS,
       maxBodyBytes: MAX_BODY_BYTES,
-      minimumBilledMinutes: MINIMUM_BILLED_MINUTES,
+      minimumBilledCredits: MINIMUM_BILLED_CREDITS,
     });
     if (!guard.ok) {
       // Left in place deliberately (not deleted) — a permanent-not-transient
@@ -636,29 +700,44 @@ Deno.serve(async (req: Request) => {
     }
 
     // 12. Bill usage using the server-reported duration (whichever provider
-    // ran) — billedMinutes is the one, directly-tested calculation between
+    // ran) — billedCredits is the one, directly-tested calculation between
     // "how long was this recording" and what gets billed. They are not the
-    // same number: summarising is charged per request, so a recording costs
-    // at least MINIMUM_BILLED_MINUTES whatever its length.
+    // same number even though a credit IS a minute of lecture: summarising
+    // is charged per request, so a recording costs at least
+    // MINIMUM_BILLED_CREDITS whatever its length.
     stage = "billing";
-    const minutesBilled = billedMinutes(durationSeconds, MINIMUM_BILLED_MINUTES);
+    const creditsBilled = billedCredits(durationSeconds, MINIMUM_BILLED_CREDITS);
     if (!(durationSeconds > 0)) {
       // Never silent: billing zero for work that was actually done is a
       // revenue hole, and it means the provider's response changed shape.
-      logFailure("billing", new Error("provider returned no duration — billing zero minutes for this request"), {
+      logFailure("billing", new Error("provider returned no duration — billing zero credits for this request"), {
         provider: transcriber.name,
       });
     }
-    logStage(stage, { minutes: minutesBilled });
-    await supabaseAdmin.from("ai_usage").upsert(
-      { user_id: userId, month, minutes_used: minutesUsedThisMonth + minutesBilled, updated_at: new Date().toISOString() },
-      { onConflict: "user_id,month" }
-    );
+    logStage(stage, { credits: creditsBilled });
+    /* THE ADDITION HAPPENS IN THE DATABASE. This used to write
+       `creditsUsedThisMonth + creditsBilled` — a sum computed from a
+       read taken back at step 7, before the provider call — so two
+       overlapping recordings both read N and both wrote N + cost, and
+       one of them was never billed at all. `add_ai_credits` (migration
+       0012) does the `+` under the row lock ON CONFLICT DO UPDATE
+       takes. `creditsUsedThisMonth` is still used for the ALLOWANCE
+       CHECK, which must stay where it is: the read precedes the
+       provider call so a refusal costs nothing. Only the write moved. */
+    const bill = await billAllowance(supabaseAdmin, { userId, profile, month, credits: creditsBilled });
+    /* Never silent. The upsert this replaced discarded its error
+       entirely, so a month that failed to bill looked exactly like one
+       that billed — the same "no and nothing answer alike" trap 0008
+       closed at the database. The request still succeeds: the work is
+       done and the student has it. */
+    if (!bill.ok) {
+      logFailure(stage, bill.error, { credits: creditsBilled, hint: "are migrations 0012 and 0014 applied?" });
+    }
 
     // 13. Mark the request done.
     await supabaseAdmin
       .from("ai_notes_requests")
-      .update({ status: "done", result, minutes_billed: minutesBilled, summary_failed: summaryFailed })
+      .update({ status: "done", result, minutes_billed: creditsBilled, summary_failed: summaryFailed })
       .eq("idempotency_key", idempotencyKey)
       .eq("user_id", userId);
 

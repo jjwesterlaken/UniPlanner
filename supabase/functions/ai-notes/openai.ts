@@ -3,6 +3,7 @@
 // not a second round trip.
 
 import { SUMMARY_MAX_TOKENS } from "./config.ts";
+import { SUMMARY_MODEL } from "../_shared/model.ts";
 
 const SUMMARY_SCHEMA_OBJECT = {
   type: "object",
@@ -94,7 +95,7 @@ export const openaiAdapter = {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: SUMMARY_MODEL,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: transcript },

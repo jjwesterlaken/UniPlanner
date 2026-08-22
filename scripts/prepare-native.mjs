@@ -35,6 +35,7 @@ import path from "node:path";
 
 const SRC = "dist-web";
 const TARGETS = ["desktop/www", "mobile/www"];
+const TOOLS = "tools";
 
 if (!fs.existsSync(SRC)) {
   throw new Error(`${SRC} not found - run "npm run build:web" first`);
@@ -61,6 +62,23 @@ for (const target of TARGETS) {
     } else {
       fs.copyFileSync(from, to);
     }
+  }
+
+  /* DIAGNOSTICS THAT SHIP TO THE SHELLS AND NOT TO THE WEB.
+
+     measure-audio.html asks for the microphone, so a public copy on the
+     app's origin undercuts the zero-third-party, nothing-leaves-the-
+     device positioning for no benefit — Jared's ruling. But it has to
+     run INSIDE WKWebView to answer anything, so it cannot simply be
+     deleted.
+
+     It lives in tools/ rather than public/ and is copied in here. That
+     way the rule is structural: public/ means "ships to the web",
+     tools/ means "packaged shells only", and there is no filename
+     exclusion list in build-web.mjs to drift out of step with what is
+     really in the folder. */
+  for (const name of fs.readdirSync(TOOLS)) {
+    fs.copyFileSync(path.join(TOOLS, name), path.join(target, name));
   }
 
   const htmlPath = path.join(target, "index.html");

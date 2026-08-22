@@ -17,7 +17,7 @@
      text-only re-summarise endpoint. It is RECOVERABLE from the server
      row for the retention window, and that is a different word.
 
-   - Transcription minutes are billed even when summarising fails. The
+   - Transcription credits are billed even when summarising fails. The
      Edge Function bills on the transcription duration, after the audio
      has already been deleted and regardless of what the summariser
      did. Saying "we couldn't generate a summary" without saying that is
@@ -27,15 +27,83 @@
 import { FAILED_RESULT_RETENTION_DAYS } from "./aiNotesRetention.js";
 
 export const AI_NOTES_COPY = {
-  /* Why a two-minute recording shows as more minutes used than it ran.
+  /* Why a two-minute recording shows as more credits used than it ran.
 
      Disclosed rather than left to be discovered: a student who records a
      short tutorial segment and watches the counter jump would otherwise
      reasonably think the app was overcharging them. The honest reason is
      short and worth giving -- writing the notes up costs the same
-     whatever the length, so the minutes aren't purely recording time. */
-  minimumBilling: (minutes) =>
-    `Recordings count in ${minutes}-minute blocks. Writing the notes up costs us about the same whether a recording is two minutes or twenty, so a very short one still uses ${minutes} minutes of your allowance.`,
+     whatever the length, so the credits aren't purely recording time. */
+  /* THE ONE SENTENCE A TRIAL TIER NEEDS, and the reason it exists is
+     the word it must not contain. A free or Plus account's 60 credits
+     are once ever, and letting a student infer that from the ABSENCE
+     of two words is how somebody waits until November for a reset
+     that is not coming.
+
+     THE SECOND SENTENCE OF THIS COMMENT USED TO SAY "every other
+     allowance line in the app says 'this month', because every other
+     allowance is monthly." It was false when written: aiTextCopy.js
+     said it to trial accounts too, in seven bands and four other
+     sentences, and helpText.js said it twice. Believing this comment
+     is part of why nobody looked. The rule is enforced now rather
+     than asserted here -- test-help.mjs sweeps every module in src/
+     and test-ai-text-function.mjs renders every sentence for every
+     tier. */
+  trialAllowance: (credits) =>
+    `These ${credits} credits are a one-off trial rather than a monthly allowance — they don't reset. A credit is about a minute of recorded lecture.`,
+
+  /* THE SIZE REFUSAL, and the hard part of it is what NOT to say.
+
+     "Record for less time" is the advice that fits in one line and it
+     is the wrong product: a two-hour lecture is the use case, and
+     telling a student to record less of their lecture is telling them
+     the app does not do the thing they installed it for. So the copy
+     says what happened, says plainly that nothing was charged (a
+     student who has just lost an hour assumes it cost them unless
+     told otherwise -- the same rule the ai_failed copy follows), and
+     does not pretend there is a good workaround.
+
+     The sizes are stated in MB because that is the unit a phone shows
+     a student everywhere else. */
+  tooLarge: ({ bytes, limit }) => ({
+    title: "That recording is too large to upload.",
+    detail:
+      `It came to ${Math.round(bytes / 1e6)} MB and the limit is ${Math.round(limit / 1e6)} MB. ` +
+      "Nothing was charged and nothing was sent — the recording never left the device. " +
+      "This is a bug on our side rather than anything you did, and it is being worked on.",
+  }),
+
+  /* SIGNED OUT BY ANOTHER DEVICE, and the copy has one job beyond
+     explaining: not to imply a harder limit than is enforced.
+
+     What actually happens is ping-pong. The displaced device signs out
+     and keeps its planner — localStorage is untouched — and signing
+     back in claims the account again, which signs the other one out.
+     Lockout would mean the free tier could strand somebody's data,
+     which is a worse failure than annoyance; the annoyance is the
+     thing Plus is for. So the copy says "the other device is signed
+     out now", not "you cannot use two devices", and it says the
+     planner is still here before it says anything else — a student who
+     opens the app to a sign-in screen assumes their work is gone.
+
+     No number of devices is quoted, because "one" invites the reading
+     that a second sign-in is refused, and it is not. */
+  displacedByAnotherDevice: {
+    title: "You signed in somewhere else.",
+    detail:
+      "Your planner is still on this device and nothing has been lost. " +
+      "A free account is used on one device at a time, so signing in over there signed this one out. " +
+      "Sign in again here whenever you like — that will sign the other one out instead.",
+    action: "Sign in again",
+  },
+
+  /* Shown BEFORE it happens, on the account screen, so the first time a
+     student meets the rule is not the time it interrupts them. */
+  oneDeviceExplainer:
+    "A free account is used on one device at a time. Signing in somewhere else signs this one out — your planner stays on each device either way, and you can sign back in here whenever you want.",
+
+  minimumBilling: (credits) =>
+    `A credit is about a minute of recorded lecture, and a recording costs at least ${credits}. Writing the notes up costs us about the same whether a recording is two minutes or twenty, so a very short one still uses ${credits} credits.`,
 
   /* Shown INSTEAD of the record button for an account whose tier the
      app has definitively read as not-AI. Before the work, not after:
@@ -67,7 +135,7 @@ export const AI_NOTES_COPY = {
   summaryFailed: {
     title: "We transcribed your lecture, but couldn't write the summary.",
     billing:
-      "Transcribing used your AI minutes — that part worked and it's what costs money, so it has been counted. Summarising is included, and you haven't been charged extra for the part that failed.",
+      "Transcribing used your AI credits — that part worked and it's what costs money, so it has been counted. Summarising is included, and you haven't been charged extra for the part that failed.",
     recoverable: (days = FAILED_RESULT_RETENTION_DAYS) =>
       `Your transcript is saved to your account for ${days} days, so you can get it back from any of your devices if you need it.`,
     action: "Save transcript as a note",
@@ -77,16 +145,28 @@ export const AI_NOTES_COPY = {
 
        The cost sentence says what it charges AND what it does not,
        because this lecture has already been paid for once: the
-       transcription minutes were really spent and really billed, and
+       transcription credits were really spent and really billed, and
        the retry does not repeat them. Same register as the billing
        line above, which is what keeps a support ticket from becoming a
        chargeback. */
     retry: "Try the summary again",
-    retryCost: (minutes) =>
-      `Trying again writes the summary from the transcript we already have — no re-recording and no re-transcribing, so you're only charged for the summary: ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+    retryCost: (credits) =>
+      `Trying again writes the summary from the transcript we already have — no re-recording and no re-transcribing, so you're only charged for the summary: ${credits} credit${credits === 1 ? "" : "s"}.`,
     retrying: "Writing your summary…",
     retryFailed:
       "That didn't work either. Nothing has been charged for the attempt, and your transcript is still here.",
+    /* The refusal, which is not a failure: the summary is already
+       there. Reachable from a stale screen — the retry succeeded on
+       another device and this one still shows the failure. It says
+       nothing was charged, because every sentence about this lecture's
+       cost says what was and was not charged.
+
+       Note what is NOT here: an entry in ERROR_MESSAGES in
+       aiNotesLogic.js. `parseAiNotesError` already falls back to the
+       server's own `error` string, so restating this sentence there
+       would be a second copy to keep in step for no gain. */
+    retryAlreadyDone:
+      "This lecture already has its summary — there's nothing to write again. Nothing has been charged.",
     retryExpired: (days = FAILED_RESULT_RETENTION_DAYS) =>
       `We no longer have the transcript for this lecture — we keep it for ${days} days. Nothing has been charged for this attempt.`,
     retryDone: "Summary written. It's saved with your notes.",

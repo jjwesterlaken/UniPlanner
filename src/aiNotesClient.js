@@ -7,6 +7,11 @@
    ================================================================== */
 
 import { supabase, backend } from "./sync.js";
+import { allowanceForTier } from "./aiTextLimits.js";
+import { MINIMUM_BILLED_CREDITS_HINT, uploadRefusal } from "./aiNotesLogic.js";
+import { deviceStanding } from "./deviceIdentity.js";
+import { getDeviceId } from "./sync.js";
+import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 
 const BUCKET = "lecture-audio";
@@ -28,40 +33,92 @@ export function currentMonthKey(d = new Date()) {
  */
 export async function fetchUsage(session, { supabaseClient = supabase, isDemo = backend.isDemo } = {}) {
   if (!session || isDemo || !supabaseClient) {
-    return { minutesUsed: 0, unavailable: true };
+    return { creditsUsed: 0, tier: null, unavailable: true };
   }
+  /* THE TIER DECIDES WHICH COUNTER TO READ, so it is read first rather
+     than assumed. A trial tier's spend is a column on `profiles` with
+     no month in it; a monthly tier's is a row in `ai_usage`. Reading
+     ai_usage for a trial account would report 0 used forever, which is
+     the friendly-looking direction and the wrong one. */
+  const { data: profile, error: profileErr } = await supabaseClient
+    .from("profiles")
+    /* The device columns ride along on a read that already happens, so
+       the one-device rule costs no extra query — the same argument that
+       put the trial counter on `profiles` rather than in `ai_usage`.
+       It also puts the check exactly where the allowance is SPENT,
+       which is the thing the rule exists to protect. */
+    .select("tier, trial_credits_used, active_device_id, active_device_at")
+    .eq("user_id", session.user.id)
+    .maybeSingle();
+  if (profileErr || !profile) return { creditsUsed: 0, tier: null, unavailable: true };
+
+  /* Reported, never acted on here. A client module that signed someone
+     out as a side effect of reading a counter would be impossible to
+     reason about; the caller decides, and the four outcomes survive
+     intact all the way up. */
+  const standing = deviceStanding({ tier: profile.tier, localId: getDeviceId(), profile });
+
+  if (!allowanceForTier(profile.tier).perMonth) {
+    return {
+      creditsUsed: Number(profile.trial_credits_used) || 0,
+      tier: profile.tier,
+      unavailable: false,
+      standing,
+    };
+  }
+
   const { data, error } = await supabaseClient
     .from("ai_usage")
-    .select("minutes_used")
+    .select("credits_used")
     .eq("user_id", session.user.id)
     .eq("month", currentMonthKey())
     .maybeSingle();
-  if (error) return { minutesUsed: 0, unavailable: true };
-  return { minutesUsed: (data && data.minutes_used) || 0, unavailable: false };
+  /* A FAILED READ IS "UNKNOWN", NEVER "NONE LEFT". Same rule as
+     fetchNote and the archive list: the badge disappears rather than
+     telling a student on a train that they are out of credits. */
+  if (error) return { creditsUsed: 0, tier: profile.tier, unavailable: true, standing };
+  return { creditsUsed: (data && data.credits_used) || 0, tier: profile.tier, unavailable: false, standing };
 }
 
 /**
  * Whether this account can record lectures at all. Three answers, and
  * the third is the one that must not collapse into the second:
  *
- *   { canRecord: true }               tier is "ai"
- *   { canRecord: false }              the read RAN and the tier is not
+ *   { canRecord: true }               there is allowance left
+ *   { canRecord: false }              the read RAN and there is none
  *   { unknown: true }                 offline / demo / read failed
  *
+ * IT IS NO LONGER A TIER CHECK. Every tier can record now — a free
+ * account gets the 60-credit lifetime trial, which is what lets the
+ * trial demonstrate the thing being sold — so what this asks is whether
+ * the ALLOWANCE covers one recording, not which plan somebody is on.
+ *
  * UNKNOWN MUST NEVER GATE. A student in a lecture theatre with no
- * signal must not be shown a paywall because the tier read timed out --
- * that is the same rule as the text allowance ("a failed read degrades
- * to unknown, never to none left"). The server refuses a free-tier
- * request anyway, at its tier check, BEFORE the paid transcription
- * call; this read only exists so the refusal arrives before an hour of
- * recording rather than after it.
+ * signal must not be shown a paywall because the read timed out -- that
+ * is the same rule as the text allowance ("a failed read degrades to
+ * unknown, never to none left"). The server re-checks anyway, BEFORE
+ * the paid transcription call; this read only exists so a refusal
+ * arrives before an hour of recording rather than after it.
  */
 export async function fetchRecordingAccess(session, { supabaseClient = supabase, isDemo = backend.isDemo } = {}) {
   if (!session || isDemo || !supabaseClient) return { unknown: true };
   try {
-    const { data, error } = await supabaseClient.from("profiles").select("tier").eq("user_id", session.user.id).maybeSingle();
+    const { data, error } = await supabaseClient
+      .from("profiles")
+      .select("tier, trial_credits_used")
+      .eq("user_id", session.user.id)
+      .maybeSingle();
     if (error || !data) return { unknown: true };
-    return { canRecord: data.tier === "ai" };
+    const { credits: limit, perMonth } = allowanceForTier(data.tier);
+    if (!perMonth) {
+      const used = Number(data.trial_credits_used) || 0;
+      return { canRecord: used + MINIMUM_BILLED_CREDITS_HINT <= limit, tier: data.tier };
+    }
+    /* A monthly tier's spend needs the usage row, and a failed read of
+       THAT is unknown too rather than a refusal. */
+    const usage = await fetchUsage(session, { supabaseClient, isDemo });
+    if (usage.unavailable) return { unknown: true };
+    return { canRecord: usage.creditsUsed + MINIMUM_BILLED_CREDITS_HINT <= limit, tier: data.tier };
   } catch (e) {
     return { unknown: true };
   }
@@ -88,6 +145,17 @@ export async function uploadAudio({ session, audioBlob, mimeType, idempotencyKey
      refusal and would have put the audio on the wire first if the path
      had ever been built differently. */
   if (!supabaseClient || !session || !session.user) throw new Error("AI notes needs a real signed-in account.");
+  /* THE SIZE GATE AT THE BOUNDARY, not only on the screen. The caller
+     checks too, so this never fires in the normal flow — which is
+     exactly the arrangement the signed-out AI gates use, and for the
+     same reason: a UI-only check is one refactor away from leaking,
+     and the refactor need not touch this file. */
+  const refusal = uploadRefusal(audioBlob && audioBlob.size);
+  if (refusal) {
+    const err = new Error(AI_NOTES_COPY.tooLarge(refusal).title);
+    err.code = refusal.code;
+    throw err;
+  }
   const extension = EXTENSION_FOR_MIME[mimeType] || "webm";
   const path = `${session.user.id}/${idempotencyKey}.${extension}`;
   const { error } = await supabaseClient.storage.from(BUCKET).upload(path, audioBlob, { contentType: mimeType, upsert: true });
