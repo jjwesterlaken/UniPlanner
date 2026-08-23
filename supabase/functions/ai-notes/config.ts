@@ -199,7 +199,22 @@ export const UPLOAD_HEADROOM = 1.25;
 
    Keeping the number here is what lets MAX_BODY_BYTES stay correct at
    every stage of that deployment instead of only at the end. */
-export const LECTURE_AUDIO_FILE_LIMIT_BYTES = 50_000_000;
+/* 100 MB, set in BOTH places and read back after a reload — Jared,
+   22 August 2026.
+
+   100_000_000 rather than 104_857_600 because "100 MB" in a dashboard
+   may mean either, and understating is the safe direction: a constant
+   below the real limit refuses a little early with a clear message,
+   while one above it waves uploads through to a slow, unexplained
+   rejection from Storage. It makes no practical difference here — the
+   derived figure binds well below both readings — which is exactly why
+   the conservative one costs nothing.
+
+   Verify with scripts/check-storage-limit.mjs. Reading the setting back
+   confirms what was SAVED; only an upload confirms what is ENFORCED,
+   and this is the setting whose whole reputation is appearing to have
+   changed when it has not. */
+export const LECTURE_AUDIO_FILE_LIMIT_BYTES = 100_000_000;
 
 /* Our refusal must land BEFORE Storage's, or the student waits through
    the whole upload for an error that explains nothing. This is the

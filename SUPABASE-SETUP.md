@@ -72,7 +72,14 @@ dashboard:**
 
 Raising only the bucket does nothing — the global still binds.
 
-**Raise both, then update `LECTURE_AUDIO_FILE_LIMIT_BYTES` in
+**Both are set to 100 MB and read back after a reload (22 August
+2026), and `LECTURE_AUDIO_FILE_LIMIT_BYTES` is `100_000_000` to
+match** — so `MAX_BODY_BYTES` is now bound by the derivation
+(86.1 MB, a 3h45m recording at the measured rate) rather than by
+Storage, which is the state to keep it in.
+
+**If you change either limit again, raise both, then update
+`LECTURE_AUDIO_FILE_LIMIT_BYTES` in
 `supabase/functions/ai-notes/config.ts` to match.** That constant is
 what `MAX_BODY_BYTES` is capped by, so the code is correct at every
 stage of the change rather than only at the end: with the dashboard

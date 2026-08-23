@@ -179,7 +179,7 @@ export const RECORDER_AUDIO_BITS_PER_SECOND = 32000;
    bundle cannot import from supabase/functions, and test-ai-notes.mjs
    asserts this against MAX_BODY_BYTES for the same reason the billing
    hints are asserted against theirs. */
-export const MAX_UPLOAD_BYTES_HINT = 48_000_000;
+export const MAX_UPLOAD_BYTES_HINT = 86_062_500;
 
 /**
  * Why this recording cannot be uploaded, or null if it can.
