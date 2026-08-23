@@ -557,16 +557,78 @@ device rather than a decision.
     problem; only a real lecture proves the fix, and this is the one
     number that decides whether a student can use the app for what
     they installed it for.
+
+13b. **The mp4-vs-Opus transcript diff.** Decides whether iOS should
+    prefer `audio/mp4` (29 kbps, so a three-hour lecture fits
+    everywhere) over `audio/webm;codecs=opus` (51 kbps). It cannot be
+    decided on the file sizes: Opus is the better speech codec at these
+    rates by design, so the smaller file may transcribe worse — and a
+    slightly worse transcript is invisible until somebody reads a
+    garbled summary and blames the summariser.
+
+    **THE CONTROL IS THE WHOLE EXPERIMENT. Play the SAME AUDIO FILE
+    through a speaker for both runs.** Reading the same paragraph twice
+    measures the reader — pace, emphasis, where you stumbled — and
+    those differences are far larger than the codec's. Pick a recording
+    of real speech, five to ten minutes, with some technical
+    vocabulary in it, and do not touch the phone's position between
+    runs.
+
+    The procedure:
+
+    1. In the shell's console:
+       `localStorage.setItem("uni-planner-force-mime", "audio/mp4")`
+    2. Record the passage. Save the note. Confirm the stored object
+       ends `.m4a` (the extension travels with the format now).
+    3. `localStorage.removeItem("uni-planner-force-mime")`
+    4. Record the SAME passage, same speaker, same position. Save.
+    5. Diff the two transcripts.
+
+    Both go through the real upload, the real Edge Function and the
+    real Groq call, so the only variable is the container. Cost is two
+    recordings of allowance.
+
+    **What decides it:** proper nouns and technical terms. General
+    fluency will look fine either way; the first thing a lower bitrate
+    costs is the words a student most needs spelled right. If mp4 holds
+    up, take it — smaller uploads are a real benefit on a phone. If it
+    does not, Opus stays and the raised ceiling is what carries the
+    three-hour case.
+
+    Delete `uni-planner-force-mime` and its code once this resolves.
+
+13c. **Confirm what Storage will really take:**
+    `SUPABASE_URL=... SUPABASE_KEY=... node scripts/check-storage-limit.mjs`
+
+    **Run it after touching the dashboard, not instead of touching it.**
+    Supabase enforces the LOWER of a project-global per-file limit and
+    the bucket's own, and the bucket cannot exceed the global — so
+    raising only the bucket changes the number on the page and nothing
+    else. The script does not read either setting; it uploads an object
+    at the app's ceiling and reports what happened, which is the only
+    figure a real lecture meets.
 14. **Sign in from `capacitor://localhost`.** The one failure that
     breaks everything else: it is a custom-scheme origin making HTTPS
     requests to Supabase, and nothing off-device can confirm it works.
     Do this first.
-15. **`PrivacyInfo.xcprivacy`** — look in the generated
-    `mobile/ios/App/` and see whether Capacitor 8 scaffolds one. If it
-    does not, the app-level answer is simple (no tracking, no
-    required-reason API called from native code), but it has to exist.
-    This is the item most likely to produce an automated App Store
-    Connect email rather than a human rejection.
+15. **`PrivacyInfo.xcprivacy` — the file is written for you; ADDING IT
+    TO THE TARGET IS THE MANUAL STEP.** `npm run stamp` creates
+    `mobile/ios/App/App/PrivacyInfo.xcprivacy` (all four keys empty,
+    matching what Capacitor ships for its own pod — checked against
+    @capacitor/ios 8.5.0). A `.xcprivacy` only reaches the bundle if it
+    is in the app target's **Resources** build phase, and that is a
+    change to `project.pbxproj` which the script will not attempt
+    blind.
+
+    In Xcode: drag the file into the **App** group, tick the **App**
+    target. Once per `cap add ios`, beside choosing the signing team,
+    which is manual for the same reason.
+
+    **The half-done state is the one that ships** — file on disk,
+    absent from the target, so it is not in the bundle and the
+    validator complains after the upload. `npm run stamp` warns if the
+    pbxproj does not reference it, so re-run it after the drag and
+    check the output is clean.
 16. **The safe areas, and `contentInset`.** The insets are applied —
     top on the header, left and right for landscape, bottom
     unconditional on the recording indicator — and a guard finds every

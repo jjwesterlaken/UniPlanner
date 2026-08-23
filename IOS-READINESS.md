@@ -242,55 +242,92 @@ what made the answer cheap to confirm:
 
 Nothing to build. Two adjacent risks, though, and the first is real.
 
-#### 1a. The recorded bitrate — **OPEN, AND THE HIGHEST-SEVERITY ITEM ON iOS**
+#### 1a. The recorded bitrate — **MEASURED; THE CEILING IS RE-DERIVED**
 
-**It blocks submission.** A 2-hour lecture — the use case — cannot be
-uploaded from an iPhone today.
+##### What was actually wrong, after two corrections
 
-##### The correction: a readback measured the request, not the output
+The 218 kbps console figure was measured from a snippet that omitted
+`audioBitsPerSecond`, so it recorded the platform DEFAULT and
+attributed it to the app. Row 4 of the harness reproduces exactly that
+— no bitrate requested, 202 kbps, readback 192000. **There was no 6.8×
+defect.**
 
-`recorder.audioBitsPerSecond` reads back as **32000** on iOS, exactly as
-asked. Four 3-second recordings on a real iPhone produced:
+What is real: **32 kbps requested produces 51 kbps.** iOS neither
+ignores the option nor honours it — it floors Opus at roughly 50.
 
-| | bytes |
-|---|---|
-| | 81,457 |
-| | 81,701 |
-| | 82,228 |
-| | 82,270 |
+| | requested | produced |
+|---|---|---|
+| row 1 raw mic, webm/opus | 32 kbps | **51 kbps** |
+| row 2 production graph | 32 kbps | 49 kbps |
+| row 3 mono 16 kHz graph | 32 kbps | 50 kbps |
+| row 4 no bitrate asked | — | 202 kbps |
+| row 5 raw mic, mp4/aac | 32 kbps | **29 kbps** |
 
-Mean **81,914 bytes over 3 s = 218 kbps**, which is **6.8× what was
-requested**. Two details make that number trustworthier than a
-three-second sample usually is: the spread across four runs is **1.0%**,
-so the encoder is running at a near-constant rate rather than varying
-with content, and treating a generous 2 KB of it as fixed container
-header still leaves 213 kbps — the same order.
+Rows 1/2/3 also disprove the graph hypothesis: raw mic, the production
+graph and a mono 16 kHz graph are indistinguishable. The graph was
+fixed anyway, as its own item, because it really was discarding the
+constraint — but not as a bitrate fix.
 
-So WKWebView **accepts the constructor option, reports it faithfully,
-and the encoder ignores it.** The property readback confirmed what was
-accepted. Only the produced bytes confirm what was applied. That
-correction is recorded in `CLAUDE.md` next to the technique it
-qualifies, because the technique is still right — it is just answering
-a different question than the one I claimed for it.
+##### THE FINDING IS THE MARGIN, NOT THE FAILURE
 
-##### What it costs at the ceilings we have
+At 51 kbps a two-hour lecture is **45.9 MB against a 46 MB ceiling**.
+It fit. It fit **by sixteen seconds of lecture**.
 
-| rate | 1 h | 2 h | 3 h |
+That is not a margin — it is a bet on the lecturer finishing on time.
+A class that runs over, a question at the end, a student who starts
+recording as they sit down: any of those and the upload is refused.
+Stating it as "two hours fits" is how a ceiling nobody re-derives
+survives another year.
+
+| | 1 h | 2 h | 3 h |
 |---|---|---|---|
-| 32 kbps (assumed) | 14 MB | 29 MB | **43 MB** |
-| **218 kbps (measured)** | **98 MB** | **196 MB** | **294 MB** |
+| 32 kbps (the old assumption) | 14 MB | 29 MB | 43 MB |
+| **51 kbps (measured)** | 23 MB | **45.9 MB** | 68.9 MB |
 
-Read the other way, the two ceilings encode an assumption about the
-rate: `MAX_BODY_BYTES` (46 MB) is **34 kbps** over three hours, and the
-bucket's 50 MB per-file limit is **37 kbps**. Both are ~6× below what
-iOS produces.
+Read the other way, the old ceiling encoded "the rate must be at most
+34 kbps over three hours" — an assumption, never a measurement.
 
-**The failure today is late and uninformative**, which is its own
-finding: nothing checks the blob size on the client, so the student
-waits through as much of a 196 MB upload as their connection allows,
-Storage rejects it, and they are told "Couldn't upload the recording"
-with no reason. Nothing is billed — the ordering holds — but the
-lecture is gone and the message explains nothing.
+##### What the ceiling is now
+
+```
+MAX_BODY_BYTES = min(51 kbps × MAX_REQUEST_SECONDS × 1.25 / 8,
+                     LECTURE_AUDIO_FILE_LIMIT_BYTES − 2 MB)
+```
+
+**86 MB** from the measurement, **48 MB** today because the bucket
+binds. The headroom covers the axes the measurement did not: the 1.0%
+spread is within one device and says nothing about another iPhone,
+another iOS version, or content that encodes harder.
+
+##### The two-settings trap, and the check for it
+
+Supabase enforces the **lower** of a project-global per-file limit and
+the bucket's own, which cannot exceed the global. Raise the bucket
+alone and the number in the dashboard changes, the page looks right,
+and nothing else does.
+
+**A document cannot prevent that**, because the person reading it has
+already seen a number change and believes they are finished. So
+`scripts/check-storage-limit.mjs` uploads an object of exactly
+`MAX_BODY_BYTES` and one over the constant, and reports what Storage
+did — the effective limit, which is the only thing a lecture meets. Run
+it after touching the dashboard. It is on `MOBILE-BUILD.md`'s list.
+
+##### mp4 is deferred, and gated on a transcript diff
+
+Row 5 is the tempting result: 29 kbps means a three-hour lecture in
+39 MB, under every ceiling and better than the assumption they were
+originally derived from. Row 5 also beats row 6, so the graph does not
+help the encoder there either.
+
+**It is not taken on that number alone.** Opus is the better speech
+codec at these rates by design, so a smaller AAC file may transcribe
+worse — and a slightly worse transcript is invisible until someone
+reads a garbled summary and blames the summariser. The comparison is
+`uni-planner-force-mime`, the procedure is on `MOBILE-BUILD.md`, and
+the control that makes it mean anything is playing **the same audio
+file** through a speaker for both runs rather than reading the same
+paragraph twice.
 
 ##### The hypothesis to test first, because it is ours, not Apple's
 

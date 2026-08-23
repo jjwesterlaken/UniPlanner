@@ -70,8 +70,47 @@ export const IOS_DEPLOYMENT_TARGET = "15.0";
    Google Play requires new apps to target API 36 from 31 August 2026.
    Capacitor's template already sets 36 -- verify it in the generated
    variables.gradle rather than trusting this comment. */
+/* iPhone ONLY for the first submission, and it is a decision rather
+   than a limitation.
+
+   Nothing is broken on iPad — the whole app is one `mx-auto max-w-2xl`
+   column, so it renders as a phone-shaped app centred on a big screen
+   and nothing overflows. What is missing is a DESIGN for 1366 points,
+   which is Grace's call, plus a second full screenshot set, while the
+   thing that actually binds the calendar is the closed test.
+
+   THE DIRECTION MATTERS. Going universal later is this setting plus
+   screenshots. Going iPhone-only later is REMOVING platform support
+   from people who already installed it, which is the direction that
+   generates one-star reviews. So the reversible choice is the one to
+   ship.
+
+   "1" is iPhone/iPod, "2" is iPad; Capacitor's template ships "1,2". */
+export const IOS_DEVICE_FAMILY = "1";
+
 export const ANDROID_MIN_SDK = 26;
 export const ANDROID_REQUIRED_TARGET_SDK = 36;
+
+/* Deliberately identical in shape to Capacitor's own, which declares
+   nothing on all four keys. Each is a claim about the APP BINARY:
+   it calls no required-reason API, it collects nothing itself (the
+   account data is declared in App Store Connect), it contacts no
+   tracking domain, and it does not track. */
+export const PRIVACY_MANIFEST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+\t<key>NSPrivacyAccessedAPITypes</key>
+\t<array/>
+\t<key>NSPrivacyCollectedDataTypes</key>
+\t<array/>
+\t<key>NSPrivacyTrackingDomains</key>
+\t<array/>
+\t<key>NSPrivacyTracking</key>
+\t<false/>
+</dict>
+</plist>
+`;
 
 const edits = [];
 const skipped = [];
@@ -98,12 +137,47 @@ export function stamp({ now = Date.now() } = {}) {
 
   /* ---- iOS ---- */
   const pbxproj = path.join(rootDir, "mobile/ios/App/App.xcodeproj/project.pbxproj");
-  editFile(pbxproj, "iOS version, build and deployment target", (s) =>
+  editFile(pbxproj, "iOS version, build, deployment target and device family", (s) =>
     s
       .replace(/MARKETING_VERSION = [^;]+;/g, `MARKETING_VERSION = ${version};`)
       .replace(/CURRENT_PROJECT_VERSION = [^;]+;/g, `CURRENT_PROJECT_VERSION = ${build};`)
       .replace(/IPHONEOS_DEPLOYMENT_TARGET = [^;]+;/g, `IPHONEOS_DEPLOYMENT_TARGET = ${IOS_DEPLOYMENT_TARGET};`)
+      .replace(/TARGETED_DEVICE_FAMILY = [^;]+;/g, `TARGETED_DEVICE_FAMILY = "${IOS_DEVICE_FAMILY}";`)
   );
+
+  /* ---- the privacy manifest ----
+
+     Apple requires one per binary. Capacitor ships its own for the pod
+     (all four keys empty, checked against @capacitor/ios 8.5.0), which
+     covers the framework and not the app target.
+
+     OURS SAYS THE SAME THING AND EVERY LINE OF IT IS CHECKABLE. The app
+     target carries no Swift of our own beyond Capacitor's template, so
+     it calls none of the required-reason APIs; nothing third-party is
+     in the bundle, so there are no tracking domains; and the app does
+     not track. What the student's ACCOUNT collects — an email address,
+     the planner's contents — is declared in App Store Connect's privacy
+     questionnaire, which is where a first-party app declares it, and
+     the published policy is the same answer in prose.
+
+     WRITING THE FILE IS NOT ENOUGH AND THE SCRIPT SAYS SO. A
+     .xcprivacy has to be in the app target's Resources build phase or
+     it never reaches the bundle, and that is a change to project.pbxproj
+     which this script will not attempt blind. The file is created; the
+     one Xcode step is on MOBILE-BUILD.md's list beside choosing the
+     signing team, which is manual for the same reason; and the check
+     below catches the half-done state, which is the one that ships. */
+  const privacyPath = path.join(rootDir, "mobile/ios/App/App/PrivacyInfo.xcprivacy");
+  if (fs.existsSync(path.dirname(privacyPath))) {
+    if (!fs.existsSync(privacyPath)) {
+      fs.writeFileSync(privacyPath, PRIVACY_MANIFEST);
+      edits.push("iOS privacy manifest (created — ADD IT TO THE TARGET IN XCODE)");
+    } else {
+      edits.push("iOS privacy manifest (already present)");
+    }
+  } else {
+    skipped.push("iOS privacy manifest");
+  }
 
   const iosPlist = path.join(rootDir, "mobile/ios/App/App/Info.plist");
   editFile(iosPlist, "iOS display name", (s) =>
@@ -149,6 +223,17 @@ if (process.argv[1] && process.argv[1].endsWith("stamp-native.mjs")) {
   /* The target SDK is the one number here that a store enforces and that
      we do NOT set — Capacitor's template does. Check it rather than
      assume it, because being below it blocks submission outright. */
+  /* THE HALF-DONE STATE IS THE ONE THAT SHIPS: the file on disk, absent
+     from the target, so it is not in the bundle and Apple's validator
+     complains after the upload. Reading the pbxproj catches it here. */
+  const iosProject = path.join(rootDir, "mobile/ios/App/App.xcodeproj/project.pbxproj");
+  if (fs.existsSync(iosProject) && !read(iosProject).includes("PrivacyInfo.xcprivacy")) {
+    console.error(
+      "\nWARNING: mobile/ios/App/App/PrivacyInfo.xcprivacy is not referenced by the Xcode project, " +
+        "so it will not be in the built bundle. In Xcode: drag it into the App group and tick the App target."
+    );
+  }
+
   const variables = path.join(rootDir, "mobile/android/variables.gradle");
   if (fs.existsSync(variables)) {
     const found = read(variables).match(/targetSdkVersion = (\d+)/);

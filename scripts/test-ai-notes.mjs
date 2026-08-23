@@ -41,6 +41,9 @@ import {
   RECOVERY_MISSING_CODES,
   uploadRefusal,
   MAX_UPLOAD_BYTES_HINT,
+  readForcedMime,
+  FORCE_MIME_KEY,
+  pickSupportedMimeType
 } from "../src/aiNotesLogic.js";
 /* The client's copy of the monthly limit moved to aiTextLimits.js when
    the two currencies collapsed into one — one mirror instead of two.
@@ -906,6 +909,75 @@ async function run() {
        failure mode of every guard that reads a value it also assumes
        the shape of. */
     assert.equal(MAX_UPLOAD_BYTES_HINT, MAX_BODY_BYTES, "the mirrored upload ceiling has drifted from the server's");
+  });
+
+  await test("the privacy manifest is written, and its every claim is one we can check", async () => {
+    /* Apple wants one per binary. Capacitor ships its own for the pod;
+       the app target needs its own, and ours says the same thing
+       because each key is a checkable fact about the app binary rather
+       than about the account. */
+    const { PRIVACY_MANIFEST, IOS_DEVICE_FAMILY } = await import(pathToFileURL(path.join(rootDir, "scripts/stamp-native.mjs")).href);
+    const doc = new JSDOM(PRIVACY_MANIFEST, { contentType: "text/xml" }).window.document;
+    assert.equal(doc.getElementsByTagName("parsererror").length, 0, "the privacy manifest is not well-formed XML");
+    const dict = doc.documentElement.getElementsByTagName("dict")[0];
+    const children = [...dict.children];
+    const valueOf = (key) => {
+      const i = children.findIndex((el) => el.tagName === "key" && el.textContent === key);
+      assert.ok(i >= 0, `${key} is missing from the privacy manifest`);
+      return children[i + 1];
+    };
+    for (const key of ["NSPrivacyAccessedAPITypes", "NSPrivacyCollectedDataTypes", "NSPrivacyTrackingDomains"]) {
+      const v = valueOf(key);
+      assert.equal(v.tagName, "array", `${key} must be an array`);
+      assert.equal(v.children.length, 0, `${key} declares something — every entry has to be justified against the app binary`);
+    }
+    /* A plist boolean is an EMPTY ELEMENT. <string>false</string> reads
+       as TRUE — the same trap as ITSAppUsesNonExemptEncryption, and
+       here it would declare that a study planner tracks its users. */
+    assert.equal(valueOf("NSPrivacyTracking").tagName, "false", "NSPrivacyTracking must be <false/>, not a string");
+
+    /* And the decision that ships with it. */
+    assert.equal(IOS_DEVICE_FAMILY, "1", "the first submission is iPhone-only — going universal later is reversible, the reverse is not");
+  });
+
+  await test("the mime override is unset by default and no UI writes it", () => {
+    /* It exists for ONE measurement — mp4/AAC against webm/Opus through
+       the real Groq call — and a diagnostic that a screen can set is not
+       a diagnostic, it is a feature nobody designed. */
+    assert.equal(readForcedMime({ getItem: () => null }), null);
+    assert.equal(readForcedMime({ getItem: () => "" }), null);
+
+    const written = [];
+    for (const file of ["src/PlannerApp.jsx", "src/aiNotes.jsx", "src/aiText.jsx", "src/aiNotesClient.js"]) {
+      const src = fs.readFileSync(path.join(rootDir, file), "utf8");
+      if (new RegExp(`setItem\\(\\s*(FORCE_MIME_KEY|"${FORCE_MIME_KEY}")`).test(src)) written.push(file);
+    }
+    assert.deepEqual(written, [], `${written.join(", ")} writes the mime override — nothing in the app may set it`);
+  });
+
+  await test("the override can only ever name a candidate the list already holds", () => {
+    /* An arbitrary string would reach MediaRecorder's constructor, and
+       a platform that happened to accept it would produce a format the
+       server's extension allowlist has never heard of. */
+    assert.equal(readForcedMime({ getItem: () => "audio/evil" }), null);
+    assert.equal(readForcedMime({ getItem: () => "audio/mp4" }), "audio/mp4");
+    /* A store that throws — Safari private browsing — is "no override",
+       never a crash on the path to recording a lecture. */
+    assert.equal(readForcedMime({ getItem: () => { throw new Error("denied"); } }), null);
+  });
+
+  await test("the override reorders the candidates and never escapes isTypeSupported", () => {
+    /* A platform that cannot record the forced format falls through to
+       the normal order rather than failing — the same posture as every
+       other degradation on this path. */
+    const supportsBoth = (t) => t.startsWith("audio/webm") || t === "audio/mp4";
+    const webmOnly = (t) => t.startsWith("audio/webm");
+    assert.equal(pickSupportedMimeType(supportsBoth, null).mimeType, "audio/webm;codecs=opus");
+    const forced = pickSupportedMimeType(supportsBoth, "audio/mp4");
+    assert.equal(forced.mimeType, "audio/mp4");
+    assert.equal(forced.extension, "m4a", "the forced candidate must carry its own extension, or the object is misnamed");
+    assert.equal(pickSupportedMimeType(webmOnly, "audio/mp4").mimeType, "audio/webm;codecs=opus");
+    assert.equal(pickSupportedMimeType(() => false, "audio/mp4"), null, "an unsupported platform must still get null");
   });
 
   await test("the object's extension is the recorder's own, not a second lookup", async () => {

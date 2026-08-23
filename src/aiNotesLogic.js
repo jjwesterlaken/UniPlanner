@@ -229,20 +229,70 @@ const CANDIDATE_MIME_TYPES = [
   { mimeType: "audio/aac", extension: "aac" },
 ];
 
+/* A DIAGNOSTIC HOOK, AND THE ONLY REASON IT EXISTS IS A MEASUREMENT.
+
+   Whether to prefer mp4/AAC over webm/Opus on iOS is a real question —
+   AAC came back at 29 kbps against Opus's 51, which is the difference
+   between a three-hour lecture fitting and not. It cannot be decided by
+   reasoning: Opus is the better speech codec at these rates, so the
+   smaller file might transcribe worse, and the only way to know is to
+   put both through the real Groq call and diff the transcripts.
+
+   That needs the app to record mp4 on a device where it would pick
+   webm, WITHOUT shipping the preference to anybody. So: a device-local
+   key, unset by default, that NO UI writes. It is set by hand from the
+   shell's console for the comparison and cleared afterwards.
+
+   THREE THINGS KEEP IT FROM BEING A LIABILITY. It can only select a
+   candidate that is already in the list below, so it cannot conjure an
+   unsupported or unallowlisted format. It is still filtered through
+   isTypeSupported, so a platform that cannot record it falls through to
+   the normal order rather than failing. And it is device-local and
+   unsynced, like the audio input and the theme — a value stuck in one
+   student's browser cannot reach anybody else.
+
+   Delete this and the key together once the diff has been run and the
+   codec decided; a hook with no measurement left to serve is just a
+   second way for the format to be wrong. */
+export const FORCE_MIME_KEY = "uni-planner-force-mime";
+
 /**
  * Picks the first mime type the platform's MediaRecorder actually
  * supports. `isSupportedFn` is injected (defaults to the real
  * `MediaRecorder.isTypeSupported`) so this is testable in Node,
  * where no MediaRecorder exists at all.
+ *
+ * `forced` is the diagnostic override above, injected for the same
+ * reason — this module reads no browser globals.
  */
-export function pickSupportedMimeType(isSupportedFn) {
+export function pickSupportedMimeType(isSupportedFn, forced) {
   const isSupported =
     isSupportedFn || (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported.bind(MediaRecorder));
   if (!isSupported) return null;
-  for (const candidate of CANDIDATE_MIME_TYPES) {
+  const wanted = forced === undefined ? readForcedMime() : forced;
+  const order = wanted
+    ? [...CANDIDATE_MIME_TYPES.filter((c) => c.mimeType === wanted), ...CANDIDATE_MIME_TYPES]
+    : CANDIDATE_MIME_TYPES;
+  for (const candidate of order) {
     if (isSupported(candidate.mimeType)) return candidate;
   }
   return null;
+}
+
+/** The override, if one is set AND names a candidate. Never throws. */
+export function readForcedMime(storage) {
+  try {
+    const store = storage || (typeof localStorage === "undefined" ? null : localStorage);
+    if (!store) return null;
+    const raw = store.getItem(FORCE_MIME_KEY);
+    /* VALIDATED AGAINST THE LIST, not merely non-empty. An arbitrary
+       string here would reach MediaRecorder's constructor and, if the
+       platform happened to accept it, produce a format the server's
+       extension allowlist has never heard of. */
+    return CANDIDATE_MIME_TYPES.some((c) => c.mimeType === raw) ? raw : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 /* ---------- error messages ---------- */

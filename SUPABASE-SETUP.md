@@ -84,6 +84,17 @@ takes waves uploads through to a slow, unexplained rejection.
 86MB is `51 kbps × 3 hours × 1.25` headroom; the derivation and the
 reasoning for 25% are in `config.ts`.
 
+**Then confirm it, because the two-settings trap cannot be documented
+away:**
+
+```
+SUPABASE_URL=... SUPABASE_KEY=... node scripts/check-storage-limit.mjs
+```
+
+It reads neither setting. It uploads an object of exactly
+`MAX_BODY_BYTES` and one over the constant, and reports what Storage
+did — which is the only figure a real lecture meets.
+
 The RLS policies from the migration take effect automatically once the
 bucket exists with this exact name.
 

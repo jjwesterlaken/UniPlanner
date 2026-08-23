@@ -577,12 +577,22 @@ which.**
 
 That failure and the artifact rule are the same shape at different
 scales: reading a real artifact that answers a different question. It
-happened three times in one investigation — a snippet that was not
-the app's configuration, a build that was not the commit under test,
-and a graph hypothesis whose arithmetic matched a coincidence.
+happened FOUR times in one investigation — a snippet that was not the
+app's configuration, a build that was not the commit under test, a
+graph hypothesis whose arithmetic matched a coincidence, and a
+re-derivation computed against `MAX_BODY_BYTES`'s DERIVATION COMMENT
+(43.2 MB) rather than the enforced constant (46 MB), which moved the
+break point from 2h00m to 1h53m. Every one of them read something
+real. None of them read the thing the claim was about.
 
-**THE ASYMMETRY BETWEEN THE THREE IS THE TRANSFERABLE PART, and it is
-not that some of us are more careful.** Two of them were acted on: the
+**The fourth is the most ordinary and therefore the most likely to
+recur**: a comment stating where a constant came from sits directly
+above the constant, and it is the comment the eye lands on because it
+carries the units. The constant is what the code enforces. When a
+number matters, read the line that executes.
+
+**THE ASYMMETRY IS THE TRANSFERABLE PART, and it is not that some of
+us are more careful.** Three of the four were acted on: the
 218 kbps figure was reported as a defect and a re-derivation of two
 ceilings was ordered from it, and the stale build sent four rebuilds
 after a fix that was already present. The third — the 48 kHz stereo
