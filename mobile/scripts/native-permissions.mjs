@@ -273,10 +273,12 @@ function describe(platform, file, result) {
   switch (result.status) {
     case "skipped":
       return `${platform}: skipped (no ${file} — run "npx cap add ${platform}" first)`;
-    case "patched":
-      return `${platform}: iOS declarations ${result.reason} in ${file}`;
+    /* Named per platform. This said "iOS declarations" on BOTH lines
+       after the plist keys were renamed, so an Android run reported
+       "android: iOS declarations added 2" — noise in exactly the place
+       someone is trying to tell a real problem from noise. */
     default:
-      return `${platform}: iOS declarations ${result.reason} in ${file}`;
+      return `${platform}: ${platform === "ios" ? "microphone, camera, photo-library and encryption declarations" : "audio permissions"} ${result.reason} in ${file}`;
   }
 }
 

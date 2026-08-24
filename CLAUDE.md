@@ -3096,6 +3096,12 @@ being approximated by a source grep that would pass either way.
 
 ### A GREEN GUARD MUST BE ABLE TO SAY WHAT IT CHECKED
 
+**WHEN A CHECK FINDS NOTHING, THAT IS A RESULT TO ASSERT, NOT A REASON
+TO PASS.** An empty set satisfies every universal claim made about it,
+a comparison between two identical things discriminates nothing, and
+an assertion that never ran cannot fail. Each of those reports
+success, and the rest of this section is how that keeps happening.
+
 Six instances, and **they were not all the artifact rule** — which is
 why writing that rule down did not stop them recurring. Two different
 classes were being filed under one heading:
@@ -3138,8 +3144,11 @@ the two sides *differ* somewhere first), and a fake that swallows
 calls so everything downstream agrees (the canvas context, recorded
 above). Both are semantic and need a person.
 
-The general form, and it is worth applying beyond tests: **when a
-check finds nothing, that is a result to assert, not a reason to pass.**
+The rule, and it generalises well past tests: **WHEN A CHECK FINDS
+NOTHING, THAT IS A RESULT TO ASSERT, NOT A REASON TO PASS.** An empty
+set satisfies every universal claim made about it, a comparison
+between two identical things discriminates nothing, and an assertion
+that never ran cannot fail. Each of those reports success.
 
 ### The sibling failure: a guard scoped to a FILE, not to a CLAIM
 

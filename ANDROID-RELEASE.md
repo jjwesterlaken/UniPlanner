@@ -42,6 +42,81 @@ so. `storeFile` should be the absolute path
 (`C:/Users/jjwes/uniplanner-upload.jks` — forward slashes are fine in a
 properties file on Windows).
 
+### What `npm run settings` prints, so you can tell noise from a problem
+
+Three scripts run in sequence. On a tree where **only** Android has
+been added, every iOS line saying "skipped" is correct and expected —
+that is the noise.
+
+```
+ios: skipped (no ios/App/App/Info.plist — run "npx cap add ios" first)
+android: audio permissions added 2 in android/app/src/main/AndroidManifest.xml
+native-signing: release signing config added in app/build.gradle
+native-signing: key.properties found — release builds will be SIGNED
+version 1.0.0, build 3494152
+  skipped  iOS version, build, deployment target and device family (platform not added yet)
+  skipped  iOS privacy manifest (platform not added yet)
+  skipped  iOS display name (platform not added yet)
+  stamped  Android versionName and versionCode
+  stamped  Android minSdkVersion
+  stamped  Android display name
+  target SDK 36 meets the Play requirement (36)
+```
+
+**The four lines that must be there, and what it means if they are
+not:**
+
+| Line | If missing or different |
+|---|---|
+| `android: audio permissions added 2` | **2 is the number.** "added 1" means only one of `RECORD_AUDIO` / `MODIFY_AUDIO_SETTINGS` landed, and without the second the WebView exposes no audio device however many times a student taps Allow. "already present" on a re-run is correct |
+| `native-signing: key.properties found — release builds will be SIGNED` | the other branch is `no key.properties — debug builds unaffected, release would be unsigned`. A release AAB built in that state uploads and is rejected by Play, after the upload |
+| `stamped Android versionName and versionCode` | a `skipped` here means the Android project was not found — `cap add android` did not complete |
+| `target SDK 36 meets the Play requirement (36)` | see below. **This is the most time-critical line in the run** |
+
+On Windows: run these from a shell where `node` is on PATH; the
+scripts spawn `process.execPath` rather than `npx` precisely because
+the `.bin` shim is a `.cmd` that modern Node refuses to execute. Paths
+with forward slashes in `key.properties` are fine.
+
+### The targetSdkVersion warning, verbatim, and what to do
+
+When it fires it is a `console.error`, so it goes to stderr and reads:
+
+```
+WARNING: targetSdkVersion is 35. Google Play requires 36 for new apps
+from 31 August 2026 — a lower value is rejected at submission.
+```
+
+**Play's requirement, confirmed rather than recalled: new apps and
+updates must target API 36 from 31 August 2026.** Existing apps must
+target 35 to stay available. An extension to 1 November 2026 can be
+requested.
+
+**That date is seven days away and the closed test takes fourteen.**
+So this is not a "deal with it later" line — a build that targets 35
+cannot start the clock.
+
+The good news, checked against the package rather than remembered:
+**`@capacitor/android` 8.5.0 defaults `targetSdkVersion` and
+`compileSdk` to 36.** The generated `variables.gradle` normally sets
+them explicitly to the same, and it passed on the 16 August build.
+
+**If the warning does fire**, it is one line in a generated file:
+
+```
+mobile/android/variables.gradle
+  targetSdkVersion = 36
+  compileSdkVersion = 36
+```
+
+Edit both, re-run `npm run settings`, confirm the line flips to
+`target SDK 36 meets the Play requirement`. It is not stamped
+automatically because the value is Capacitor's to set and silently
+overriding a build-system default is how you end up compiling against
+something the toolchain on that machine does not have — if 36 is
+missing, Android Studio's SDK Manager needs it before the edit will
+build.
+
 ### What the last fortnight changed that is iOS-only
 
 Most of it was shared. Listed so nothing is looked for twice:
@@ -151,6 +226,105 @@ no device or advertising IDs, **no data used for tracking, and no
 advertising or marketing purpose anywhere in the app.**
 
 ---
+
+## 2b. The rest of the Play Console flow — what the code bears on
+
+You are answering the content rating and target audience from your own
+knowledge, which is right. These are the places where something in the
+repository either contradicts that or adds a step.
+
+### The one that blocks review and is easy to miss: App access
+
+**Play asks whether any functionality is behind a login, and if so
+demands working test credentials.** Ours is: every AI feature is gated
+on a real account (`AiNotesPanel` returns "needs a real signed-in
+account" without one), and reviewers cannot see any of it otherwise.
+
+Go to **App content → App access → All or some functionality is
+restricted**, and supply the e2e test account's email and password —
+the one already in the repo secrets as `TEST_ACCOUNT_EMAIL` /
+`TEST_ACCOUNT_PASSWORD`. Add a note saying the planner itself works
+signed out and the account is only needed for the AI features.
+
+**Use the e2e account rather than a personal one**, and know the
+consequence: the e2e suite resets that account's data in `beforeAll`.
+A reviewer opening it mid-CI-run sees an empty planner. That is
+survivable — it is a planner with nothing in it, not a broken app —
+but seed it with a course and an assignment before you submit so it
+does not look empty on purpose.
+
+### Content rating (IARC)
+
+Nothing in the code raises the rating. The answers the repository
+supports:
+
+- **No violence, sexual content, profanity, gambling, or drug
+  references** — none of it is in the app or generatable by it in any
+  targeted way.
+- **Do users interact or share content with each other? NO.** There is
+  no user-to-user anything: no comments, no sharing, no profiles, no
+  chat. The blob is one student's and the RLS policies are all
+  `auth.uid() = user_id`. This is the answer that keeps the rating
+  low, and it is provable.
+- **Does the app share the user's location? NO.**
+- **Does the app allow purchases? NO** — there is no billing in the
+  app at all yet; tiers are flipped by hand in the dashboard.
+- **AI-generated content.** The questionnaire has begun asking about
+  this and it is the one place to answer carefully rather than
+  reflexively: the app **does** display model-generated text (lecture
+  summaries, practice questions, reading summaries). It is generated
+  from material the student supplied, shown only to them, and never
+  shared with another user. Answer honestly that generated content is
+  present; it does not raise the rating on its own, and being found to
+  have said otherwise would.
+
+### Target audience and content
+
+**Select 18 and over.** The app is for university students, and this
+matters more than it looks:
+
+- Any age band that **includes under-13** pulls the app into the
+  Families programme, which brings requirements this app does not meet
+  and does not want to (and would make the AI features a compliance
+  question rather than a product one).
+- Selecting **13–17** as well is defensible for sixth-formers, but it
+  triggers additional obligations around content and data. Given the
+  app collects an email address, records audio and sends supplied text
+  to third-party models, the clean answer is 18+.
+- **Do not** tick "appeal to children" — a study planner does not, and
+  the store listing has no child-directed imagery.
+
+### Ads
+
+**"Does your app contain ads?" — NO.** Provable rather than asserted:
+the bundle contains no third-party code at all, and
+`scripts/test-local-only.mjs` verifies a signed-out session makes zero
+outbound requests through `fetch`, `XMLHttpRequest`, `sendBeacon`,
+`WebSocket` or `EventSource`.
+
+### Permissions
+
+`RECORD_AUDIO` and `MODIFY_AUDIO_SETTINGS` are what we declare, plus
+`INTERNET` from Capacitor's template. **None of these is on Play's
+sensitive-permissions list** — that list is SMS, Call Log,
+`MANAGE_EXTERNAL_STORAGE` and `AccessibilityService` — so **no
+permissions declaration form is required**. Check the generated
+manifest after `cap add android` rather than trusting this paragraph:
+
+```
+findstr uses-permission mobile\android\app\src\main\AndroidManifest.xml
+```
+
+Anything beyond those three arrived from a plugin, and we have no
+plugins — so it would be worth understanding before it ships.
+
+### Not applicable, so you can answer them flatly
+
+No financial features, no health data, no news, no COVID-19 contact
+tracing, no government affiliation, no VPN, no blockchain, no loans.
+The **data deletion URL** is
+`https://www.uniplannerapp.com/delete-account` and it is already live
+and reachable, which Play does check.
 
 ## 3. The store listing
 

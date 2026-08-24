@@ -95,18 +95,62 @@ exists for.
 
 ## 3. Verify a real action bills the NEW counter — before 0013
 
-Sign in on the deployed web app, run one cheap AI action (an
-explain-it-back is a single credit), then:
+**CORRECTED. My first version of this step was wrong, in the direction
+that looks like a failed deploy.** `billAllowance` branches on the
+tier: a MONTHLY tier (`ai`, `ai_max`) calls `add_ai_credits` and writes
+`ai_usage.credits_used`; a TRIAL tier (`free`, `plus`) calls
+`add_trial_credits` and writes `profiles.trial_credits_used` — which
+has no month and never appears in `ai_usage` at all. Every account
+today is on a trial tier unless somebody flipped it by hand, so
+querying `ai_usage` and finding nothing would have looked like a
+broken deploy when the deploy was fine.
+
+### 3a. Read the BEFORE, and know which counter to watch
 
 ```sql
-select user_id, month, credits_used, updated_at
-  from public.ai_usage order by updated_at desc limit 5;
+select p.user_id,
+       p.tier,
+       p.trial_credits_used                                    as trial_counter,
+       coalesce(u.credits_used, 0)                             as monthly_counter,
+       case when p.tier in ('ai','ai_max') then 'monthly_counter'
+            else 'trial_counter' end                           as watch_this
+  from public.profiles p
+  left join public.ai_usage u
+    on u.user_id = p.user_id and u.month = to_char(now(), 'YYYY-MM')
+ where p.user_id = auth.uid();
 ```
 
-**Expect a row whose `credits_used` moved just now.** If it did not,
-`add_ai_credits` is not being called — stop here. Do not apply 0013:
-the old columns are the only working billing path until the functions
-are right, and dropping them turns a visible problem into free AI.
+Run it as the signed-in account, or replace the `where` with your own
+user id from `auth.users`. **Write down the number in the column
+`watch_this` names.**
+
+### 3b. Do one cheap action
+
+On the deployed web app, signed in: **Study → a card → "Explain it
+back"**, type a sentence, submit. That is the cheapest action in the
+app at **1 credit**, and it is a text action, so it exercises `ai-text`
+— the function whose allowance read must precede its provider call.
+
+If you would rather exercise `ai-notes` instead, a recording costs
+`MINIMUM_BILLED_CREDITS` (3) however short it is.
+
+### 3c. Read the AFTER
+
+Re-run 3a. **The counter that `watch_this` named must have gone up by
+exactly 1** (or 3 for a recording). The other counter must not have
+moved at all.
+
+| What you see | What it means |
+|---|---|
+| the named counter +1 | correct — proceed |
+| neither counter moved | the RPC is not being called. **Stop.** Check the function logs for `add_ai_credits`/`add_trial_credits` "does not exist" — that is 0011/0012/0014 not applied, or applied after the deploy |
+| the OTHER counter moved | the tier branch disagrees with the tier — read `_shared/allowance.ts` before going further |
+| the action failed with an allowance error | the trial is spent on that account; use another, or raise the tier in the dashboard |
+
+**Do not apply 0013 until the named counter has moved.** The old
+columns are the only working billing path until the functions are
+right, and dropping them turns a visible problem into free AI that
+nobody notices.
 
 ---
 
