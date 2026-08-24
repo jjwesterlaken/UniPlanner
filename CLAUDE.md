@@ -3094,6 +3094,53 @@ anything in `npm test`. For those the artifact check is a hardware or
 dashboard step, and it belongs on `MOBILE-BUILD.md`'s list rather than
 being approximated by a source grep that would pass either way.
 
+### A GREEN GUARD MUST BE ABLE TO SAY WHAT IT CHECKED
+
+Six instances, and **they were not all the artifact rule** — which is
+why writing that rule down did not stop them recurring. Two different
+classes were being filed under one heading:
+
+**A. The guard read the wrong thing.** `npm test` green at 20 of 21
+files; a tracked `coverage/` under a correct `.gitignore`; a CSS rule
+present in the commit and absent from the computed output. Covered by
+the artifact rule above, and that rule works.
+
+**B. The guard read the right thing and then checked nothing.** A
+derived set that came back empty, so `for (const x of set) assert(…)`
+passed vacuously. A light-mode ground that matched the shell's colour
+by coincidence, so the comparison could not discriminate. A
+synchronous runner handed an `async` test, so the assertions ran after
+the summary was printed and the exit code decided — three tests
+reported green before they could assert anything.
+
+**B is the one that keeps recurring, and it recurs because it is
+invisible by construction: the symptom of a vacuous pass is a pass.**
+No amount of care spots it, because there is nothing to spot. It has
+to be made mechanical.
+
+`scripts/test-vacuous-guards.mjs` does that for the two shapes a
+script can detect:
+
+- **a derived set, iterated, never asserted non-empty.** Twelve such
+  sites existed when this was written and seven others already had the
+  assertion — so the practice was instinct, not rule. The count is a
+  ratchet: new code cannot add to it, and it fails if the real number
+  drops below the recorded one, because a ratchet nobody tightens is
+  just a ceiling.
+- **a synchronous runner that accepts a thenable.** Five more suites
+  had the same landmine as `test-site.mjs`; all now throw rather than
+  count a pass.
+
+The two shapes it CANNOT see, named because that is where the seventh
+will arrive: a comparison between two values that are equal for an
+unrelated reason (the colour coincidence — the remedy is to assert
+the two sides *differ* somewhere first), and a fake that swallows
+calls so everything downstream agrees (the canvas context, recorded
+above). Both are semantic and need a person.
+
+The general form, and it is worth applying beyond tests: **when a
+check finds nothing, that is a result to assert, not a reason to pass.**
+
 ### The sibling failure: a guard scoped to a FILE, not to a CLAIM
 
 Sixteenth instance, and it is worth its own heading because the fix is

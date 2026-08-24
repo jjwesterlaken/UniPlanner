@@ -26,7 +26,13 @@ import { AI_NOTES_COPY } from "../src/aiNotesCopy.js";
 
 let passed = 0;
 function test(name, fn) {
-  fn();
+  const r = fn();
+  /* This runner has no try/catch — a throw fails the run outright,
+     which is what an async test here deserves: it would otherwise be
+     counted green with its assertions still pending. */
+  if (r && typeof r.then === "function") {
+    throw new Error("this runner is synchronous — an async test would be reported green whatever it asserts");
+  }
   passed++;
   console.log(`  ok  ${name}`);
 }
