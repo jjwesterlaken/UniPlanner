@@ -7,6 +7,7 @@
    a label; those two are the difference between a student being charged
    for an hour of nothing and not being. */
 
+import fs from "node:fs";
 import assert from "node:assert/strict";
 import {
   describeCapabilities,
@@ -19,12 +20,19 @@ import {
   AUDIO_SOURCES,
   AUDIO_INPUT_STORE_KEY,
   ROOM_HIGHPASS_HZ,
+  MIC_SAMPLE_RATE,
 } from "../src/audioSources.js";
 import { AI_NOTES_COPY } from "../src/aiNotesCopy.js";
 
 let passed = 0;
 function test(name, fn) {
-  fn();
+  const r = fn();
+  /* This runner has no try/catch — a throw fails the run outright,
+     which is what an async test here deserves: it would otherwise be
+     counted green with its assertions still pending. */
+  if (r && typeof r.then === "function") {
+    throw new Error("this runner is synchronous — an async test would be reported green whatever it asserts");
+  }
   passed++;
   console.log(`  ok  ${name}`);
 }
@@ -279,3 +287,47 @@ test("the device preference is stored outside the synced blob", () => {
 });
 
 console.log(`\n${passed} audio source tests passed\n`);
+
+/* ---------- the graph is built in the shape the mic was asked for ---------- */
+
+test("the graph reads the SAME rate the constraints ask for", () => {
+  /* The defect this closes: micConstraints asked for 16 kHz mono and
+     buildGraph created `new AudioCtx()` — the hardware default, 48 kHz
+     on iOS — with a stereo destination, so the recorder never saw the
+     track the constraint produced. Measured on device:
+     micTrackSettings.sampleRate 16000, defaultContextSampleRate 48000.
+
+     Both numbers now come from one constant, which is the only thing
+     that makes them unable to disagree. */
+  assert.equal(micConstraints().sampleRate, MIC_SAMPLE_RATE);
+  assert.equal(systemConstraints().sampleRate, MIC_SAMPLE_RATE);
+
+  const src = fs.readFileSync(new URL("../src/aiNotes.jsx", import.meta.url), "utf8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+  /* THE CALL SITES, not the region. Slicing from makeContext to start()
+     pulls in the helpers' own definitions, so "channelCount: 1 appears
+     somewhere in here" stayed true when buildGraph stopped CALLING
+     monoDestination — checked by mutation, and it passed. A guard whose
+     subject is a call has to name the call. */
+  const build = code.slice(code.indexOf("const buildGraph"), code.indexOf("const start ="));
+  assert.match(build, /makeContext\(AudioCtx, MIC_SAMPLE_RATE\)/, "buildGraph no longer builds its context at the microphone's rate");
+  assert.match(build, /monoDestination\(ctx\)/, "buildGraph takes the default stereo destination again — a mono constraint discarded one node later");
+  assert.ok(
+    !/new AudioCtx\(\)|createMediaStreamDestination\(\)/.test(build),
+    "buildGraph constructs a default context or destination directly, bypassing the helpers that carry the fallbacks"
+  );
+});
+
+test("both graph settings DEGRADE rather than fail the recording", () => {
+  /* A rate a platform refuses throws NotSupportedError from the
+     AudioContext constructor. A recording at the wrong sample rate
+     beats one that does not happen — the same call buildGraph already
+     makes by returning null rather than throwing. */
+  const src = fs.readFileSync(new URL("../src/aiNotes.jsx", import.meta.url), "utf8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+  const ctxFn = code.slice(code.indexOf("const makeContext"), code.indexOf("const monoDestination"));
+  assert.match(ctxFn, /catch[\s\S]*new AudioCtx\(\)/, "makeContext has no fallback — an unsupported rate would kill the recording");
+  const destFn = code.slice(code.indexOf("const monoDestination"), code.indexOf("const buildGraph"));
+  assert.match(destFn, /createMediaStreamDestination\(\)/, "monoDestination has no factory fallback");
+  assert.equal((destFn.match(/catch/g) || []).length, 2, "monoDestination stopped tolerating a platform that refuses either route");
+});

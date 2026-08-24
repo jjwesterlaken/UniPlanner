@@ -2,10 +2,8 @@
   "appId": "com.uniplannerapp.planner",
   "appName": "University Planner",
   "webDir": "www",
-  "backgroundColor": "#f5f5f4",
   "ios": {
-    "contentInset": "always",
-    "backgroundColor": "#f5f5f4"
+    "contentInset": "always"
   },
   "android": {
     "backgroundColor": "#f5f5f4"

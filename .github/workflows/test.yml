@@ -133,6 +133,19 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
+      - name: What the built page actually computes
+        # Runs HERE rather than in the npm test job, because this is the
+        # job that has a browser. REQUIRE_BROWSER turns "no Chromium"
+        # from a skip into a failure, the same arrangement as
+        # REQUIRE_POSTGRES and REQUIRE_E2E: a check that quietly stops
+        # running is how the next artifact-vs-source bug ships.
+        #
+        # It needs no credentials — it loads dist-web from the file
+        # system — so it runs before the journeys and fails fast.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-computed-ground.mjs
+
       - name: Run the three journeys
         # Against the live Supabase project with a dedicated test account
         # (see e2e/helpers.mjs for why its data cannot accumulate).

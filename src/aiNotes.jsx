@@ -20,8 +20,8 @@ import {
   buildConsentPatch,
   pickSupportedMimeType,
   RECORDER_AUDIO_BITS_PER_SECOND,
-  MONTHLY_MINUTES_LIMIT_HINT,
-  MINIMUM_BILLED_MINUTES_HINT,
+  uploadRefusal,
+  MINIMUM_BILLED_CREDITS_HINT,
   describeRecorderError,
   parseAiNotesError,
   PERMANENT_FAILURE_CODES,
@@ -38,7 +38,7 @@ import {
   defaultCardSelection,
   folderForRecording,
   DEFAULT_CARDS_SELECTED,
-  RESUMMARISE_BILLED_MINUTES_HINT,
+  RESUMMARISE_BILLED_CREDITS_HINT,
 } from "./aiNotesLogic.js";
 import {
   describeCapabilities,
@@ -51,10 +51,12 @@ import {
   loadPreferredInput,
   savePreferredInput,
   ROOM_HIGHPASS_HZ,
+  MIC_SAMPLE_RATE,
   AUDIO_SOURCES,
 } from "./audioSources.js";
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
 import { noteCache } from "./noteCache.js";
+import { MONTHLY_CREDITS_LIMIT } from "./aiTextLimits.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes, callResummarise } from "./aiNotesClient.js";
 import { nowISO, supabase } from "./sync.js";
@@ -78,16 +80,26 @@ function UsageBadge({ session }) {
   }, [session && session.user.id]);
 
   if (!usage || usage.unavailable) return null;
-  const near = usage.minutesUsed >= MONTHLY_MINUTES_LIMIT_HINT * 0.9;
+  /* THE SHAPE, NOT JUST THE NUMBER. A trial tier's 60 credits are
+     once-ever, so the words "this month" would be a lie that reads as a
+     promise — a student who waits for a reset that never comes is a
+     support ticket, and an angry one. The tier decides both halves. */
+  const { credits: limit, perMonth } = allowanceForTier(usage.tier);
+  const near = usage.creditsUsed >= limit * 0.9;
   return (
     <div className={`mb-3 rounded-lg px-3 py-2 text-xs ${near ? "bg-amber-50 text-amber-800" : "bg-stone-100 text-stone-500"}`}>
       <div className="flex items-center gap-1.5">
         {near && <TriangleAlert size={13} />}
-        {Math.round(usage.minutesUsed)} of {MONTHLY_MINUTES_LIMIT_HINT} AI minutes used this month
+        {Math.round(usage.creditsUsed)} of {limit} AI credits used{perMonth ? " this month" : ""}
       </div>
+      {!perMonth && (
+        /* Said once, plainly, rather than left to be inferred from the
+           absence of "this month". */
+        <p className="mt-1 opacity-80">{AI_NOTES_COPY.trialAllowance(limit)}</p>
+      )}
       {/* Disclosed here rather than discovered by watching the counter
           jump after a two-minute recording. */}
-      <p className="mt-1 opacity-80">{AI_NOTES_COPY.minimumBilling(MINIMUM_BILLED_MINUTES_HINT)}</p>
+      <p className="mt-1 opacity-80">{AI_NOTES_COPY.minimumBilling(MINIMUM_BILLED_CREDITS_HINT)}</p>
     </div>
   );
 }
@@ -126,6 +138,11 @@ function useLectureRecorder() {
 
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
+  /* The candidate pickSupportedMimeType() chose, held so the stop
+     handler can carry its extension through. A ref rather than state:
+     nothing renders from it, and it must survive the closure that
+     outlives the panel. */
+  const pickedRef = useRef(null);
   /* An ARRAY now: "Both" holds a microphone stream and a display stream
      at once, and the display one carries a video track we never record
      but do keep alive (see startCapture). All of them have to be
@@ -230,11 +247,67 @@ function useLectureRecorder() {
      single source (fall back to the raw stream, losing the filter and
      the meter — exactly the behaviour before this feature) and fatal
      for "Both", where mixing is the entire point. */
+  /* Asks for the rate, falls back to the platform default. Separated
+     out so the fallback is visible rather than buried in a ternary
+     inside a try that already swallows a different failure. */
+  const makeContext = (AudioCtx, sampleRate) => {
+    try {
+      return new AudioCtx({ sampleRate });
+    } catch (e) {
+      return new AudioCtx();
+    }
+  };
+
+  /* A mono destination, by whichever route the platform offers. The
+     constructor form takes the channel count directly; the factory does
+     not, so the property is set after. Either way a failure leaves the
+     default stereo node rather than no node at all. */
+  const monoDestination = (ctx) => {
+    try {
+      if (typeof MediaStreamAudioDestinationNode === "function") {
+        return new MediaStreamAudioDestinationNode(ctx, { channelCount: 1, channelCountMode: "explicit" });
+      }
+    } catch (e) {
+      /* fall through to the factory */
+    }
+    const dest = ctx.createMediaStreamDestination();
+    try {
+      dest.channelCount = 1;
+      dest.channelCountMode = "explicit";
+    } catch (e) {
+      /* a platform that refuses gets stereo, which is what it did before */
+    }
+    return dest;
+  };
+
   const buildGraph = ({ micStream, sysStream }) => {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtx();
-      const dest = ctx.createMediaStreamDestination();
+      /* THE GRAPH IS BUILT IN THE SHAPE WE ASKED THE MICROPHONE FOR.
+
+         micConstraints() requests 16 kHz mono — the rate Whisper works
+         at — and until now the recorder never saw that track. `new
+         AudioCtx()` takes the hardware default (48 kHz on iOS) and
+         `createMediaStreamDestination()` defaults to STEREO, so the
+         constraint was satisfied at the microphone and then discarded
+         one node later. The recorder was handed 48 kHz stereo on every
+         platform.
+
+         THIS IS NOT A BITRATE FIX, and the measurement is why. Rows
+         1/2/3 of tools/measure-audio.html came back 51 / 49 / 50 kbps
+         — raw mic, this graph, and a 16 kHz mono graph are
+         indistinguishable, because iOS's Opus encoder clamps around
+         50 kbps whatever it is fed. What this buys is that the code
+         stops misrepresenting what it does, and that six times fewer
+         samples go through a biquad filter on a phone for three hours.
+
+         BOTH SETTINGS DEGRADE RATHER THAN FAIL. A rate a platform
+         refuses throws NotSupportedError from the constructor, and a
+         recording that works at the wrong sample rate beats one that
+         does not happen — which is the same call buildGraph already
+         makes by returning null rather than throwing. */
+      const ctx = makeContext(AudioCtx, MIC_SAMPLE_RATE);
+      const dest = monoDestination(ctx);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
 
@@ -289,6 +362,7 @@ function useLectureRecorder() {
 
     streamsRef.current = [micStream, sysStream].filter(Boolean);
     chunksRef.current = [];
+    pickedRef.current = picked;
     const recorder = new MediaRecorder(recordedStream, {
       mimeType: picked.mimeType,
       audioBitsPerSecond: RECORDER_AUDIO_BITS_PER_SECOND,
@@ -419,7 +493,17 @@ function useLectureRecorder() {
         );
         cleanupStream();
         // A UUID, not uid(): this value goes into a `uuid` column.
-        dispatch({ type: "stop", blob, mimeType, idempotencyKey: newIdempotencyKey(), estimatedDurationSeconds });
+        dispatch({
+          type: "stop",
+          blob,
+          mimeType,
+          /* The candidate that was picked, not a lookup on
+             recorder.mimeType — which a platform may return with extra
+             codec parameters that no exact-match map would recognise. */
+          extension: pickedRef.current && pickedRef.current.extension,
+          idempotencyKey: newIdempotencyKey(),
+          estimatedDurationSeconds,
+        });
         resolve();
       };
       recorder.stop();
@@ -684,7 +768,9 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
         message:
           err && err.code === "transcript_expired"
             ? AI_NOTES_COPY.summaryFailed.retryExpired()
-            : AI_NOTES_COPY.summaryFailed.retryFailed,
+            : err && err.code === "already_summarised"
+              ? AI_NOTES_COPY.summaryFailed.retryAlreadyDone
+              : AI_NOTES_COPY.summaryFailed.retryFailed,
       });
     }
   };
@@ -724,7 +810,7 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
         {onRetrySummary && (
           <div className="space-y-2 rounded-lg border border-stone-200 p-3">
             <p className="text-xs text-stone-600">
-              {AI_NOTES_COPY.summaryFailed.retryCost(RESUMMARISE_BILLED_MINUTES_HINT)}
+              {AI_NOTES_COPY.summaryFailed.retryCost(RESUMMARISE_BILLED_CREDITS_HINT)}
             </p>
             {retryState.status === "error" && (
               <p role="status" className="text-xs text-rose-700">
@@ -893,6 +979,16 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
   const [selectedCards, setSelectedCards] = useState(null);
 
   const runUpload = async () => {
+    /* BEFORE the key is parked, deliberately. Parking first would leave
+       a recovery card pointing at a recording that can never be
+       uploaded — the student would be offered a retry that fails
+       identically every time, which is worse than a clean refusal. */
+    const refusal = uploadRefusal(state.blob && state.blob.size);
+    if (refusal) {
+      const copy = AI_NOTES_COPY.tooLarge(refusal);
+      dispatch({ type: "uploadFailed", code: refusal.code, message: `${copy.title} ${copy.detail}` });
+      return;
+    }
     dispatch({ type: "upload" });
     /* Park the key in the synced blob BEFORE the upload, not after: the
        whole point is to survive the app closing, and the window where
@@ -916,6 +1012,7 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
         session,
         audioBlob: state.blob,
         mimeType: state.mimeType,
+        extension: state.extension,
         idempotencyKey: state.idempotencyKey,
       });
       const result = await callAiNotes({
@@ -1095,8 +1192,18 @@ export function RecordingIndicator({ recording, onOpen, liftedForNav = false }) 
        and "I can't stop it" is a privacy problem before it is a
        usability one. */
     <div
-      className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-3 pointer-events-none"
-      style={liftedForNav ? { paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 4.25rem)" } : undefined}
+      className="fixed inset-x-0 bottom-0 z-40 flex justify-center pointer-events-none"
+      /* The bottom inset is UNCONDITIONAL now. It used to apply only
+         when the indicator was lifted over the tab bar, so on a layout
+         without that bar the pill sat in the home-indicator strip. The
+         nav's own inset covers the lifted case either way, so this
+         costs nothing where it was already right. px-3 is in the style
+         for the same reason main's px-4 is: the inset must add. */
+      style={{
+        paddingLeft: "calc(0.75rem + env(safe-area-inset-left, 0px))",
+        paddingRight: "calc(0.75rem + env(safe-area-inset-right, 0px))",
+        paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + ${liftedForNav ? "4.25rem" : "0.75rem"})`,
+      }}
     >
       <div className="pointer-events-auto flex w-full max-w-md items-center gap-2 rounded-xl border border-stone-200 bg-surface/95 px-3 py-2 shadow-lg backdrop-blur">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onOpen}>

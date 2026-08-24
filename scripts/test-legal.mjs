@@ -435,6 +435,10 @@ async function run() {
     "uni-planner-demo-session": { noUserContent: "demo sign-in bookkeeping; the policy covers demo mode wholesale" },
     "uni-planner-demo-cloud": { documented: { privacy: /stores everything locally and syncs nothing/i, deletion: /local copy/i } },
     "uni-planner-device-id": { noUserContent: "a random id distinguishing devices during merge; not derived from the device or the user" },
+    "uni-planner-force-mime": {
+      noUserContent:
+        "a DIAGNOSTIC override naming which audio container to record in, for one measurement comparing mp4/AAC against webm/Opus through the real transcription path. Unset by default, written by no screen in the app, and validated against the candidate list so it can only ever name a format the recorder already offers. It holds one mime-type string — none of the student's work, and nothing about them",
+    },
     "uni-planner-audio-input": {
       noUserContent:
         "which microphone to record from, by the browser's own device id and its label. Device-local by design — it is never synced and never uploaded — and holds none of the student's work; nothing recorded, transcribed or written passes through it",

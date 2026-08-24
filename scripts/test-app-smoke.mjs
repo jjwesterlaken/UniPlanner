@@ -719,7 +719,7 @@ for (const [tabName, phrases] of [
       "  document.body.appendChild(host);\n" +
       "  createRoot(host).render(\n" +
       '    <SummariseNote session={{ token: "t", user: { id: "u" } }} page={page}\n' +
-      "      allowanceApi={{ allowance: { tier: \"free\", limit: 10, used: 0, remaining: 10, fraction: 0, isFree: true }, applyFraction: () => {} }}\n" +
+      "      allowanceApi={{ allowance: { tier: \"free\", limit: 10, used: 0, remaining: 10, fraction: 0, perMonth: false }, applyFraction: () => {} }}\n" +
       "      onSummarised={() => {}} />\n" +
       "  );\n" +
       "  return host;\n" +
@@ -816,7 +816,7 @@ for (const [tabName, phrases] of [
     /* Summarising a reading, mounted the same way and for the same
        reason: it is gated on a real session, so the demo-mode tab walk
        cannot reach it either. */
-    const allowance = { tier: "free", limit: 10, used: 0, remaining: 10, fraction: 0, isFree: true };
+    const allowance = { tier: "free", limit: 10, used: 0, remaining: 10, fraction: 0, perMonth: false };
     const reading = { id: "r1", course: "PHYS1001", week: "3", pages: "ch. 4" };
 
     /* Collapsed is the state that ships on every reading row, so it is

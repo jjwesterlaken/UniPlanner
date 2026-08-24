@@ -32,9 +32,40 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 
 const SRC = "dist-web";
 const TARGETS = ["desktop/www", "mobile/www"];
+const TOOLS = "tools";
+
+/* ---------- what a PACKAGED app may contain ----------
+
+   dist-web is the WEB deploy. A store bundle is a different artifact
+   with different rules, and copying one into the other wholesale put
+   two things inside a submitted app that had no business there:
+
+   `site/` is the marketing page — it carries PRICES and external
+   GitHub download links. Neither store looks kindly on an app bundle
+   containing links to buy or download outside the store, and it is
+   dead weight besides: nothing in the app can reach it.
+
+   `measure-audio.html` asks for the microphone. It exists for one
+   measurement and belongs in a diagnostic build, not in the one
+   twelve testers install.
+
+   DECLARED WITH REASONS RATHER THAN LISTED, and the guard in
+   test-service-worker.mjs enumerates dist-web's top level and fails on
+   anything that appears in neither map — so a new asset forces the
+   decision instead of being copied by default. */
+const NATIVE_EXCLUDED = {
+  "sw.js": "a worker inside a packaged app can serve files from before a store update replaced them",
+  site: "the marketing page: prices and external download links do not belong in a store bundle",
+  "_headers": "Cloudflare Pages directives, meaningless anywhere but the web host",
+};
+
+/* Copied only when asked for. `INCLUDE_TOOLS=1 npm run build` produces
+   a diagnostic build; a release build must not carry these. */
+const INCLUDE_TOOLS = process.env.INCLUDE_TOOLS === "1";
 
 if (!fs.existsSync(SRC)) {
   throw new Error(`${SRC} not found - run "npm run build:web" first`);
@@ -51,15 +82,32 @@ for (const target of TARGETS) {
   fs.mkdirSync(target, { recursive: true });
 
   for (const entry of fs.readdirSync(SRC, { withFileTypes: true })) {
-    // Not wanted inside a packaged app -- and see the header: this is
-    // the half of the strip that is still doing real work.
-    if (entry.name === "sw.js") continue;
+    if (NATIVE_EXCLUDED[entry.name]) continue;
     const from = path.join(SRC, entry.name);
     const to = path.join(target, entry.name);
     if (entry.isDirectory()) {
       fs.cpSync(from, to, { recursive: true });
     } else {
       fs.copyFileSync(from, to);
+    }
+  }
+
+  /* DIAGNOSTICS THAT SHIP TO THE SHELLS AND NOT TO THE WEB.
+
+     measure-audio.html asks for the microphone, so a public copy on the
+     app's origin undercuts the zero-third-party, nothing-leaves-the-
+     device positioning for no benefit — Jared's ruling. But it has to
+     run INSIDE WKWebView to answer anything, so it cannot simply be
+     deleted.
+
+     It lives in tools/ rather than public/ and is copied in here. That
+     way the rule is structural: public/ means "ships to the web",
+     tools/ means "packaged shells only", and there is no filename
+     exclusion list in build-web.mjs to drift out of step with what is
+     really in the folder. */
+  if (INCLUDE_TOOLS) {
+    for (const name of fs.readdirSync(TOOLS)) {
+      fs.copyFileSync(path.join(TOOLS, name), path.join(target, name));
     }
   }
 

@@ -203,6 +203,102 @@ async function run() {
       assert.ok(html.includes("<body"), `${shell}/index.html lost its body`);
       assert.ok(html.includes("app.js"), `${shell}/index.html no longer loads the app`);
     }
+
+    /* THE tools/ SPLIT, asserted in both directions.
+
+       measure-audio.html asks for the microphone, and a public copy of
+       it on the app's own origin undercuts the nothing-leaves-the-device
+       positioning for no benefit. But it only answers anything from
+       INSIDE WKWebView, so it cannot just be deleted.
+
+       So the rule is structural rather than a filename exclusion list:
+       public/ is what ships to the web, tools/ is what only the
+       packaged shells get, and prepare-native copies the second in.
+       Both halves are checked, because either one alone is satisfiable
+       by deleting the file. */
+    const tools = fs.readdirSync(path.join(rootDir, "tools"));
+    assert.ok(tools.length > 0, "tools/ is empty — if the diagnostics were removed, remove this guard too");
+    for (const name of tools) {
+      assert.ok(
+        !fs.existsSync(path.join(rootDir, "dist-web", name)),
+        `${name} reached the WEB build — tools/ is for the packaged shells only`
+      );
+      /* A RELEASE build must not carry them. The default run above was
+         a release build; INCLUDE_TOOLS=1 is what a diagnostic build
+         sets, and that is checked separately below. */
+      for (const shell of ["desktop/www", "mobile/www"]) {
+        assert.ok(
+          !fs.existsSync(path.join(rootDir, shell, name)),
+          `${name} is in ${shell} after a RELEASE build — a microphone diagnostic must not ship to twelve testers`
+        );
+      }
+    }
+
+    /* And it still REACHES the shells when asked for, or the mp4
+       comparison has nowhere to run. Both halves, because either alone
+       is satisfiable by deleting the file. */
+    execFileSync(process.execPath, [path.join(rootDir, "scripts/prepare-native.mjs")], {
+      cwd: rootDir,
+      stdio: "pipe",
+      env: { ...process.env, INCLUDE_TOOLS: "1" },
+    });
+    for (const name of tools) {
+      for (const shell of ["desktop/www", "mobile/www"]) {
+        assert.ok(
+          fs.existsSync(path.join(rootDir, shell, name)),
+          `${name} did not reach ${shell} even with INCLUDE_TOOLS=1 — it cannot answer anything outside the shell`
+        );
+      }
+    }
+  });
+
+  await test("EVERY built asset is classified before it can reach a store bundle", () => {
+    /* THE ONE THAT SHIPPED. dist-web is the WEB deploy and a store
+       bundle is a different artifact, but prepare-native copied one
+       into the other wholesale — so `site/`, the marketing page, went
+       inside the submitted iOS build carrying PRICES and external
+       GitHub download links. Nothing in the app can reach it, and
+       neither store looks kindly on finding one.
+
+       An exclusion list alone would have the same shape as the bug: it
+       only knows about what somebody remembered. So the top level of
+       dist-web is enumerated and every entry must be either declared
+       as shipped or declared as excluded WITH A REASON. A new asset
+       fails here until someone decides which it is. */
+    const SHIPPED = {
+      "index.html": "the app shell",
+      "app.js": "the bundle",
+      "app.css": "the stylesheet",
+      fonts: "self-hosted, so the packaged app has them offline",
+      "manifest.webmanifest": "harmless in a shell; the PWA install path ignores it there",
+      "icon-192.png": "referenced by the manifest",
+      "icon-512.png": "referenced by the manifest",
+      "apple-touch-icon.png": "referenced by index.html",
+      "privacy.html": "the published policy, also linked absolutely — a local copy costs nothing and works offline",
+      "delete-account.html": "as above, and Google Play requires the page to be reachable",
+    };
+
+    const prepare = fs.readFileSync(path.join(rootDir, "scripts/prepare-native.mjs"), "utf8");
+    const block = prepare.slice(prepare.indexOf("const NATIVE_EXCLUDED"), prepare.indexOf("const INCLUDE_TOOLS"));
+    const excluded = [...block.matchAll(/^\s*"?([A-Za-z_][\w.\-]*)"?:\s*"([^"]{20,})"/gm)].map((m) => m[1]);
+    assert.ok(excluded.length >= 3, `expected the exclusion map, parsed ${excluded.length} entries`);
+
+    const unclassified = fs
+      .readdirSync(path.join(rootDir, "dist-web"))
+      .filter((name) => !SHIPPED[name] && !excluded.includes(name));
+    assert.deepEqual(
+      unclassified,
+      [],
+      `dist-web now contains ${unclassified.join(", ")}, which prepare-native would copy into every store bundle ` +
+        "without anyone deciding it should. Declare it in SHIPPED here, or in NATIVE_EXCLUDED with a reason."
+    );
+
+    for (const name of excluded) {
+      assert.ok(
+        !fs.existsSync(path.join(rootDir, "mobile/www", name)),
+        `${name} is excluded from packaged apps and is in mobile/www anyway`
+      );
+    }
   });
 
   await test("index.html keeps the markers prepare-native strips between", () => {

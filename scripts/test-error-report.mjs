@@ -34,15 +34,32 @@ const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 let passed = 0;
 let failed = 0;
+/* QUEUED, NOT EXECUTED ON THE SPOT, because most of these tests are
+   async and the old runner called them synchronously: `fn()` returned
+   a promise, nothing threw, a pass was counted, and every assertion
+   inside ran after the summary had printed and the exit code had been
+   decided. SEVEN tests in this file were reporting green while
+   asserting nothing, found by scripts/test-vacuous-guards.mjs.
+
+   Awaiting is the right fix here rather than forbidding async — these
+   tests genuinely need it. The queue is what makes the summary come
+   last. */
+const queue = [];
 function test(name, fn) {
-  try {
-    fn();
-    passed++;
-    console.log(`  ok  - ${name}`);
-  } catch (err) {
-    failed++;
-    console.error(`FAIL  - ${name}`);
-    console.error(`        ${err.message}`);
+  queue.push([name, fn]);
+}
+
+async function runAll() {
+  for (const [name, fn] of queue) {
+    try {
+      await fn();
+      passed++;
+      console.log(`  ok  - ${name}`);
+    } catch (err) {
+      failed++;
+      console.error(`FAIL  - ${name}`);
+      console.error(`        ${err.message}`);
+    }
   }
 }
 
@@ -232,5 +249,13 @@ test("npm test runs this file", () => {
   assert.match(pkg.scripts.test, /test-error-report\.mjs/);
 });
 
+await runAll();
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
+/* A suite that ran nothing at all is a failure, not a quiet success —
+   the same rule the derived-set guard applies to a set. */
+if (passed === 0) {
+  console.error("no results at all — treating that as a failure");
+  process.exit(1);
+}

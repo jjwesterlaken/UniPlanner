@@ -22,6 +22,13 @@
    again.
    ================================================================== */
 
+import {
+  CHARS_PER_TOKEN,
+  USD_PER_1M_INPUT,
+  USD_PER_1M_OUTPUT,
+  creditsFor,
+} from "../_shared/credits.ts";
+
 export const SUMMARY_PROVIDER = "openai";
 
 export const TASKS = ["practice", "explain", "weakspots", "summarise", "merge"] as const;
@@ -88,28 +95,39 @@ export const MAX_INPUT_CHARS: Record<Task, number> = {
 
    PHOTOS ARE PRICED AS PARTS OF THE READING, NOT AS A SECOND SCHEME.
    The client batches photos the same way it chunks long text: each
-   batch of up to PHOTOS_PER_CHUNK pages is one `summarise` request (3
-   units), further batches are further chunks, merge is 1 as today. So
+   batch of up to PHOTOS_PER_CHUNK pages is one `summarise` request,
+   further batches are further chunks, and the merge is one more. So
    the whole pipeline -- pre-flight estimate in parts, the
    keep-what-was-charged partial-failure rule, the merge -- is the
    EXISTING one, and there is no image-specific billing arithmetic to
    drift.
 
-   Why one batch prices like one text chunk, shown rather than asserted:
-   gpt-4o-mini bills an image as input tokens, ~85 base + ~170 per
-   512px tile at high detail. A page photo downscaled client-side to
-   ~1536px on the long edge is 4-6 tiles, so:
+   WHY ONE BATCH IS PRICED LIKE ONE TEXT CHUNK IS NO LONGER TRUE, and
+   the comment that used to stand here is the reason this file now
+   carries a warning instead of a derivation.
 
-     one photo        ~765-1,105 input tokens   ~$0.00012-0.00017
-     a batch of 4     ~3,100-4,400              ~$0.0005-0.0007
-     one text chunk   20,000 chars ~ 5,000      ~$0.00075
+   It showed its arithmetic — "gpt-4o-mini bills an image as input
+   tokens, ~85 base + ~170 per 512px tile" — and every step after those
+   two numbers was right. The numbers were gpt-4o's. gpt-4o-mini bills
+   an image at 2,833 base + 5,667 a tile, because its text tokens are so
+   cheap that OpenAI charges images at a token multiple; an image costs
+   about TWICE on the mini model what it costs on the big one. So a
+   6-tile A4 page is 36,835 input tokens, not 1,105, and a batch of four
+   costs about 12x a full 20,000-character text chunk rather than
+   slightly less. Confirmed against OpenAI's vision guide, 20 August
+   2026. Thirteenth entry in the restatement ledger and the first where
+   the restated value belonged to a model we do not use.
 
-   A full batch of photos costs slightly LESS input than a full text
-   chunk, and the output is the same summary either way -- so weight 3
-   per batch is conservative in the right direction. The derived
-   billing test covers these constants; if the provider's image pricing
-   model changes, change IMAGE_BASE_TOKENS/IMAGE_TILE_TOKENS and the
-   test re-runs the comparison. */
+   PHOTOS ARE STILL PRICED AS PARTS OF THE READING, and that part was
+   never in doubt: the client batches photos the same way it chunks long
+   text, so the pre-flight estimate in parts, the
+   keep-what-was-charged partial-failure rule and the merge are all the
+   EXISTING pipeline. What is wrong is only the weight, and
+   PHOTO_BATCH_CREDITS below says what is being done about it.
+
+   IMAGE_BASE_TOKENS and IMAGE_TILE_TOKENS are corrected below so the
+   test that reads them computes the true comparison rather than a
+   flattering one. */
 export const PHOTOS_PER_CHUNK = 4;
 export const MAX_READING_PHOTOS = 16; // mirrors MAX_READING_CHUNKS * PHOTOS_PER_CHUNK
 
@@ -118,11 +136,26 @@ export const MAX_READING_PHOTOS = 16; // mirrors MAX_READING_CHUNKS * PHOTOS_PER
    is an un-downscaled original, which the client never sends. */
 export const MAX_IMAGE_BASE64_CHARS = 700_000;
 
-/* The provider's image-token model, mirrored for the derivation above
-   and its test. Published figures, not measurements. */
-export const IMAGE_BASE_TOKENS = 85;
-export const IMAGE_TILE_TOKENS = 170;
-export const IMAGE_MAX_TILES = 6; // a 1536px long edge at high detail
+/* The provider's image-token model for the model we actually call.
+   Published figures, not measurements — gpt-4o-mini, confirmed against
+   OpenAI's vision guide on 20 August 2026. gpt-4o's 85/170 is what used
+   to be here, and it is 33x lower.
+
+   These MOVE WITH VISION_MODEL. The newer mini and nano models do not
+   tile at all: they cover the image in 32x32 patches, cap it at a patch
+   budget and apply a per-model multiplier, which takes the same page
+   from 36,835 tokens to about 1,800. When _shared/model.ts moves,
+   these constants and PHOTO_BATCH_CREDITS move in the same commit. */
+export const IMAGE_BASE_TOKENS = 2833;
+export const IMAGE_TILE_TOKENS = 5667;
+
+/* A 1536px long edge at high detail. The tiler scales the SHORTEST side
+   to 768px in both directions, so a portrait A4 page is 2 x 3 tiles
+   whatever it was downscaled to — sending a smaller photo saves nothing
+   under tiling, and that is settled rather than suspected. Under patch
+   tokenisation it becomes a real lever again, which is why maxEdge and
+   the model are one decision. */
+export const IMAGE_MAX_TILES = 6;
 
 /* ---------- readings ----------
 
@@ -145,47 +178,68 @@ export const WEAKSPOTS_MAX_TOPICS = 40;
 
 /* ---------- metering ----------
 
-   Weighted by output ceiling, because that is what dominates cost:
-   gpt-4o-mini charges 4x more for output than input, and the input caps
-   above are already tight.
+   ONE CURRENCY. A credit is a minute of recorded lecture, and every
+   task's price is DERIVED from what it costs at its own ceilings — the
+   input cap it already declares and the output cap it already declares,
+   at the published rates in _shared/credits.ts.
 
-     explain    600 tokens -> 1
-     weakspots  800        -> 1
-     practice  1500        -> 2
-     summarise 2000        -> 3   (largest input as well as largest output)
+   Nothing here is chosen. The previous version of this block was a
+   hand-written table justified by a paragraph of reasoning about output
+   ceilings, and the reasoning was sound; the problem is that it stayed
+   frozen while the thing it reasoned about moved. A raised
+   MAX_INPUT_CHARS or MAX_TOKENS now re-prices its task automatically,
+   which is the only arrangement that survives somebody changing a
+   ceiling and not thinking about the bill.
 
-   150 a month is roughly a text feature used five times a day, every
-   day, which is well past what a student doing this earnestly would
-   reach and comfortably inside what it costs us: at the ceilings above,
-   150 units of the most expensive mix is under $0.20.
+   Priced at the CEILINGS, not at a typical case, so the number is an
+   upper bound on what any single call can cost us. `merge` moves from 1
+   to 2 under this: it was weighted down for its smaller input, which
+   was true and no longer decides anything, because output is four times
+   the price of input and merge's output ceiling equals summarise's.
 
-   STUDENTS NEVER SEE THE WORD "UNITS". The weighting is internal; the
-   app shows a proportion in plain language and a specific warning when
-   the remaining allowance won't cover the action about to be taken.
-   See src/aiTextCopy.js. */
-export const TASK_UNITS: Record<Task, number> = {
-  explain: 1,
-  weakspots: 1,
-  practice: 2,
-  summarise: 3,
+   STUDENTS DO SEE THE WORD "CREDITS", and that is the change. They
+   never saw "units" — aiTextCopy.js existed to keep an internal weight
+   off every screen — because a unit meant nothing to anybody. A credit
+   means one minute of recorded lecture, which is a quantity a student
+   already has an intuition for, so it can be said out loud. */
 
-  /* 1, not 3, even though the output ceiling matches `summarise`.
-     `summarise` is priced for 20,000 characters of input; a merge takes
-     four summaries -- around 6,000 characters -- and returns one. It is
-     under a third of the input at the same output, so charging it as a
-     summarise would be overcharging for the step the student did not
-     ask for and only needs because their reading was long.
+/** What one call of `task` costs us, at its own input and output caps. */
+export const usdForTask = (task: Task) =>
+  (MAX_INPUT_CHARS[task] / CHARS_PER_TOKEN) * (USD_PER_1M_INPUT / 1_000_000) +
+  MAX_TOKENS[task] * (USD_PER_1M_OUTPUT / 1_000_000);
 
-     What that makes a whole reading cost:
+export const TASK_CREDITS: Record<Task, number> = Object.fromEntries(
+  TASKS.map((task) => [task, creditsFor(usdForTask(task))])
+) as Record<Task, number>;
 
-       <= 20k chars   1 chunk            3 units
-       <= 40k         2 chunks + merge   7
-       <= 60k         3 chunks + merge  10
-       <= 80k         4 chunks + merge  13    (the ceiling)  */
-  merge: 1,
-};
+/* ---------- the photo batch price is HELD, not derived ----------
 
-export const MONTHLY_TEXT_UNITS_LIMIT = 150;
+   Every other price in this file falls out of the arithmetic above. This
+   one cannot, and pretending otherwise would be worse than saying so.
+
+   Derived honestly against the model we call TODAY, a batch of four
+   photographed pages is about 33 credits — gpt-4o-mini bills an image at
+   2,833 base + 5,667 a tile, which is 36,835 tokens for an A4 page, 12x
+   what a full 20,000-character text chunk costs. At that price a
+   16-page reading is most of a month and the feature does not exist.
+
+   Derived against the model it is RECOMMENDED to move to — gpt-5.4-nano
+   at detail "original" and maxEdge 1024 — it is about 6.
+
+   Setting 33 against a model we are about to leave would tell students a
+   reading costs a third of their month when it is about to cost a
+   fortieth, and a visibly wrong number is worse than an invisible one.
+   Setting 6 against a model we have not measured would undercharge for
+   the app's most expensive action on the strength of two third-hand
+   published rates.
+
+   So it stays where it has always been — the same as one text chunk —
+   and this comment is the record that it is known to be wrong in a
+   known direction. IT MOVES WHEN COST-MODEL.md SECTION 12.7'S TWO GATES
+   LAND: the three-call cost test that resolves the 66,000-token report,
+   and the side-by-side quality comparison on real page photographs.
+   A test asserts the hold, so lifting it is deliberate. */
+export const PHOTO_BATCH_CREDITS = TASK_CREDITS.summarise;
 
 /* ---------- who gets these features ----------
 
@@ -209,17 +263,34 @@ export const MONTHLY_TEXT_UNITS_LIMIT = 150;
 
    Nothing in the four screens branches on tier, so this array and the
    limits below are the whole decision. */
-export const TEXT_TIERS = ["ai", "free"];
+/* EVERY TIER GETS THE TEXT FEATURES. It was ["ai", "free"] when there
+   were two; the tier table has four and none of them is excluded, so
+   this is now the same list as TIERS and exists only because the
+   endpoint's validation reads a name it owns.
 
-/* What a free account gets. Deliberately small: enough to feel the
-   feature, not enough to replace the tier.
+   The reasoning is unchanged from when it was written: ten credits is
+   roughly five practice sets or ten explanations, it costs about a cent
+   per free account, and it is the best advertisement for the paid tier.
+   Gating the cheapest features means nobody ever experiences the thing
+   they would be buying. */
+export const TEXT_TIERS = ["free", "plus", "ai", "ai_max"];
 
-   THE TWO HALVES MUST MOVE TOGETHER. Adding a tier here without giving
-   it a smaller limit hands it the paid allowance, which is the mistake
-   that looks like generosity until the bill arrives -- so a test asserts
-   the COMBINATION, not each constant on its own. */
-export const FREE_TEXT_UNITS_LIMIT = 10;
+/* THE ALLOWANCE MOVED TO _shared/credits.ts, because it is no longer a
+   property of the text features: audio and text draw on the same pool.
+   Re-exported here so the four screens that ask this file what an
+   action costs also get to ask it what the month holds.
 
-/** The monthly allowance for a tier. */
-export const limitForTier = (tier: string) =>
-  tier === "ai" ? MONTHLY_TEXT_UNITS_LIMIT : FREE_TEXT_UNITS_LIMIT;
+   THE TWO HALVES STILL MOVE TOGETHER. Adding a tier to TEXT_TIERS
+   without giving it a smaller limit hands it the paid allowance, which
+   is the mistake that looks like generosity until the bill arrives — so
+   a test asserts the COMBINATION, not each constant on its own. */
+export {
+  MONTHLY_CREDITS_LIMIT,
+  FREE_CREDITS_LIMIT,
+  TRIAL_CREDITS,
+  TIERS,
+  TRIAL_TIERS,
+  isTrialTier,
+  allowanceForTier,
+  creditsForTier,
+} from "../_shared/credits.ts";

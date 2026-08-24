@@ -570,11 +570,13 @@ async function run() {
     assert.match(src, /If there's an account for/);
   });
 
-  await test("the failure screen says the minutes were billed", () => {
+  await test("the failure screen says the allowance was billed", () => {
     // Charging for transcription and saying only "we couldn't generate a
-    // summary" is how a support ticket becomes a chargeback.
+    // summary" is how a support ticket becomes a chargeback. The
+    // currency in that sentence is credits since the collapse; what has
+    // to survive any rewording is that it NAMES the charge.
     const copy = fs.readFileSync(path.join(rootDir, "src/aiNotesCopy.js"), "utf8");
-    assert.match(copy, /AI minutes/, "the billing sentence is gone");
+    assert.match(copy, /AI credits/, "the billing sentence is gone");
     const src = fs.readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8");
     assert.match(src, /AI_NOTES_COPY\.summaryFailed\.billing/, "the failure screen no longer renders it");
   });

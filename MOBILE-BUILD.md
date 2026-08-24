@@ -154,6 +154,15 @@ keytool -genkey -v -keystore ~/keystores/uniplanner-upload.jks \
 (pick one, store it with the backup) and some identity questions — the
 answers are embedded in the certificate and never shown to users.
 
+**THE ALIAS IS AN EXAMPLE, NOT A REQUIREMENT.** `-alias upload` above
+is just what this command happens to pass; use whatever you like.
+`mobile/scripts/native-signing.mjs` reads `keyAlias` out of
+`key.properties` and hardcodes nothing, so the only thing that has to
+agree is that file and the keystore you actually generated. Jared's
+machine uses `uniplanner` and that is fine. **The alias cannot be
+changed after the first upload** — Play pins the signing identity — so
+whatever you used at `keytool` time is the one, forever.
+
 **2. Write `mobile/key.properties`** (beside, not inside, the generated
 project, so regenerating `mobile/android/` does not destroy it — and
 gitignored by name, with a test asserting the ignore entries exist):
@@ -164,6 +173,17 @@ storePassword=THE_STORE_PASSWORD
 keyAlias=upload
 keyPassword=THE_KEY_PASSWORD
 ```
+
+**`keyAlias` must match whatever `-alias` you actually used in step 1.**
+The two are `upload` above because that is what the command above
+generates, and they have to agree or Gradle fails at signing time with an
+error about a missing key rather than a mismatched one. If your keystore
+came from different instructions — Jared's was made with
+`-alias uniplanner` — then `keyAlias` is that name, and the step-1
+command here is what a FRESH keystore should use rather than a
+description of one you already have. Nothing in the repo can check this:
+`key.properties` is gitignored and the keystore lives outside the repo
+entirely, which is the whole point of both.
 
 Use the absolute path to wherever step 1 put the keystore (forward
 slashes work on Windows too: `C:/Users/jjwes/keystores/...`).
@@ -516,6 +536,117 @@ is intended.
     message naming the page, not a garbage summary. This is the model
     following an instruction rather than code enforcing a rule, so it is
     exactly the behaviour that needs a real run.
+
+### iOS only — the items the readiness audit left open
+
+The full audit is `IOS-READINESS.md`; these are the parts that need a
+device rather than a decision.
+
+13. **The bitrate matrix — `public/measure-audio.html`.** THE ONE THAT
+    BLOCKS SUBMISSION. Open it in the shell (or Safari on the phone),
+    tap Run, and talk normally for about two and a half minutes; it
+    records six configurations for 20 s each and divides real bytes by
+    real elapsed time. Copy the JSON block back.
+
+    **Do not substitute a property readback.** `audioBitsPerSecond`
+    reads back as 32000 on iOS and the encoder produces ~218 kbps
+    anyway — a readback measures what the API accepted, not what the
+    encoder did. That mistake is written up in `CLAUDE.md`.
+
+    What the rows answer: 1 vs 2, whether our own WebAudio graph is
+    the cause (it builds a 48 kHz **stereo** destination and that, not
+    the mic track, is what the recorder gets); 2 vs 3, whether a mono
+    16 kHz graph fixes it; 1 vs 4, whether the bitrate option does
+    anything at all; 5 and 6, whether the AAC path honours it where
+    Opus does not. The options and the recommendation are in
+    `IOS-READINESS.md` §1a.
+
+13a. **Once a fix is in: record two hours for real**, and check the
+    blob size against the ceiling. A 20-second sample sized the
+    problem; only a real lecture proves the fix, and this is the one
+    number that decides whether a student can use the app for what
+    they installed it for.
+
+13b. **The mp4-vs-Opus transcript diff.** Decides whether iOS should
+    prefer `audio/mp4` (29 kbps, so a three-hour lecture fits
+    everywhere) over `audio/webm;codecs=opus` (51 kbps). It cannot be
+    decided on the file sizes: Opus is the better speech codec at these
+    rates by design, so the smaller file may transcribe worse — and a
+    slightly worse transcript is invisible until somebody reads a
+    garbled summary and blames the summariser.
+
+    **THE CONTROL IS THE WHOLE EXPERIMENT. Play the SAME AUDIO FILE
+    through a speaker for both runs.** Reading the same paragraph twice
+    measures the reader — pace, emphasis, where you stumbled — and
+    those differences are far larger than the codec's. Pick a recording
+    of real speech, five to ten minutes, with some technical
+    vocabulary in it, and do not touch the phone's position between
+    runs.
+
+    The procedure:
+
+    1. In the shell's console:
+       `localStorage.setItem("uni-planner-force-mime", "audio/mp4")`
+    2. Record the passage. Save the note. Confirm the stored object
+       ends `.m4a` (the extension travels with the format now).
+    3. `localStorage.removeItem("uni-planner-force-mime")`
+    4. Record the SAME passage, same speaker, same position. Save.
+    5. Diff the two transcripts.
+
+    Both go through the real upload, the real Edge Function and the
+    real Groq call, so the only variable is the container. Cost is two
+    recordings of allowance.
+
+    **What decides it:** proper nouns and technical terms. General
+    fluency will look fine either way; the first thing a lower bitrate
+    costs is the words a student most needs spelled right. If mp4 holds
+    up, take it — smaller uploads are a real benefit on a phone. If it
+    does not, Opus stays and the raised ceiling is what carries the
+    three-hour case.
+
+    Delete `uni-planner-force-mime` and its code once this resolves.
+
+13c. **Confirm what Storage will really take:**
+    `SUPABASE_URL=... SUPABASE_KEY=... node scripts/check-storage-limit.mjs`
+
+    **Run it after touching the dashboard, not instead of touching it.**
+    Supabase enforces the LOWER of a project-global per-file limit and
+    the bucket's own, and the bucket cannot exceed the global — so
+    raising only the bucket changes the number on the page and nothing
+    else. The script does not read either setting; it uploads an object
+    at the app's ceiling and reports what happened, which is the only
+    figure a real lecture meets.
+14. **Sign in from `capacitor://localhost`.** The one failure that
+    breaks everything else: it is a custom-scheme origin making HTTPS
+    requests to Supabase, and nothing off-device can confirm it works.
+    Do this first.
+15. **`PrivacyInfo.xcprivacy` — the file is written for you; ADDING IT
+    TO THE TARGET IS THE MANUAL STEP.** `npm run stamp` creates
+    `mobile/ios/App/App/PrivacyInfo.xcprivacy` (all four keys empty,
+    matching what Capacitor ships for its own pod — checked against
+    @capacitor/ios 8.5.0). A `.xcprivacy` only reaches the bundle if it
+    is in the app target's **Resources** build phase, and that is a
+    change to `project.pbxproj` which the script will not attempt
+    blind.
+
+    In Xcode: drag the file into the **App** group, tick the **App**
+    target. Once per `cap add ios`, beside choosing the signing team,
+    which is manual for the same reason.
+
+    **The half-done state is the one that ships** — file on disk,
+    absent from the target, so it is not in the bundle and the
+    validator complains after the upload. `npm run stamp` warns if the
+    pbxproj does not reference it, so re-run it after the drag and
+    check the output is clean.
+16. **The safe areas, and `contentInset`.** The insets are applied —
+    top on the header, left and right for landscape, bottom
+    unconditional on the recording indicator — and a guard finds every
+    viewport-pinned element rather than checking a list. What source
+    cannot answer is whether the padding is the right SIZE, and whether
+    `contentInset: "always"` in `capacitor.config.json` double-insets
+    on top of it. Look at the header under the Dynamic Island, then try
+    `"never"` and keep whichever is right. Do this before the store
+    screenshots, since the screenshots are what expose it.
 
 ### Handwriting — removed
 

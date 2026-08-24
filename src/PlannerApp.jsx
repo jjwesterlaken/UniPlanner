@@ -5793,7 +5793,24 @@ export default function PlannerApp() {
         .no-scrollbar{scrollbar-width:none;}
         .no-scrollbar::-webkit-scrollbar{display:none;}
       `}</style>
-      <header className="sticky top-0 z-10 border-b border-stone-200 bg-stone-50/90 backdrop-blur">
+      {/* THE TOP INSET, which nothing in the app had. viewport-fit=cover
+          means the page really does extend under the status bar and the
+          Dynamic Island, so a sticky header pinned to top-0 paints its
+          background up there and puts its content under the cutout.
+          Padding on the HEADER rather than on its inner row so the
+          background fills the inset and only the content moves down.
+
+          The horizontal insets are for LANDSCAPE on a notched device,
+          where the cutout eats into one side. They sit on the header
+          and add to the inner row's px-4, rather than replacing it. */}
+      <header
+        className="sticky top-0 z-10 border-b border-stone-200 bg-stone-50/90 backdrop-blur"
+        style={{
+          paddingTop: "env(safe-area-inset-top, 0px)",
+          paddingLeft: "env(safe-area-inset-left, 0px)",
+          paddingRight: "env(safe-area-inset-right, 0px)",
+        }}
+      >
         <div className="relative mx-auto max-w-2xl px-4">
           <div className="flex items-center gap-3 py-3">
             <span className="flex h-9 w-9 items-center justify-center rounded-xl u-accent-bg text-white">
@@ -5892,10 +5909,17 @@ export default function PlannerApp() {
       </header>
 
       <main
-        className="mx-auto max-w-2xl px-4 py-5"
-        /* The fixed bar would otherwise cover the last card on the
-           page -- including the archive panel's own buttons. */
-        style={bottomBar ? { paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 5rem)" } : undefined}
+        className="mx-auto max-w-2xl py-5"
+        /* px-4 moved into the style so the landscape inset ADDS to the
+           1rem rather than overriding it -- a plain padding-left in a
+           later rule would silently take the gutter away. The fixed bar
+           would otherwise cover the last card on the page, including
+           the archive panel's own buttons. */
+        style={{
+          paddingLeft: "calc(1rem + env(safe-area-inset-left, 0px))",
+          paddingRight: "calc(1rem + env(safe-area-inset-right, 0px))",
+          ...(bottomBar ? { paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 5rem)" } : null),
+        }}
       >
         {/* A failed local save is invisible by nature, so it gets the most
             prominent spot in the app and stays until a save succeeds. */}
@@ -6134,7 +6158,11 @@ export default function PlannerApp() {
       {bottomBar && (
         <nav
           className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-stone-50/95 backdrop-blur"
-          style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)" }}
+          style={{
+            paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",
+            paddingLeft: "env(safe-area-inset-left, 0px)",
+            paddingRight: "env(safe-area-inset-right, 0px)",
+          }}
         >
           <div className="mx-auto flex max-w-2xl items-stretch gap-0.5 px-2 pt-1.5">
             {TABS.map((t) => (

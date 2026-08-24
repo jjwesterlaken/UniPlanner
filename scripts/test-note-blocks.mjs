@@ -52,7 +52,13 @@ let passed = 0;
 let failed = 0;
 function test(name, fn) {
   try {
-    fn();
+    const r = fn();
+    /* A synchronous runner given an async fn gets a promise, throws
+       nothing, and counts a pass — while every assertion inside runs
+       after the summary and the exit code. Refuse rather than ignore. */
+    if (r && typeof r.then === "function") {
+      throw new Error("this runner is synchronous — an async test would be reported green whatever it asserts");
+    }
     passed++;
     console.log(`  ok  - ${name}`);
   } catch (err) {

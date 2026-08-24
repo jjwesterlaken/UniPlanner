@@ -66,6 +66,42 @@ export const CAMERA_USAGE_DESCRIPTION =
 
 export const IOS_CAMERA_PLIST_KEY = "NSCameraUsageDescription";
 
+/* THE PHOTO LIBRARY STRING IS INSURANCE, AND THAT IS THE ARGUMENT FOR
+   ADDING IT. The reasoning for the camera string above says Library
+   and Files need no declaration, because WKWebView presents PHPicker,
+   which hands back only what the user picked. That is true of the
+   MODERN picker. What could not be established from a build machine is
+   which picker WKWebView presents on iOS 15.0 -- our deployment floor
+   -- for `<input type="file" accept="image/*">`, and if any route on
+   any supported version reaches the legacy UIImagePickerController,
+   this key's absence TERMINATES THE APP exactly the way the camera
+   one does.
+
+   The asymmetry is what decides it: an unused usage string is never
+   shown and costs nothing, while a missing one that turns out to be
+   needed kills the app on one of the three routes a student is told to
+   take. Fail towards declaring. If the iOS build later proves PHPicker
+   is always used, this can go -- but removing it needs the evidence,
+   not the reasoning. */
+export const PHOTO_LIBRARY_USAGE_DESCRIPTION =
+  "University Planner uses your photo library so you can pick a photo of a " +
+  "reading to summarise. Photos are sent for summarising and are not stored by us.";
+
+export const IOS_PHOTO_LIBRARY_PLIST_KEY = "NSPhotoLibraryUsageDescription";
+
+/* NOT A PERMISSION -- an EXPORT COMPLIANCE declaration, and the only
+   boolean in this file.
+
+   Without it, every TestFlight and App Store Connect upload stops and
+   asks the encryption question by hand. The answer never changes: the
+   app uses HTTPS and nothing else, which is the exempt case, so
+   declaring it once removes a manual step from every upload forever.
+
+   It is `false` rather than absent on purpose. Absent means "unknown"
+   and prompts; false means "exempt" and does not. */
+export const IOS_ENCRYPTION_PLIST_KEY = "ITSAppUsesNonExemptEncryption";
+export const IOS_USES_NON_EXEMPT_ENCRYPTION = false;
+
 /* BOTH are required, and the second one is the whole reason this list
    is a list.
 
@@ -100,14 +136,20 @@ function escapeXmlText(value) {
 }
 
 /**
- * Adds NSMicrophoneUsageDescription to an Info.plist's root <dict>.
+ * Adds one key to an Info.plist's root <dict>.
  *
  * Returns `{ xml, changed, reason }`. An existing key is left exactly as
  * it is rather than overwritten — someone may have deliberately reworded
  * it, and silently reverting that on the next `cap sync` would be worse
  * than leaving it alone.
+ *
+ * `type` is "string" for the three usage descriptions and "bool" for the
+ * export-compliance flag. A plist boolean is an EMPTY ELEMENT
+ * (`<true/>`) and not a string containing the word — written as a
+ * string, iOS reads a non-empty string as truthy and the declaration
+ * says the opposite of what was meant, silently.
  */
-export function patchInfoPlist(xml, description = MIC_USAGE_DESCRIPTION, key = IOS_PLIST_KEY) {
+export function patchInfoPlist(xml, description = MIC_USAGE_DESCRIPTION, key = IOS_PLIST_KEY, type = "string") {
   if (new RegExp(`<key>\\s*${key}\\s*</key>`).test(xml)) {
     return { xml, changed: false, reason: "already present" };
   }
@@ -123,9 +165,9 @@ export function patchInfoPlist(xml, description = MIC_USAGE_DESCRIPTION, key = I
 
   const indent = match[1] || "";
   const entryIndent = indent + "\t";
-  const entry =
-    `${entryIndent}<key>${key}</key>\n` +
-    `${entryIndent}<string>${escapeXmlText(description)}</string>\n`;
+  const value =
+    type === "bool" ? `<${description ? "true" : "false"}/>` : `<string>${escapeXmlText(description)}</string>`;
+  const entry = `${entryIndent}<key>${key}</key>\n${entryIndent}${value}\n`;
 
   return {
     xml: xml.replace(rootDictClose, `${entry}${indent}</dict>${match[2]}</plist>`),
@@ -201,18 +243,27 @@ function applyToFile(absPath, patch) {
  */
 export function applyNativePermissions(mobileDir) {
   return {
-    /* BOTH usage strings, in one pass over the file. The camera one is
-       load-bearing since the reading summariser's photo input can reach
-       the camera — see CAMERA_USAGE_DESCRIPTION for why its absence
-       terminates the app rather than degrading. */
+    /* ALL FOUR KEYS, in one pass over the file, each patch reading the
+       PREVIOUS one's output. A pass that read the original xml would
+       silently drop every key but the last — which is why this is a
+       fold rather than four independent calls, and why the test applies
+       the real function to a real fixture instead of pinning the shape
+       of the expression. */
     ios: applyToFile(path.join(mobileDir, IOS_PLIST_PATH), (xml) => {
-      const mic = patchInfoPlist(xml);
-      const cam = patchInfoPlist(mic.xml, CAMERA_USAGE_DESCRIPTION, IOS_CAMERA_PLIST_KEY);
-      return {
-        xml: cam.xml,
-        changed: mic.changed || cam.changed,
-        reason: mic.changed || cam.changed ? "added" : "already present",
-      };
+      const steps = [
+        [MIC_USAGE_DESCRIPTION, IOS_PLIST_KEY, "string"],
+        [CAMERA_USAGE_DESCRIPTION, IOS_CAMERA_PLIST_KEY, "string"],
+        [PHOTO_LIBRARY_USAGE_DESCRIPTION, IOS_PHOTO_LIBRARY_PLIST_KEY, "string"],
+        [IOS_USES_NON_EXEMPT_ENCRYPTION, IOS_ENCRYPTION_PLIST_KEY, "bool"],
+      ];
+      let out = xml;
+      let changed = false;
+      for (const [value, key, type] of steps) {
+        const r = patchInfoPlist(out, value, key, type);
+        out = r.xml;
+        changed = changed || r.changed;
+      }
+      return { xml: out, changed, reason: changed ? "added" : "already present" };
     }),
     android: applyToFile(path.join(mobileDir, ANDROID_MANIFEST_PATH), patchAndroidManifest),
   };
@@ -222,10 +273,12 @@ function describe(platform, file, result) {
   switch (result.status) {
     case "skipped":
       return `${platform}: skipped (no ${file} — run "npx cap add ${platform}" first)`;
-    case "patched":
-      return `${platform}: microphone and camera declarations ${result.reason} in ${file}`;
+    /* Named per platform. This said "iOS declarations" on BOTH lines
+       after the plist keys were renamed, so an Android run reported
+       "android: iOS declarations added 2" — noise in exactly the place
+       someone is trying to tell a real problem from noise. */
     default:
-      return `${platform}: microphone and camera declarations ${result.reason} in ${file}`;
+      return `${platform}: ${platform === "ios" ? "microphone, camera, photo-library and encryption declarations" : "audio permissions"} ${result.reason} in ${file}`;
   }
 }
 

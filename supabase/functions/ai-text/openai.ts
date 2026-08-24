@@ -6,6 +6,8 @@
 // jobs are the call, the ceiling, and turning a truncated response into
 // an error rather than into unparseable JSON.
 
+import { SUMMARY_MODEL, VISION_MODEL } from "../_shared/model.ts";
+
 export const openaiTextAdapter = {
   name: "openai",
 
@@ -13,18 +15,31 @@ export const openaiTextAdapter = {
     messages,
     maxTokens,
     apiKey,
+    hasImages = false,
     fetchImpl = fetch,
   }: {
-    messages: { role: string; content: string }[];
+    messages: { role: string; content: unknown }[];
     maxTokens: number;
     apiKey: string;
+    hasImages?: boolean;
     fetchImpl?: typeof fetch;
   }): Promise<string> {
+    /* THE MODEL IS CHOSEN PER MEDIUM, not per task. Photographs and
+       pasted text are the same `summarise` task, so a single model
+       string here would drag text and lecture summaries wherever the
+       photo path goes — and COST-MODEL.md section 12.5 prices that at
+       6.6x worse for a text chunk and 6.3x worse for a lecture, because
+       every one of these tasks is output-dominated and the models with
+       cheap images have expensive output.
+
+       Both constants are the same string today. VISION_MODEL is the one
+       expected to move. */
+    const model = hasImages ? VISION_MODEL : SUMMARY_MODEL;
     const res = await fetchImpl("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model,
         messages,
         // json_object rather than a strict json_schema: the four tasks
         // have four shapes, and prompts.js validates each one on the way

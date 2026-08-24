@@ -54,8 +54,53 @@ Bucket creation isn't part of a SQL migration. In the dashboard:
 
 - Name: `lecture-audio`
 - Public: **off**
-- File size limit: 50MB (the free-plan ceiling; the app records at
-  32kbps, so a 3-hour lecture is ~43.2MB — comfortably under this)
+- File size limit: see below — **and it is TWO settings, not one**
+
+**THE 32 kbps ASSUMPTION WAS WRONG, measured on device.** iOS's Opus
+encoder floors at about **51 kbps** whatever bitrate is requested
+(`tools/measure-audio.html`, row 1). At that rate a two-hour lecture is
+45.9MB and a three-hour one is 68.8MB, so the free plan's 50MB
+per-file ceiling fails the app's own stated use case.
+
+**Storage enforces the LOWER of two limits and both are in the
+dashboard:**
+
+| | where | free plan | Pro |
+|---|---|---|---|
+| project global | Settings → Storage → Upload file size limit | 50 MB max | up to 500 GB |
+| per bucket | Storage → `lecture-audio` → Configuration | ≤ the global | ≤ the global |
+
+Raising only the bucket does nothing — the global still binds.
+
+**Both are set to 100 MB and read back after a reload (22 August
+2026), and `LECTURE_AUDIO_FILE_LIMIT_BYTES` is `100_000_000` to
+match** — so `MAX_BODY_BYTES` is now bound by the derivation
+(86.1 MB, a 3h45m recording at the measured rate) rather than by
+Storage, which is the state to keep it in.
+
+**If you change either limit again, raise both, then update
+`LECTURE_AUDIO_FILE_LIMIT_BYTES` in
+`supabase/functions/ai-notes/config.ts` to match.** That constant is
+what `MAX_BODY_BYTES` is capped by, so the code is correct at every
+stage of the change rather than only at the end: with the dashboard
+still at 50MB the ceiling sits at 48MB and refuses cleanly, and it
+rises to the derived 86MB the moment the constant follows the
+dashboard. Never the other way round — a ceiling above what Storage
+takes waves uploads through to a slow, unexplained rejection.
+
+86MB is `51 kbps × 3 hours × 1.25` headroom; the derivation and the
+reasoning for 25% are in `config.ts`.
+
+**Then confirm it, because the two-settings trap cannot be documented
+away:**
+
+```
+SUPABASE_URL=... SUPABASE_KEY=... node scripts/check-storage-limit.mjs
+```
+
+It reads neither setting. It uploads an object of exactly
+`MAX_BODY_BYTES` and one over the constant, and reports what Storage
+did — which is the only figure a real lecture meets.
 
 The RLS policies from the migration take effect automatically once the
 bucket exists with this exact name.

@@ -34,7 +34,7 @@ import {
 } from "../src/readingChunks.js";
 import { READING_COPY } from "../src/aiTextCopy.js";
 import * as failuresCopy from "../src/aiTextCopy.js";
-import { TASK_UNITS, sectionsAffordable, canAffordUnits } from "../src/aiTextLimits.js";
+import { TASK_CREDITS, PHOTO_BATCH_CREDITS, sectionsAffordable, canAffordCredits } from "../src/aiTextLimits.js";
 import { validateRequest } from "../supabase/functions/ai-text/guards.js";
 import { buildMessages, parseTaskResult } from "../supabase/functions/ai-text/prompts.js";
 
@@ -46,7 +46,13 @@ let passed = 0;
 let failed = 0;
 function test(name, fn) {
   try {
-    fn();
+    const r = fn();
+    /* A synchronous runner given an async fn gets a promise, throws
+       nothing, and counts a pass — while every assertion inside runs
+       after the summary and the exit code. Refuse rather than ignore. */
+    if (r && typeof r.then === "function") {
+      throw new Error("this runner is synchronous — an async test would be reported green whatever it asserts");
+    }
     passed++;
     console.log(`  ok  - ${name}`);
   } catch (err) {
@@ -67,7 +73,7 @@ test("a short reading is one chunk and needs no merge", () => {
   const r = estimateReading("A short paragraph about tectonics.");
   assert.equal(r.ok, true);
   assert.equal(r.chunks, 1);
-  assert.equal(r.units, TASK_UNITS.summarise);
+  assert.equal(r.credits, TASK_CREDITS.summarise);
 });
 
 test("a reading is split on paragraph boundaries, never mid-sentence", () => {
@@ -149,26 +155,26 @@ test("the cost of a reading rises with its length, and the estimate says so", ()
   const many = estimateReading(reading([para(19000), para(19000), para(19000)]));
   assert.equal(one.chunks, 1);
   assert.ok(many.chunks > one.chunks);
-  assert.ok(many.units > one.units);
-  assert.equal(many.units, many.chunks * TASK_UNITS.summarise + TASK_UNITS.merge);
+  assert.ok(many.credits > one.credits);
+  assert.equal(many.credits, many.chunks * TASK_CREDITS.summarise + TASK_CREDITS.merge);
 });
 
-test("the four-chunk ceiling costs 13 units", () => {
+test("the four-chunk ceiling costs 14 credits", () => {
   /* The arithmetic in config.ts, asserted rather than left in a comment. */
-  assert.equal(MAX_READING_CHUNKS * TASK_UNITS.summarise + TASK_UNITS.merge, 13);
+  assert.equal(MAX_READING_CHUNKS * TASK_CREDITS.summarise + TASK_CREDITS.merge, 14);
 });
 
 test("a single-chunk reading is never charged for a merge", () => {
   const r = estimateReading(para(500));
-  assert.equal(r.units, TASK_UNITS.summarise);
+  assert.equal(r.credits, TASK_CREDITS.summarise);
 });
 
 test("a refusal states the real numbers: how big it is and what's left", () => {
   /* Not a generic "not enough left". The interaction is otherwise
-     baffling: ten units is ONE shorter reading, not four of anything,
+     baffling: ten credits is ONE shorter reading, not four of anything,
      and a student refused a long one after using nothing all month
      reads the counter as broken rather than as spent. */
-  const copy = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, isFree: true });
+  const copy = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, perMonth: false });
   assert.match(copy.title, /4 parts/, "the size of the reading is not stated");
   assert.match(copy.title, /one/, "what is left is not stated");
 });
@@ -176,10 +182,10 @@ test("a refusal states the real numbers: how big it is and what's left", () => {
 test("a refusal says a shorter paste still fits, when it does", () => {
   /* The actionable half. It turns a dead end into a smaller paste,
      which is the one thing the student can do about it. */
-  const some = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 2, isFree: true });
+  const some = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 2, perMonth: false });
   assert.match(some.detail, /section at a time/i);
 
-  const none = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 0, isFree: true });
+  const none = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 0, perMonth: false });
   assert.doesNotMatch(none.detail, /section at a time/i, "offered a smaller paste that would also be refused");
   assert.match(none.title, /none of them/i);
 });
@@ -189,17 +195,17 @@ test("both numbers in a refusal are parts, never units", () => {
      the first time an internal unit count reached a screen, and it
      would mean nothing to anyone. */
   for (const sectionsLeft of [0, 1, 3]) {
-    for (const isFree of [true, false]) {
-      const c = READING_COPY.cantAfford({ chunks: 4, sectionsLeft, isFree });
+    for (const perMonth of [true, false]) {
+      const c = READING_COPY.cantAfford({ chunks: 4, sectionsLeft, perMonth });
       assert.doesNotMatch(`${c.title} ${c.detail}`, /\bunits?\b/i);
     }
   }
 });
 
-test("only a free student is told what the plan adds", () => {
-  const free = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, isFree: true });
-  assert.ok(free.action, "a free student is told what the plan adds");
-  const paid = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, isFree: false });
+test("only a trial student is told what the plan adds", () => {
+  const free = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, perMonth: false });
+  assert.ok(free.action, "a trial student is told what the plan adds");
+  const paid = READING_COPY.cantAfford({ chunks: 4, sectionsLeft: 1, perMonth: true });
   /* Selling someone the plan they already have is the fastest way to
      make an app feel like it isn't listening. */
   assert.equal(paid.action, null);
@@ -215,8 +221,8 @@ test("how many sections are left is the same arithmetic the server bills", () =>
   assert.equal(sectionsAffordable({ remaining: 3 }), 1);
   assert.equal(sectionsAffordable({ remaining: 2 }), 0);
   assert.equal(sectionsAffordable(null), 0);
-  assert.equal(canAffordUnits({ remaining: 13 }, 13), true);
-  assert.equal(canAffordUnits({ remaining: 12 }, 13), false);
+  assert.equal(canAffordCredits({ remaining: 13 }, 13), true);
+  assert.equal(canAffordCredits({ remaining: 12 }, 13), false);
 });
 
 test("a summarised reading is filed into the per-course folder, like a recording", () => {
@@ -386,27 +392,93 @@ test("the chunk ceiling matches the server's", () => {
   assert.equal(CHUNK_MAX_CHARS, serverSummarise);
 });
 
-test("the merge weight matches the server's", () => {
+test("no weight on the server is a typed number any more — they are all derived", () => {
+  /* This test used to scrape `merge: N` out of a hand-written table on
+     the server and compare it with the client's copy. That comparison
+     has moved to the mirror test in test-ai-text-function.mjs, which
+     deep-equals the WHOLE table against the real config rather than one
+     row of it — and what is worth pinning here instead is that there is
+     no table to scrape.
+
+     TASK_CREDITS is now computed from each task's own input and output
+     ceilings at the published rates, so raising MAX_TOKENS re-prices
+     the task instead of leaving a number nobody re-derived. Putting a
+     literal back is exactly the regression this catches. */
   const config = source("supabase/functions/ai-text/config.ts");
-  const units = config.slice(config.indexOf("export const TASK_UNITS"));
-  assert.equal(Number(units.match(/merge: (\d+)/)[1]), TASK_UNITS.merge);
+  const table = config.slice(
+    config.indexOf("export const TASK_CREDITS"),
+    config.indexOf("export const PHOTO_BATCH_CREDITS")
+  );
+  assert.ok(/creditsFor\(/.test(table), "TASK_CREDITS is no longer derived from a cost");
+  assert.ok(
+    !/\b(explain|weakspots|practice|summarise|merge)\s*:\s*\d/.test(table),
+    "a task weight has been typed back in as a literal — a raised ceiling would stop re-pricing its task"
+  );
 });
 
 /* ---------- the design facts ---------- */
+
+/* Everything the ai-text endpoint can WRITE, whichever spelling it uses.
+   Since migration 0011 billing goes through an RPC rather than an
+   upsert, so a check that only looked for `.from("X").upsert` would have
+   found nothing to inspect and passed with an empty set — the guard
+   that the copyright posture rests on, quietly measuring nothing.
+
+   The RPC is resolved to the tables it touches by READING THE MIGRATION
+   that defines it, rather than by a mapping typed here. A function that
+   grew a second table would go red without anyone remembering to.
+
+   IT DOES NOT STRIP SQL COMMENTS, deliberately, and that is the one way
+   it differs from every other source grep here. Those strip comments
+   because a comment naming the forbidden thing is a false alarm; this
+   one errs the other way on purpose, because the question is "where can
+   a student's pasted reading end up" and a guard about that should
+   flag a mention it cannot account for rather than wave it through. The
+   cost is that `-- insert into public.foo` in one of these migrations
+   fails the suite; the fix then is to reword the comment. */
+function tablesWrittenByAiText() {
+  /* THE ENDPOINT PLUS THE HELPER IT CALLS. The allowance read and both
+     writes moved to _shared/allowance.ts when tiers arrived, so reading
+     index.ts alone would inspect a shrinking surface and pass over an
+     empty set — the exact way this guard failed once already. */
+  const fn =
+    source("supabase/functions/ai-text/index.ts") + "\n" + source("supabase/functions/_shared/allowance.ts");
+  const direct = [...fn.matchAll(/\.from\("([^"]+)"\)\s*\.(?:upsert|insert|update|delete)/gs)].map((m) => m[1]);
+  const rpcs = [...fn.matchAll(/\.rpc\(\s*"([^"]+)"/g)].map((m) => m[1]);
+  const viaRpc = [];
+  for (const name of rpcs) {
+    const file = fs
+      .readdirSync(path.join(rootDir, "supabase/migrations"))
+      .find((f) => fs.readFileSync(path.join(rootDir, "supabase/migrations", f), "utf8").includes(`function public.${name}(`));
+    assert.ok(file, `no migration defines public.${name} — an ai-text write nobody can account for`);
+    const sql = fs.readFileSync(path.join(rootDir, "supabase/migrations", file), "utf8");
+    for (const m of sql.matchAll(/(?:insert\s+into|update)\s+public\.([a-z_]+)/gi)) viaRpc.push(m[1]);
+    /* `update public.profiles set trial_credits_used = ...` is the
+       lifetime counter, which is an allowance and not user content.
+       Named here rather than filtered silently, because the whole point
+       of this guard is that a new table shows up. */
+  }
+  return [...new Set([...direct, ...viaRpc])].sort();
+}
 
 test("the pasted text is never persisted anywhere", () => {
   /* THE fact the copyright posture rests on, asserted for readings
      specifically rather than inherited from the note path.
 
-     Two halves. The endpoint writes only ai_usage -- so the text has no
-     server-side home even on the failure path, unlike a lecture, whose
-     transcript is kept for 7 or 30 days. And the client's save path
-     stores the RESULT, never the source. */
-  const fn = source("supabase/functions/ai-text/index.ts");
+     Two halves. The endpoint touches only the allowance tables -- so
+     the text has no server-side home even on the failure path, unlike a
+     lecture, whose transcript is kept for 7 or 30 days. And the
+     client's save path stores the RESULT, never the source.
+
+     THE HELPER COUNTS AS THE ENDPOINT. _shared/allowance.ts holds the
+     allowance read since tiers arrived, so a check confined to
+     index.ts would be measuring a surface that shrank rather than a
+     posture that held. */
+  const fn =
+    source("supabase/functions/ai-text/index.ts") + "\n" + source("supabase/functions/_shared/allowance.ts");
   const tables = [...fn.matchAll(/\.from\("([^"]+)"\)/g)].map((m) => m[1]);
   assert.deepEqual([...new Set(tables)].sort(), ["ai_usage", "profiles"]);
-  const written = [...fn.matchAll(/\.from\("([^"]+)"\)\s*\.(?:upsert|insert|update|delete)/gs)].map((m) => m[1]);
-  assert.deepEqual([...new Set(written)], ["ai_usage"]);
+  assert.deepEqual(tablesWrittenByAiText(), ["ai_usage", "profiles"], "ai-text writes something other than the two allowance counters");
 
   const app = source("src/PlannerApp.jsx");
   const handler = app.slice(app.indexOf("const summariseReading ="), app.indexOf("const summariseReading =") + 2000);
@@ -419,14 +491,14 @@ test("the pasted text is never persisted anywhere", () => {
 test("photos are priced as parts of the reading, not as a second scheme", () => {
   /* The entire pricing story: a batch of PHOTOS_PER_CHUNK pages is one
      summarise call, further batches are further chunks, merge as
-     today. Derived from TASK_UNITS, so a weight change re-runs this
+     today. Derived from TASK_CREDITS, so a weight change re-runs this
      instead of leaving it green. */
-  assert.equal(estimatePhotos(1).units, TASK_UNITS.summarise);
-  assert.equal(estimatePhotos(4).units, TASK_UNITS.summarise);
-  assert.equal(estimatePhotos(5).units, 2 * TASK_UNITS.summarise + TASK_UNITS.merge);
+  assert.equal(estimatePhotos(1).credits, PHOTO_BATCH_CREDITS);
+  assert.equal(estimatePhotos(4).credits, PHOTO_BATCH_CREDITS);
+  assert.equal(estimatePhotos(5).credits, 2 * PHOTO_BATCH_CREDITS + TASK_CREDITS.merge);
   /* The photo ceiling costs exactly what the text ceiling costs -- 16
      photos and an 80,000-character reading are the same 4-chunk job. */
-  assert.equal(estimatePhotos(MAX_READING_PHOTOS).units, 4 * TASK_UNITS.summarise + TASK_UNITS.merge);
+  assert.equal(estimatePhotos(MAX_READING_PHOTOS).credits, 4 * PHOTO_BATCH_CREDITS + TASK_CREDITS.merge);
   assert.equal(estimatePhotos(MAX_READING_PHOTOS).chunks, MAX_READING_CHUNKS);
 });
 
@@ -478,8 +550,7 @@ test("the photos are never persisted anywhere, on any path", () => {
      the draft, the blob, or localStorage. */
   const fn = source("supabase/functions/ai-text/index.ts");
   assert.doesNotMatch(fn, /\.storage/, "ai-text touches the Storage API — photos would have a server-side home");
-  const written = [...fn.matchAll(/\.from\("([^"]+)"\)\s*\.(?:upsert|insert|update|delete)/gs)].map((m) => m[1]);
-  assert.deepEqual([...new Set(written)], ["ai_usage"], "the endpoint writes more than usage");
+  assert.deepEqual(tablesWrittenByAiText(), ["ai_usage", "profiles"], "the endpoint writes more than the two allowance counters");
 
   /* Comments stripped before the grep -- this assertion caught its own
      explanatory comment on the first run, the same way the wording
@@ -533,8 +604,15 @@ test("the copy never suggests skipping the reading", () => {
      so a guard that counted comments would be reporting the rule as a
      violation of itself. It caught exactly that on its first run. */
   const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  /* THE STORE LISTING IS SWEPT TOO, and it is the copy most likely to
+     reach for "skip the reading", because that is what sells. It is
+     also the copy nobody reviews — typed into a Play Console box,
+     greped by nothing — which is exactly why it belongs in a file. */
   const text =
-    JSON.stringify(READING_COPY) + strip(source("src/aiTextCopy.js")) + strip(source("src/readingChunks.js"));
+    JSON.stringify(READING_COPY) +
+    strip(source("src/aiTextCopy.js")) +
+    strip(source("src/readingChunks.js")) +
+    strip(source("site/store-listing.js"));
   for (const rx of banned) assert.doesNotMatch(text, rx, `substitution framing: ${rx}`);
 });
 

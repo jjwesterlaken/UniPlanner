@@ -29,6 +29,15 @@ export const AUDIO_SOURCES = ["microphone", "system", "both"];
    desk rumble live in, so it removes energy that is never speech. */
 export const ROOM_HIGHPASS_HZ = 80;
 
+/* THE RATE WHISPER WORKS AT, and the one the WebAudio graph must be
+   built in. It was a literal in both constraint sets below and would
+   have become a third in aiNotes.jsx's buildGraph — which is exactly
+   how the graph came to run at 48 kHz while the constraints asked for
+   16: nothing connected the two numbers, so nothing noticed they had
+   stopped agreeing. Exported so the graph reads the same constant the
+   microphone was asked for. */
+export const MIC_SAMPLE_RATE = 16000;
+
 /* ------------------------------------------------------------------ */
 /*  Reading the environment                                           */
 /* ------------------------------------------------------------------ */
@@ -158,7 +167,7 @@ export function micConstraints(deviceId) {
     noiseSuppression: false,
     autoGainControl: false,
     channelCount: 1,
-    sampleRate: 16000,
+    sampleRate: MIC_SAMPLE_RATE,
   };
   if (deviceId) c.deviceId = { ideal: deviceId };
   return c;
@@ -173,7 +182,7 @@ export function micConstraints(deviceId) {
  * meaningless. Only the shape is shared.
  */
 export function systemConstraints() {
-  return { channelCount: 1, sampleRate: 16000 };
+  return { channelCount: 1, sampleRate: MIC_SAMPLE_RATE };
 }
 
 /* ------------------------------------------------------------------ */

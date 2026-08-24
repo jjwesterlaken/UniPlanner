@@ -161,31 +161,66 @@ export function newIdempotencyKey(cryptoObj = typeof globalThis !== "undefined" 
 // with it, since that constant assumes this bitrate.
 export const RECORDER_AUDIO_BITS_PER_SECOND = 32000;
 
-// Display-only hint for the "X of Y minutes used" badge and the
-// near-cap warning banner. The real limit is enforced server-side
-// (supabase/functions/ai-notes/config.ts MONTHLY_MINUTES_LIMIT) — if
-// this drifts out of sync with that constant it's a cosmetic issue,
-// not a security one, since the server never trusts the client's copy.
-export const MONTHLY_MINUTES_LIMIT_HINT = 300;
+/* THE UPLOAD CEILING, MIRRORED — and it is checked HERE now, not only
+   by the server.
 
-/* Mirrored from the Edge Function's MINIMUM_BILLED_MINUTES, for the same
+   Nothing on the client validated the recorded size, so the only
+   limits were the Edge Function's MAX_BODY_BYTES and the bucket's own
+   per-file cap. On a platform whose encoder ignores the requested
+   bitrate (iOS: ~218 kbps against 32 kbps asked -- see
+   IOS-READINESS.md 1a) a two-hour lecture is ~196 MB, and the student
+   waits through as much of that upload as their connection allows
+   before Storage rejects it with a message that explains nothing.
+
+   Nothing is billed either way -- the ordering has always held -- but
+   a refusal in one second beats the same refusal after eight minutes
+   of uploading, and it can say what happened. The check is the same
+   number the server enforces, so the EQUALITY is the guard: a browser
+   bundle cannot import from supabase/functions, and test-ai-notes.mjs
+   asserts this against MAX_BODY_BYTES for the same reason the billing
+   hints are asserted against theirs. */
+export const MAX_UPLOAD_BYTES_HINT = 86_062_500;
+
+/**
+ * Why this recording cannot be uploaded, or null if it can.
+ *
+ * Pure, and it returns a REASON rather than a boolean so the caller
+ * has something to say. `{ code, bytes, limit }` — the wording lives in
+ * aiNotesCopy.js, like every other failure here.
+ *
+ * An unknown or zero size returns null deliberately: the point is to
+ * catch a recording that is definitively too big, and refusing one we
+ * cannot measure would turn a missing number into a lost lecture. Same
+ * rule as fetchNote's three outcomes — absence is not evidence.
+ */
+export function uploadRefusal(bytes, limit = MAX_UPLOAD_BYTES_HINT) {
+  if (typeof bytes !== "number" || !isFinite(bytes) || bytes <= 0) return null;
+  if (bytes <= limit) return null;
+  return { code: "recording_too_large", bytes, limit };
+}
+
+// THE MONTHLY LIMIT MOVED to src/aiTextLimits.js, which is now the
+// client's copy of the whole currency rather than of the text half.
+// Two mirrors of one number is one mirror too many, and this one spent
+// several months with a comment where its assertion should have been.
+// Import MONTHLY_CREDITS_LIMIT from there.
+
+/* Mirrored from the Edge Function's MINIMUM_BILLED_CREDITS, for the same
    reason TRANSLATION_LANGUAGES is mirrored: the browser bundle can't
-   import from supabase/functions/. A test asserts the two agree, which
-   the older MONTHLY_MINUTES_LIMIT_HINT above did not have until this was
-   added -- a restatement with nothing checking it.
+   import from supabase/functions/. A test asserts the two agree.
 
-   Unlike that one, this constant is not cosmetic. It is what a student
-   sees their allowance move by, so a drift here makes the number on
-   screen disagree with the number being charged. */
-export const MINIMUM_BILLED_MINUTES_HINT = 3;
+   Not cosmetic. It is what a student sees their allowance move by, so a
+   drift here makes the number on screen disagree with the number being
+   charged. */
+export const MINIMUM_BILLED_CREDITS_HINT = 3;
 
-/* What a re-summarise costs, mirrored for the copy that has to state it
+/* What a re-summarise costs in credits, mirrored for the copy that has to state it
    before the student commits. A browser bundle cannot import from
    supabase/functions, so this is the allowed kind of restatement — and
    the EQUALITY is the guard: test-ai-notes.mjs asserts it against the
    server's derived constant, because a figure on screen that disagrees
    with the figure charged is the failure this pattern exists to stop. */
-export const RESUMMARISE_BILLED_MINUTES_HINT = 2;
+export const RESUMMARISE_BILLED_CREDITS_HINT = 2;
 
 const CANDIDATE_MIME_TYPES = [
   { mimeType: "audio/webm;codecs=opus", extension: "webm" },
@@ -194,20 +229,70 @@ const CANDIDATE_MIME_TYPES = [
   { mimeType: "audio/aac", extension: "aac" },
 ];
 
+/* A DIAGNOSTIC HOOK, AND THE ONLY REASON IT EXISTS IS A MEASUREMENT.
+
+   Whether to prefer mp4/AAC over webm/Opus on iOS is a real question —
+   AAC came back at 29 kbps against Opus's 51, which is the difference
+   between a three-hour lecture fitting and not. It cannot be decided by
+   reasoning: Opus is the better speech codec at these rates, so the
+   smaller file might transcribe worse, and the only way to know is to
+   put both through the real Groq call and diff the transcripts.
+
+   That needs the app to record mp4 on a device where it would pick
+   webm, WITHOUT shipping the preference to anybody. So: a device-local
+   key, unset by default, that NO UI writes. It is set by hand from the
+   shell's console for the comparison and cleared afterwards.
+
+   THREE THINGS KEEP IT FROM BEING A LIABILITY. It can only select a
+   candidate that is already in the list below, so it cannot conjure an
+   unsupported or unallowlisted format. It is still filtered through
+   isTypeSupported, so a platform that cannot record it falls through to
+   the normal order rather than failing. And it is device-local and
+   unsynced, like the audio input and the theme — a value stuck in one
+   student's browser cannot reach anybody else.
+
+   Delete this and the key together once the diff has been run and the
+   codec decided; a hook with no measurement left to serve is just a
+   second way for the format to be wrong. */
+export const FORCE_MIME_KEY = "uni-planner-force-mime";
+
 /**
  * Picks the first mime type the platform's MediaRecorder actually
  * supports. `isSupportedFn` is injected (defaults to the real
  * `MediaRecorder.isTypeSupported`) so this is testable in Node,
  * where no MediaRecorder exists at all.
+ *
+ * `forced` is the diagnostic override above, injected for the same
+ * reason — this module reads no browser globals.
  */
-export function pickSupportedMimeType(isSupportedFn) {
+export function pickSupportedMimeType(isSupportedFn, forced) {
   const isSupported =
     isSupportedFn || (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported.bind(MediaRecorder));
   if (!isSupported) return null;
-  for (const candidate of CANDIDATE_MIME_TYPES) {
+  const wanted = forced === undefined ? readForcedMime() : forced;
+  const order = wanted
+    ? [...CANDIDATE_MIME_TYPES.filter((c) => c.mimeType === wanted), ...CANDIDATE_MIME_TYPES]
+    : CANDIDATE_MIME_TYPES;
+  for (const candidate of order) {
     if (isSupported(candidate.mimeType)) return candidate;
   }
   return null;
+}
+
+/** The override, if one is set AND names a candidate. Never throws. */
+export function readForcedMime(storage) {
+  try {
+    const store = storage || (typeof localStorage === "undefined" ? null : localStorage);
+    if (!store) return null;
+    const raw = store.getItem(FORCE_MIME_KEY);
+    /* VALIDATED AGAINST THE LIST, not merely non-empty. An arbitrary
+       string here would reach MediaRecorder's constructor and, if the
+       platform happened to accept it, produce a format the server's
+       extension allowlist has never heard of. */
+    return CANDIDATE_MIME_TYPES.some((c) => c.mimeType === raw) ? raw : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 /* ---------- error messages ---------- */
@@ -279,7 +364,12 @@ export const PERMANENT_FAILURE_CODES = new Set([
 
 const ERROR_MESSAGES = {
   no_access: "AI notes isn't enabled for your account yet.",
-  usage_exceeded: "You've used all your AI minutes for this month.",
+  /* NO PERIOD, and no "minutes". This map is keyed by an error code
+     with no tier in scope, so "this month" would be a promise it
+     cannot check -- and a trial account's credits never come back.
+     The allowance badge above the recorder states the shape (see
+     AI_NOTES_COPY.trialAllowance); this sentence states the fact. */
+  usage_exceeded: "You've used all your AI credits.",
   already_processing: "This recording is already being processed — try again shortly.",
   recording_too_long: "Recordings are limited to about 3 hours.",
   recording_missing: "We couldn't find that recording — please record it again.",
@@ -748,6 +838,11 @@ export function recorderReducer(state, action) {
         status: "stopped",
         blob: action.blob,
         mimeType: action.mimeType,
+        /* The recorder's OWN choice, carried rather than re-derived.
+           CANDIDATE_MIME_TYPES pairs each mime type with its extension;
+           re-deriving it downstream from a second map is how a stored
+           object comes to disagree with its contents. */
+        extension: action.extension,
         idempotencyKey: action.idempotencyKey,
         estimatedDurationSeconds: action.estimatedDurationSeconds,
       };

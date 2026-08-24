@@ -297,6 +297,14 @@ export const demoBackend = {
     }
   },
 
+  /* Demo mode has no server to claim on, and no shared account to
+     protect. Returning `unavailable` rather than a fake claim keeps the
+     three-outcome shape honest all the way down: the caller cannot tell
+     "no backend" from "the write failed" by guessing, so it is told. */
+  async claimDevice() {
+    return { unavailable: true };
+  },
+
   async pull({ session }) {
     if (!session) throw new Error("Not signed in.");
     const cloud = readJSON(DEMO_CLOUD_KEY, {});
@@ -456,6 +464,31 @@ export const supabaseBackend = {
   async updatePassword({ password }) {
     const { error } = await supabase.auth.updateUser({ password: password || "" });
     if (error) throw new Error(readable(error));
+  },
+
+  /* ONE DEVICE AT A TIME, on the tiers whose allowance is once ever.
+
+     A function rather than a table write, because `profiles` is
+     read-only to `authenticated` and `tier` lives on it — see migration
+     0015. The row is chosen by auth.uid() inside the function, so this
+     call names no user and cannot be pointed at another account.
+
+     THREE OUTCOMES, like every other read in this codebase. A failed
+     RPC is `unavailable`, never "you do not hold it": the whole point
+     of the rule is to sign a second device out, and doing that because
+     a request failed in a tunnel would be the same bug as tombstoning a
+     note because a fetch 500'd. */
+  async claimDevice({ session, deviceId }) {
+    if (!supabase || !session || !deviceId) return { unavailable: true };
+    try {
+      const { data, error } = await supabase.rpc("claim_device", { p_device_id: deviceId });
+      if (error) return { unavailable: true };
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) return { unavailable: true };
+      return { activeDeviceId: row.active_device_id || null, activeDeviceAt: row.active_device_at || null };
+    } catch (e) {
+      return { unavailable: true };
+    }
   },
 
   async pull({ session }) {
