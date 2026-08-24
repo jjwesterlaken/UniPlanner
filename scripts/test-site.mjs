@@ -18,6 +18,8 @@
      marker, guarded the way the UNMEASURED billing marker is */
 
 import assert from "node:assert/strict";
+import { STORE_NAME, SHORT_DESCRIPTION, FULL_DESCRIPTION, PRIVACY_POLICY_PATH, ACCOUNT_DELETION_PATH, LIMITS } from "../site/store-listing.js";
+import { SITE_URL, PRIVACY_URL, DELETE_ACCOUNT_URL } from "../src/legalLinks.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +38,17 @@ let passed = 0;
 let failed = 0;
 function test(name, fn) {
   try {
-    fn();
+    const r = fn();
+    /* THE RUNNER IS SYNCHRONOUS, and an async fn returns a promise it
+       would never await — so every assertion inside one runs after the
+       summary has been printed and the exit code decided, and a failure
+       surfaces as an unhandled rejection rather than as a failure. It
+       reported three tests green that could not have gone red. Refusing
+       is the fix; making it async would mean auditing every existing
+       caller for ordering. */
+    if (r && typeof r.then === "function") {
+      throw new Error("this runner is synchronous — an async test would be reported green whatever it asserts");
+    }
     passed++;
     console.log(`  ok  - ${name}`);
   } catch (err) {
@@ -432,6 +444,34 @@ test("the generated build facts really are what desktop/package.json says", () =
   for (const [key, cfg] of [["nsis", desktopPkg.build.nsis], ["portable", desktopPkg.build.portable], ["linux", desktopPkg.build.linux]]) {
     assert.ok(facts.includes(JSON.stringify(cfg.artifactName)), `the ${key} artifactName in build-facts.js is stale`);
   }
+});
+
+/* ---------- the store listing ---------- */
+
+test("the store listing fits the limits Google actually enforces", () => {
+  /* Over the limit, Play refuses to save the draft — after you have
+     typed it. Under it by one character is fine; the point is that the
+     copy lives where a test can count it rather than in a text box. */
+  assert.ok(STORE_NAME.length <= LIMITS.name, `name is ${STORE_NAME.length} characters, limit ${LIMITS.name}`);
+  assert.ok(
+    SHORT_DESCRIPTION.length <= LIMITS.short,
+    `short description is ${SHORT_DESCRIPTION.length} characters, limit ${LIMITS.short}`
+  );
+  assert.ok(
+    FULL_DESCRIPTION.length <= LIMITS.full,
+    `full description is ${FULL_DESCRIPTION.length} characters, limit ${LIMITS.full}`
+  );
+});
+
+test("the listing links the two pages Play requires, at the paths that really serve them", () => {
+  /* Derived from legalLinks rather than retyped: a store listing is the
+     hardest place to fix a wrong URL, because it is reviewed. */
+  assert.equal(`${SITE_URL}${PRIVACY_POLICY_PATH}`, PRIVACY_URL);
+  assert.equal(`${SITE_URL}${ACCOUNT_DELETION_PATH}`, DELETE_ACCOUNT_URL);
+});
+
+test("the listing name matches the store record, and says so about the in-app name", () => {
+  assert.equal(STORE_NAME, "UniPlanner", "the Play name must match the App Store record");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

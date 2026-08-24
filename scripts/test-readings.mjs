@@ -598,8 +598,15 @@ test("the copy never suggests skipping the reading", () => {
      so a guard that counted comments would be reporting the rule as a
      violation of itself. It caught exactly that on its first run. */
   const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  /* THE STORE LISTING IS SWEPT TOO, and it is the copy most likely to
+     reach for "skip the reading", because that is what sells. It is
+     also the copy nobody reviews — typed into a Play Console box,
+     greped by nothing — which is exactly why it belongs in a file. */
   const text =
-    JSON.stringify(READING_COPY) + strip(source("src/aiTextCopy.js")) + strip(source("src/readingChunks.js"));
+    JSON.stringify(READING_COPY) +
+    strip(source("src/aiTextCopy.js")) +
+    strip(source("src/readingChunks.js")) +
+    strip(source("site/store-listing.js"));
   for (const rx of banned) assert.doesNotMatch(text, rx, `substitution framing: ${rx}`);
 });
 

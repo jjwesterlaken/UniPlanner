@@ -2424,6 +2424,37 @@ Netlify remains configured and is deliberately not deleted, so there are
 two working options rather than zero. It is no longer the origin of
 record.
 
+### Before #55 merges — the preconditions, and they are all deploys
+
+The branch is COMPLETE as code and INERT where it is unfinished. What
+gates it is deployment state, not more work:
+
+1. **Migrations 0011–0015 applied, in order.** 0015 is the one people
+   will miss: `fetchUsage` selects `active_device_id, active_device_at`
+   from `profiles`, and PostgREST answers an unknown column with a 400
+   — which `fetchUsage` reads as `unavailable`, so the allowance badge
+   silently disappears and the text features report an unknown
+   allowance. Not a crash; a quiet regression, on the screens that sell
+   the paid tier.
+2. **Both Edge Functions deployed**, after 0011/0012/0014 and before
+   0013. The workflow names both now.
+3. **Verify a real action bills `credits_used`** before applying 0013,
+   which drops the old columns.
+
+**ORDER 5 IS SHIPPABLE HALF-DONE, and the reason is that nothing
+consumes it.** `claimDevice` exists on both backends and is called by
+nothing; `deviceStanding` is computed in `fetchUsage` and returned as
+`standing`, which no `.jsx` reads; the copy is written and rendered
+nowhere. So no student's session behaves differently — the only live
+effect of the whole feature is the two extra columns in that select,
+which is why 0015 is a precondition rather than the wiring being one.
+
+Do NOT revert it. Reverting would mean pulling the migration, the two
+backends, the pure module and its tests to remove code that does
+nothing, and then writing them again. The half that is missing is the
+half that *acts*, and leaving it out is exactly what makes the rest
+safe to ship.
+
 ### Pending, in order, once someone is at a desk
 
 **One item is BLOCKING and must happen before the next function

@@ -154,6 +154,15 @@ keytool -genkey -v -keystore ~/keystores/uniplanner-upload.jks \
 (pick one, store it with the backup) and some identity questions — the
 answers are embedded in the certificate and never shown to users.
 
+**THE ALIAS IS AN EXAMPLE, NOT A REQUIREMENT.** `-alias upload` above
+is just what this command happens to pass; use whatever you like.
+`mobile/scripts/native-signing.mjs` reads `keyAlias` out of
+`key.properties` and hardcodes nothing, so the only thing that has to
+agree is that file and the keystore you actually generated. Jared's
+machine uses `uniplanner` and that is fine. **The alias cannot be
+changed after the first upload** — Play pins the signing identity — so
+whatever you used at `keytool` time is the one, forever.
+
 **2. Write `mobile/key.properties`** (beside, not inside, the generated
 project, so regenerating `mobile/android/` does not destroy it — and
 gitignored by name, with a test asserting the ignore entries exist):
