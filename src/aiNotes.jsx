@@ -56,7 +56,7 @@ import {
 } from "./audioSources.js";
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
 import { noteCache } from "./noteCache.js";
-import { MONTHLY_CREDITS_LIMIT } from "./aiTextLimits.js";
+import { MONTHLY_CREDITS_LIMIT, allowanceForTier } from "./aiTextLimits.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes, callResummarise } from "./aiNotesClient.js";
 import { nowISO, supabase } from "./sync.js";

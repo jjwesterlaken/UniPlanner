@@ -3094,6 +3094,64 @@ anything in `npm test`. For those the artifact check is a hardware or
 dashboard step, and it belongs on `MOBILE-BUILD.md`'s list rather than
 being approximated by a source grep that would pass either way.
 
+### A FREE VARIABLE IS INVISIBLE TO THE BUILD, AND TO EVERY UNIT TEST
+
+`src/aiNotes.jsx` called `allowanceForTier()` and imported only
+`MONTHLY_CREDITS_LIMIT` from the same module. One name short. It
+reached production and blanked the AI tab — the paid feature — for
+every signed-in student, through 22 green suites, 83% coverage and a
+mutation-checked guard set.
+
+**Why nothing saw it, and each reason is worth keeping:**
+
+- **esbuild does not error on a free variable.** A named import that
+  does not exist IS a build error; an identifier that was never
+  imported is left as a global and the build is clean. Verified by
+  mutation: injecting `aFreeVariableNobodyImported()` into the courses
+  tab produced **zero** esbuild complaints and a blank page.
+- **Unit tests import the module**, which resolves the name through
+  Node's own module graph. The bug cannot exist in that environment.
+  Every one of those suites was testing a version of the code where
+  the identifier was defined.
+- **`test-app-smoke.mjs` mounts the real bundle and walks the tabs —
+  in DEMO MODE.** `AiNotesPanel` returns "needs a real signed-in
+  account" before rendering anything.
+- **And the badge returns `null` two lines above the call**, on
+  `!usage || usage.unavailable`. Even a signed-in probe stops short
+  unless the allowance read SUCCEEDS.
+
+Four guards, each stopping one line before the defect. That is the
+shape to look for: not "is this covered" but **"does anything execute
+this line, in the form it ships in".**
+
+**THE FIRST VERSION OF THE NEW GUARD DID NOT CATCH IT EITHER**, and
+that is the part to carry. `test-rendered-tabs.mjs` rendered the AI
+tab, saw markup, and passed — because a signed-in account with no
+accepted consent gets the CONSENT GATE, so the component that threw
+still never mounted. It only went red once the probe seeded
+`meta.aiConsent` and asserted on something that exists only on the far
+side of the gate. **A screen behind two gates needs both opened, and a
+render check that does not assert WHICH screen rendered is a check
+that the app is not entirely broken.**
+
+The two halves now in place, and they cover different things:
+
+- **`freeVariables()`** — static, no browser. Every name exported by a
+  `src/` module, used in another `src/` file that neither imports nor
+  declares it. Catches the class in code the render walk cannot reach,
+  like a click handler. It counts PARAMETERS as declarations, because
+  these modules take dependencies as arguments by design
+  (`buildAttempt({ uid })`) and a detector that flags five
+  pure-by-design injections gets itself disabled.
+- **the render walk** — every tab, from the BUILT bundle, in real
+  Chromium, signed in, with consent accepted and the network
+  intercepted so no credentials are needed. **Each tab from a COLD
+  MOUNT rather than by clicking through**, because the AI tab opens
+  the consent overlay, which correctly intercepts pointer events and
+  would have turned one modal doing its job into five spurious
+  failures. A cold mount is also where a ReferenceError actually
+  bites: on first render, before anybody clicks anything.
+
 ### A GREEN GUARD MUST BE ABLE TO SAY WHAT IT CHECKED
 
 **WHEN A CHECK FINDS NOTHING, THAT IS A RESULT TO ASSERT, NOT A REASON

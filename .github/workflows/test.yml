@@ -146,6 +146,18 @@ jobs:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-computed-ground.mjs
 
+      - name: Every tab renders from the built bundle, signed in
+        # The guard that was missing when `allowanceForTier is not
+        # defined` reached production: the unit suites import the
+        # modules, which resolves the identifier through Node's module
+        # graph, so the bug is invisible there by construction. This
+        # renders each tab from the BUILT bundle with a session and a
+        # successful allowance read, and fails on any uncaught error.
+        # No credentials — every request is intercepted.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-rendered-tabs.mjs
+
       - name: Run the three journeys
         # Against the live Supabase project with a dedicated test account
         # (see e2e/helpers.mjs for why its data cannot accumulate).
