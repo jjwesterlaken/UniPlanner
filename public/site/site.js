@@ -16,7 +16,7 @@
 import { repoSlug, assetName, detectPlatform, downloadsFor } from "./downloads.js";
 import { TIERS, PERIODS, allowanceLine, priceLabel } from "./pricing.js";
 import { FLAGS } from "./flags.js";
-import { REPOSITORY_URL, PRODUCT_NAME, ARTIFACT_NAMES, APP_PATH } from "./build-facts.js";
+import { REPOSITORY_URL, PRODUCT_NAME, ARTIFACT_NAMES, APP_URL } from "./build-facts.js";
 
 /* ---------- the service worker that used to own this path ----------
 
@@ -45,6 +45,41 @@ function releaseTheOldWorker() {
       }
     })
     .catch(() => {});
+}
+
+/* ---------- a recovery link that landed on the wrong page ----------
+
+   THIS IS REQUIRED BY BUILDS THAT ARE ALREADY IN THE STORES, and that
+   is why it is not optional.
+
+   `PASSWORD_RESET_REDIRECT` is baked into a bundle at build time. The
+   iOS build on TestFlight and the Android AAB already uploaded both
+   carry the BARE ORIGIN, because that is what it was when they were
+   cut. After the split the bare origin is this page — so a student who
+   taps "forgot password" in either of those builds gets an email whose
+   link lands here, with the recovery token in the hash, on a page that
+   cannot consume it. Supabase tokens are single-use: opening the link
+   burns it. The reset does not fail loudly, it just never works.
+
+   So the marketing page forwards it, hash intact, to the app. New
+   builds point at /app directly and never touch this path; this exists
+   for every copy of the app that was cut before the split and for any
+   bookmark or installed PWA that predates it.
+
+   IT MUST NOT FIRE ON AN ORDINARY VISIT. Supabase puts recovery
+   parameters in the FRAGMENT, so it checks for both an access token and
+   the recovery type before doing anything, and it uses `replace` so the
+   marketing page does not sit in the back stack behind a password form. */
+function forwardRecoveryToTheApp() {
+  const hash = location.hash || "";
+  if (hash.length < 2) return;
+  const params = new URLSearchParams(hash.slice(1));
+  const isRecovery = params.get("type") === "recovery" && params.get("access_token");
+  /* An error coming back from Supabase (an expired link) rides the same
+     fragment and belongs in the app too, where there is wording for it. */
+  const isAuthError = params.get("error") || params.get("error_description");
+  if (!isRecovery && !isAuthError) return;
+  location.replace("/app/" + hash);
 }
 
 /* ---------- fill the slots ---------- */
@@ -87,7 +122,7 @@ function fillHeroCta() {
   a.textContent = label;
   /* On a platform with no desktop build, the hero button goes to the
      app rather than to a downloads section that has nothing for them. */
-  if (platform === "mac" || platform === "ios" || platform === "android") a.setAttribute("href", APP_PATH);
+  if (platform === "mac" || platform === "ios" || platform === "android") a.setAttribute("href", APP_URL);
 }
 
 function fillStoreBadges() {
@@ -189,7 +224,7 @@ function fillDownloads() {
   }
   /* The web card is not a release asset, so it is not in downloadsFor —
      it is always available and always last-but-two. */
-  box.appendChild(make({ id: "web", title: "Web", blurb: "Nothing to install", href: APP_PATH, label: "Open the app" }));
+  box.appendChild(make({ id: "web", title: "Web", blurb: "Nothing to install", href: APP_URL, label: "Open the app" }));
   box.appendChild(
     make({ id: "android", title: "Android", blurb: "Google Play", href: null, label: "Coming soon", soon: !FLAGS.playBadge })
   );
@@ -199,6 +234,7 @@ function fillDownloads() {
 }
 
 releaseTheOldWorker();
+forwardRecoveryToTheApp();
 fillHeroCta();
 fillStoreBadges();
 fillPricing();

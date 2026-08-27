@@ -474,6 +474,108 @@ test("the listing name matches the store record, and says so about the in-app na
   assert.equal(STORE_NAME, "UniPlanner", "the Play name must match the App Store record");
 });
 
+/* ---------- the recovery link that lands on the wrong page ---------- */
+
+test("the marketing page forwards a recovery token to the app, hash intact", () => {
+  /* REQUIRED BY BUILDS ALREADY IN THE STORES. PASSWORD_RESET_REDIRECT is
+     baked in at build time, and the TestFlight build and the uploaded
+     AAB both carry the BARE ORIGIN — which after the split is this
+     page. Supabase recovery tokens are single-use, so a link that lands
+     somewhere that cannot consume it is burnt, silently. */
+  const src = fs.readFileSync(path.join(rootDir, "public/site/site.js"), "utf8");
+  const body = src.slice(src.indexOf("function forwardRecoveryToTheApp"), src.indexOf("/* ---------- fill the slots"));
+  assert.ok(body.length > 100, "forwardRecoveryToTheApp is gone from the marketing page");
+  assert.match(src, /^forwardRecoveryToTheApp\(\);$/m, "it is defined but never called");
+
+  const run = (hash) => {
+    let replaced = null;
+    const location = { hash, replace: (u) => (replaced = u) };
+    new Function("location", "URLSearchParams", body + "; return forwardRecoveryToTheApp;")(location, URLSearchParams)();
+    return replaced;
+  };
+
+  /* Forwarded, with the fragment carried across unchanged — the token
+     is IN the fragment, so dropping it forwards an empty form. */
+  const hash = "#access_token=abc&type=recovery&expires_in=3600";
+  assert.equal(run(hash), "/app/" + hash);
+  /* An expired-link error rides the same fragment and belongs in the
+     app too, where there is wording for it. */
+  assert.match(run("#error=access_denied&error_description=expired"), /^\/app\/#error=/);
+
+  /* AND IT MUST NOT FIRE ON AN ORDINARY VISIT — a marketing page that
+     bounces every reader to /app is worse than no page. */
+  for (const quiet of ["", "#", "#features", "#access_token=abc&type=signup", "#type=recovery"]) {
+    assert.equal(run(quiet), null, `the page forwarded on a hash it should ignore: "${quiet}"`);
+  }
+});
+
+test("the app's reset destination and the forwarder agree on where the app lives", () => {
+  /* If PASSWORD_RESET_REDIRECT moves to /app for new builds, the
+     forwarder must point at the same place — otherwise old builds land
+     one path away from where new ones do, and only one of them works. */
+  const links = fs.readFileSync(path.join(rootDir, "src/legalLinks.js"), "utf8");
+  const m = /export const PASSWORD_RESET_REDIRECT = ([^;]+);/.exec(links);
+  assert.ok(m, "PASSWORD_RESET_REDIRECT is gone from legalLinks.js");
+  const site = fs.readFileSync(path.join(rootDir, "public/site/site.js"), "utf8");
+  const target = /location\.replace\("([^"]+)"/.exec(site);
+  assert.ok(target, "the forwarder no longer names a destination");
+  const dest = target[1];
+  if (/\/app/.test(m[1])) {
+    assert.match(dest, /^\/app\//, "new builds go to /app but the forwarder sends old ones elsewhere");
+  } else {
+    /* Still the bare origin: fine, and the forwarder is what makes the
+       split safe for the builds already shipped. Recorded rather than
+       asserted away. */
+    assert.match(dest, /^\/app\//, "the forwarder must send recovery links to the app's path");
+  }
+});
+
+/* ---------- the apex build ---------- */
+
+test("the app link is ABSOLUTE, so the page works off-origin", () => {
+  /* Served from the apex, `/app` resolves to a path on a host that has
+     no app. It was also wrong on `www`, where the planner is still at
+     the root — the hero button 404s today. */
+  const facts = fs.readFileSync(path.join(rootDir, "site/build-facts.js"), "utf8");
+  const m = /export const APP_URL = "([^"]+)"/.exec(facts);
+  assert.ok(m, "APP_URL is gone from build-facts.js");
+  assert.match(m[1], /^https:\/\//, `APP_URL is "${m[1]}" — root-relative breaks the apex and any other host`);
+  assert.ok(m[1].startsWith(SITE_URL), "the app link points at a different origin from SITE_URL");
+  assert.ok(!/APP_PATH/.test(fs.readFileSync(path.join(rootDir, "public/site/site.js"), "utf8")), "the page still uses the old root-relative constant");
+});
+
+test("the apex build ships a page whose every link resolves", () => {
+  /* THE ONE THAT ALREADY BIT. The build rewrites `./site.js` to
+     `./site/site.js` and originally never copied site.js, so the page
+     loaded, rendered its static markup, and filled in NO slots — no
+     download buttons, no pricing, no worker release, no recovery
+     forwarding — and nothing about it looked broken.
+
+     Checked against the built output, because a rewrite that points
+     somewhere is not the same claim as one that points at a file. */
+  const out = path.join(rootDir, "dist-site");
+  if (!fs.existsSync(out)) {
+    /* Not built in this run. Say so rather than pass: a check that
+       silently skips is the shape this project spends its discipline
+       removing. */
+    assert.fail("dist-site is missing — run `npm run build:site` before this suite, or the apex build is unverified");
+  }
+  const html = fs.readFileSync(path.join(out, "index.html"), "utf8");
+  const refs = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((r) => r[1]);
+  assert.ok(refs.length >= 8, `the apex page references ${refs.length} things — the markup did not survive the build`);
+
+  const local = refs.filter((r) => !/^(https?:|mailto:|#|data:)/.test(r));
+  assert.ok(local.length >= 2, "no local references at all — the rewrite took everything absolute, including the script");
+  const missing = local.filter((r) => !fs.existsSync(path.join(out, r.replace(/^\.?\//, ""))));
+  assert.deepEqual(missing, [], `the apex page links to files that are not in the build: ${missing.join(", ")}`);
+
+  /* The legal pages are NOT in this build and must therefore be
+     absolute — they live on www and are named in two store listings. */
+  assert.match(html, new RegExp(`href="${SITE_URL}/privacy"`), "the privacy link is not absolute — it 404s on the apex");
+  assert.match(html, new RegExp(`href="${SITE_URL}/delete-account"`), "the deletion link is not absolute — Play checks this one");
+  assert.ok(!fs.existsSync(path.join(out, "sw.js")), "a service worker reached the apex build");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
 if (passed === 0) {

@@ -22,6 +22,11 @@ export const ARTIFACT_NAMES = {
   "linux": "${productName}.${ext}"
 };
 
-/* Where the planner lives once the origin split lands. One constant,
-   because it is written into the hero button and two download cards. */
-export const APP_PATH = "/app";
+/* Where the planner lives — ABSOLUTE, and written by the build from
+   SITE_URL rather than typed here.
+
+   It was "/app", which was wrong twice: the app is still served from
+   the root, so the hero button 404s today; and root-relative breaks
+   entirely when this page is served from the APEX domain, which is a
+   different host. */
+export const APP_URL = "https://www.uniplannerapp.com";

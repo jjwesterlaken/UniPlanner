@@ -77,6 +77,24 @@ fs.cpSync("public", OUT, { recursive: true });
    is what makes this a derivation rather than a copy with extra steps. */
 {
   const desktop = JSON.parse(fs.readFileSync("desktop/package.json", "utf8"));
+  /* WHERE THE PLANNER LIVES, absolute and DERIVED.
+
+     It was a hand-written "/app" — wrong twice over. Wrong today,
+     because the app is still served from the root, so the hero button
+     and two download cards 404. And root-relative is wrong from the
+     APEX domain, where the marketing site is served from a different
+     host and `/app` resolves to a path that does not exist there.
+
+     Absolute, from SITE_URL, so the page works served from /site/, from
+     the apex, or from / after the split. The split changes this line
+     and PASSWORD_RESET_REDIRECT together — a test pins them to the same
+     location, because a page pointing one place while the reset email
+     points another is two half-working paths. */
+  const links = fs.readFileSync("src/legalLinks.js", "utf8");
+  const siteUrl = /export const SITE_URL = "([^"]+)"/.exec(links);
+  if (!siteUrl) throw new Error("SITE_URL is gone from src/legalLinks.js — the site's app link cannot be derived");
+  const appUrl = siteUrl[1]; // + "/app" when the origin split lands
+
   const facts = fs.readFileSync("site/build-facts.js", "utf8");
   const filled = facts
     .replace(/export const REPOSITORY_URL = "[^"]*";/, `export const REPOSITORY_URL = ${JSON.stringify(desktop.repository.url)};`)
@@ -95,7 +113,11 @@ fs.cpSync("public", OUT, { recursive: true });
         ) +
         ";"
     );
-  if (filled !== facts) fs.writeFileSync("site/build-facts.js", filled);
+  const withApp = filled.replace(
+    /export const APP_URL = "[^"]*";/,
+    `export const APP_URL = ${JSON.stringify(appUrl)};`
+  );
+  if (withApp !== facts) fs.writeFileSync("site/build-facts.js", withApp);
 
   /* The site's own modules ride along beside its page. Copied rather
      than bundled: three small ES modules a browser loads directly, and
