@@ -2721,6 +2721,49 @@ async function run() {
     }
   });
 
+  await test("NO BUILD OUTPUT IS TRACKED — derived from the build scripts, not from a list", () => {
+    /* THE PROBE LIST BELOW IS SCOPED TO PATHS SOMEBODY REMEMBERED, and
+       that is how `dist-site/` got committed: a new build script wrote
+       a new output directory, `.gitignore` knew about `dist-web/` and
+       nothing else, and `git add -A` took ten files. Same mechanism as
+       the coverage directory, one entry later — which is the whole
+       argument for deriving the set instead of extending the list.
+
+       So: every `const OUT = "..."` in a build script IS a build
+       output, and each must be ignored by git AND have nothing tracked
+       under it. A new build script that writes somewhere new fails here
+       until .gitignore follows. */
+    const scripts = fs.readdirSync(path.join(rootDir, "scripts")).filter((f) => /^build-.*\.mjs$/.test(f));
+    assert.ok(scripts.length >= 2, `expected the build scripts, found ${scripts.length}`);
+
+    const outputs = new Set();
+    for (const file of scripts) {
+      const src = fs.readFileSync(path.join(rootDir, "scripts", file), "utf8");
+      for (const m of src.matchAll(/^const OUT\s*=\s*"([^"]+)"/gm)) outputs.add(m[1]);
+    }
+    assert.ok(
+      outputs.size >= 2,
+      `parsed ${outputs.size} build outputs from ${scripts.length} scripts — the pattern stopped matching, so this guard is blind`
+    );
+
+    for (const dir of outputs) {
+      const ignored = spawnSync("git", ["check-ignore", "-q", "--no-index", `${dir}/probe.txt`], {
+        cwd: rootDir,
+        encoding: "utf8",
+      });
+      assert.equal(ignored.status, 0, `git does not ignore ${dir}/ — a build run followed by "git add -A" commits it`);
+
+      const tracked = spawnSync("git", ["ls-files", "--", dir], { cwd: rootDir, encoding: "utf8" });
+      assert.equal(tracked.status, 0, "git ls-files failed");
+      assert.equal(
+        tracked.stdout.trim(),
+        "",
+        `${dir}/ has tracked files:\n        ${tracked.stdout.trim().split("\n").slice(0, 5).join("\n        ")}\n` +
+          `        Ignoring a directory does not untrack what is already in it — "git rm -r --cached ${dir}" does.`
+      );
+    }
+  });
+
   await test("git REALLY ignores a keystore at each of those paths, not just the entry text", () => {
     /* THE FAILURE THE TEXT CHECK ABOVE CANNOT SEE. An entry can be
        present and still not bite: a later negation un-ignores it, a

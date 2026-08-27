@@ -1,5 +1,6 @@
 node_modules/
 dist-web/
+dist-site/
 desktop/www/
 mobile/www/
 # Generated per machine by `cap add` — and regenerated freely, which is why
