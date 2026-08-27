@@ -474,6 +474,62 @@ test("the listing name matches the store record, and says so about the in-app na
   assert.equal(STORE_NAME, "UniPlanner", "the Play name must match the App Store record");
 });
 
+/* ---------- the recovery link that lands on the wrong page ---------- */
+
+test("the marketing page forwards a recovery token to the app, hash intact", () => {
+  /* REQUIRED BY BUILDS ALREADY IN THE STORES. PASSWORD_RESET_REDIRECT is
+     baked in at build time, and the TestFlight build and the uploaded
+     AAB both carry the BARE ORIGIN — which after the split is this
+     page. Supabase recovery tokens are single-use, so a link that lands
+     somewhere that cannot consume it is burnt, silently. */
+  const src = fs.readFileSync(path.join(rootDir, "public/site/site.js"), "utf8");
+  const body = src.slice(src.indexOf("function forwardRecoveryToTheApp"), src.indexOf("/* ---------- fill the slots"));
+  assert.ok(body.length > 100, "forwardRecoveryToTheApp is gone from the marketing page");
+  assert.match(src, /^forwardRecoveryToTheApp\(\);$/m, "it is defined but never called");
+
+  const run = (hash) => {
+    let replaced = null;
+    const location = { hash, replace: (u) => (replaced = u) };
+    new Function("location", "URLSearchParams", body + "; return forwardRecoveryToTheApp;")(location, URLSearchParams)();
+    return replaced;
+  };
+
+  /* Forwarded, with the fragment carried across unchanged — the token
+     is IN the fragment, so dropping it forwards an empty form. */
+  const hash = "#access_token=abc&type=recovery&expires_in=3600";
+  assert.equal(run(hash), "/app/" + hash);
+  /* An expired-link error rides the same fragment and belongs in the
+     app too, where there is wording for it. */
+  assert.match(run("#error=access_denied&error_description=expired"), /^\/app\/#error=/);
+
+  /* AND IT MUST NOT FIRE ON AN ORDINARY VISIT — a marketing page that
+     bounces every reader to /app is worse than no page. */
+  for (const quiet of ["", "#", "#features", "#access_token=abc&type=signup", "#type=recovery"]) {
+    assert.equal(run(quiet), null, `the page forwarded on a hash it should ignore: "${quiet}"`);
+  }
+});
+
+test("the app's reset destination and the forwarder agree on where the app lives", () => {
+  /* If PASSWORD_RESET_REDIRECT moves to /app for new builds, the
+     forwarder must point at the same place — otherwise old builds land
+     one path away from where new ones do, and only one of them works. */
+  const links = fs.readFileSync(path.join(rootDir, "src/legalLinks.js"), "utf8");
+  const m = /export const PASSWORD_RESET_REDIRECT = ([^;]+);/.exec(links);
+  assert.ok(m, "PASSWORD_RESET_REDIRECT is gone from legalLinks.js");
+  const site = fs.readFileSync(path.join(rootDir, "public/site/site.js"), "utf8");
+  const target = /location\.replace\("([^"]+)"/.exec(site);
+  assert.ok(target, "the forwarder no longer names a destination");
+  const dest = target[1];
+  if (/\/app/.test(m[1])) {
+    assert.match(dest, /^\/app\//, "new builds go to /app but the forwarder sends old ones elsewhere");
+  } else {
+    /* Still the bare origin: fine, and the forwarder is what makes the
+       split safe for the builds already shipped. Recorded rather than
+       asserted away. */
+    assert.match(dest, /^\/app\//, "the forwarder must send recovery links to the app's path");
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
 if (passed === 0) {
