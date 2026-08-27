@@ -530,6 +530,52 @@ test("the app's reset destination and the forwarder agree on where the app lives
   }
 });
 
+/* ---------- the apex build ---------- */
+
+test("the app link is ABSOLUTE, so the page works off-origin", () => {
+  /* Served from the apex, `/app` resolves to a path on a host that has
+     no app. It was also wrong on `www`, where the planner is still at
+     the root — the hero button 404s today. */
+  const facts = fs.readFileSync(path.join(rootDir, "site/build-facts.js"), "utf8");
+  const m = /export const APP_URL = "([^"]+)"/.exec(facts);
+  assert.ok(m, "APP_URL is gone from build-facts.js");
+  assert.match(m[1], /^https:\/\//, `APP_URL is "${m[1]}" — root-relative breaks the apex and any other host`);
+  assert.ok(m[1].startsWith(SITE_URL), "the app link points at a different origin from SITE_URL");
+  assert.ok(!/APP_PATH/.test(fs.readFileSync(path.join(rootDir, "public/site/site.js"), "utf8")), "the page still uses the old root-relative constant");
+});
+
+test("the apex build ships a page whose every link resolves", () => {
+  /* THE ONE THAT ALREADY BIT. The build rewrites `./site.js` to
+     `./site/site.js` and originally never copied site.js, so the page
+     loaded, rendered its static markup, and filled in NO slots — no
+     download buttons, no pricing, no worker release, no recovery
+     forwarding — and nothing about it looked broken.
+
+     Checked against the built output, because a rewrite that points
+     somewhere is not the same claim as one that points at a file. */
+  const out = path.join(rootDir, "dist-site");
+  if (!fs.existsSync(out)) {
+    /* Not built in this run. Say so rather than pass: a check that
+       silently skips is the shape this project spends its discipline
+       removing. */
+    assert.fail("dist-site is missing — run `npm run build:site` before this suite, or the apex build is unverified");
+  }
+  const html = fs.readFileSync(path.join(out, "index.html"), "utf8");
+  const refs = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((r) => r[1]);
+  assert.ok(refs.length >= 8, `the apex page references ${refs.length} things — the markup did not survive the build`);
+
+  const local = refs.filter((r) => !/^(https?:|mailto:|#|data:)/.test(r));
+  assert.ok(local.length >= 2, "no local references at all — the rewrite took everything absolute, including the script");
+  const missing = local.filter((r) => !fs.existsSync(path.join(out, r.replace(/^\.?\//, ""))));
+  assert.deepEqual(missing, [], `the apex page links to files that are not in the build: ${missing.join(", ")}`);
+
+  /* The legal pages are NOT in this build and must therefore be
+     absolute — they live on www and are named in two store listings. */
+  assert.match(html, new RegExp(`href="${SITE_URL}/privacy"`), "the privacy link is not absolute — it 404s on the apex");
+  assert.match(html, new RegExp(`href="${SITE_URL}/delete-account"`), "the deletion link is not absolute — Play checks this one");
+  assert.ok(!fs.existsSync(path.join(out, "sw.js")), "a service worker reached the apex build");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
 if (passed === 0) {
