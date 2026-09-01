@@ -105,20 +105,59 @@ and the boundaries refuse on their own
 Store Connect → App Review Information → **Sign-in required**, with
 working credentials, or the reviewer sees none of the paid feature.
 
-**Use a dedicated standing account, not the e2e one.** The e2e suite
-resets its account to a seed at the START of every CI run
-(`e2e/helpers.mjs:12–13`) — for a one-shot Play review that was
-survivable; an Apple review can span days, and any state the reviewer
-creates gets wiped by the next push to main. Create
-`review@`-something, seed it with a course, an assignment and a note,
-and let nothing automated touch it. (Same change is worth making on
-the Play form.)
+**THE STANDING REVIEWER ACCOUNT — decided.** One dedicated account,
+free tier, seeded once, **never touched by CI**, serving **both Apple
+review and Play review** — which retires the pause-CI-during-review
+workaround permanently. The e2e account was the wrong tool because it
+resets to seed at the start of every run (`e2e/helpers.mjs:12–13`),
+and an Apple review can span days.
 
-What the reviewer can exercise on a free-tier account: everything.
-Recording is no longer tier-gated — the allowance is the gate
-(`src/aiNotesClient.js:91`), and a fresh account has the 60-credit
-trial. They will meet the consent gate first; that is a consent flow
-working, not an obstacle to explain away.
+**The tier: leave it FREE. The trial credits suffice, with real
+margin.** Every gated action, costed from `TASK_CREDITS`
+(`src/aiTextLimits.js:38`) and `MINIMUM_BILLED_CREDITS`
+(`src/aiNotesLogic.js:215`):
+
+| Action | Credits |
+|---|---|
+| record a short lecture | 3 (the minimum) |
+| summarise a short pasted reading (1 chunk) | 3 |
+| photograph pages (one batch of ≤4) | 3 |
+| summarise a note | 3 |
+| practice questions | 2 |
+| explain-it-back | 1 |
+| weak spots | 1 |
+| **one full pass over everything** | **16** |
+
+Against the 60-credit trial that is nearly four complete passes, which
+covers both stores' reviews and a rejection cycle. If it ever drains,
+reset `trial_credits_used` on that row in the dashboard rather than
+changing the tier — the counter is documented as "never reset by
+anything but a human", and this is the human case. **Keeping it free
+is also the point**: the reviewer then sees the trial's own copy —
+the once-ever wording, the pre-flight estimates, the upgrade pitch —
+exactly as the students they are protecting will.
+
+**The seed, beyond a course, two assignments, a note and a study
+card:**
+
+- **A reading row** (week + pages). Without one, Summarise-a-reading
+  is UNREACHABLE — the panel lives on the reading row, the same shape
+  as the rubric panel, and there is no other way in.
+- **Assessment weights and an exam with a date**, so Grades answers
+  its question and the exam countdown/plan renders rather than showing
+  preconditions.
+- **Six study cards rather than one** — six is `DEFAULT_CARDS_SELECTED`,
+  and practice over one card is a degenerate screen.
+- **One practice run with a couple of deliberate misses**, so Weak
+  Spots has history to show instead of its empty state.
+- **Leave AI consent UNACCEPTED.** The reviewer should meet the
+  consent gate — it is the flow Apple most wants to see working, and
+  it is one tap.
+
+In App Review notes, say the planner works fully signed out and the
+account is only needed for the AI features — true, tested
+(`test-local-only.mjs`), and it frames the sign-in requirement as
+scoped rather than as a wall.
 
 ---
 
@@ -149,16 +188,18 @@ Sensitive Info. **Data Used to Track You: none** — which is also what
 `PrivacyInfo.xcprivacy` declares, so the questionnaire and the
 manifest agree.
 
-**THE ONE JUDGEMENT CALL — photos.** Apple's definition of "collect"
-is transmitting data off the device **and retaining it longer than
-needed to service the request**. Photos are relayed to the model and
-written nowhere — `ai-text` has no storage client, pinned at
-`test-readings.mjs:552` — so under the definition they are arguably
-not "collected" at all, and omitting them is defensible. Declaring
-them anyway is the conservative reading. This is the mirror of the
-Play service-provider call, and the same rule applies: **read Apple's
-current definition yourself before answering** — it is one paragraph —
-rather than taking either reading of mine.
+**PHOTOS: DECLARED. Decided-conservative, Jared, and recorded here so
+the question does not reopen next submission.** The relay-not-retained
+reading is defensible — Apple's "collect" requires retention beyond
+the request, and `ai-text` has no storage client, pinned at
+`test-readings.mjs:552` — but the asymmetry settles it: declaring
+costs one privacy-label row; omitting risks a rejection cycle if a
+reviewer reads the definition the other way. It also matches the Play
+data-safety answer, so the two labels cannot be played against each
+other, and it is true in the sense a student reads it: their photo
+leaves the device. So the table above stands with **Photos or Videos:
+collected, linked, no tracking, App Functionality** — do not
+un-declare it on a future pass without a ruling.
 
 Note the division of labour the reviewer may probe: the app-level
 `PrivacyInfo.xcprivacy` declares what the **binary** does (nothing);
@@ -172,7 +213,7 @@ ever flags a mismatch between them, that is the seam to look at.
 
 | Item | State | Evidence |
 |---|---|---|
-| **Cut from a tree with `NATIVE_EXCLUDED`** | main has it; **check the output at cut time** | `scripts/prepare-native.mjs` exclusion map; after `npm run build`, `ls mobile/www` must show no `site/` and no `measure-audio.html`. Build **3494152 contains both** — this build supersedes it, and the guard (`test-service-worker.mjs`) now fails a build where any dist-web entry is unclassified |
+| **Cut from a tree with the classification gate** | PASS — **the build itself enforces it, unconditionally** | `scripts/prepare-native.mjs` throws on any dist-web entry not declared in `NATIVE_SHIPPED` or `NATIVE_EXCLUDED`, naming the file — so a local Mac `npm run build` cannot copy an unclassified asset, and `ls mobile/www` is confirmation rather than the gate. Build **3494152 contains `site/` and `measure-audio.html`** — this build supersedes it |
 | iPhone-only | PASS | `TARGETED_DEVICE_FAMILY = "1"`, `stamp-native.mjs:89`, re-applied every `cap add`, asserted by `test-ai-notes.mjs:914` block |
 | `CFBundleVersion` strictly increases | PASS by construction | derived (minutes since 2020) in `stamp-native.mjs`; marketing version stays 1.0.0 from the root `package.json` |
 | Privacy policy + deletion URLs live | PASS | `src/legalLinks.js` exports both; `test-legal.mjs` pins documents ↔ code; served network-only so never stale from cache |

@@ -16,7 +16,7 @@
    Run via `npm test`. */
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -252,51 +252,47 @@ async function run() {
     }
   });
 
-  await test("EVERY built asset is classified before it can reach a store bundle", () => {
-    /* THE ONE THAT SHIPPED. dist-web is the WEB deploy and a store
-       bundle is a different artifact, but prepare-native copied one
-       into the other wholesale — so `site/`, the marketing page, went
-       inside the submitted iOS build carrying PRICES and external
-       GitHub download links. Nothing in the app can reach it, and
-       neither store looks kindly on finding one.
+  await test("the BUILD ITSELF refuses an unclassified asset — not a test, the build", () => {
+    /* THE GATE MOVED INTO prepare-native.mjs, and this now checks the
+       gate rather than keeping a second copy of the map. Two maps was
+       the mirror problem; worse, the enumeration only ran here, i.e.
+       in CI — so a local `npm run build` on the release Mac would copy
+       a new dist-web entry into the store bundle with nobody deciding.
+       A gate that only runs where the mistake cannot happen is a
+       remembered path with extra steps.
 
-       An exclusion list alone would have the same shape as the bug: it
-       only knows about what somebody remembered. So the top level of
-       dist-web is enumerated and every entry must be either declared
-       as shipped or declared as excluded WITH A REASON. A new asset
-       fails here until someone decides which it is. */
-    const SHIPPED = {
-      "index.html": "the app shell",
-      "app.js": "the bundle",
-      "app.css": "the stylesheet",
-      fonts: "self-hosted, so the packaged app has them offline",
-      "manifest.webmanifest": "harmless in a shell; the PWA install path ignores it there",
-      "icon-192.png": "referenced by the manifest",
-      "icon-512.png": "referenced by the manifest",
-      "apple-touch-icon.png": "referenced by index.html",
-      "privacy.html": "the published policy, also linked absolutely — a local copy costs nothing and works offline",
-      "delete-account.html": "as above, and Google Play requires the page to be reachable",
-    };
+       Checked BEHAVIOURALLY: plant a stray file in dist-web, run the
+       real prepare-native, and require it to fail naming the file. */
+    const stray = path.join(rootDir, "dist-web", "unclassified-probe.bin");
+    fs.writeFileSync(stray, "x");
+    try {
+      const r = spawnSync(process.execPath, [path.join(rootDir, "scripts/prepare-native.mjs")], {
+        cwd: rootDir,
+        encoding: "utf8",
+      });
+      assert.notEqual(r.status, 0, "prepare-native copied an unclassified asset into the shells without complaint");
+      assert.match(
+        (r.stderr || "") + (r.stdout || ""),
+        /unclassified-probe\.bin/,
+        "it failed, but without naming the file — an error nobody can act on"
+      );
+    } finally {
+      fs.rmSync(stray, { force: true });
+    }
 
-    const prepare = fs.readFileSync(path.join(rootDir, "scripts/prepare-native.mjs"), "utf8");
-    const block = prepare.slice(prepare.indexOf("const NATIVE_EXCLUDED"), prepare.indexOf("const INCLUDE_TOOLS"));
-    const excluded = [...block.matchAll(/^\s*"?([A-Za-z_][\w.\-]*)"?:\s*"([^"]{20,})"/gm)].map((m) => m[1]);
-    assert.ok(excluded.length >= 3, `expected the exclusion map, parsed ${excluded.length} entries`);
+    /* And a clean tree still builds — a gate that also fails the good
+       case is a gate that gets deleted. */
+    const ok = spawnSync(process.execPath, [path.join(rootDir, "scripts/prepare-native.mjs")], {
+      cwd: rootDir,
+      encoding: "utf8",
+    });
+    assert.equal(ok.status, 0, `prepare-native fails on a clean dist-web:\n${(ok.stderr || "").slice(0, 300)}`);
 
-    const unclassified = fs
-      .readdirSync(path.join(rootDir, "dist-web"))
-      .filter((name) => !SHIPPED[name] && !excluded.includes(name));
-    assert.deepEqual(
-      unclassified,
-      [],
-      `dist-web now contains ${unclassified.join(", ")}, which prepare-native would copy into every store bundle ` +
-        "without anyone deciding it should. Declare it in SHIPPED here, or in NATIVE_EXCLUDED with a reason."
-    );
-
-    for (const name of excluded) {
+    /* The excluded entries really are absent from the shells. */
+    for (const name of ["site", "measure-audio.html", "sw.js", "_headers"]) {
       assert.ok(
         !fs.existsSync(path.join(rootDir, "mobile/www", name)),
-        `${name} is excluded from packaged apps and is in mobile/www anyway`
+        `${name} is in mobile/www after a release build`
       );
     }
   });
