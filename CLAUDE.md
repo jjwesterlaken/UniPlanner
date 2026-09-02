@@ -1232,6 +1232,24 @@ entries render on `bg-stone-50` with tone-ramp text, background and ink
 from ONE source — which is the pattern the fix restores for paper, from
 the other end.
 
+**The viewer/editor contrast gap is the app's ink hierarchy, not a
+paper decision — recorded so nobody reads meaning into it.** Same
+paper, different ink: the lined viewer measures 10.27:1 and the lined
+editor 15.17:1. The cause is `text-stone-700` on the three viewer
+paths against `text-stone-800` on the editor, and that is the
+convention everywhere — every EDITABLE text surface is `stone-800`
+(`inputCls`, the block editor), every read-only body paragraph is
+400–700 by prominence, with the note body the strongest of them. The
+viewer's 700 was chosen when the read-only viewer was written (574001b,
+12 August 2026) and nobody wrote down a reason. Two facts settle that
+it is incidental to the paper work rather than a readability choice
+about paper: the gap is identical in LIGHT mode and predates the ink
+fix, and blank pages show the same spread (12.44:1 viewer against
+14.31:1 editor). Both clear AA comfortably. **Left alone deliberately**
+— flattening the two into one tone would be a change to the app's
+whole text hierarchy, made silently, in a bug fix about colour
+sources.
+
 **The mode is device-local and unsynced** (`uni-planner-mode`), like
 the last tab and the audio input: a phone in bed and a laptop in a
 library want different answers. "System" is the default, stored as an

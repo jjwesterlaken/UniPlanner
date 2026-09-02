@@ -22,6 +22,16 @@
    and asserts WCAG contrast ratios. A selector that finds nothing is a
    FAILURE: an empty result satisfies every claim made about it.
 
+   THE VIEWER AND THE EDITOR DIFFER, AND IT MEANS NOTHING. The table
+   this prints shows the lined viewer at ~10.3:1 and the lined editor
+   at ~15.2:1 on the same white paper. That is the app's ink hierarchy
+   — every editable surface is text-stone-800, every read-only body
+   paragraph is 400-700 — not a decision about paper: the same gap is
+   there in light mode, predates this fix, and appears on blank pages
+   too. Both clear AA, so the assertion is a FLOOR on each rather than
+   equality between them. Do not "tidy" them into one number here; that
+   would be a change to the whole text hierarchy, made in a test.
+
    Skips without a browser; REQUIRE_BROWSER=1 turns the skip into a
    failure. CI runs it in the browser job (test.yml), and a wiring test
    in test-ai-notes.mjs derives that list, so this file cannot quietly
