@@ -1915,7 +1915,12 @@ function TextBlockEditor({ block, onChange, style, font, registerArea, onFocusBl
          viewport-relative floor is what makes the note dominate on a
          phone, and it still grows with the text beyond that. */
       className={`min-h-[55vh] sm:min-h-[320px] w-full rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-800 u-field ${
-        style === "lined" ? "lined-paper" : "bg-paper"
+        /* A blank page FOLLOWS THE THEME (the ruling that fixed lined
+           ink): bg-surface, like the picker's swatch and the viewer's
+           card. bg-paper here was the same mismatch as the lined bug —
+           pinned white ground, flipping ink — invisible in light mode
+           only because --surface and --paper are the same white. */
+        style === "lined" ? "lined-paper" : "bg-surface"
       }`}
       style={{ fontFamily: fontCss, outline: "none" }}
     />

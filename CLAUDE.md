@@ -1206,6 +1206,32 @@ agenda below, and until she rules, the paper stays light and the test
 pins `--paper` equal in both modes so flipping it arrives as a choice
 (update the test in the same commit), never as an accident.
 
+**AND THE PAPER CARRIES ITS OWN INK (Jared's ruling, 2 September
+2026).** A pinned surface with themed text is two sources of truth for
+one square of screen, and they disagreed: white paper, near-white ink,
+an unreadable lined note in dark mode — editor at 1.09:1, viewer at
+1.26:1, measured. The fix is that `.lined-paper` is a LIGHT-SCHEME
+ISLAND: it re-pins the whole `--tone-*` ramp to the light values plus
+`color-scheme: light`, so every utility on or under the surface — body
+text, placeholder, the muted "empty note" span, the border, the caret
+via currentColor, selection via the scheme — resolves to paper ink with
+no per-element overrides, and no future utility on the surface can
+reopen the mismatch. The island block in `input.css` is a MIRROR of the
+light ramp (var() indirection would break the literal token parsers
+three suites share), so the equality is asserted in
+`test-dark-mode.mjs`, and `test-paper-ink.mjs` measures the COMPUTED
+colours and WCAG ratios on the built page, both themes, both page
+styles, editor and viewer — because both halves of this bug passed
+every source-level check. Blank pages are the other half of the ruling:
+they FOLLOW the theme, and the blank editor page had the same defect
+(pinned `bg-paper`, hidden by light `--surface` and `--paper` being the
+same white — the colour-coincidence class again); it is `bg-surface`
+now, like the picker swatch and the viewer card always were. Reference
+sheets were never affected because they never sit on the paper: their
+entries render on `bg-stone-50` with tone-ramp text, background and ink
+from ONE source — which is the pattern the fix restores for paper, from
+the other end.
+
 **The mode is device-local and unsynced** (`uni-planner-mode`), like
 the last tab and the audio input: a phone in bed and a laptop in a
 library want different answers. "System" is the default, stored as an

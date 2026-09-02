@@ -235,6 +235,44 @@ async function run() {
     assert.equal(darkPaper[1].trim(), lightPaper[1].trim(), "the note paper flipped — if that is Grace's ruling, update this test in the same commit");
   });
 
+  await test("THE PAPER CARRIES ITS OWN INK — .lined-paper re-pins the ramp to the light values, byte for byte", () => {
+    /* The lined page stays white in both modes (the pin above) while
+       text-stone-* used to flip with the theme: white paper, white
+       ink, an unreadable note editor in dark mode. The fix scopes the
+       whole tone ramp on .lined-paper to the LIGHT values, so every
+       utility on the surface — body, placeholder, muted span, border,
+       caret via currentColor — is paper ink by construction.
+
+       That block is a MIRROR of the :root light ramp (var()
+       indirection would break the literal token parsers this suite and
+       two others share), so the equality IS the guard: every tone the
+       light ramp declares must be re-pinned on the surface with the
+       identical value, and nothing else may hide in the block. What
+       the values COMPUTE to on the built page is test-paper-ink.mjs's
+       half. */
+    const css = fs.readFileSync(path.join(rootDir, "src/input.css"), "utf8");
+    const at = css.indexOf(".lined-paper {");
+    assert.ok(at > -1, "the .lined-paper ink block is gone from input.css — lined ink follows the theme again");
+    const island = css.slice(at, css.indexOf("}", at));
+    const light = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
+
+    const tones = (b) => new Map([...b.matchAll(/--(tone-\d+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+    const lightTones = tones(light);
+    const islandTones = tones(island);
+    assert.ok(lightTones.size >= 10, `only ${lightTones.size} light tones parsed — the guard is reading the wrong block`);
+    for (const [name, value] of lightTones) {
+      assert.equal(
+        islandTones.get(name),
+        value,
+        `--${name} on .lined-paper is "${islandTones.get(name)}" but the light ramp says "${value}" — the mirror drifted`
+      );
+    }
+    for (const name of islandTones.keys()) {
+      assert.ok(lightTones.has(name), `--${name} is pinned on .lined-paper but is not a light ramp token`);
+    }
+    assert.match(island, /color-scheme: light/, ".lined-paper lost color-scheme: light — selection and controls render dark on white paper");
+  });
+
   await test("the dark accents are DERIVED from each palette, not a second hand-picked set", () => {
     const app = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
     const themes = app.slice(app.indexOf("const THEMES = {"), app.indexOf("\n};", app.indexOf("const THEMES = {")));
