@@ -158,6 +158,18 @@ jobs:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-rendered-tabs.mjs
 
+      - name: Ink on paper meets contrast in both themes
+        # Lined pages are white in both themes by ruling, so their ink
+        # must be dark in both — measured as computed colours and WCAG
+        # ratios on the real rendered note viewer and editor, because
+        # the bug this catches (white ink on white paper in dark mode)
+        # was invisible to every source-level check. A wiring test in
+        # test-ai-notes.mjs derives this job's suite list, so a new
+        # browser suite cannot be forgotten here.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-paper-ink.mjs
+
       - name: Run the three journeys
         # Against the live Supabase project with a dedicated test account
         # (see e2e/helpers.mjs for why its data cannot accumulate).

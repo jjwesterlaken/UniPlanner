@@ -2535,6 +2535,36 @@ async function run() {
     assert.match(workflow, /fetch-depth:\s*0/, "CI checks out shallow, so the coverage ratchet has no origin/main to compare against");
   });
 
+  await test("every browser suite is named in CI's browser job — the list is DERIVED, not remembered", () => {
+    /* The browser suites (computed-ground, rendered-tabs, paper-ink)
+       skip without Chromium, so in the plain npm-test job they skip
+       every time. The browser job runs them with REQUIRE_BROWSER=1 —
+       but it enumerates them BY NAME, and a hand-enumerated list
+       drifts exactly the way the function-deploy workflow's did (it
+       named ai-notes while the repo had two functions). Derive the
+       set from the scripts directory instead: any test that honours
+       REQUIRE_BROWSER must be run by the job that has a browser, or
+       it never runs anywhere. */
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
+    const scriptsDir = path.join(rootDir, "scripts");
+    /* The needle is what a browser suite EXECUTES, not what a file
+       mentions — and it is split so this guard's own source never
+       matches it (the grep-trips-on-its-own-explanation trap, sixth
+       costume: a guard whose derivation string names the marker). */
+    const honours = "process.env." + "REQUIRE_BROWSER";
+    const browserSuites = fs
+      .readdirSync(scriptsDir)
+      .filter((f) => /^test-.*\.mjs$/.test(f))
+      .filter((f) => fs.readFileSync(path.join(scriptsDir, f), "utf8").includes(honours));
+    assert.ok(browserSuites.length >= 3, `only ${browserSuites.length} browser suites found — the derivation is reading the wrong thing`);
+    for (const f of browserSuites) {
+      assert.ok(
+        workflow.includes(`node scripts/${f}`),
+        `${f} honours REQUIRE_BROWSER but the browser job never runs it — it skips in the npm-test job and runs nowhere`
+      );
+    }
+  });
+
   await test("CI runs the three e2e journeys, and forces them rather than letting them skip", () => {
     /* The journeys are the only automation that puts a real browser in
        front of the real backend — the class of check every shipped

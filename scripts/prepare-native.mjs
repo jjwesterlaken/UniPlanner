@@ -67,6 +67,43 @@ const NATIVE_EXCLUDED = {
    a diagnostic build; a release build must not carry these. */
 const INCLUDE_TOOLS = process.env.INCLUDE_TOOLS === "1";
 
+/* WHAT A PACKAGED APP CARRIES, declared entry by entry.
+
+   This map used to live only in test-service-worker.mjs, which meant
+   the classification ran in CI and nowhere else: a local `npm run
+   build` on the release Mac would copy a brand-new dist-web entry into
+   the store bundle without anyone deciding it should — the exact
+   mechanism that put the marketing page inside build 3494152. A gate
+   that only runs where the mistake cannot happen is a remembered path
+   with extra steps.
+
+   So the BUILD enforces it, unconditionally: every top-level entry of
+   dist-web must be named here or in NATIVE_EXCLUDED, and anything
+   unnamed fails the build naming the file. The test now checks this
+   gate behaves rather than keeping its own copy of the map. */
+const NATIVE_SHIPPED = {
+  "index.html": "the app shell",
+  "app.js": "the bundle",
+  "app.css": "the stylesheet",
+  fonts: "self-hosted, so the packaged app has them offline",
+  "manifest.webmanifest": "harmless in a shell; the PWA install path ignores it there",
+  "icon-192.png": "referenced by the manifest",
+  "icon-512.png": "referenced by the manifest",
+  "apple-touch-icon.png": "referenced by index.html",
+  "privacy.html": "the published policy — a local copy costs nothing and works offline",
+  "delete-account.html": "as above, and Google Play requires the page to be reachable",
+};
+
+for (const entry of fs.readdirSync(SRC)) {
+  if (!NATIVE_SHIPPED[entry] && !NATIVE_EXCLUDED[entry]) {
+    throw new Error(
+      `dist-web contains "${entry}", which is neither declared as shipped nor excluded from packaged apps. ` +
+        "Add it to NATIVE_SHIPPED or NATIVE_EXCLUDED in scripts/prepare-native.mjs, with a reason — " +
+        "an unclassified asset inside a store bundle is how the marketing page shipped to Apple."
+    );
+  }
+}
+
 if (!fs.existsSync(SRC)) {
   throw new Error(`${SRC} not found - run "npm run build:web" first`);
 }

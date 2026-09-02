@@ -81,6 +81,45 @@
   color-scheme: dark;
 }
 
+/* THE PAPER CARRIES ITS OWN INK — the lined page is a LIGHT-SCHEME
+   ISLAND.
+
+   The lined page stays white in both modes (the --paper pin above),
+   but its text used to be coloured by the FLIPPING ramp: white paper,
+   near-white ink, an unreadable note in dark mode. Two sources of
+   truth for one surface. The ruling (Jared, 2 September 2026): ink on
+   a lined page is dark in both themes, as a property of the SURFACE,
+   never of the theme.
+
+   So the surface re-pins the whole tone ramp to the light values.
+   Every utility on or under it — text-stone-*, the border, the muted
+   "empty note" span, the placeholder rule below (custom properties
+   reach pseudo-elements) — resolves to paper ink with no per-element
+   overrides, and the caret follows currentColor for free.
+   `color-scheme: light` makes selection and any form control render
+   light-scheme too. A future utility on the surface cannot reopen the
+   mismatch, because there is nothing left on the surface that reads
+   the theme.
+
+   THIS IS A MIRROR OF THE :root LIGHT RAMP, and the equality is the
+   guard: test-dark-mode.mjs asserts every value here is byte-equal to
+   the light declaration above (deriving it with var() indirection
+   would break the literal parsers three suites share), and
+   test-paper-ink.mjs measures the computed result on the built page. */
+.lined-paper {
+  --tone-50: 250 250 249;
+  --tone-100: 245 245 244;
+  --tone-200: 231 229 228;
+  --tone-300: 214 211 209;
+  --tone-400: 168 162 158;
+  --tone-500: 120 113 108;
+  --tone-600: 87 83 78;
+  --tone-700: 68 64 60;
+  --tone-800: 41 37 36;
+  --tone-900: 28 25 23;
+  color-scheme: light;
+}
+
 html, body { height: 100%; }
 
 /* THE GROUND IS SET ON BOTH, and `html` is the one that was missing.

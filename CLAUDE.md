@@ -1206,6 +1206,50 @@ agenda below, and until she rules, the paper stays light and the test
 pins `--paper` equal in both modes so flipping it arrives as a choice
 (update the test in the same commit), never as an accident.
 
+**AND THE PAPER CARRIES ITS OWN INK (Jared's ruling, 2 September
+2026).** A pinned surface with themed text is two sources of truth for
+one square of screen, and they disagreed: white paper, near-white ink,
+an unreadable lined note in dark mode — editor at 1.09:1, viewer at
+1.26:1, measured. The fix is that `.lined-paper` is a LIGHT-SCHEME
+ISLAND: it re-pins the whole `--tone-*` ramp to the light values plus
+`color-scheme: light`, so every utility on or under the surface — body
+text, placeholder, the muted "empty note" span, the border, the caret
+via currentColor, selection via the scheme — resolves to paper ink with
+no per-element overrides, and no future utility on the surface can
+reopen the mismatch. The island block in `input.css` is a MIRROR of the
+light ramp (var() indirection would break the literal token parsers
+three suites share), so the equality is asserted in
+`test-dark-mode.mjs`, and `test-paper-ink.mjs` measures the COMPUTED
+colours and WCAG ratios on the built page, both themes, both page
+styles, editor and viewer — because both halves of this bug passed
+every source-level check. Blank pages are the other half of the ruling:
+they FOLLOW the theme, and the blank editor page had the same defect
+(pinned `bg-paper`, hidden by light `--surface` and `--paper` being the
+same white — the colour-coincidence class again); it is `bg-surface`
+now, like the picker swatch and the viewer card always were. Reference
+sheets were never affected because they never sit on the paper: their
+entries render on `bg-stone-50` with tone-ramp text, background and ink
+from ONE source — which is the pattern the fix restores for paper, from
+the other end.
+
+**The viewer/editor contrast gap is the app's ink hierarchy, not a
+paper decision — recorded so nobody reads meaning into it.** Same
+paper, different ink: the lined viewer measures 10.27:1 and the lined
+editor 15.17:1. The cause is `text-stone-700` on the three viewer
+paths against `text-stone-800` on the editor, and that is the
+convention everywhere — every EDITABLE text surface is `stone-800`
+(`inputCls`, the block editor), every read-only body paragraph is
+400–700 by prominence, with the note body the strongest of them. The
+viewer's 700 was chosen when the read-only viewer was written (574001b,
+12 August 2026) and nobody wrote down a reason. Two facts settle that
+it is incidental to the paper work rather than a readability choice
+about paper: the gap is identical in LIGHT mode and predates the ink
+fix, and blank pages show the same spread (12.44:1 viewer against
+14.31:1 editor). Both clear AA comfortably. **Left alone deliberately**
+— flattening the two into one tone would be a change to the app's
+whole text hierarchy, made silently, in a bug fix about colour
+sources.
+
 **The mode is device-local and unsynced** (`uni-planner-mode`), like
 the last tab and the audio input: a phone in bed and a laptop in a
 library want different answers. "System" is the default, stored as an
