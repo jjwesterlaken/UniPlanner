@@ -52,8 +52,24 @@ PASS against the production project AND the end-to-end run in
 `supabase/checks/verify-deletion-end-to-end.sql` has been done on a
 throwaway account, both dated here.
 
-- Live check last run: **NOT YET RUN against production** — do this before submitting.
-- End-to-end run: **NOT YET RUN** — do this before submitting.
+- Live check last run: **3 September 2026** — `verify-account-deletion.sql`
+  against `kuhtogvewcooigudmgwj` returned 12 rows, every property PASS,
+  verdict ALL PASS, 11 properties checked. That includes both
+  *anon may NOT execute* rows, which were failing beforehand: migration
+  0016 applied without raising, the revoke took, and the pre-existing
+  0002 exposure (anon holding EXECUTE on both deletion functions via
+  Supabase's function default privileges) is closed.
+- End-to-end run: **NOT YET RUN** — do this before submitting, on a
+  throwaway account, following
+  `supabase/checks/verify-deletion-end-to-end.sql`. The live check
+  proves the function exists with the right properties; only this proves
+  a real account and its rows actually go.
+
+**The iOS archive is unaffected.** The repair was server-side only — no
+migration changes a byte of the bundle — so **build 1.0.0 (3509882)
+stands and does not need rebuilding.** What changed is the database the
+shipped client was already calling: `rpc("delete_my_account")` now
+resolves where before it did not.
 
 - The flow (client half, which was never in doubt):
   `src/accountDeletion.js:87` (`deleteAccount`) removes the
