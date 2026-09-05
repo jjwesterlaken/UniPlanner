@@ -130,10 +130,40 @@ $$;
 --    an execute grant nothing needs is one the grant audit in 0008 would
 --    have removed had it covered functions as well as tables.
 -- ---------------------------------------------------------------------
+-- REVOKING FROM public IS NOT ENOUGH, and this is the whole of the
+-- second failure. Supabase runs, as part of every project's setup,
+--
+--   alter default privileges in schema public
+--     grant all on functions to postgres, anon, authenticated, service_role;
+--
+-- so a function created in the SQL editor arrives with EXECUTE granted
+-- DIRECTLY TO anon — a role-specific grant, not merely membership of
+-- PUBLIC. `revoke ... from public` removes the PUBLIC entry from the
+-- ACL and leaves `anon=X/postgres` sitting right beside it, so
+-- has_function_privilege('anon', ...) stays true and the self-check
+-- below refuses the migration. That is exactly what happened on the
+-- live project on 5 September 2026.
+--
+-- It is also why 0011, 0012, 0014 and 0015 each revoke from public AND
+-- anon explicitly. 0002 predates that lesson and revokes only from
+-- public — so even had 0002 been applied, anon would have held EXECUTE
+-- on both deletion functions. A local plain-Postgres cluster cannot
+-- show this: without Supabase's default privileges the only grant is
+-- the built-in one to PUBLIC, which the old statement does remove. The
+-- test shim now models the function defaults for that reason.
+--
+-- Neither function was exploitable in that state — both raise when
+-- auth.uid() is null, and anon has no uid — but a grant nothing needs
+-- is one the 0008 audit would have removed had it covered functions.
+--
+-- service_role keeps the default grant, deliberately and consistently
+-- with claim_device in 0015: it also has no uid, so it can only raise.
 revoke all on function public.delete_my_account() from public;
+revoke all on function public.delete_my_account() from anon;
 grant execute on function public.delete_my_account() to authenticated;
 
 revoke all on function public.delete_my_account_data() from public;
+revoke all on function public.delete_my_account_data() from anon;
 grant execute on function public.delete_my_account_data() to authenticated;
 
 comment on function public.delete_my_account() is
@@ -200,13 +230,24 @@ begin
   end if;
   checked := checked + 1;
 
+  /* A privilege failure names the ACL and the owner, because the two
+     causes look identical from the outside: a role-specific grant the
+     revoke did not target (an `anon=X/...` entry survives), or a revoke
+     that could not be performed at all (the ACL is unchanged and the
+     owner is not the role running this). One paste should answer which. */
   if pg_catalog.has_function_privilege('anon', fn, 'execute') then
-    raise exception 'REPAIR FAILED: anon can execute delete_my_account(); the revoke did not take.';
+    raise exception 'REPAIR FAILED: anon can still execute delete_my_account(). acl = %, owner = %, current_user = %. An anon=X entry means a role-specific grant survived the revoke; an unchanged acl with a different owner means the revoke could not be performed.',
+      (select p.proacl from pg_catalog.pg_proc p where p.oid = fn::oid),
+      (select p.proowner::regrole from pg_catalog.pg_proc p where p.oid = fn::oid),
+      current_user;
   end if;
   checked := checked + 1;
 
   if pg_catalog.has_function_privilege('anon', 'public.delete_my_account_data()', 'execute') then
-    raise exception 'REPAIR FAILED: anon can execute delete_my_account_data(); the revoke did not take.';
+    raise exception 'REPAIR FAILED: anon can still execute delete_my_account_data(). acl = %, owner = %, current_user = %.',
+      (select p.proacl from pg_catalog.pg_proc p where p.oid = 'public.delete_my_account_data()'::regprocedure),
+      (select p.proowner::regrole from pg_catalog.pg_proc p where p.oid = 'public.delete_my_account_data()'::regprocedure),
+      current_user;
   end if;
   checked := checked + 1;
 

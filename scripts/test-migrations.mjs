@@ -219,6 +219,21 @@ const SUPABASE_STUBS = `
   end $$;
 
   alter default privileges in schema public grant all on tables to anon, authenticated;
+  /* AND ON FUNCTIONS, which is the omission that let 0002's revoke look
+     correct here and fail on the real project. Supabase runs
+     "alter default privileges ... grant all on functions to postgres,
+     anon, authenticated, service_role", so a function created in the SQL
+     editor arrives with EXECUTE granted DIRECTLY to anon — not merely
+     via PUBLIC. "revoke all on function ... from public" does not remove
+     a role-specific grant, so anon keeps it.
+
+     That is exactly why 0011, 0012, 0014 and 0015 each revoke from
+     public AND anon; 0002 predates the lesson and revokes only from
+     public. Without this line the shim says 0002 is correct. With it,
+     the shim agrees with production. Third instance of the stand-in
+     restating the environment more weakly than it is -- see the default
+     privileges on tables above, and the missing service_role. */
+  alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
   grant usage on schema public to anon, authenticated, service_role;
 
   create schema if not exists auth;
@@ -405,10 +420,59 @@ async function run() {
     assert.equal(count(db, "public.ai_notes_requests"), 2);
   });
 
-  await test("anon can't call the deletion functions; authenticated can", () => {
+  await test("REVOKING FROM public DOES NOT REMOVE A ROLE-SPECIFIC GRANT — the environment fact", () => {
+    /* Stated on a synthetic function rather than on a migration, so it
+       pins the MECHANISM and survives any later edit to 0002.
+
+       Supabase grants EXECUTE on new public functions directly to anon
+       via ALTER DEFAULT PRIVILEGES. `revoke ... from public` removes the
+       PUBLIC entry and leaves `anon=X/...` untouched, so anon keeps the
+       privilege. This is why 0011/0012/0014/0015 revoke from both, why
+       0002 (which revokes only from public) was never sufficient on the
+       real project, and why 0016's self-check refused to commit on
+       5 September 2026. A plain Postgres cluster cannot show it — the
+       shim models the default privileges for exactly this reason. */
+    const db = freshDb();
+    psqlOrThrow(db, "create function public.probe_fn() returns void language sql as $$ select $$;");
+    assert.equal(
+      one(db, `select has_function_privilege('anon', 'public.probe_fn()', 'execute');`),
+      "t",
+      "the shim is not granting anon EXECUTE on a new function, so it is weaker than production again"
+    );
+    psqlOrThrow(db, "revoke all on function public.probe_fn() from public;");
+    assert.equal(
+      one(db, `select has_function_privilege('anon', 'public.probe_fn()', 'execute');`),
+      "t",
+      "revoking from public removed anon's grant — the mechanism this whole incident rests on does not hold"
+    );
+    psqlOrThrow(db, "revoke all on function public.probe_fn() from anon;");
+    assert.equal(
+      one(db, `select has_function_privilege('anon', 'public.probe_fn()', 'execute');`),
+      "f",
+      "revoking from anon did not remove it either — something else is going on"
+    );
+  });
+
+  await test("anon can't call the deletion functions; authenticated can — AFTER the 0016 repair", () => {
+    /* 0002 alone does NOT make this true on a Supabase-shaped database:
+       it revokes from public only. This test applied 0001+0002 and
+       passed for as long as the shim omitted the function default
+       privileges, which is the same stand-in weakness that let the
+       missing function go unnoticed. 0016 is what makes the claim
+       true, so 0016 is what the test applies. */
     const db = freshDb();
     applyMigration(db, "0001_ai_notes.sql");
     applyMigration(db, "0002_account_deletion.sql");
+
+    for (const fn of ["public.delete_my_account()", "public.delete_my_account_data()"]) {
+      assert.equal(
+        one(db, `select has_function_privilege('anon', '${fn}', 'execute');`),
+        "t",
+        `${fn} is already closed to anon after 0002 alone — if 0002 was fixed, move this expectation`
+      );
+    }
+
+    applyMigration(db, "0016_repair_account_deletion.sql");
     for (const fn of ["public.delete_my_account()", "public.delete_my_account_data()"]) {
       assert.equal(one(db, `select has_function_privilege('anon', '${fn}', 'execute');`), "f", `anon must not be able to call ${fn}`);
       assert.equal(one(db, `select has_function_privilege('authenticated', '${fn}', 'execute');`), "t", `authenticated must be able to call ${fn}`);

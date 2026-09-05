@@ -3220,6 +3220,52 @@ the oid form is strict and yields a clean FAIL. And postgres stores
 check for a bare `search_path=` fails a correct function. Both were
 caught because the guards were run against the broken state first.
 
+**AND THE SECOND FAILURE, WHICH THE SELF-CHECK CAUGHT ON THE LIVE
+DATABASE: `revoke ... from public` does not remove a role-specific
+grant.** 0016 rolled itself back on production with *"anon can execute
+delete_my_account(); the revoke did not take"*. Supabase runs
+`alter default privileges in schema public grant all on functions to
+postgres, anon, authenticated, service_role`, so a function created in
+the SQL editor arrives with EXECUTE granted **directly to `anon`**.
+Revoking from PUBLIC removes the `=X/postgres` ACL entry and leaves
+`anon=X/postgres` beside it, so `has_function_privilege('anon', …)`
+stays true.
+
+That is why 0011, 0012, 0014 and 0015 each revoke from `public` **and**
+`anon` — and why 0002, which revokes only from `public`, was never
+sufficient on the real project. **Even if 0002 had been applied, both
+deletion functions would have been anon-executable.** Neither is
+exploitable (both raise when `auth.uid()` is null, and anon has no
+uid), but it is a grant nothing needs, and the 0008 audit did not cover
+functions.
+
+**The shim hid it, for the third time.** `SUPABASE_STUBS` modelled
+`alter default privileges … on TABLES` and not on FUNCTIONS, so the
+only grant a local function had was the built-in one to PUBLIC — which
+`revoke … from public` does remove. The existing test *"anon can't call
+the deletion functions"* therefore passed locally while being false in
+production. Adding the function defaults to the shim reproduced the
+live error exactly, and the mechanism is now pinned on a synthetic
+function (*"REVOKING FROM public DOES NOT REMOVE A ROLE-SPECIFIC
+GRANT"*) so it survives any later edit to 0002. Three instances now —
+table defaults, the missing `service_role`, and function defaults — and
+the pattern is always the same: **the stand-in is weaker than
+production, so the guard is weaker than it reads.**
+
+**The audit that followed:** every other function in the folder already
+revokes from `anon` explicitly. `handle_new_profile()` does not, and
+does not need to — it returns `trigger`, so PostgREST will not expose
+it and a direct call raises "can only be called as a trigger". It does
+set `search_path = public` rather than `''`, which is a mild hardening
+opportunity recorded rather than taken.
+
+**What made the second failure cheap:** the self-check refused to
+commit, so production was left in its previous state rather than half
+repaired, and the error named the property. A migration that had
+applied its statements and returned success would have left the
+function present, anon-executable, and nobody looking. The rollback IS
+the feature.
+
 **The rule: a conditional that protects against clobbering must still
 be observable.** `if not exists ... then create` is fine; `if exists
 then skip silently` is not, because its failure mode is a migration
