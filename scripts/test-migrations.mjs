@@ -219,6 +219,21 @@ const SUPABASE_STUBS = `
   end $$;
 
   alter default privileges in schema public grant all on tables to anon, authenticated;
+  /* AND ON FUNCTIONS, which is the omission that let 0002's revoke look
+     correct here and fail on the real project. Supabase runs
+     "alter default privileges ... grant all on functions to postgres,
+     anon, authenticated, service_role", so a function created in the SQL
+     editor arrives with EXECUTE granted DIRECTLY to anon — not merely
+     via PUBLIC. "revoke all on function ... from public" does not remove
+     a role-specific grant, so anon keeps it.
+
+     That is exactly why 0011, 0012, 0014 and 0015 each revoke from
+     public AND anon; 0002 predates the lesson and revokes only from
+     public. Without this line the shim says 0002 is correct. With it,
+     the shim agrees with production. Third instance of the stand-in
+     restating the environment more weakly than it is -- see the default
+     privileges on tables above, and the missing service_role. */
+  alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
   grant usage on schema public to anon, authenticated, service_role;
 
   create schema if not exists auth;
@@ -405,10 +420,59 @@ async function run() {
     assert.equal(count(db, "public.ai_notes_requests"), 2);
   });
 
-  await test("anon can't call the deletion functions; authenticated can", () => {
+  await test("REVOKING FROM public DOES NOT REMOVE A ROLE-SPECIFIC GRANT — the environment fact", () => {
+    /* Stated on a synthetic function rather than on a migration, so it
+       pins the MECHANISM and survives any later edit to 0002.
+
+       Supabase grants EXECUTE on new public functions directly to anon
+       via ALTER DEFAULT PRIVILEGES. `revoke ... from public` removes the
+       PUBLIC entry and leaves `anon=X/...` untouched, so anon keeps the
+       privilege. This is why 0011/0012/0014/0015 revoke from both, why
+       0002 (which revokes only from public) was never sufficient on the
+       real project, and why 0016's self-check refused to commit on
+       5 September 2026. A plain Postgres cluster cannot show it — the
+       shim models the default privileges for exactly this reason. */
+    const db = freshDb();
+    psqlOrThrow(db, "create function public.probe_fn() returns void language sql as $$ select $$;");
+    assert.equal(
+      one(db, `select has_function_privilege('anon', 'public.probe_fn()', 'execute');`),
+      "t",
+      "the shim is not granting anon EXECUTE on a new function, so it is weaker than production again"
+    );
+    psqlOrThrow(db, "revoke all on function public.probe_fn() from public;");
+    assert.equal(
+      one(db, `select has_function_privilege('anon', 'public.probe_fn()', 'execute');`),
+      "t",
+      "revoking from public removed anon's grant — the mechanism this whole incident rests on does not hold"
+    );
+    psqlOrThrow(db, "revoke all on function public.probe_fn() from anon;");
+    assert.equal(
+      one(db, `select has_function_privilege('anon', 'public.probe_fn()', 'execute');`),
+      "f",
+      "revoking from anon did not remove it either — something else is going on"
+    );
+  });
+
+  await test("anon can't call the deletion functions; authenticated can — AFTER the 0016 repair", () => {
+    /* 0002 alone does NOT make this true on a Supabase-shaped database:
+       it revokes from public only. This test applied 0001+0002 and
+       passed for as long as the shim omitted the function default
+       privileges, which is the same stand-in weakness that let the
+       missing function go unnoticed. 0016 is what makes the claim
+       true, so 0016 is what the test applies. */
     const db = freshDb();
     applyMigration(db, "0001_ai_notes.sql");
     applyMigration(db, "0002_account_deletion.sql");
+
+    for (const fn of ["public.delete_my_account()", "public.delete_my_account_data()"]) {
+      assert.equal(
+        one(db, `select has_function_privilege('anon', '${fn}', 'execute');`),
+        "t",
+        `${fn} is already closed to anon after 0002 alone — if 0002 was fixed, move this expectation`
+      );
+    }
+
+    applyMigration(db, "0016_repair_account_deletion.sql");
     for (const fn of ["public.delete_my_account()", "public.delete_my_account_data()"]) {
       assert.equal(one(db, `select has_function_privilege('anon', '${fn}', 'execute');`), "f", `anon must not be able to call ${fn}`);
       assert.equal(one(db, `select has_function_privilege('authenticated', '${fn}', 'execute');`), "t", `authenticated must be able to call ${fn}`);
@@ -433,6 +497,227 @@ async function run() {
     // ...and the helper it's told to call is available to be added to it.
     psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account_data();`);
     assert.equal(count(db, "public.profiles", `user_id = ${USER}`), 0);
+  });
+
+  /* ---------- 0016: the production repair ----------
+
+     THE STATE THIS REPRODUCES. Production held exactly one deletion
+     function on 5 September 2026 — `delete_my_account_data` — and no
+     `delete_my_account`, so `rpc("delete_my_account")` failed and
+     in-app deletion deleted nothing server-side.
+
+     The cause is structural rather than mysterious, and these tests
+     demonstrate it rather than asserting it: 0002 creates the data
+     function unconditionally AND 0005/0007/0010 re-create it, while it
+     is the ONLY migration that creates the account function, inside a
+     DO block that skips silently. Skip 0002 and you get production's
+     state exactly. */
+
+  const productionShapedDb = () => {
+    /* Every migration EXCEPT 0002 — the reproduction. */
+    const db = freshDb();
+    for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
+      if (file.startsWith("0002_")) continue;
+      if (file.startsWith("0016_")) continue;
+      applyMigration(db, file);
+    }
+    return db;
+  };
+
+  /* Every table a deletion must empty, DERIVED FROM THE CATALOGUE rather
+     than typed, so a table added later fails this instead of being
+     quietly skipped — the shape CLAUDE.md records for the document's
+     table list and for the grant audit. */
+  const userTablesOf = (db) => {
+    const rows = one(
+      db,
+      `select coalesce(string_agg('public.'||table_name, ',' order by table_name), '')
+         from information_schema.columns
+        where table_schema = 'public' and column_name = 'user_id';`
+    );
+    const list = rows ? rows.split(",").filter(Boolean) : [];
+    assert.ok(list.length >= 6, `only ${list.length} user-owned tables found — the derivation is reading the wrong thing`);
+    return list;
+  };
+
+  /* Both users, in every user-owned table, so "the deletion emptied it"
+     and "it left the other account alone" are both real claims. */
+  const seedEveryTable = (db) => {
+    seedTwoUsers(db);
+    psqlOrThrow(
+      db,
+      `insert into public.ai_notes (id, user_id, course, week, content) values
+         ('aaaaaaaa-0000-0000-0000-000000000001', ${USER},  'PHYS1001', '3', '{"translations":{}}'),
+         ('bbbbbbbb-0000-0000-0000-000000000002', ${OTHER}, 'LAWS2002', '4', '{"translations":{}}');
+       insert into public.semester_archives (id, user_id, label, summary, data) values
+         ('cccccccc-0000-0000-0000-000000000003', ${USER},  'Semester 1', '{}', '{}'),
+         ('dddddddd-0000-0000-0000-000000000004', ${OTHER}, 'Semester 1', '{}', '{}');
+       insert into public.client_errors (user_id, message) values
+         (${USER}, 'mine'), (${OTHER}, 'theirs');`
+    );
+    /* The seed must cover everything the derivation finds, or the
+       assertions below pass over whatever it missed. */
+    for (const table of userTablesOf(db)) {
+      assert.ok(
+        Number(count(db, table, `user_id = ${USER}`)) > 0,
+        `${table} has a user_id column but the seed leaves it empty, so emptying it would prove nothing`
+      );
+    }
+  };
+
+  await test("SKIPPING 0002 reproduces production exactly: the data function exists, the account function does not", () => {
+    const db = productionShapedDb();
+    const found = one(
+      db,
+      `select coalesce(string_agg(n.nspname||'.'||p.proname, ', ' order by p.proname), '(none)')
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where p.proname like '%delete_my_account%';`
+    );
+    // Jared's query, against a database we built by omitting one file.
+    assert.equal(
+      found,
+      "public.delete_my_account_data",
+      "omitting 0002 did not reproduce the reported production state, so the diagnosis is wrong"
+    );
+  });
+
+  await test("the client's RPC name is the one that is missing — the defect, stated as the app sees it", () => {
+    /* Derived from the client rather than typed here: the guard must
+       follow a rename instead of pinning the name it was written with. */
+    const client = fs.readFileSync(path.join(rootDir, "src/accountDeletion.js"), "utf8");
+    const m = /\.rpc\(\s*"([a-z_]+)"/.exec(client);
+    assert.ok(m, "src/accountDeletion.js no longer calls an rpc by name");
+    const rpcName = m[1];
+    const db = productionShapedDb();
+    assert.equal(
+      one(db, `select (pg_catalog.to_regprocedure('public.${rpcName}()') is not null)::text;`),
+      "false",
+      `${rpcName} exists in the production-shaped database, so this test is not reproducing the defect`
+    );
+    // ...and applying the repair is what makes the app's own call work.
+    applyMigration(db, "0016_repair_account_deletion.sql");
+    assert.equal(
+      one(db, `select (pg_catalog.to_regprocedure('public.${rpcName}()') is not null)::text;`),
+      "true",
+      `0016 did not create ${rpcName}, which is the function the client actually calls`
+    );
+  });
+
+  await test("0016 REPAIRS rather than skips: it creates the function that was absent", () => {
+    const db = productionShapedDb();
+    applyMigration(db, "0016_repair_account_deletion.sql");
+    assert.equal(one(db, `select (pg_catalog.to_regprocedure('public.delete_my_account()') is not null)::text;`), "true");
+    assert.equal(one(db, `select prosecdef::text from pg_proc where oid = 'public.delete_my_account()'::regprocedure;`), "true");
+    assert.equal(
+      one(db, `select exists (select 1 from unnest(proconfig) c where c in ('search_path=', 'search_path=""'))::text
+                 from pg_proc where oid = 'public.delete_my_account()'::regprocedure;`),
+      "true",
+      "the repaired function does not pin search_path"
+    );
+    assert.equal(one(db, `select has_function_privilege('authenticated', 'public.delete_my_account()', 'execute');`), "t");
+    assert.equal(one(db, `select has_function_privilege('anon', 'public.delete_my_account()', 'execute');`), "f");
+  });
+
+  await test("0016 repairs the PRIVILEGE 0002 was also the only carrier of", () => {
+    /* create-or-replace preserves an existing ACL, so a data function
+       created by 0005 rather than 0002 never had 0002's revoke applied
+       and has carried PostgreSQL's default EXECUTE-to-PUBLIC since. Not
+       exploitable — it raises when auth.uid() is null — but it is the
+       same omission one object over, and it is the fingerprint that
+       tells "0002 never ran" apart from "0002 ran and was skipped". */
+    const db = productionShapedDb();
+    assert.equal(
+      one(db, `select has_function_privilege('anon', 'public.delete_my_account_data()', 'execute');`),
+      "t",
+      "the production-shaped database does not show the default-privilege fingerprint, so the discriminator is wrong"
+    );
+    applyMigration(db, "0016_repair_account_deletion.sql");
+    assert.equal(
+      one(db, `select has_function_privilege('anon', 'public.delete_my_account_data()', 'execute');`),
+      "f",
+      "0016 did not revoke the default grant it exists to repair"
+    );
+    assert.equal(one(db, `select has_function_privilege('authenticated', 'public.delete_my_account_data()', 'execute');`), "t");
+  });
+
+  await test("the REPAIRED function really deletes the account, end to end", () => {
+    const db = productionShapedDb();
+    applyMigration(db, "0016_repair_account_deletion.sql");
+    seedEveryTable(db);
+    const tables = userTablesOf(db);
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account();`);
+
+    for (const table of tables) {
+      assert.equal(count(db, table, `user_id = ${USER}`), 0, `${table} survived the repaired deletion`);
+      assert.equal(count(db, table, `user_id = ${OTHER}`), 1, `${table} lost the OTHER user's row`);
+    }
+    assert.equal(count(db, "auth.users", `id = ${USER}`), 0, "the auth.users row itself must go");
+    assert.equal(count(db, "auth.users", `id = ${OTHER}`), 1);
+  });
+
+  await test("0016's self-check RAISES rather than reporting success — the whole point of it", () => {
+    /* A migration that can succeed while its object is absent is what
+       produced this incident. Remove the helper it depends on and the
+       apply must FAIL, not skip. Mutation-checked by construction. */
+    const db = productionShapedDb();
+    psqlOrThrow(db, "drop function public.delete_my_account_data();");
+    const r = psql(db, fs.readFileSync(path.join(migrationsDir, "0016_repair_account_deletion.sql"), "utf8"));
+    assert.equal(r.ok, false, "0016 reported success with its helper missing");
+    assert.match(r.err, /delete_my_account_data\(\) is missing/);
+  });
+
+  await test("0016 is re-runnable, and the second run still verifies", () => {
+    const db = productionShapedDb();
+    applyMigration(db, "0016_repair_account_deletion.sql");
+    applyMigration(db, "0016_repair_account_deletion.sql");
+    assert.equal(one(db, `select (pg_catalog.to_regprocedure('public.delete_my_account()') is not null)::text;`), "true");
+    seedTwoUsers(db);
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account();`);
+    assert.equal(count(db, "auth.users", `id = ${USER}`), 0);
+  });
+
+  await test("AFTER EVERY MIGRATION, the deletion function the client calls exists and works", () => {
+    /* The generalising check: not "0016 works" but "the folder, applied
+       in order, leaves a working deletion flow". This is the assertion
+       whose PRODUCTION counterpart nobody was running — see
+       scripts/check-live-database.mjs, which asks the live database the
+       same questions. */
+    const db = freshDb();
+    for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
+      applyMigration(db, file);
+    }
+    seedEveryTable(db);
+    const tables = userTablesOf(db);
+    assert.equal(one(db, `select has_function_privilege('authenticated', 'public.delete_my_account()', 'execute');`), "t");
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account();`);
+    assert.equal(count(db, "auth.users", `id = ${USER}`), 0);
+    for (const table of tables) {
+      assert.equal(count(db, table, `user_id = ${USER}`), 0, `${table} survived a full-folder deletion`);
+    }
+  });
+
+  await test("the LIVE-DATABASE check reports FAIL before the repair and ALL PASS after it", () => {
+    /* The check in supabase/checks/verify-account-deletion.sql is the
+       only artifact-level guard here — it asks a real database rather
+       than reading a migration file. A check nobody has watched fail is
+       a check nobody should trust, so this runs it against the
+       production-shaped database (must FAIL, naming the missing
+       function) and again after 0016 (must ALL PASS). */
+    const check = fs.readFileSync(path.join(rootDir, "supabase/checks/verify-account-deletion.sql"), "utf8");
+
+    const before = psqlOrThrow(productionShapedDb(), check).out;
+    assert.match(before, /FAILED/, "the live check passed against a database with no delete_my_account()");
+    assert.match(
+      before,
+      /delete_my_account\(\) exists\s*\|\s*FAIL/,
+      "the live check did not name the missing function as the failure"
+    );
+
+    const db = productionShapedDb();
+    applyMigration(db, "0016_repair_account_deletion.sql");
+    const after = psqlOrThrow(db, check).out;
+    assert.match(after, /ALL PASS/, `the live check still fails after the repair:\n${after}`);
+    assert.ok(!/\|\s*FAIL\s*\|/.test(after), `a property still fails after the repair:\n${after}`);
   });
 
   await test("0002 is re-runnable (a second apply changes nothing and fails nothing)", () => {
