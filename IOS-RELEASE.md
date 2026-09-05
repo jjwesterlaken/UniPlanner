@@ -30,7 +30,7 @@ DESIGN and ship safely (§5), and one build-time check gates the cut
 
 ### 1. Account deletion — WAS A FALSE PASS; now gated on a live check
 
-**This section said PASS on 2 September 2026 and was wrong.** On 5
+**This section said PASS on 1 September 2026 and was wrong.** On 5
 September Jared queried `pg_proc` on the production project and found
 `public.delete_my_account_data` and no `public.delete_my_account` — so
 `rpc("delete_my_account")` failed, in-app deletion deleted nothing
@@ -46,13 +46,20 @@ readiness audit — and the audit's own promise was "pass/fail with the
 evidence — the file and line, not the intention", which a file and line
 cannot deliver for a claim about server state.
 
+**Dates here are Sydney (AEST, UTC+10 in September)** and are anchored
+to commit timestamps rather than memory: the false PASS shipped in
+`61be13d`, the absence was found and diagnosed on the day of `a457637`,
+the first apply rolled back on the day of `30b4d7c`, and the live
+verification is recorded in `6c887b9`. Re-check any of them with
+`TZ=Australia/Sydney git show -s --format=%cd <sha>`.
+
 **This section may not read PASS again on file evidence.** It is PASS
 only when `supabase/checks/verify-account-deletion.sql` returns ALL
 PASS against the production project AND the end-to-end run in
 `supabase/checks/verify-deletion-end-to-end.sql` has been done on a
 throwaway account, both dated here.
 
-- Live check last run: **3 September 2026** — `verify-account-deletion.sql`
+- Live check last run: **6 September 2026** — `verify-account-deletion.sql`
   against `kuhtogvewcooigudmgwj` returned 12 rows, every property PASS,
   verdict ALL PASS, 11 properties checked. That includes both
   *anon may NOT execute* rows, which were failing beforehand: migration

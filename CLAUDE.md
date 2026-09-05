@@ -3142,7 +3142,17 @@ being approximated by a source grep that would pass either way.
 
 `public.delete_my_account()` **did not exist in production** and in-app
 account deletion had therefore never worked. Found on 5 September 2026
-by Jared querying `pg_proc` directly; the client calls
+by Jared querying `pg_proc` directly — **all dates in this section are
+Sydney (AEST, UTC+10 in September), which is the timezone Jared
+operates in and therefore the one the record uses.** They are anchored
+to commit timestamps, not memory: found and diagnosed on the day of
+`a457637`, the first apply rolled back on the day of `30b4d7c`,
+verified live on 6 September in `6c887b9`. A date written from a build
+machine's clock is a UTC date, and a UTC afternoon is already the next
+day here — which is how a verification came to be recorded as having
+happened two days before the fault was discovered, until Jared caught
+it. Check any of them with
+`TZ=Australia/Sydney git show -s --format=%cd <sha>`; the client calls
 `rpc("delete_my_account")`, PostgREST answered "function does not
 exist", and nothing was deleted server-side. Both stores require
 working in-app deletion.
