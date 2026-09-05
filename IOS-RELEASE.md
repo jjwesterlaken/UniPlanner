@@ -28,12 +28,37 @@ DESIGN and ship safely (§5), and one build-time check gates the cut
 | 7 | Review (demo) account | **HUMAN STEP** — and use a dedicated account, not the e2e one |
 | 8 | App Privacy questionnaire | **MAPPED** in §3, with one judgement call flagged |
 
-### 1. Account deletion — PASS
+### 1. Account deletion — WAS A FALSE PASS; now gated on a live check
 
-- The flow: `src/accountDeletion.js:87` (`deleteAccount`) removes the
+**This section said PASS on 2 September 2026 and was wrong.** On 5
+September Jared queried `pg_proc` on the production project and found
+`public.delete_my_account_data` and no `public.delete_my_account` — so
+`rpc("delete_my_account")` failed, in-app deletion deleted nothing
+server-side, and the store requirement this section certifies was not
+met. Migration 0016 repairs it.
+
+**How the PASS was reached, because the method is the defect:** the
+evidence below is file-and-line citations into a migration FILE, and
+the claim being made is about a DATABASE. Every line quoted was
+accurate; none of it was evidence for the thing asserted. That is the
+artifact rule in CLAUDE.md, in the place it costs most — a submission
+readiness audit — and the audit's own promise was "pass/fail with the
+evidence — the file and line, not the intention", which a file and line
+cannot deliver for a claim about server state.
+
+**This section may not read PASS again on file evidence.** It is PASS
+only when `supabase/checks/verify-account-deletion.sql` returns ALL
+PASS against the production project AND the end-to-end run in
+`supabase/checks/verify-deletion-end-to-end.sql` has been done on a
+throwaway account, both dated here.
+
+- Live check last run: **NOT YET RUN against production** — do this before submitting.
+- End-to-end run: **NOT YET RUN** — do this before submitting.
+
+- The flow (client half, which was never in doubt):
+  `src/accountDeletion.js:87` (`deleteAccount`) removes the
   account's own audio objects, then `:96` calls
-  `rpc("delete_my_account")`, whose body — `delete from auth.users`,
-  scoped to `auth.uid()` — is `supabase/migrations/0002_account_deletion.sql`.
+  `rpc("delete_my_account")` — the name that was missing server-side.
 - Reachable in-app: `src/PlannerApp.jsx:5263`, behind a typed
   confirmation phrase (`:4116`).
 - Guarded against regression: `scripts/test-migrations.mjs:1453`

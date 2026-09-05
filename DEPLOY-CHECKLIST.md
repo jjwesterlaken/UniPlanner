@@ -82,6 +82,42 @@ select has_function_privilege('anon',          'public.claim_device(text)', 'exe
 
 ---
 
+## 1b. Apply 0016 and PROVE the deletion function exists
+
+**Do this even if you think 0002 was applied.** It was not, and nothing
+in the repository could tell: the migration tests apply the migration
+FILES to a local scratch database and never touch this project. In-app
+account deletion had never worked in production — the client calls
+`rpc("delete_my_account")` and the function did not exist — which is a
+store requirement on both platforms.
+
+Paste `supabase/migrations/0016_repair_account_deletion.sql`. It is
+re-runnable, and it **verifies itself**: if any property is untrue when
+it finishes it raises `REPAIR FAILED: …` instead of returning success.
+
+**Check — against the database, not the file:**
+
+```sql
+-- paste supabase/checks/verify-account-deletion.sql
+```
+
+Every row must read `PASS` and the last row must read `ALL PASS`. If
+the verdict row says FAILED, the FAIL rows name which property and why.
+**No rows at all means the query did not run — that is a failure, not a
+pass.**
+
+**Then exercise it for real**, once, on a throwaway account you do not
+mind losing — never the reviewer account: follow
+`supabase/checks/verify-deletion-end-to-end.sql`, which captures the
+uid BEFORE deleting (so the after-check cannot pass by finding nothing)
+and has you delete from inside the app rather than from the dashboard,
+because the in-app path is the one that was broken.
+
+Record both dates in `IOS-RELEASE.md` §1. That section may not read
+PASS on file evidence again.
+
+---
+
 ## 2. Deploy both Edge Functions
 
 GitHub → Actions → **Deploy functions** → Run workflow.

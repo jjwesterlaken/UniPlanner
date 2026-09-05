@@ -3138,6 +3138,96 @@ anything in `npm test`. For those the artifact check is a hardware or
 dashboard step, and it belongs on `MOBILE-BUILD.md`'s list rather than
 being approximated by a source grep that would pass either way.
 
+### A MIGRATION THAT CAN SKIP SILENTLY IS NOT IDEMPOTENT — IT IS UNOBSERVABLE
+
+`public.delete_my_account()` **did not exist in production** and in-app
+account deletion had therefore never worked. Found on 5 September 2026
+by Jared querying `pg_proc` directly; the client calls
+`rpc("delete_my_account")`, PostgREST answered "function does not
+exist", and nothing was deleted server-side. Both stores require
+working in-app deletion.
+
+**The cause, established by reproduction rather than inference.** 0002
+creates two functions. `delete_my_account_data()` it creates with
+`create or replace` — and 0005, 0007 and 0010 each re-create it as
+tables were added. `delete_my_account()` it creates inside a DO block
+that SKIPS when one already exists, and no other migration creates it.
+So a project where 0002 never ran holds exactly one of the two: the
+data function, from 0005. Applying every migration EXCEPT 0002 to a
+scratch database reproduces production's `pg_proc` output byte for
+byte, and that is now a test.
+
+**The fingerprint that tells "never ran" from "ran and skipped":** 0002
+is also the only migration that revokes PUBLIC's execute on
+`delete_my_account_data` and sets its comment, and `create or replace`
+PRESERVES an existing ACL. A data function created by 0005 therefore
+still carries PostgreSQL's default EXECUTE-to-PUBLIC. Not exploitable
+— it raises when `auth.uid()` is null — but it is the same omission one
+object over, and it dates the absence.
+
+**WHY THE MIGRATION TESTS COULD NEVER HAVE CAUGHT IT, and this is the
+part that generalises.** `scripts/test-migrations.mjs` applies the
+migration FILES to a throwaway local cluster; its own header says
+"Nothing here touches your Supabase project". It proves a migration
+WOULD work. It cannot observe whether one WAS applied. Worse, the suite
+contained a test named *"0002 never overwrites a delete_my_account()
+the project already had"* — so the silent skip was covered, deliberately,
+as intended behaviour. Nothing was broken in the file. The database was
+simply not what the file said.
+
+That is the artifact rule again (**THE ARTIFACT IS THE EVIDENCE. THE
+SOURCE IS A CLAIM ABOUT IT**), and it is the second time "applied" and
+"working" have come apart on this project: 0005 created `ai_notes`
+weeks before a single insert succeeded, because the id column was
+`uuid` and page ids are base36. **"The migration exists" and "the object
+exists" are different claims, and only one of them is checkable from
+this repository.**
+
+**It also produced a false PASS in a submission audit.** `IOS-RELEASE.md`
+§1 certified account deletion by citing `src/accountDeletion.js:96` and
+`supabase/migrations/0002_account_deletion.sql`. Every citation was
+accurate and none was evidence for the claim, which was about server
+state. A readiness audit promising "the file and line, not the
+intention" cannot discharge a claim about a database with a file and a
+line.
+
+**The three things that changed:**
+
+1. **0016 repairs rather than skips.** `create or replace`
+   unconditionally; privileges and comments re-asserted on every run
+   (because create-or-replace preserves an ACL, so "only on create" is
+   how a grant goes missing for a year); the previous definition raised
+   as a NOTICE first so nothing is discarded silently.
+2. **The migration VERIFIES ITSELF and raises.** Nine properties —
+   exists, SECURITY DEFINER, `search_path` pinned, calls the helper,
+   deletes from `auth.users`, and the four grants — asserted against the
+   catalogue after the work, with a count so the block cannot pass
+   having checked nothing. An apply cannot report success while the
+   object is absent, which is the only property that would have
+   prevented this.
+3. **`supabase/checks/verify-account-deletion.sql` asks the LIVE
+   database**, and is in DEPLOY-CHECKLIST. A test in the migration suite
+   runs it against a production-shaped database and requires it to FAIL,
+   then against a repaired one and requires ALL PASS — a check nobody
+   has watched fail is a check nobody should trust.
+
+**Two traps found by running these rather than reading them**, both
+worth keeping: `has_function_privilege(text, text, text)` RAISES when
+the function is absent, so the first version of the live check errored
+instead of reporting FAIL — in exactly the state it exists to report;
+the oid form is strict and yields a clean FAIL. And postgres stores
+`set search_path = ''` as the proconfig element `search_path=""`, so a
+check for a bare `search_path=` fails a correct function. Both were
+caught because the guards were run against the broken state first.
+
+**The rule: a conditional that protects against clobbering must still
+be observable.** `if not exists ... then create` is fine; `if exists
+then skip silently` is not, because its failure mode is a migration
+that reports success having done nothing, and a NOTICE in a SQL editor
+nobody reads afterwards is not a report. Where a migration must not
+clobber, it should still ASSERT the end state and raise — the skip may
+be conditional, the verification may not be.
+
 ### A FREE VARIABLE IS INVISIBLE TO THE BUILD, AND TO EVERY UNIT TEST
 
 `src/aiNotes.jsx` called `allowanceForTier()` and imported only
