@@ -3391,6 +3391,73 @@ about the wrong element rather than about nothing. A selector's failure
 mode is naming the wrong thing, not naming nothing, and only an
 assertion that the probe really captured something tells them apart.
 
+### iOS ZOOMS A FOCUSED FIELD BELOW 16px — AND THE VIEWPORT GUARD PASSED ON AN IDLE PAGE
+
+Build 3514163, iPhone 17 simulator: focus a sign-in field and the page
+pans 27px sideways with the left edge cut off. Jared's Web Inspector
+reading did the diagnosis before any code was opened, and it is worth
+keeping as the shape of a good measurement: `scrollWidth 440 ==
+clientWidth 440` (so NOT overflow — the document is the right width),
+`innerWidth 385`, `visualViewport.width 384.89`. 440 / 385 = 1.143 =
+16 / 14. **WebKit zooms the page when the control it is about to edit
+computes below 16px** (`WKContentView`'s `_zoomToRevealFocusedElement`,
+minimum scale = 16 / the focused element's font size), then pans to
+keep the caret on screen. `inputCls` is `text-sm`. So was the note
+editor's contentEditable.
+
+**Scope was every text field in the app, not the two Jared tapped.**
+`test-focus-zoom.mjs` focused 38 controls across every tab, the
+sign-in form and the open editor: **all 38 computed to 14px**, WebKit's
+rule putting each at x1.143 — the reading planner's week and pages,
+the AI week field, the header's semester select on every screen, the
+editor's font select, the contentEditable itself. The rubric's "Your
+note" field is `text-xs` and would have zoomed x1.333; the walk does
+not reach it (it sits behind an edit button) and the floor covers it
+by element type regardless.
+
+**THE FIX IS A FLOOR ON THE CONTROL, NEVER ON THE VIEWPORT.**
+`maximum-scale=1` / `user-scalable=no` hides the symptom by disabling
+pinch-zoom for every user, and Apple has rejected apps for it. Instead
+`input.css` makes every text-entry control — input, textarea, select,
+contenteditable; the list is what WebKit zooms for — compute to 16px
+on a **coarse primary pointer**, `!important` so no `text-*` utility
+or inline style can step under it. Scoped to touch because Grace has
+not ruled on desktop input sizes: a fine pointer still gets 14px, and
+the guard asserts the two contexts DIFFER so a green touch run cannot
+be a coincidence. **Android inputs grow from 14 to 16px too** — a
+visible change on the verified moto g05, flagged for Grace, and the
+platform's own convention.
+
+**Why `(pointer: coarse)` and not an iOS-only CSS hook.** `@supports
+(-webkit-touch-callout: none)` targets iOS precisely — and Chromium
+can never match it, so a guard on the built page could only grep the
+source for the rule. Touch emulation DOES make `(pointer: coarse)`
+match in Chromium, which is what lets the floor be measured as a
+computed value on the artifact rather than asserted as text. The
+guard checks that precondition first: if the emulation stops
+producing a coarse pointer, it fails there instead of passing over
+nothing.
+
+**THE PREVIOUS GUARD WAS NOT WRONG; IT WAS MEASURING A STATE THE BUG
+DOES NOT EXIST IN.** `test-viewport-layout.mjs` asserts nothing is
+past the viewport on an IDLE page, and on an idle page nothing is —
+the zoom only happens with a field focused. The new suite focuses
+each control and reads its computed size **while it holds focus**,
+and refuses any control that declined focus. The general form: **a
+guard for a bug that needs a user action has to perform the action.**
+Idle-state measurement of an interaction bug is a green light for
+the bug.
+
+**What the guard cannot see, said in its header rather than implied
+by a pass:** Chromium does not implement the zoom, so
+`visualViewport.scale` is 1 here whatever the font size — asserting
+it would be vacuous and it is NOT asserted. The "WebKit would zoom
+to" column is `16 / fontSize`, a MODEL of WebKit's rule applied to a
+measured input. The observation is one Web Inspector line with the
+keyboard up (MOBILE-BUILD.md §13e), and until Jared has read `scale:
+1` on the device, this fix is verified at the precondition and not at
+the symptom.
+
 ### A FREE VARIABLE IS INVISIBLE TO THE BUILD, AND TO EVERY UNIT TEST
 
 `src/aiNotes.jsx` called `allowanceForTier()` and imported only

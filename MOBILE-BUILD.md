@@ -492,6 +492,46 @@ it, and no browser can see that.
 - `envTop` **0px** → `viewport-fit=cover` is not reaching the page, and
   every inset in the app is silently doing nothing.
 
+13e. **Focus a text field with the keyboard up — sign-in email is the
+    quickest — and check the page has NOT zoomed or panned.** The left
+    edge of the layout must stay on screen. iOS zooms the page when a
+    focused control's text computes below 16px (WKContentView scales
+    so the field reads at 16, then pans to keep the caret visible);
+    every control now computes to 16px on a touch pointer, asserted
+    on the built page by test-focus-zoom.mjs. What that suite cannot
+    do is watch WebKit zoom — Chromium never does — so the zoom itself
+    is only ever observed here.
+
+**The measurement, with the field focused and the keyboard showing**,
+from Safari → Develop → [device] → the app, in the console:
+
+```js
+({
+  scale: visualViewport.scale,
+  visualW: visualViewport.width,
+  innerW: window.innerWidth,
+  scrollX: window.scrollX,
+  focused: document.activeElement.tagName + "[" + (document.activeElement.type || "") + "]",
+  fontPx: getComputedStyle(document.activeElement).fontSize,
+})
+```
+
+**How to read it:**
+
+- `scale` **1**, `scrollX` **0**, `fontPx` **16px** → fixed. This is
+  the state the suite models and the only one it can pass on.
+- `scale` > 1 and `fontPx` **below 16px** → a control the floor did
+  not reach. The floor is by ELEMENT TYPE (input, textarea, select,
+  contenteditable); capture `focused` and the control is something
+  outside that list or carries an inline `font-size` with its own
+  `!important`. Widen the rule, not the viewport meta.
+- `scale` > 1 and `fontPx` **16px or more** → the zoom has another
+  cause and this section does not describe it. Say so rather than
+  reaching for `maximum-scale=1`: that disables pinch-zoom for
+  everyone and Apple has rejected apps for it.
+- `innerW` smaller than the screen width with `scale` 1 → not zoom;
+  something else is narrowing the layout viewport. Different fault.
+
 ### Storage and offline
 
 1. **IndexedDB exists at all.** Open an AI lecture note, then check the
