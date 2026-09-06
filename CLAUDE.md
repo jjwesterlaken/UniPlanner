@@ -3310,6 +3310,46 @@ anyone took loaded `dist-web`, which never had it. **The artifact that
 ships to Apple was the one artifact nothing measured** — the artifact
 rule, at the level of "which build".
 
+**AND IT WAS ONE OF THREE, WHICH I DID NOT ESTABLISH BEFORE REPORTING
+THE SYMPTOM CLOSED.** Removing the body padding took the band from two
+web-layer insets to one, and build 3514031 still showed an empty band
+the height of the status-bar inset. The third is native and no browser
+can see it: `ios.contentInset: "always"` in capacitor.config.json
+becomes `WKWebView.scrollView.contentInsetAdjustmentBehavior`
+(CAPBridgeViewController.swift:302), and at `.always` UIScrollView adds
+the safe-area insets to the scroll content — so the whole DOCUMENT is
+pushed down while the page also pads itself. Capacitor's own default is
+`.never` (CAPInstanceDescriptor.m:45), which is correct for an app that
+handles its own insets, and this one does in five places.
+
+**Three failures of method, and the first two are the ones to carry:**
+
+1. **I named `contentInset: "always"` as a candidate in the first
+   minute, then dropped it the moment the body padding turned up** — no
+   control separating them. The rule against exactly that is written
+   above, in the bitrate section: *refusing to act on a plausible
+   mechanism before a control has separated it from the alternative.*
+   Here it ran the other way: a real mechanism was found and the
+   alternatives were abandoned rather than eliminated. **Finding a
+   cause is not the same as finding the cause, and the tell is whether
+   anything ruled the others out.**
+2. **The hole was already written down, in a file I had open.**
+   `test-dark-mode.mjs`'s safe-area sweep says, in its own header, that
+   it cannot tell "whether contentInset in capacitor.config.json
+   double-insets on top of it" and that this needs a device. I greped
+   `contentInset`, saw that line in the results, and did not read it.
+   A guard that names its hole only works if the next person reads the
+   sentence rather than the match.
+3. **`header.getBoundingClientRect().top === 0` is TRUE on the device.**
+   The header is at the top of the document; the document is not at the
+   top of the screen, because Capacitor makes the web view the root view
+   (`view = webView`) and the scroll view insets its content. So
+   `test-viewport-layout.mjs` was not measuring the wrong element or a
+   stale state — it was measuring the wrong **layer**, and I presented a
+   document-level measurement as evidence about a screen. A guard can be
+   correct, non-vacuous, mutation-checked, and still not evidence for
+   the claim being made with it.
+
 **2. The tab row hanging off the right — NOT iOS-SPECIFIC AT ALL.**
 `useBottomBar()` was `useState(false)` with the media query consulted
 in an effect, and effects run AFTER paint. So the first frame a phone

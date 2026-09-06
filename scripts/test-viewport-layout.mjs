@@ -34,6 +34,31 @@
    to zero — without which every assertion here would be vacuous, since
    a zero inset cannot be doubled.
 
+   WHAT IT CANNOT SEE, AND THIS HAS ALREADY COST A BUILD.
+
+   Everything here measures the DOCUMENT: element rects inside the web
+   viewport. iOS can inset the document from OUTSIDE it, and that band
+   is invisible to every assertion in this file.
+
+   `ios.contentInset` in capacitor.config.json becomes
+   `WKWebView.scrollView.contentInsetAdjustmentBehavior`. At `.always`
+   UIScrollView adds the safe-area insets to the scroll content, so the
+   whole document is pushed down while the page also pads itself. And
+   because Capacitor makes the web view the view controller's ROOT view
+   (`view = webView`), `header.getBoundingClientRect().top` reads 0 on
+   the device exactly as it does here — the header really is at the top
+   of the document; the document is not at the top of the screen.
+
+   So this file reported `dead band above header = 0` at every width on
+   build 3514031 while the simulator showed an empty band the height of
+   the status-bar inset. It was not measuring the wrong element or the
+   wrong state: it was measuring the wrong LAYER, and was reported as
+   though it settled the on-screen symptom. It does not, and cannot.
+
+   The native half is asserted in test-dark-mode.mjs ("THE NATIVE SCROLL
+   VIEW MUST NOT INSET TOO") from the config, and confirmed only on
+   hardware — MOBILE-BUILD.md carries the measurement.
+
    Skips without a browser; REQUIRE_BROWSER=1 makes that a failure. */
 
 import assert from "node:assert/strict";
