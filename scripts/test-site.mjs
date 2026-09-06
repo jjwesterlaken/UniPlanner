@@ -284,7 +284,126 @@ test("the pricing page cannot ship a made-up price", () => {
     }
   }
   assert.equal(priceLabel(TIERS.find((t) => t.id === "free"), "monthly"), "Free");
-  assert.equal(FLAGS.prices, false, "prices are flagged live while tiers still have unset figures");
+  /* CONDITIONAL, because that is what this line always meant — its own
+     message says "while tiers still have unset figures" and the code
+     said it unconditionally. Written when every paid figure was null,
+     it fired the moment Phase 0 set them, which is the one change it
+     was waiting for. The combination it was reaching for is asserted
+     properly in the test below, in BOTH directions; this is the local
+     half of it. Not deleted, because a half-finished pricing change —
+     some figures set, flag flipped — is still exactly what must not
+     ship. */
+  const anyUnset = TIERS.some((t) => PERIODS.some((p) => t.prices[p.id] === null));
+  if (anyUnset) {
+    assert.equal(FLAGS.prices, false, "prices are flagged live while tiers still have unset figures");
+  }
+});
+
+test("every price the page can show is a real figure in the stated currency", () => {
+  /* THE OTHER HALF OF "cannot ship a made-up price", and it only
+     becomes checkable once figures exist: a number that is set must
+     also be sayable. A negative, a zero on a paid tier, or something
+     with more than two decimal places is a typo that renders as an
+     offer — and on Apple's and Google's side a price is entered
+     separately in each dashboard, so this is the only place the six
+     figures we PUBLISH can be checked against each other at all. */
+  assert.equal(CURRENCY, "AUD", "the site quotes one currency and names it");
+  const paid = TIERS.filter((t) => t.id !== "free");
+  assert.ok(paid.length >= 2, `expected the paid tiers, found ${paid.length}`);
+  for (const tier of paid) {
+    for (const p of PERIODS) {
+      const v = tier.prices[p.id];
+      if (v === null) continue;
+      assert.ok(v > 0, `${tier.name}/${p.id} is not a positive price`);
+      assert.equal(Number(v.toFixed(2)), v, `${tier.name}/${p.id} has sub-cent precision, which no store accepts`);
+      assert.match(priceLabel(tier, p.id), /^\$\d+\.\d{2} AUD$/, `${tier.name}/${p.id} does not render as a price`);
+    }
+    /* A LONGER PERIOD MUST NOT COST MORE THAN THE SHORTER ONES IT
+       REPLACES. Six months at more than six monthlies is not a
+       discount, it is a mistake nobody notices until a student does
+       the arithmetic on a pricing page — and the whole reason the
+       six-month row exists is that it maps to a semester. */
+    const m = tier.prices.monthly;
+    if (m !== null) {
+      if (tier.prices.sixMonth !== null) {
+        assert.ok(tier.prices.sixMonth < m * 6, `${tier.name}: six months costs more than six monthly payments`);
+      }
+      if (tier.prices.annual !== null) {
+        assert.ok(tier.prices.annual < m * 12, `${tier.name}: a year costs more than twelve monthly payments`);
+      }
+    }
+  }
+  /* And the ranking: the tier with more credits costs more, at every
+     period. Two tiers where the cheaper one buys more is the kind of
+     thing that survives a review of each number on its own. */
+  const byCredits = [...paid].sort((a, b) => a.credits - b.credits);
+  for (let i = 1; i < byCredits.length; i++) {
+    for (const p of PERIODS) {
+      const lo = byCredits[i - 1].prices[p.id];
+      const hi = byCredits[i].prices[p.id];
+      if (lo === null || hi === null) continue;
+      assert.ok(hi > lo, `${byCredits[i].name} buys more credits than ${byCredits[i - 1].name} but costs no more at ${p.id}`);
+    }
+  }
+});
+
+test("no tier sells a device limit while nothing enforces one — derived from the app, not from the copy", () => {
+  /* JARED'S RULE: we do not sell limits we do not enforce, IN EITHER
+     DIRECTION. Plus was dropped for charging for something every
+     signed-in account already had. The Free tier's "on one device"
+     was the same error mirrored — claiming a restriction that does
+     not exist, which makes the paid tiers look like they lift
+     something they do not.
+
+     DERIVED, so it relaxes on its own. Order 5 computes
+     `deviceStanding` in fetchUsage and returns it as `standing`; the
+     ACTING half — shouldSignOut / shouldClaim — is called by no
+     `.jsx`. While that is true, no tier's copy may mention a device
+     count. Wire Order 5 and this guard stops applying without anyone
+     having to remember it exists, which is the difference between a
+     guard people satisfy and one they suppress.
+
+     The alternative was a comment, and a comment is what let the
+     bullet sit there through a pricing review. */
+  const srcDir = path.join(rootDir, "src");
+  const jsx = fs
+    .readdirSync(srcDir)
+    .filter((f) => f.endsWith(".jsx"))
+    .map((f) => fs.readFileSync(path.join(srcDir, f), "utf8"))
+    // Comments first — this project has tripped that guard six times.
+    .map((t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 "))
+    .join("\n");
+  assert.ok(jsx.length > 5000, "the jsx sweep read almost nothing — it would report 'unenforced' whatever the truth is");
+
+  /* Named from deviceIdentity.js's exports rather than guessed, so a
+     rename moves this with it. */
+  const identity = fs.readFileSync(path.join(srcDir, "deviceIdentity.js"), "utf8");
+  const actors = [...identity.matchAll(/export const (shouldSignOut|shouldClaim)\b/g)].map((m) => m[1]);
+  /* assert.ok rather than assert.equal, and the shape matters: the
+     vacuous-guards detector recognises `assert.ok(...length...)` and
+     not `assert.equal(x.length, 2)`, so writing it the other way put
+     this file on the unguarded list. It caught a real omission in
+     form even though the count was asserted — worth satisfying in the
+     shape the detector can see rather than raising its ceiling. */
+  assert.ok(actors.length === 2, `deviceIdentity.js no longer exports the two acting helpers (found ${actors.join(", ") || "none"}) — re-point this guard`);
+
+  const enforced = actors.some((fn) => new RegExp(`\\b${fn}\\s*\\(`).test(jsx));
+
+  const deviceClaims = TIERS.flatMap((tier) =>
+    [tier.tagline, ...tier.features]
+      .filter((line) => /\b(one|1|single|every|all|unlimited|multiple)\s+devices?\b/i.test(line))
+      .map((line) => `${tier.name}: "${line}"`)
+  );
+
+  /* Order 5 wired: the copy may say what the app enforces. This branch
+     is why the guard does not have to be deleted to let that through. */
+  if (enforced) return;
+
+  assert.deepEqual(
+    deviceClaims,
+    [],
+    "the site sells a device limit while no screen acts on deviceStanding — Order 5's enforcing half is not wired, so this is a promise about behaviour the app does not have"
+  );
 });
 
 test("the prices flag and the numbers agree — one cannot be turned on without the other", () => {

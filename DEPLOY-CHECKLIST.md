@@ -118,14 +118,69 @@ PASS on file evidence again.
 
 ---
 
-## 2. Deploy both Edge Functions
+## 1c. Apply 0017 and PROVE the billing schema is really there
+
+**0017 WIDENS** — it adds the columns, the constraint and the table that
+`billing-webhook` writes — so it goes BEFORE the function is deployed, the
+0003/0004/0015 direction rather than 0008's. Deployed against a database
+without it, nothing fails loudly: the insert errors, PostgREST returns 400,
+the function logs it, and the student who just paid never gets their tier.
+
+**Run this first, and expect no rows:**
+
+```sql
+select tier, count(*) from public.profiles group by tier order by 2 desc;
+```
+
+Every row must read `free`, `ai` or `ai_max`. If any reads `plus` or anything
+else, 0017 REFUSES and tells you the statement to run — it changes nothing
+when it refuses, so there is no half-applied state to unpick.
+
+Then paste `supabase/migrations/0017_billing.sql`. It verifies itself and
+raises: a successful apply ends with
+
+```
+NOTICE:  0017 applied and verified: 13 properties checked.
+```
+
+**Then ask the LIVE database, which is a different question from "the file
+applied":**
+
+```sql
+-- paste supabase/checks/verify-billing.sql
+```
+
+Expect `=== VERDICT === | ALL PASS | 16 properties checked`. Anything else,
+stop — the function must not be deployed against a schema that is not there.
+
+---
+
+## 2. Deploy the Edge Functions — ALL of them, and one differently
 
 GitHub → Actions → **Deploy functions** → Run workflow.
 
-**Check:** the run is green AND its log names **both** `ai-notes` and
-`ai-text`. The workflow used to name one while the repo had two, and a
-deploy that ships half of what you think is the failure this check
-exists for.
+**Check:** the run is green AND its log names **every** function the repo
+has — today `ai-notes`, `ai-text` and `billing-webhook`. The workflow no
+longer enumerates them (it derives the list from
+`supabase/functions/*/index.ts`), so the thing to read in the log is the
+"Deploying: ..." line, and the thing that would go wrong is a function
+whose directory has no `index.ts`.
+
+**AND CHECK THE ONE THAT IS DIFFERENT.** `billing-webhook` must be
+deployed with `--no-verify-jwt`; the log shows it on its own line. Its
+caller is RevenueCat, which cannot mint a Supabase JWT, so with
+verification on every delivery is refused by the platform before our code
+runs — nothing errors, nothing appears in our logs, and the symptom is
+"students pay and their plan never changes". The other two must NOT carry
+that flag: they spend money and require a signed-in student.
+
+**And its three secrets must exist before the first delivery**, in
+Supabase → Edge Functions → Secrets. They are invisible to every test in
+this repository, so nothing but this line will tell you:
+`REVENUECAT_WEBHOOK_SECRET`, `REVENUECAT_WEBHOOK_SIGNING_SECRET`,
+`REVENUECAT_SECRET_KEY`. A missing one makes the function refuse every
+delivery with a 500 rather than granting anything, which is the right
+direction and still a dead endpoint.
 
 ---
 
@@ -134,7 +189,7 @@ exists for.
 **CORRECTED. My first version of this step was wrong, in the direction
 that looks like a failed deploy.** `billAllowance` branches on the
 tier: a MONTHLY tier (`ai`, `ai_max`) calls `add_ai_credits` and writes
-`ai_usage.credits_used`; a TRIAL tier (`free`, `plus`) calls
+`ai_usage.credits_used`; a TRIAL tier (`free`) calls
 `add_trial_credits` and writes `profiles.trial_credits_used` — which
 has no month and never appears in `ai_usage` at all. Every account
 today is on a trial tier unless somebody flipped it by hand, so

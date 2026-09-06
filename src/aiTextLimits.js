@@ -54,17 +54,22 @@ export const PHOTO_BATCH_CREDITS = TASK_CREDITS.summarise;
 
 /* THE TIERS, mirrored from _shared/credits.ts.
 
-     free / plus      60 credits, ONCE EVER   (Plus buys sync, not AI)
+     free             60 credits, ONCE EVER
      ai              900 credits per month     (Study AI)
      ai_max        3,000 credits per month     (Study AI Max)
 
-   TWO SHAPES, NOT FOUR NUMBERS. `perMonth: false` means the number is a
+   PLUS WAS DROPPED BEFORE IT WAS EVER SOLD (Jared, Phase 0) — it
+   would have charged for sync, which is gated on a session rather
+   than a tier and is promised free in the submitted 1.0.0 store
+   listing. The reasoning lives with the numbers, in credits.ts.
+
+   TWO SHAPES, NOT THREE NUMBERS. `perMonth: false` means the number is a
    LIFETIME total, held on the account rather than on a month — a
    different counter, not a smaller limit. Every screen that says "this
    month" has to branch on it, because telling a trial student their
    allowance resets in November is a support ticket and an angry one. */
-export const TIERS = ["free", "plus", "ai", "ai_max"];
-export const TRIAL_TIERS = ["free", "plus"];
+export const TIERS = ["free", "ai", "ai_max"];
+export const TRIAL_TIERS = ["free"];
 export const isTrialTier = (tier) => TRIAL_TIERS.includes(tier);
 export const TRIAL_CREDITS = 60;
 

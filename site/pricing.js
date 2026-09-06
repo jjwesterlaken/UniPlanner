@@ -1,7 +1,16 @@
 /* ==================================================================
    pricing.js — the tier table, in ONE place
 
-   THE NUMBERS ARE PLACEHOLDERS AND ARE MARKED AS SUCH. Final figures
+   THE PRICES ARE DECIDED (Jared, Phase 0, 1.1.0) AND THE MARKER IS
+   GONE. What follows was written while they were placeholders and is
+   kept because the reasoning still binds the next change.
+
+   PLUS IS NOT HERE ANY MORE. It was dropped before it was ever sold:
+   it would have charged for sync, which is gated on a session rather
+   than a tier and is promised free in the submitted 1.0.0 store
+   listing. Two paid tiers.
+
+   THE ORIGINAL NOTE: Final figures
    depend on Gate 1 (COST-MODEL.md 12.7): whether the photo path can
    move to a model that makes a photographed reading cost about a
    fortieth of a month rather than a third of one. A price set before
@@ -42,36 +51,41 @@ export const PERIODS = [
 /**
  * The tiers.
  *
- * `credits` and `perMonth` MIRROR the server. `prices` are the ones
- * waiting on Gate 1: null means "not set yet" and the page renders the
- * placeholder treatment rather than a number somebody might believe.
+ * `credits` and `perMonth` MIRROR the server, asserted equal by
+ * test-site.mjs. `prices` are AUD, set in Phase 0 of the 1.1.0 billing
+ * work; the null-renders-as-placeholder path in `priceLabel` is kept
+ * for the next tier whose figure is undecided.
+ *
+ * NO TIER CLAIMS A DEVICE LIMIT, and the rule is Jared's: we do not
+ * sell limits we do not enforce, IN EITHER DIRECTION. Free used to
+ * say "on one device" twice — in the tagline and in a bullet — which
+ * is Order 5's rule, and Order 5's ENFORCING HALF IS NOT WIRED:
+ * `deviceStanding` is computed in `fetchUsage` and no screen reads
+ * it. So both were describing an intention as a behaviour.
+ *
+ * The symmetry is the part worth keeping. Plus was dropped for
+ * charging for something every account already had; a "one device"
+ * line on Free is the same error mirrored — taking credit for a
+ * restriction that does not exist, which makes the paid tiers look
+ * like they lift something. Both halves are a page that does not
+ * describe the product.
+ *
+ * A test derives this rather than trusting the comment: while no
+ * `.jsx` acts on `deviceStanding`, no tier's copy may mention a
+ * device count. Wire Order 5 and the guard relaxes on its own.
  */
 export const TIERS = [
   {
     id: "free",
     name: "Free",
-    tagline: "Everything on one device, and enough AI to see what it does.",
+    tagline: "The whole planner, and enough AI to see what it does.",
     credits: 60,
     perMonth: false,
     prices: { monthly: 0, sixMonth: 0, annual: 0 },
     features: [
       "The whole planner: courses, assignments, readings, grades, study cards",
-      "Works offline, on one device",
+      "Works offline",
       "60 AI credits to spend once — about an hour of recorded lecture",
-    ],
-  },
-  {
-    id: "plus",
-    name: "Plus",
-    tagline: "The same planner, on every device you use.",
-    credits: 60,
-    perMonth: false,
-    prices: { monthly: null, sixMonth: null, annual: null }, // PLACEHOLDER
-    features: [
-      "Everything in Free",
-      "Sync across your phone, laptop and tablet",
-      "Cloud backup of everything you have written",
-      "The same 60-credit AI trial — Plus buys sync, not AI",
     ],
   },
   {
@@ -81,9 +95,9 @@ export const TIERS = [
     credits: 900,
     perMonth: true,
     highlight: true,
-    prices: { monthly: null, sixMonth: null, annual: null }, // PLACEHOLDER
+    prices: { monthly: 8.99, sixMonth: 44.99, annual: 79.99 },
     features: [
-      "Everything in Plus",
+      "Everything in Free",
       "900 AI credits a month — around fifteen hours of recorded lecture",
       "Lecture notes, reading summaries, practice questions, explain-it-back",
       "Credits do not roll over",
@@ -95,7 +109,7 @@ export const TIERS = [
     tagline: "For a full timetable, every week.",
     credits: 3000,
     perMonth: true,
-    prices: { monthly: null, sixMonth: null, annual: null }, // PLACEHOLDER
+    prices: { monthly: 18.99, sixMonth: 94.99, annual: 169.99 },
     features: [
       "Everything in Study AI",
       "3,000 AI credits a month — around fifty hours of recorded lecture",

@@ -1543,6 +1543,152 @@ guarded on the old columns still existing**, because 0013 removes what
 it reads and "re-runnable exactly once" is not re-runnable; a test
 applies the whole folder twice to prove it.
 
+## Billing: one writer, and the payload is never the evidence
+
+`BILLING-PLAN.md` is the map and the phased plan; migration 0017,
+`supabase/functions/billing-webhook/`, `_shared/entitlement.ts` and
+`supabase/checks/verify-billing.sql` are Phase 1, which is server-only
+and invisible to every student until the client half ships.
+
+**WHAT "BILLING NOT BUILT" ACTUALLY MEANT, established by reading the
+catalogue rather than the migrations.** The READ side was finished and
+enforced server-side the whole time: both Edge Functions look up
+`profiles.tier`, `readAllowance` branches on the shape, and the client
+only ever displays a courtesy copy of a number the server enforces.
+What did not exist was any WRITER — no policy, no grant, no function,
+no client path — and `profiles.tier` is plain `text` with no CHECK and
+no enum, so the four tier strings lived in exactly two places
+(`credits.ts` and its browser mirror) and a row could hold anything.
+Tiers were flipped by hand, which is why ANDROID-RELEASE.md could
+answer Play's "does the app allow purchases?" with NO. 1.1.0's whole
+structural job is one writer.
+
+**PLUS WAS DROPPED BEFORE IT WAS EVER SOLD, and the finding generalises
+past this tier.** Plus was to buy SYNC at the trial's AI allowance. But
+sync is gated on a SESSION and never on a tier, so every signed-in
+account already had it — and the already-submitted 1.0.0 store listing
+promises it in as many words: *"Make an account and it syncs across
+your devices."* Selling it meant charging for what the listing gives
+away, or taking a promised feature off every existing account. **The
+check worth repeating on any new tier: what does this tier GATE, and is
+that gate enforced anywhere?**
+
+**AND THE RULE IS SYMMETRIC — Jared, 6 September 2026: we do not sell
+limits we do not enforce, IN EITHER DIRECTION.** The Free tier said "on
+one device" twice, in its tagline and a bullet, and that is the same
+error mirrored: taking credit for a RESTRICTION that does not exist,
+which quietly makes the paid tiers look like they lift something. Both
+lines are gone. Order 5 computes `deviceStanding` and its acting half
+(`shouldSignOut` / `shouldClaim`) is called by no `.jsx`, so the claim
+was about an intention.
+
+**The guard is DERIVED and RELAXES rather than being suppressed**: while
+no `.jsx` calls either acting helper, no tier's copy may mention a
+device count; wire Order 5 and it stops applying on its own. That branch
+is the point — a guard that must be deleted to let an intended change
+through is one people learn to delete. It asserts its own precondition
+too (the jsx sweep read something) and names the helpers out of
+`deviceIdentity.js` rather than guessing them.
+
+**THE PAYLOAD IS A TRIGGER. THE SUBSCRIBER RECORD IS THE TRUTH.** The
+webhook reads nothing about entitlements out of the delivered event; it
+takes the app user id, fetches the subscriber back from RevenueCat, and
+computes the tier from that. Three problems collapse into that one
+answer, which is why it is worth the extra request:
+
+- Authentication here is a SHARED SECRET, not a per-user proof. Re-reading
+  means the worst a forged delivery achieves is making us ask RevenueCat
+  about a user and write what RevenueCat already believes.
+- Webhook deliveries are NOT ORDERED. A cancellation overtaking the
+  renewal after it would, under payload-trust, unsubscribe a paying
+  student. Every event meaning "go and look" makes arrival order stop
+  mattering.
+- A retry replays a CLAIM. It cannot replay a FACT.
+
+It is also RevenueCat's own documented recommendation, which is the
+cheapest kind of agreement to have.
+
+**VERIFY BEFORE PARSE, and this is structural rather than a comment.**
+The HMAC covers the RAW REQUEST BYTES, so parsing first and
+re-serialising to verify changes them — key order, whitespace, number
+formatting — and every valid delivery fails. `req.json()` appears
+nowhere in the function; a test asserts its absence AND the order of
+`req.text()` → `signPayload` → `JSON.parse` **inside the handler body**.
+The first version of that guard searched the whole file, found
+`signPayload`'s DEFINITION above `handle`, and failed a correct
+function — the measuring-the-wrong-layer mistake, in a source grep.
+A second test signs a pretty-printed body and requires it ACCEPTED, so
+the rule is pinned from both sides.
+
+**APPLY BEFORE RECORD.** A crash between them means a retry re-applies
+(harmless: the apply is a re-read and a write of the same value) and
+then records. The reverse marks an event handled that was never
+applied, and the retry that would have fixed it is refused as a
+duplicate. Same rule as `aiNotesStore`'s two orderings.
+
+**MANUAL WINS.** `tier_source` distinguishes `signup` / `manual` /
+`revenuecat` / `stripe`, and the webhook never overwrites `manual` —
+that is how the App Review account keeps a tier nobody bought, and
+Apple's reviewer needs working paid features or sees none of them. The
+0017 backfill marks every existing non-free row `manual`, because until
+0017 a human was the only thing that could have set it. Its predicate
+(`tier <> 'free' and tier_source = 'signup'`) is what makes a second
+apply safe rather than a guard wrapped around it: a row the webhook has
+since written carries `revenuecat`, does not match, and cannot be
+demoted to `manual` — which would freeze that account's tier forever.
+
+**A MIGRATION THAT REFUSES BEATS AN ASSUMPTION ABOUT PRODUCTION.**
+0017 adds a three-value CHECK, and adding a CHECK to a table that
+violates it fails with postgres's own message, which names the
+constraint and not the rows. So the migration raises FIRST, naming the
+count, the values and the statement to run, and changes nothing when it
+does. **The test runs whatever the message prescribes, extracted from
+the file** — which is what caught the first version prescribing
+`set tier_source = 'manual'`, a column 0017 has not added yet, so
+following the instruction verbatim on a live pre-0017 database would
+have errored. A refusal whose remedy does not run is worse than no
+message.
+
+**And the live check errored in exactly the state it exists to
+report**, for the third time on this project: `where tier_source =
+'signup'` does not PARSE on a database without the column, so
+`verify-billing.sql` failed outright instead of returning FAIL rows.
+It reads the column by name at runtime now (`to_jsonb(p.*) ->> 'name'`).
+That is `has_function_privilege`'s trap one file over, and it was found
+the same way — by running the guard against the broken state first,
+which is the only way this class is ever found.
+
+**THE DEPLOY IS DERIVED NOW, and one function is deployed
+differently.** `deploy-functions.yml` reads
+`supabase/functions/*/index.ts` rather than naming two functions, and
+`billing-webhook` alone gets `--no-verify-jwt` — RevenueCat cannot mint
+a Supabase JWT, and with verification on every delivery is refused by
+the platform before our code runs, so nothing errors, nothing is
+logged, and the symptom is "students pay and their plan never changes".
+The wiring test asserts BOTH halves: the flag is present, and it occurs
+exactly once, so it cannot leak onto the two functions that spend money.
+
+**A TRIPWIRE ARMED FOR A CHANGE THAT HAS NOT HAPPENED.** Three
+sentences in the privacy policy become false the day the purchase SDK
+ships — "the AI features are the only part that sends anything
+overseas", "every request is made from our server rather than from your
+device", "the only server the app itself contacts is our own". Phase 1
+does not falsify them (no products, no client, no traffic), so they
+stay, and `test-legal.mjs` fires the moment `mobile/package.json` gains
+the dependency. **Keyed on the dependency, not on a date or a version**,
+because the dependency is the thing that makes the claim false — and it
+asserts its own precondition, failing rather than passing quietly if
+none of the three sentences is in the document any longer.
+
+**The leak gate was widened BEFORE any such secret existed**, which is
+the only moment widening one is free. It was written for the AI
+providers and matched OpenAI's `sk-` with a HYPHEN; RevenueCat's and
+Stripe's secrets use an UNDERSCORE (`sk_live_`, `sk_test_`, `rk_live_`,
+`whsec_`) and would have walked straight past it. Public SDK keys
+(`appl_`, `goog_`) are deliberately NOT forbidden — they are meant to
+ship, and forbidding them would be a gate that has to be suppressed the
+day Phase 2 lands.
+
 ## The marketing site: data first, design last
 
 `site/` holds everything the page READS — downloads, pricing, flags —

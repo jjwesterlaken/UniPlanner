@@ -31,7 +31,19 @@ export const FLAGS = {
       warning it explains. */
   windowsUnsignedNote: true,
 
-  /** Real prices. ON when Gate 1 lands and the tier prices are decided.
-      Until then the pricing table renders its placeholder treatment. */
-  prices: false,
+  /** Real prices. ON since Phase 0 of the 1.1.0 billing work, when
+      Jared set the six figures in pricing.js.
+
+      GATE 1 WAS CONSCIOUSLY DEFERRED, not passed. It is COST-MODEL.md
+      12.7's photo-token measurement, and the reason it gated a price
+      at all is that a photographed reading is the most expensive
+      action in the app on the model we run and among the cheapest on
+      the one recommended — so a price per credit set before that
+      ratio is known is set against a cost known to be wrong. The
+      decision was to ship prices anyway and treat the photo path as
+      held (PHOTO_BATCH_CREDITS, pinned by a test) until the model
+      move lands. Recorded here and in COST-MODEL.md 12.8 so that
+      "the prices are live" is never mistaken for "the measurement
+      was taken". */
+  prices: true,
 };

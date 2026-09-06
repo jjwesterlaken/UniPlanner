@@ -330,7 +330,20 @@ function seedTwoUsers(db, { withPlannerData = true } = {}) {
      insert into public.ai_notes_requests (idempotency_key, user_id, status, result) values
        (gen_random_uuid(), ${USER}, 'done', '{"transcript":"my lecture"}'),
        (gen_random_uuid(), ${OTHER}, 'done', '{"transcript":"their lecture"}');
-     ${withPlannerData ? `insert into public.planner_data (user_id, data) values (${USER}, '{}'), (${OTHER}, '{}');` : ""}`
+     ${withPlannerData ? `insert into public.planner_data (user_id, data) values (${USER}, '{}'), (${OTHER}, '{}');` : ""}
+     /* billing_events, BOTH users, and guarded on the table existing
+        because this helper is also used by tests that stop long before
+        0017 creates it. The catalogue-derived deletion tests assert
+        that every user_id table is both emptied for the deleted
+        account AND left alone for the other, so a table seeded for
+        only one of them proves half of what it claims. */
+     do $do$ begin
+       if pg_catalog.to_regclass('public.billing_events') is not null then
+         insert into public.billing_events (id, user_id, event_type, tier_before, tier_after)
+         values ('evt-seed-mine', ${USER}, 'INITIAL_PURCHASE', 'free', 'ai'),
+                ('evt-seed-theirs', ${OTHER}, 'RENEWAL', 'ai', 'ai');
+       end if;
+     end $do$;`
   );
 }
 
@@ -514,11 +527,20 @@ async function run() {
      state exactly. */
 
   const productionShapedDb = () => {
-    /* Every migration EXCEPT 0002 — the reproduction. */
+    /* Every migration EXCEPT 0002 — the reproduction.
+       0017 IS EXCLUDED TOO, and not to make a test pass: a database in
+       the pre-0016 state had not had 0017 either, so including it
+       models a project that took the billing migration but not the
+       repair, which never existed. It also erases the evidence — 0017
+       re-creates delete_my_account_data() and revokes public and anon,
+       which is exactly the default-privilege FINGERPRINT that dates
+       0002's absence. Closing that hole is right; reading the
+       fingerprint has to happen before it closes. */
     const db = freshDb();
     for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
       if (file.startsWith("0002_")) continue;
       if (file.startsWith("0016_")) continue;
+      if (file.startsWith("0017_")) continue;
       applyMigration(db, file);
     }
     return db;
@@ -1432,6 +1454,15 @@ async function run() {
     "ai_usage.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
     "profiles.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
     "semester_archives.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
+    /* PROVIDER-minted, which is a third category and the reason the
+       column is `text`. RevenueCat's event ids are UUID-shaped today
+       and nobody promised us that; 0009 is what a foreign id crossing
+       into a typed column cost — every insert rejected with 22P02 for
+       four migrations, on a table everyone believed was working. No
+       client ever writes it: the webhook copies it out of a delivery
+       it has already authenticated. */
+    "billing_events.id": "minted by RevenueCat and copied from an authenticated webhook delivery; typed text because a provider's id format is not ours to assume",
+    "billing_events.user_id": "the auth user id, taken from the subscriber record RevenueCat returned — never from the request body, which is the service-role rule",
   };
 
   await test("every id column is either fed by a named client generator or excused with a reason", () => {
@@ -1819,6 +1850,225 @@ async function run() {
       one(db, `select has_function_privilege('authenticated', 'public.add_trial_credits(uuid, numeric)', 'execute')::text;`),
       "false"
     );
+  });
+
+  /* ---------- 0017: the entitlement writer's half of the schema ---------- */
+
+  /* Every migration EXCEPT 0017, which is what the project looks like
+     the moment before the billing work is applied. */
+  const preBillingDb = () => {
+    const db = freshDb();
+    for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql") && !f.startsWith("0017")).sort()) {
+      applyMigration(db, file);
+    }
+    return db;
+  };
+
+  await test("0017 REFUSES a database holding a tier outside the three, and changes nothing when it does", () => {
+    /* THE PRODUCTION ASSUMPTION, CHECKED. Jared's instruction was
+       "I'm assuming zero, and an assumption about production is what
+       0016 was for" — so the assumption is not made anywhere. A CHECK
+       added to a table that violates it fails with postgres's own
+       message, which names the constraint and not the rows; this
+       raises first, naming the count and the values.
+
+       The half that matters as much as the refusal: NOTHING is
+       changed by it. A migration that half-applied and then refused
+       would leave the database in a state no one has a name for. */
+    const db = preBillingDb();
+    psqlOrThrow(db, `insert into auth.users (id, email) values (${USER}, 'plus@x.test');`);
+    psqlOrThrow(db, `update public.profiles set tier = 'plus' where user_id = ${USER};`);
+    assert.equal(one(db, `select tier from public.profiles where user_id = ${USER};`), "plus", "the fixture did not take — nothing below would mean anything");
+
+    const refused = psql(db, fs.readFileSync(path.join(migrationsDir, "0017_billing.sql"), "utf8"));
+    assert.equal(refused.ok, false, "0017 applied over a row holding a tier it does not allow");
+    assert.match(refused.err, /0017 REFUSED/, `the refusal did not name itself:\n${refused.err}`);
+    assert.match(refused.err, /plus/, "the refusal did not name the value that caused it");
+
+    assert.equal(one(db, `select tier from public.profiles where user_id = ${USER};`), "plus", "the refused migration changed a row");
+    assert.equal(
+      count(db, "pg_constraint", `conname = 'profiles_tier_check'`),
+      0,
+      "the refused migration left a constraint behind"
+    );
+    assert.equal(one(db, `select to_regclass('public.billing_events') is null;`), "t", "the refused migration created its table anyway");
+
+    /* And the remediation the message prescribes actually works. A
+       refusal that tells you to do something that does not help is
+       worse than no message. */
+    /* THE REMEDIATION IS RUN EXACTLY AS THE MESSAGE PRESCRIBES IT,
+       which is how the first version of that message was found to be
+       wrong: it told the operator to set tier_source in the same
+       statement, and tier_source is a column 0017 has not added yet —
+       so following the instruction verbatim on a live pre-0017
+       database would have errored. A refusal whose remedy does not
+       run is worse than no message. */
+    const prescribed = /run `(update public\.profiles[^`]+;)`/.exec(
+      fs.readFileSync(path.join(migrationsDir, "0017_billing.sql"), "utf8").replace(/''/g, "'")
+    );
+    assert.ok(prescribed, "0017's refusal no longer prescribes an update statement — the operator is told to decide with no way to act");
+    psqlOrThrow(db, prescribed[1]);
+    applyMigration(db, "0017_billing.sql");
+    assert.equal(one(db, `select tier from public.profiles where user_id = ${USER};`), "free");
+  });
+
+  await test("0017's CHECK actually bites — a tier outside the three cannot be written at all", () => {
+    /* A CONSTRAINT THAT EXISTS BUT DOES NOT ENFORCE is worse than
+       none, because it reads as protection. Proved by trying, not by
+       reading pg_constraint. */
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id, email) values (${USER}, 'a@x.test');`);
+    for (const bad of ["plus", "ai_pro", "AI", ""]) {
+      const r = psql(db, `update public.profiles set tier = '${bad}' where user_id = ${USER};`);
+      assert.equal(r.ok, false, `the tier '${bad}' was accepted`);
+    }
+    for (const good of ["free", "ai", "ai_max"]) {
+      const r = psql(db, `update public.profiles set tier = '${good}' where user_id = ${USER};`);
+      assert.equal(r.ok, true, `the tier '${good}' was rejected — the constraint is too tight`);
+    }
+  });
+
+  await test("0017 marks an existing hand-flipped tier as manual, and a re-apply cannot undo a webhook's write", () => {
+    /* RE-RUNNABLE EXACTLY ONCE IS NOT RE-RUNNABLE (0012's lesson).
+       The backfill's predicate is what makes a second apply safe: a
+       row the webhook has since written carries tier_source
+       'revenuecat', so it does not match and cannot be demoted to
+       'manual' — which would freeze that account's tier forever,
+       because the webhook never overwrites manual. */
+    const db = preBillingDb();
+    psqlOrThrow(db, `insert into auth.users (id, email) values (${USER}, 'granted@x.test'), (${OTHER}, 'free@x.test');`);
+    psqlOrThrow(db, `update public.profiles set tier = 'ai_max' where user_id = ${USER};`);
+    applyMigration(db, "0017_billing.sql");
+    assert.equal(one(db, `select tier_source from public.profiles where user_id = ${USER};`), "manual", "a hand-granted tier was not marked manual, so the first webhook would take it away");
+    assert.equal(one(db, `select tier_source from public.profiles where user_id = ${OTHER};`), "signup", "an untouched free account was marked manual, which would freeze it out of ever subscribing");
+
+    psqlOrThrow(db, `update public.profiles set tier = 'ai', tier_source = 'revenuecat' where user_id = ${OTHER};`);
+    applyMigration(db, "0017_billing.sql");
+    assert.equal(one(db, `select tier_source from public.profiles where user_id = ${OTHER};`), "revenuecat", "a re-apply demoted a subscriber's row to manual, freezing their tier forever");
+  });
+
+  await test("no client role can reach billing_events, in any verb", () => {
+    /* Supabase's default privileges grant ALL to anon and
+       authenticated on every table created in the SQL editor, so this
+       is the 0008 lesson applied at the moment a table is created
+       rather than in an audit a year later. */
+    const db = withArchives();
+    for (const role of ["anon", "authenticated"]) {
+      for (const verb of ["select", "insert", "update", "delete"]) {
+        assert.equal(
+          one(db, `select has_table_privilege('${role}', 'public.billing_events', '${verb}')::text;`),
+          "false",
+          `${role} can ${verb} billing_events`
+        );
+      }
+    }
+    assert.equal(one(db, `select has_table_privilege('service_role', 'public.billing_events', 'insert')::text;`), "true", "the webhook cannot record an event");
+    assert.equal(one(db, `select relrowsecurity::text from pg_class where oid = 'public.billing_events'::regclass;`), "true", "RLS is off on billing_events");
+  });
+
+  await test("the event id is the primary key, so a redelivery is refused by the schema and not by a code path", () => {
+    const db = withArchives();
+    psqlOrThrow(db, `insert into auth.users (id, email) values (${USER}, 'e@x.test');`);
+    const row = `insert into public.billing_events (id, user_id, event_type, tier_before, tier_after) values ('evt-1', ${USER}, 'INITIAL_PURCHASE', 'free', 'ai');`;
+    psqlOrThrow(db, row);
+    const again = psql(db, row);
+    assert.equal(again.ok, false, "the same event id was recorded twice");
+    assert.match(again.err, /duplicate key|unique/i);
+    assert.equal(count(db, "public.billing_events"), 1);
+  });
+
+  await test("deleting an account takes its billing events with it", () => {
+    const db = withArchives();
+    seedTwoUsers(db); // seeds one billing event for each user
+    const theirs = count(db, "public.billing_events", `user_id = ${OTHER}`);
+    assert.ok(count(db, "public.billing_events", `user_id = ${USER}`) > 0, "the fixture seeded nothing, so emptying it would prove nothing");
+    assert.ok(theirs > 0, "the other user has no rows, so 'left alone' would be vacuous");
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account();`);
+    assert.equal(count(db, "public.billing_events", `user_id = ${USER}`), 0, "an account's subscription history survived its deletion");
+    assert.equal(count(db, "public.billing_events", `user_id = ${OTHER}`), theirs, "the deletion took somebody else's rows");
+  });
+
+  await test("0017 clears the stray trigger/truncate/references grants everywhere, not on two tables", () => {
+    /* 0008 tightened the four data verbs and stopped. These came from
+       the same platform default. Derived over the catalogue in the
+       migration, so the assertion is over the catalogue too — a table
+       added later is covered by neither a list nor a memory. */
+    const db = withArchives();
+    const remaining = one(
+      db,
+      `select coalesce(string_agg(distinct c.relname, ', '), '')
+         from pg_class c join pg_namespace n on n.oid = c.relnamespace,
+              unnest(array['anon','authenticated']) r(role),
+              unnest(array['trigger','truncate','references']) v(verb)
+        where n.nspname = 'public' and c.relkind = 'r'
+          and has_table_privilege(r.role, c.oid, v.verb);`
+    );
+    assert.equal(remaining, "", `stray grants survive on: ${remaining}`);
+    /* Non-vacuity: the sweep must have had something to sweep. */
+    const tables = Number(one(db, `select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r';`));
+    assert.ok(tables >= 6, `only ${tables} public tables — the sweep proved nothing`);
+  });
+
+  await test("0017 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = withArchives();
+    applyMigration(db, "0017_billing.sql");
+    applyMigration(db, "0017_billing.sql");
+    assert.equal(count(db, "pg_constraint", `conname = 'profiles_tier_check'`), 1, "a re-apply duplicated or dropped the constraint");
+    assert.equal(one(db, `select to_regclass('public.billing_events') is not null;`), "t");
+  });
+
+  await test("0017's self-check RAISES rather than reporting success — the property that would have prevented 0016", () => {
+    /* An apply must not be able to report success while an object it
+       created is absent. Demonstrated by removing one afterwards and
+       re-running: the block must refuse. */
+    const db = withArchives();
+    psqlOrThrow(db, `drop table public.billing_events;`);
+    /* Re-creating it is part of the migration, so the interesting
+       mutation is one the migration does NOT repair: revoke a grant
+       the self-check asserts, on an object the migration does not
+       touch again. */
+    psqlOrThrow(db, `revoke execute on function public.delete_my_account_data() from authenticated;`);
+    psqlOrThrow(db, `create table public.billing_events (id text primary key, user_id uuid, event_type text, store text, tier_before text, tier_after text, received_at timestamptz default now());`);
+    /* 0017 re-grants execute unconditionally, so it repairs this — and
+       that is the point: it repairs rather than skipping, and the
+       verification is what proves the repair happened. */
+    applyMigration(db, "0017_billing.sql");
+    assert.equal(
+      one(db, `select has_function_privilege('authenticated', 'public.delete_my_account_data()', 'execute')::text;`),
+      "true",
+      "0017 did not re-assert the grant it verifies"
+    );
+    /* And the count assertion is real: change the block to check
+       nothing and it must fail. Demonstrated by mutation in the PR,
+       not here — a test that edits a migration file mid-run is the
+       one that eats an uncommitted change. */
+    const sql = fs.readFileSync(path.join(migrationsDir, "0017_billing.sql"), "utf8");
+    assert.match(sql, /if checked <> 13 then/, "0017's self-check lost its count, so it could pass having asserted nothing");
+    assert.equal((sql.match(/checked := checked \+ 1;/g) || []).length, 13, "the number of assertions and the count they are checked against disagree");
+  });
+
+  await test("the LIVE BILLING check reports FAIL before 0017 and ALL PASS after it", () => {
+    /* The artifact-level guard, and the one that answers a question no
+       migration test can: was 0017 APPLIED. It is run against the
+       pre-0017 shape first because a check nobody has watched fail is
+       a check nobody should trust — and the first version of it
+       ERRORED there instead of reporting, because `where tier_source =
+       'signup'` does not PARSE on a database without the column. That
+       is the has_function_privilege trap one file over, and it is why
+       the column is read by name at runtime. */
+    const check = fs.readFileSync(path.join(rootDir, "supabase/checks/verify-billing.sql"), "utf8");
+
+    const beforeDb = preBillingDb();
+    const before = psql(beforeDb, check);
+    assert.equal(before.ok, true, `the live check ERRORED on a pre-0017 database instead of reporting FAIL:\n${before.err}`);
+    assert.match(before.out, /FAILED/, "the live check passed against a database with no billing schema");
+    assert.match(before.out, /billing_events exists\s*\|\s*FAIL/, "the live check did not name the missing table");
+
+    const afterDb = preBillingDb();
+    applyMigration(afterDb, "0017_billing.sql");
+    const after = psqlOrThrow(afterDb, check).out;
+    assert.match(after, /ALL PASS/, `the live check still fails after 0017:\n${after}`);
+    assert.ok(!/\|\s*FAIL\s*\|/.test(after), `a property still fails after 0017:\n${after}`);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

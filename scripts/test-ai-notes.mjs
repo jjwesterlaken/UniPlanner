@@ -2675,9 +2675,57 @@ async function run() {
        mentioned. Surfaced one step short of shipping the
        photographed-pages server half with no path to the server. */
     const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/deploy-functions.yml"), "utf8");
-    for (const fn of ["ai-notes", "ai-text"]) {
-      assert.match(workflow, new RegExp(`functions deploy ${fn}`), `the deploy workflow no longer ships ${fn}`);
+    /* DERIVED FROM THE DIRECTORY, on both sides. The old version of
+       this test named ai-notes and ai-text as literals — which is the
+       restatement it was written to prevent, one level up: it would
+       have gone on passing when billing-webhook arrived, in exactly
+       the way the workflow itself went on passing when ai-text did.
+       A function is a directory with an index.ts; _shared has none. */
+    const fnDir = path.join(rootDir, "supabase/functions");
+    const functions = fs
+      .readdirSync(fnDir)
+      .filter((d) => fs.existsSync(path.join(fnDir, d, "index.ts")))
+      .sort();
+    assert.ok(functions.length >= 3, `only found ${functions.length} Edge Functions — the derivation is reading the wrong thing`);
+    /* The workflow does not name them either, so what is asserted is
+       that its derivation would FIND them: the same find(1) expression,
+       run here. A workflow that enumerated them again would fail this. */
+    assert.match(
+      workflow,
+      /find supabase\/functions -mindepth 2 -maxdepth 2 -name index\.ts/,
+      "the deploy workflow no longer derives its function list from the directory"
+    );
+    for (const fn of functions) {
+      assert.ok(
+        !new RegExp(`functions deploy ${fn}\\b`).test(workflow),
+        `the deploy workflow names ${fn} as a literal — it derives the list, and a literal beside the derivation is the drift the derivation removes`
+      );
     }
+  });
+
+  await test("billing-webhook is deployed WITHOUT jwt verification, and it is the only one that is", () => {
+    /* THE FLAG THAT DECIDES WHETHER SUBSCRIPTIONS WORK AT ALL.
+       RevenueCat cannot mint a Supabase JWT, so with verify_jwt on,
+       every delivery is refused by the platform before our code runs:
+       nothing is logged by us, nothing errors, and the symptom is
+       "students pay and never get their tier".
+
+       The reverse matters just as much — --no-verify-jwt on ai-notes
+       or ai-text would expose an endpoint that spends money to anyone
+       who can reach it — so this asserts BOTH halves, which is what
+       stops somebody "simplifying" the branch away by applying the
+       flag to the whole loop. */
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/deploy-functions.yml"), "utf8");
+    assert.match(workflow, /billing-webhook\)/, "the deploy workflow has no billing-webhook branch");
+    const branch = workflow.slice(workflow.indexOf("billing-webhook)"), workflow.indexOf(";;", workflow.indexOf("billing-webhook)")));
+    assert.match(branch, /--no-verify-jwt/, "billing-webhook is deployed WITH jwt verification, so every RevenueCat delivery will 401");
+    /* And exactly one occurrence in the file, so the flag cannot have
+       leaked onto the default arm of the case. */
+    assert.equal(
+      (workflow.match(/--no-verify-jwt/g) || []).length,
+      1,
+      "--no-verify-jwt appears more than once; a function that spends money must not be reachable without a session"
+    );
   });
 
   await test("the function deploy refuses to ship an unmeasured billing constant", () => {
@@ -2941,7 +2989,8 @@ async function run() {
     const ask = (c) => fetchRecordingAccess(session, { supabaseClient: c, isDemo: false });
     assert.equal((await ask(account("free", 0))).canRecord, true, "an untouched trial must be able to record");
     assert.equal((await ask(account("free", 59))).canRecord, false, "a spent trial must not");
-    assert.equal((await ask(account("plus", 0))).canRecord, true, "Plus shares the same trial");
+    assert.equal((await ask(account("plus", 0))).canRecord, true, "a legacy 'plus' row falls through to the trial, and 60 unspent credits can record");
+    assert.equal((await ask(account("plus", 59))).canRecord, false, "and a SPENT legacy row must not — the fallback is the trial allowance, not an exemption from it");
     assert.equal((await ask(account("ai", 0, 0))).canRecord, true);
     assert.equal((await ask(account("ai", 0, 899))).canRecord, false, "a spent month must not");
     assert.equal((await ask(account("ai_max", 0, 899))).canRecord, true, "Max has more of the same month");
@@ -2986,9 +3035,39 @@ async function run() {
     // Deepgram adapter only runs inside the Edge Function). The literal
     // secret env var names and key-prefix patterns below are what actually
     // matter.
-    for (const forbidden of ["sk-", "DEEPGRAM_API_KEY", "OPENAI_API_KEY", "service_role"]) {
+    /* WIDENED FOR BILLING, BEFORE ANY SUCH SECRET EXISTS — which is
+       the only moment widening a gate is free. The list was written
+       for the AI providers and matches OpenAI's "sk-" with a HYPHEN.
+       RevenueCat's and Stripe's secrets use an UNDERSCORE and would
+       have walked straight past it: sk_live_, sk_test_, rk_live_
+       (Stripe restricted keys), and whsec_ (a Stripe webhook signing
+       secret). RevenueCat's own secret API key is "sk_" too.
+       PUBLIC keys are deliberately absent from this list: appl_ and
+       goog_ are MEANT to ship in the bundle — that is what a public
+       SDK key is for — and forbidding them would be a gate that has to
+       be suppressed the day Phase 2 lands. */
+    for (const forbidden of [
+      "sk-",
+      "sk_live_",
+      "sk_test_",
+      "rk_live_",
+      "whsec_",
+      "DEEPGRAM_API_KEY",
+      "OPENAI_API_KEY",
+      "REVENUECAT_SECRET_KEY",
+      "REVENUECAT_WEBHOOK_SECRET",
+      "REVENUECAT_WEBHOOK_SIGNING_SECRET",
+      "STRIPE_SECRET_KEY",
+      "service_role",
+    ]) {
       assert.ok(!js.includes(forbidden), `bundle must not contain "${forbidden}"`);
     }
+    /* A bare "sk_" would match Stripe's publishable "pk_" siblings and
+       any word ending in sk_, so the prefixes above are specific. The
+       generic shape is caught here instead: a long opaque token that
+       LOOKS like a provider secret, whatever its prefix. */
+    const secretish = js.match(/\b(?:sk|rk|whsec)_[A-Za-z0-9]{20,}/g);
+    assert.deepEqual(secretish, null, `the bundle carries something shaped like a provider secret: ${(secretish || []).join(", ")}`);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);
