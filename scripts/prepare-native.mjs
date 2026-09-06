@@ -108,11 +108,30 @@ if (!fs.existsSync(SRC)) {
   throw new Error(`${SRC} not found - run "npm run build:web" first`);
 }
 
-const SAFE_AREA = `
-    <style>
-      body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
-    </style>
-  </head>`;
+/* THE SAFE-AREA PADDING THAT USED TO BE INJECTED HERE IS GONE, and
+   removing it is a bug fix rather than a tidy-up.
+
+   It padded BODY on all four edges by the insets. That was right when
+   it was written: nothing in the app knew about safe areas, so one
+   blunt rule kept content out from under the notch. The app has since
+   grown per-element insets — the header pads top/left/right so its
+   background paints UNDER the status bar while only its content moves
+   down, `main` adds the side insets to its own gutter, and the bottom
+   nav and the recording indicator each clear the home indicator.
+
+   Both were then applying the top inset, so the native builds got it
+   TWICE: a 62px empty band above the header on an iPhone 16 Pro Max,
+   with the header's own 62px of padding below that. Measured on the
+   real mobile/www bundle at 402x874 with a 59px inset: header.top=59
+   AND header padding-top=59, against header.top=0 in dist-web.
+
+   THAT IS WHY IT SURVIVED EVERY BROWSER CHECK. This style is injected
+   only into the native copies, so dist-web — which every test and
+   every desktop browser loads — never had it. The artifact that ships
+   to Apple was the one artifact nothing measured.
+
+   scripts/test-viewport-layout.mjs now measures BOTH bundles, and
+   asserts the gap above the header equals exactly one inset. */
 
 for (const target of TARGETS) {
   fs.rmSync(target, { recursive: true, force: true });
@@ -164,8 +183,20 @@ for (const target of TARGETS) {
      change. Same rule as everywhere else here: derive the guard from
      something stable, don't restate the thing being guarded. */
   html = html.replace(/[ \t]*<!-- sw-register:start[\s\S]*?sw-register:end -->\n?/, "");
-  html = html.replace("  </head>", SAFE_AREA);
   fs.writeFileSync(htmlPath, html);
+
+  /* The native head is now IDENTICAL to the web one but for the
+     stripped worker block. Asserted rather than assumed, because the
+     safe-area style that used to be added here is what doubled the top
+     inset on every iOS build, and a second native-only style would do
+     the same thing again. */
+  if (/safe-area-inset/.test(html)) {
+    throw new Error(
+      `${target}/index.html injects a safe-area rule. The app applies its own insets per element ` +
+        "(header, main, the bottom nav, the recording indicator); a blunt rule here applies them a SECOND time. " +
+        "See the comment above SAFE_AREA's removal."
+    );
+  }
 
   if (html.includes("serviceWorker")) {
     throw new Error(`service worker was not stripped from ${target}`);

@@ -4795,8 +4795,34 @@ const writeLastTab = (id) => {
    see the note in MOBILE-BUILD.md about what that does and does not
    cover. */
 const PHONE_MAX_WIDTH = 640;
+/* THE INITIAL STATE IS COMPUTED, NOT GUESSED, and that is the whole
+   fix for the tab row hanging off the right of an iPhone.
+
+   This used to be `useState(false)`, with the media query consulted in
+   the effect. Effects run AFTER paint, so the first frame a phone
+   really drew was the DESKTOP row — and that row's buttons are
+   `flex-shrink-0 whitespace-nowrap`, so they cannot compress: measured
+   at 508px of buttons, which on a 402px iPhone 17 puts "Settings" at
+   x=445..548, 146px beyond the screen, and clips "Courses" at the
+   edge. The bottom bar then replaced it a frame later, so it read as a
+   flash to anyone who caught it and as clipping to anyone who
+   screenshotted it.
+
+   Reading matchMedia during the initial render costs one synchronous
+   query and makes the first painted frame correct. The effect stays,
+   because it is what handles a LATER change — rotation, or a desktop
+   window being resized across the breakpoint.
+
+   `window.matchMedia` is still guarded: jsdom does not implement it,
+   and the smoke tests mount there. Falling back to false keeps those
+   on the desktop row exactly as before. */
 function useBottomBar() {
-  const [bottom, setBottom] = useState(false);
+  const [bottom, setBottom] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      !!window.matchMedia &&
+      window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH - 1}px)`).matches
+  );
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
     const mq = window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH - 1}px)`);

@@ -3284,6 +3284,73 @@ nobody reads afterwards is not a report. Where a migration must not
 clobber, it should still ASSERT the end state and raise — the skip may
 be conditional, the verification may not be.
 
+### THE NATIVE BUNDLE IS A DIFFERENT ARTIFACT, AND NOTHING WAS MEASURING IT
+
+Two iOS layout complaints arrived together on build 3509882 and looked
+like one safe-area fault in two axes. **They were independent, in
+different files, at different layers — and only one was iOS-specific.**
+Establishing that took one measurement each and is the reason both fixes
+are small.
+
+**1. The doubled top inset — NATIVE ONLY.** `prepare-native.mjs`
+injected `body { padding: env(safe-area-inset-*) }` into the native
+copies. That was right when written — nothing in the app knew about
+safe areas — but the app has since grown per-element insets: the header
+pads top/left/right so its background paints UNDER the status bar while
+only its content moves down, `main` adds the side insets to its gutter,
+and the bottom nav and recording indicator each clear the home
+indicator. Both were applying the top inset, so iOS got it **twice**.
+Measured on `mobile/www` at 402x874 with a 59px inset: `header.top=59`
+AND `header padding-top=59`, against `header.top=0` in `dist-web` — an
+empty band the height of the header, above the header, on every build.
+
+**THAT IS WHY IT SURVIVED EVERYTHING.** The style exists only in the
+native copies. Every test, every desktop browser and every screenshot
+anyone took loaded `dist-web`, which never had it. **The artifact that
+ships to Apple was the one artifact nothing measured** — the artifact
+rule, at the level of "which build".
+
+**2. The tab row hanging off the right — NOT iOS-SPECIFIC AT ALL.**
+`useBottomBar()` was `useState(false)` with the media query consulted
+in an effect, and effects run AFTER paint. So the first frame a phone
+drew used the DESKTOP row, whose buttons are `flex-shrink-0
+whitespace-nowrap` and cannot compress: measured at **508px of buttons**,
+which on a 402px iPhone 17 puts "Settings" at x=445..548 — 146px past
+the screen — and clips "Courses" at the edge. The bottom bar replaced it
+a frame later, so it reads as a flash if you catch it and as clipping if
+you screenshot it. It reproduces in desktop Chromium at 320, 375, 402
+and 440. The fix is a lazy initial state: ask matchMedia during the
+first render, keep the effect for rotation and resizes.
+
+The row itself is fine and was left alone — it is `overflow-x-auto` by
+design and fits from 640px up, which is the only range it should ever
+render in. The defect was rendering it on a phone, not the row.
+
+**`scripts/test-viewport-layout.mjs` measures BOTH bundles**, at seven
+real iPhone widths from the 320pt SE 1st gen (the narrowest device an
+iOS 15 / iPhone-only build installs on) to the 440pt 16 Pro Max, with
+insets injected over CDP so `env()` really resolves — **without which
+every assertion would be vacuous, since a zero inset cannot be
+doubled.** It asserts the gap above the header against the inset THIS
+RUN injected rather than a hardcoded number, that nothing is laid out
+past the viewport, and that the two bundles agree — the last one being
+the assertion that would have caught this class at all.
+
+**It measures the FIRST PAINTED FRAME, not the settled one.** The
+settled DOM was always correct, so a check that waits for the app to
+settle passes over exactly the frame a student photographs. A
+MutationObserver plus one `requestAnimationFrame` captures it.
+
+**Three bugs in the probe, each caught by its own non-vacuity
+assertion**, which is the argument for writing those first: an init
+script runs before the document is parsed, so `#root` AND
+`document.documentElement` are both null and observing either throws —
+`document` is what always exists; and `body > div > nav` never matched a
+`body > #root > div > nav` tree, so "is there a bottom bar" answered
+about the wrong element rather than about nothing. A selector's failure
+mode is naming the wrong thing, not naming nothing, and only an
+assertion that the probe really captured something tells them apart.
+
 ### A FREE VARIABLE IS INVISIBLE TO THE BUILD, AND TO EVERY UNIT TEST
 
 `src/aiNotes.jsx` called `allowanceForTier()` and imported only
