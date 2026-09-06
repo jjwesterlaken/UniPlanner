@@ -3,7 +3,7 @@
   "appName": "University Planner",
   "webDir": "www",
   "ios": {
-    "contentInset": "always"
+    "contentInset": "never"
   },
   "android": {
     "backgroundColor": "#f5f5f4"

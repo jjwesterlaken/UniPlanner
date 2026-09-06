@@ -318,6 +318,53 @@ async function run() {
     assert.match(css, /body[^{}]*\{[^}]*background-color:\s*rgb\(var\(--page\)\)/, "body lost its themed ground");
   });
 
+  await test("THE NATIVE SCROLL VIEW MUST NOT INSET TOO — only one layer may own the safe area", () => {
+    /* THE THIRD APPLICATION, and the one no browser can see.
+       `ios.contentInset` becomes `WKWebView.scrollView
+       .contentInsetAdjustmentBehavior` (CAPBridgeViewController.swift
+       line 302). At `.always` UIScrollView adds the safe-area insets to
+       the scroll content on every edge, regardless of scrollability —
+       so the whole DOCUMENT is pushed down by the top inset while the
+       page ALSO pads itself, and the two stack.
+
+       It is invisible to everything in this repository. Capacitor makes
+       the web view the view controller's ROOT view (`view = webView`),
+       so the document already spans the full screen and
+       `header.getBoundingClientRect().top` reads 0 on the device just
+       as it does in Chromium — the band is OUTSIDE the document.
+       test-viewport-layout.mjs measures the document and is structurally
+       unable to see this; it says so in its header.
+
+       Capacitor's own default is `.never`
+       (CAPInstanceDescriptor.m line 45), which is the correct value for
+       an app that handles its own insets — and this project does, in
+       five places. So the requirement is DERIVED rather than typed: if
+       any src/*.jsx applies a top safe-area inset, the native layer must
+       add none. Remove every env(safe-area-inset-top) from the app and
+       this guard stops demanding anything, which is the right coupling. */
+    const cfg = JSON.parse(fs.readFileSync(path.join(rootDir, "mobile/capacitor.config.json"), "utf8"));
+    const jsxWithTopInset = fs
+      .readdirSync(path.join(rootDir, "src"))
+      .filter((n) => n.endsWith(".jsx"))
+      .filter((n) => /safe-area-inset-top/.test(fs.readFileSync(path.join(rootDir, "src", n), "utf8")));
+
+    assert.ok(
+      jsxWithTopInset.length > 0,
+      "no src/*.jsx applies a top safe-area inset, so this guard is asserting nothing — if the app stopped " +
+        "handling its own insets, the native behaviour is a fresh decision rather than a foregone one"
+    );
+
+    const inset = (cfg.ios || {}).contentInset;
+    assert.equal(
+      inset,
+      "never",
+      `${jsxWithTopInset.join(", ")} pad for env(safe-area-inset-top), so WKWebView's scroll view must add ` +
+        `nothing on top of that — ios.contentInset is "${inset}". Anything but "never" applies the inset a ` +
+        "SECOND time, natively, and produces an empty band the height of the status-bar inset above the header " +
+        "that no test in this repository can observe."
+    );
+  });
+
   await test("THE SHELL COLOURS ARE DERIVED FROM THE LIGHT TOKENS, since they cannot follow the theme", () => {
     /* Three files outside the token system hardcode a ground colour:
        the Capacitor config (the web view's background, which is what

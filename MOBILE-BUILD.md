@@ -445,6 +445,53 @@ phone and a narrow browser window are the same situation and behave
 identically. A 380px desktop window therefore gets the phone bar, which
 is intended.
 
+### The band above the header — the one only a device can measure
+
+**This is here because a green guard reported 0 while the simulator
+showed a band the height of the status-bar inset**, on build 3514031.
+The guards measure the DOCUMENT; iOS insets the document from outside
+it, and no browser can see that.
+
+13d. **Cold-launch the app, scroll to the very top, and look at the
+    strip between the status bar and the teal logo.** It should be the
+    header's own background — teal-adjacent app chrome, not the page
+    ground — with the logo sitting one status-bar-inset below the top
+    of the screen. An empty band of PAGE colour there means the inset
+    is being applied twice.
+
+**The one measurement that says which layer is at fault**, from Safari
+→ Develop → [device] → the app, in the console:
+
+```js
+({
+  headerTop: document.querySelector("header").getBoundingClientRect().top,
+  docTop: document.documentElement.getBoundingClientRect().top,
+  innerH: window.innerHeight,
+  screenH: window.screen.height,
+  envTop: getComputedStyle(document.documentElement).getPropertyValue("--probe-top") ||
+    (() => { const d = document.createElement("div");
+             d.style.cssText = "position:fixed;padding-top:env(safe-area-inset-top,0px)";
+             document.body.appendChild(d);
+             const v = getComputedStyle(d).paddingTop; d.remove(); return v; })(),
+})
+```
+
+**How to read it, and this is the whole point of running it:**
+
+- `headerTop` ≈ **0** with a visible band on screen → the gap is
+  **outside the document**: WKWebView's scroll view is insetting its
+  content. That is `ios.contentInset` in `mobile/capacitor.config.json`,
+  which must be `"never"` — Capacitor's own default, and asserted by
+  test-dark-mode.mjs. Nothing in the web layer can fix it and nothing
+  in the web layer can see it.
+- `headerTop` ≈ **the inset** (59–62) → the gap is **inside the
+  document**: something above the header in the page. That contradicts
+  every width in test-viewport-layout.mjs, so capture it and say so —
+  it would mean the guard runs against a state a cold launch does not
+  reach.
+- `envTop` **0px** → `viewport-fit=cover` is not reaching the page, and
+  every inset in the app is silently doing nothing.
+
 ### Storage and offline
 
 1. **IndexedDB exists at all.** Open an AI lecture note, then check the
