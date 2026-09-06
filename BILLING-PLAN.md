@@ -25,6 +25,14 @@ rest is code.
 
 ## Part 1 — What exists
 
+> **THIS PART IS THE DISCOVERY RECORD, as found on 6 September 2026,
+> BEFORE the Phase 0 decisions.** It still describes `plus` as a live
+> tier because it was one when this was written, and the case it makes
+> against Plus is what got Plus dropped. It is dated rather than
+> rewritten: a survey edited to match the decision it produced stops
+> being evidence for it. Part 2 carries the decisions and what was
+> built; where the two disagree, Part 2 is current.
+
 ### 1. The tier model as it exists today
 
 **In the database (catalogue, post-0016):**
@@ -469,20 +477,63 @@ page cannot say "return to the app".
 
 ## Part 2 — The plan
 
-### Phase 0 — Decisions (Jared; nothing builds until these are written down)
+### Phase 0 — DECIDED (Jared, 6 September 2026)
 
-1. **Prices**, AUD, for `plus` (if it survives), `ai`, `ai_max` × monthly /
-   6 months / annual — with Gate 1's photo measurement run first or
-   consciously deferred.
-2. **Plus**: drop it, or make it "every device" via the Order 5 exemption.
-   If kept, `TRIAL_TIERS` and the device-rule tiers become two lists.
-3. **Reset**: calendar UTC month (recommended, built, matches the copy)
-   or anniversary (a re-keying of `ai_usage`).
-4. **Manual overrides win**, and the reviewer account is one; confirm.
-5. **Terms of Use**: who writes it, reviewed by someone qualified like
-   the other two documents.
-6. **Refund wording**: credits already spent are not clawed back; the
-   allowance drops to the trial at the moment the entitlement ends.
+1. **Plus is dropped.** Two paid tiers. `TIERS` is `free / ai / ai_max`
+   in `credits.ts` and its mirror; the CHECK in 0017 names three; the
+   unknown-tier-means-trial rule stays for legacy rows, and the
+   migration's pre-flight is what proves there are none.
+2. **Prices, AUD**: Study AI 8.99 / 44.99 / 79.99, Study AI Max
+   18.99 / 94.99 / 169.99 (monthly / six-month / annual). Set in
+   `site/pricing.js` with `FLAGS.prices` flipped in the same commit and
+   the PLACEHOLDER markers removed — `test-site.mjs` demands both
+   halves together and now also checks each figure is sayable, that a
+   longer period never costs more than the shorter ones it replaces,
+   and that the tier with more credits costs more at every period.
+3. **Gate 1 consciously deferred**, recorded in COST-MODEL.md §12.8
+   with the exposure it accepts. `PHOTO_BATCH_CREDITS` is still held.
+4. **Reset stays the calendar month, UTC.** The plans copy discloses it
+   (Phase 2).
+5. **Manual overrides win.** `tier_source = 'manual'` is never
+   overwritten; the reviewer account is manual.
+6. **Terms of Use for 1.1.0 is Apple's standard EULA**
+   (`https://www.apple.com/legal/internet-services/itunes/dev/stdeula/`).
+   A UniPlanner Terms document is a **Phase 6 prerequisite**, not a
+   1.1.0 one.
+7. **Refund wording accepted as written** (see the section below).
+
+**Six products, not nine**, since Plus is gone — the identifier table
+below is updated accordingly.
+
+**THE ONE THING PHASE 0 ASKED FOR THAT IS STILL OUTSTANDING:** the live
+count of `profiles` rows holding a tier outside the three. It cannot be
+run from the build container. It is now asked TWICE, by machinery
+rather than by memory — `verify-billing.sql` reports it as a property,
+and 0017 REFUSES to apply while any such row exists, naming the count,
+the values and the statement to run, and changing nothing when it
+refuses. So the assumption is never made; it is either confirmed or the
+migration stops.
+
+### Two [confirm] markers resolved (Jared, from RevenueCat's current docs)
+
+- The **Authorization header** is a dashboard-configured value sent on
+  every delivery — as recorded.
+- **HMAC signing is now available as an opt-in**, and is being enabled:
+  `X-RevenueCat-Webhook-Signature: t=<ts>,v1=<hmac_sha256_hex>` over
+  `<timestamp>.<raw_body>`.
+
+The function verifies **both**, and in that order: constant-time
+comparison of the header, then the HMAC over the **raw request bytes**
+before any JSON parsing. That ordering is not a preference — a parsed
+and re-serialised body is a different string (key order, whitespace,
+number formatting), so verifying against a re-render fails every valid
+delivery. `req.json()` appears nowhere in the function and a test
+asserts it, which is what makes verify-before-parse structural rather
+than a comment. A second test signs a pretty-printed body and requires
+it to be ACCEPTED, so the rule is pinned from both sides.
+
+The re-read design stays regardless, and is also RevenueCat's own
+documented recommendation after any webhook.
 
 ### The permanent names — product identifiers and the entitlement mapping
 
@@ -494,20 +545,19 @@ id lie:
 
 | tier | Apple product id (one auto-renewable product per period, all in ONE subscription group so Apple handles up/down/cross-grades) | Play (one subscription per tier, three base plans) |
 |---|---|---|
-| `plus` | `uniplanner.plus.monthly` · `uniplanner.plus.sixmonth` · `uniplanner.plus.annual` | subscription `uniplanner.plus`, base plans `monthly` / `sixmonth` / `annual` |
-| `ai` | `uniplanner.studyai.monthly` · `.sixmonth` · `.annual` | `uniplanner.studyai` + the same three |
-| `ai_max` | `uniplanner.studyaimax.monthly` · `.sixmonth` · `.annual` | `uniplanner.studyaimax` + the same three |
+| `ai` | `uniplanner.studyai.monthly` · `uniplanner.studyai.sixmonth` · `uniplanner.studyai.annual` | subscription `uniplanner.studyai`, base plans `monthly` / `sixmonth` / `annual` |
+| `ai_max` | `uniplanner.studyaimax.monthly` · `uniplanner.studyaimax.sixmonth` · `uniplanner.studyaimax.annual` | subscription `uniplanner.studyaimax` + the same three |
 
-Subscription group ranking on Apple: `studyaimax` above `studyai` above
-`plus`, so a change between tiers is an upgrade or downgrade in Apple's
+Subscription group ranking on Apple: `studyaimax` above `studyai`, so a
+change between tiers is an upgrade or downgrade in Apple's
 terms (upgrade immediate and prorated, downgrade at the next renewal),
 and a change of period within a tier is a crossgrade. Play's base-plan
 model gives the same shape natively.
 
 **RevenueCat entitlement ids are the tier strings themselves** —
-`plus`, `ai`, `ai_max` — so the webhook's mapping is the identity
+`ai` and `ai_max` — so the webhook's mapping is the identity
 function and there is no table to drift. One offering, `default`, with
-the nine packages. `credits.ts`'s `TIERS` is unchanged; the CHECK
+the six packages. `credits.ts`'s `TIERS` is unchanged; the CHECK
 constraint in 0017 names the same four strings, and a test asserts the
 three lists (TypeScript, SQL, and a `BILLING_ENTITLEMENTS` constant the
 webhook reads) are equal.
@@ -556,6 +606,55 @@ deploy rather than before (the function 400s on a missing column —
 activating); `verify_jwt` off on a function that trusts its body (the
 re-read design is what makes this survivable, and the traced-fake test
 is what keeps the re-read in place).
+
+### Phase 1 — BUILT, 6 September 2026 (server only; nothing a student can see)
+
+What landed, and the three things worth knowing before reading the diff:
+
+- **`supabase/migrations/0017_billing.sql`** — the four columns, three
+  CHECK constraints, `billing_events`, the derived revoke of the stray
+  trigger/truncate/references grants across every public table,
+  `delete_my_account_data()` re-created to empty the new table, and a
+  self-check that raises with a count of 13. Plus a **pre-flight that
+  REFUSES** while any `profiles` row holds a tier outside the three,
+  naming the count, the values and the statement to run, and changing
+  nothing when it refuses. A test plants such a row and asserts the
+  refusal, that nothing changed, and that the remedy the message
+  prescribes — **extracted from the file and run verbatim** — lets the
+  migration through. That test is what caught the first version of the
+  message prescribing `set tier_source = 'manual'`, a column 0017 has
+  not added yet, so following the instruction on a live pre-0017
+  database would have errored.
+- **`supabase/functions/billing-webhook/`** and
+  **`_shared/entitlement.ts`** — header, then HMAC over raw bytes, then
+  parse; re-read the subscriber, then apply, then record. 33 tests,
+  every guard mutation-checked.
+- **`supabase/checks/verify-billing.sql`** — 16 properties, run against
+  a pre-0017 database and watched to FAIL (13 FAIL, 3 PASS) before
+  being trusted. Its first version ERRORED there instead of reporting,
+  because `where tier_source = 'signup'` does not PARSE without the
+  column; it reads the column by name at runtime now. That is the
+  `has_function_privilege` trap from `verify-account-deletion.sql`,
+  one file over, found the same way — by running the guard against the
+  broken state first.
+
+**The deploy workflow is now DERIVED** from `supabase/functions/*/index.ts`
+rather than enumerating two names, with one branch: `billing-webhook`
+alone is deployed `--no-verify-jwt`. A wiring test asserts both halves —
+that the flag is there, and that it appears exactly once, so it cannot
+leak onto the two functions that spend money.
+
+**Also armed, for a change that has not happened yet:** a test in
+`test-legal.mjs` fires the day `mobile/package.json` gains the purchase
+SDK, because three sentences in the privacy policy become false at that
+moment ("the AI features are the only part that sends anything
+overseas", "every request is made from our server rather than from your
+device", "the only server the app itself contacts is our own"). Phase 1
+does not falsify them — no products, no client, no traffic — so they
+stay, and the tripwire is keyed on the dependency rather than on
+somebody remembering. It asserts its own precondition too: if none of
+the three sentences is in the document any more, it fails rather than
+passing over nothing.
 
 ### Phase 2 — Client: plans on the Account tab, restore, and the documents
 

@@ -1,13 +1,13 @@
 name: Deploy Supabase function
 
-# Deploys the ai-notes Edge Function without needing a terminal.
-# Run it from the Actions tab whenever the function changes.
+# Deploys every Edge Function in supabase/functions/ without needing a
+# terminal. Run it from the Actions tab whenever a function changes.
 on:
   workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy ai-notes
+    name: Deploy every Edge Function
     runs-on: ubuntu-latest
     steps:
       - name: Get the code
@@ -18,15 +18,30 @@ jobs:
         with:
           version: latest
 
-      - name: Check the functions exist
+      # DERIVED FROM THE DIRECTORY, NOT ENUMERATED. This workflow named
+      # only ai-notes for as long as ai-text existed, so every ai-text
+      # change reached production by a hand-deploy nobody's checklist
+      # mentioned. Naming both fixed that instance and left the shape:
+      # the repo grows a third function, the workflow does not, and
+      # nothing goes red. billing-webhook is that third function, and
+      # it is the one whose absence is silent — a student pays, no
+      # event is ever delivered anywhere, and their tier never changes.
+      #
+      # A function is a directory under supabase/functions/ WITH AN
+      # index.ts. _shared has no index.ts and is not a function; it is
+      # bundled into the ones that import it.
+      - name: Work out which functions exist
+        id: functions
         run: |
-          for fn in ai-notes ai-text; do
-            if [ ! -d "supabase/functions/$fn" ]; then
-              echo "ERROR: supabase/functions/$fn not found."
-              exit 1
-            fi
-          done
-          echo "Found these files:"
+          FNS=$(find supabase/functions -mindepth 2 -maxdepth 2 -name index.ts \
+                  | sed 's|supabase/functions/||; s|/index.ts||' | sort | tr '\n' ' ')
+          if [ -z "$FNS" ]; then
+            echo "ERROR: no Edge Functions found under supabase/functions/*/index.ts."
+            echo "That is either a broken checkout or a moved layout; either way, deploying nothing silently is the failure this step exists to prevent."
+            exit 1
+          fi
+          echo "functions=$FNS" >> "$GITHUB_OUTPUT"
+          echo "Deploying: $FNS"
           find supabase/functions -type f | sort
 
       # THE PRECONDITION, made unreachable rather than documented.
@@ -65,19 +80,41 @@ jobs:
           fi
           echo "No unmeasured billing inputs. OK to deploy."
 
-      # BOTH functions, deliberately enumerated. This workflow deployed
-      # only ai-notes for as long as ai-text existed, so every ai-text
-      # change needed a by-hand deploy nobody's checklist mentioned --
-      # the photographed-pages PR is what surfaced it, one step short of
-      # shipping a server half with no path to the server.
+      # ONE FUNCTION IS DEPLOYED DIFFERENTLY, and this is the whole of
+      # why the loop has a branch in it.
+      #
+      # billing-webhook is called by RevenueCat, which cannot mint a
+      # Supabase JWT, so the platform's verify_jwt must be OFF for that
+      # function and ON for the other two. It authenticates itself
+      # instead — a shared header compared in constant time, and an
+      # HMAC over the raw request bytes — and, because even both of
+      # those could in principle be defeated, it re-reads the
+      # subscriber from RevenueCat before writing anything, so the
+      # worst a forged delivery achieves is a wasted API call.
+      #
+      # DEPLOYED WITH verify_jwt ON, EVERY DELIVERY 401s. Nothing
+      # errors on our side, nothing appears in the logs beyond the
+      # platform's own rejection, and the symptom is "subscriptions
+      # never activate" — a paid feature that silently never arrives.
+      # A wiring test in test-ai-notes.mjs asserts this flag stays.
       - name: Deploy
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
-          supabase functions deploy ai-notes \
-            --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
-          supabase functions deploy ai-text \
-            --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+          for fn in ${{ steps.functions.outputs.functions }}; do
+            case "$fn" in
+              billing-webhook)
+                echo "--- $fn (no JWT verification: the caller is RevenueCat, not a signed-in student)"
+                supabase functions deploy "$fn" --no-verify-jwt \
+                  --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+                ;;
+              *)
+                echo "--- $fn"
+                supabase functions deploy "$fn" \
+                  --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+                ;;
+            esac
+          done
 
       - name: Done
         run: |

@@ -297,7 +297,14 @@ async function main() {
       }
     }
     assert.equal(cfg.creditsForTier("free"), cfg.TRIAL_CREDITS, "the free allowance is a decided number, not a default");
-    assert.equal(cfg.creditsForTier("plus"), cfg.TRIAL_CREDITS, "Plus buys sync, not AI — it shares the trial");
+    /* PLUS IS GONE (Phase 0), and this is now the LEGACY-ROW case
+       rather than a tier: allowanceForTier's unknown-tier rule is what
+       a profiles row written before 0017 falls through to, and it must
+       keep landing on the trial. Defaulting the other way costs 3,000
+       credits a month per row nobody noticed. */
+    assert.ok(!cfg.TIERS.includes("plus"), "plus is still a tier — Phase 0 dropped it");
+    assert.equal(cfg.creditsForTier("plus"), cfg.TRIAL_CREDITS, "a legacy 'plus' row must read as the trial, not as a paid allowance");
+    assert.equal(cfg.allowanceForTier("plus").perMonth, false, "a legacy row must use the LIFETIME counter, or its allowance refills every month");
     assert.ok(
       cfg.allowanceForTier("ai_max").credits > cfg.allowanceForTier("ai").credits,
       "Max is not more than Study AI, which is the only thing it is"

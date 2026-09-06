@@ -284,7 +284,67 @@ test("the pricing page cannot ship a made-up price", () => {
     }
   }
   assert.equal(priceLabel(TIERS.find((t) => t.id === "free"), "monthly"), "Free");
-  assert.equal(FLAGS.prices, false, "prices are flagged live while tiers still have unset figures");
+  /* CONDITIONAL, because that is what this line always meant — its own
+     message says "while tiers still have unset figures" and the code
+     said it unconditionally. Written when every paid figure was null,
+     it fired the moment Phase 0 set them, which is the one change it
+     was waiting for. The combination it was reaching for is asserted
+     properly in the test below, in BOTH directions; this is the local
+     half of it. Not deleted, because a half-finished pricing change —
+     some figures set, flag flipped — is still exactly what must not
+     ship. */
+  const anyUnset = TIERS.some((t) => PERIODS.some((p) => t.prices[p.id] === null));
+  if (anyUnset) {
+    assert.equal(FLAGS.prices, false, "prices are flagged live while tiers still have unset figures");
+  }
+});
+
+test("every price the page can show is a real figure in the stated currency", () => {
+  /* THE OTHER HALF OF "cannot ship a made-up price", and it only
+     becomes checkable once figures exist: a number that is set must
+     also be sayable. A negative, a zero on a paid tier, or something
+     with more than two decimal places is a typo that renders as an
+     offer — and on Apple's and Google's side a price is entered
+     separately in each dashboard, so this is the only place the six
+     figures we PUBLISH can be checked against each other at all. */
+  assert.equal(CURRENCY, "AUD", "the site quotes one currency and names it");
+  const paid = TIERS.filter((t) => t.id !== "free");
+  assert.ok(paid.length >= 2, `expected the paid tiers, found ${paid.length}`);
+  for (const tier of paid) {
+    for (const p of PERIODS) {
+      const v = tier.prices[p.id];
+      if (v === null) continue;
+      assert.ok(v > 0, `${tier.name}/${p.id} is not a positive price`);
+      assert.equal(Number(v.toFixed(2)), v, `${tier.name}/${p.id} has sub-cent precision, which no store accepts`);
+      assert.match(priceLabel(tier, p.id), /^\$\d+\.\d{2} AUD$/, `${tier.name}/${p.id} does not render as a price`);
+    }
+    /* A LONGER PERIOD MUST NOT COST MORE THAN THE SHORTER ONES IT
+       REPLACES. Six months at more than six monthlies is not a
+       discount, it is a mistake nobody notices until a student does
+       the arithmetic on a pricing page — and the whole reason the
+       six-month row exists is that it maps to a semester. */
+    const m = tier.prices.monthly;
+    if (m !== null) {
+      if (tier.prices.sixMonth !== null) {
+        assert.ok(tier.prices.sixMonth < m * 6, `${tier.name}: six months costs more than six monthly payments`);
+      }
+      if (tier.prices.annual !== null) {
+        assert.ok(tier.prices.annual < m * 12, `${tier.name}: a year costs more than twelve monthly payments`);
+      }
+    }
+  }
+  /* And the ranking: the tier with more credits costs more, at every
+     period. Two tiers where the cheaper one buys more is the kind of
+     thing that survives a review of each number on its own. */
+  const byCredits = [...paid].sort((a, b) => a.credits - b.credits);
+  for (let i = 1; i < byCredits.length; i++) {
+    for (const p of PERIODS) {
+      const lo = byCredits[i - 1].prices[p.id];
+      const hi = byCredits[i].prices[p.id];
+      if (lo === null || hi === null) continue;
+      assert.ok(hi > lo, `${byCredits[i].name} buys more credits than ${byCredits[i - 1].name} but costs no more at ${p.id}`);
+    }
+  }
 });
 
 test("the prices flag and the numbers agree — one cannot be turned on without the other", () => {

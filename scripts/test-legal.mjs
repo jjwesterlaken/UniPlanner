@@ -364,6 +364,17 @@ async function run() {
       privacy: /error report never\s+contains what you have written/i,
       deletion: /Error reports linked to your account/i,
     },
+    /* A subscription record is OURS, about a transaction — not the
+       student's content, and not something they can restore. Both
+       documents have to say the two halves that a reader actually
+       wants: what it holds, and what it does NOT (a receipt, a card
+       number). The second half is the one that would quietly stop
+       being true if this ever grew a price or a token column, which is
+       why it is asserted rather than left to the table's shape. */
+    billing_events: {
+      privacy: /record of subscription events/i,
+      deletion: /record of subscription events/i,
+    },
   };
 
   await test("every table in the schema is accounted for in both published documents", () => {
@@ -672,6 +683,67 @@ async function run() {
        full-database credential does not belong there. */
     assert.doesNotMatch(branch, /SUPABASE_SERVICE_ROLE_KEY/, "the sweep authenticates with the service role key");
     assert.doesNotMatch(branch, /console\.log\([^)]*[sS]ecret/, "the secret must never be logged");
+  });
+
+  await test("THE DAY THE PURCHASE SDK SHIPS, the policy must already say so", () => {
+    /* A TRIPWIRE FOR A CHANGE THAT HAS NOT HAPPENED YET, armed now
+       because now is when it is free.
+
+       Three sentences in the privacy policy are true today and become
+       FALSE the moment the RevenueCat SDK is in the app: "The AI
+       features are the ONLY part that sends anything overseas", "every
+       request is made from our server rather than from your device",
+       and "the only server the app itself contacts is our own". A
+       purchase goes from the DEVICE to Apple or Google, and the
+       receipt plus the account id to RevenueCat in the United States.
+
+       Phase 1 (the server half) does not falsify them: no products
+       exist, no client calls anything, and the webhook has no traffic.
+       So the sentences stay, and this asserts the CONDITION rather
+       than the wording — the day mobile/package.json gains the plugin,
+       the policy has to have caught up or this goes red naming the
+       sentence. That is the same move as the allowance read preceding
+       the provider call: make the bad interleaving unreachable rather
+       than documented.
+
+       It is deliberately keyed on the DEPENDENCY and not on a date or
+       a version, because the dependency is the thing that makes the
+       claim false. */
+    const mobilePkg = JSON.parse(fs.readFileSync(path.join(rootDir, "mobile/package.json"), "utf8"));
+    const deps = { ...mobilePkg.dependencies, ...mobilePkg.devDependencies };
+    const hasPurchases = Object.keys(deps).some((d) => /revenuecat|purchases|in-?app-?purchase/i.test(d));
+
+    const policy = fs.readFileSync(path.join(rootDir, "public/privacy.html"), "utf8").replace(/\s+/g, " ");
+    /* The three sentences, matched loosely enough to survive rewording
+       and specifically enough to be the sentences in question. */
+    const exclusiveClaims = [
+      { re: /only part that sends anything overseas/i, what: '"the AI features are the only part that sends anything overseas"' },
+      { re: /made from our server rather than from your device/i, what: '"every request is made from our server rather than from your device"' },
+      { re: /only server the app itself contacts is our own/i, what: '"the only server the app itself contacts is our own"' },
+    ];
+    const standing = exclusiveClaims.filter((c) => c.re.test(policy));
+
+    if (!hasPurchases) {
+      /* The precondition of the tripwire itself: if none of the three
+         sentences is in the document any more, this test proves
+         nothing and must say so rather than passing quietly. */
+      assert.ok(
+        standing.length > 0,
+        "none of the three exclusivity sentences is in the policy any more, so this tripwire is guarding nothing — re-point it at whatever replaced them, or delete it"
+      );
+      return;
+    }
+
+    assert.deepEqual(
+      standing.map((c) => c.what),
+      [],
+      "the purchase SDK is now a dependency, so these sentences in public/privacy.html are false and must be rewritten before this ships"
+    );
+    assert.match(
+      policy,
+      /RevenueCat/i,
+      "the purchase SDK is a dependency but the policy does not name RevenueCat in its list of who else sees your data"
+    );
   });
 
   await test("npm test still runs the legal tests", () => {

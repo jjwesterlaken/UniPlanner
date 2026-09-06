@@ -100,16 +100,28 @@ export const creditsFor = (usd: number) => Math.max(1, Math.round(usd / USD_PER_
 /* THE TIERS, and the only place these numbers are written.
 
      free        60 credits, ONCE EVER
-     plus        60 credits, ONCE EVER   (Plus buys sync, not AI)
      ai         900 credits per month     (Study AI)
      ai_max   3,000 credits per month     (Study AI Max)
 
-   TWO SHAPES, NOT FOUR NUMBERS, and the distinction is the design.
+   PLUS WAS DROPPED BEFORE IT WAS EVER SOLD (Jared, Phase 0), and the
+   reason is worth keeping because it is a product trap rather than a
+   technical one. Plus was to buy SYNC, at the trial's AI allowance.
+   But sync is gated on a SESSION and never on a tier — `grep tier
+   src/sync.js` finds nothing that acts — so every signed-in account
+   already had it, and the 1.0.0 store listing, already submitted,
+   promises it: "Make an account and it syncs across your devices."
+   Selling it would have meant either charging for what the listing
+   gives away, or taking a promised feature off every existing
+   account. Two paid tiers, six store products, one fewer thing to
+   explain on a pricing page. Migration 0017 carries the constraint
+   and the pre-flight that proved no account was holding it.
+
+   TWO SHAPES, NOT THREE NUMBERS, and the distinction is the design.
    A per-month free allowance is the one cost line that grows without
    bound as signups grow: ten thousand signed-up-and-forgot accounts is
    ten thousand allowances a month, forever, for people who are not
    using the app. A lifetime trial costs the same ten thousand accounts
-   exactly once. That is why `trialTier` exists rather than a fourth
+   exactly once. That is why the shape exists rather than another
    entry in a table of monthly numbers.
 
    WHAT A TRIAL IS FOR, and it decides the size: 60 credits has to be
@@ -120,14 +132,14 @@ export const creditsFor = (usd: number) => Math.max(1, Math.round(usd / USD_PER_
    free account cannot finish one, which is a real argument for the
    model move and is recorded in COST-MODEL.md 12.6 rather than fixed
    by making the trial bigger. */
-export const TIERS = ["free", "plus", "ai", "ai_max"] as const;
+export const TIERS = ["free", "ai", "ai_max"] as const;
 export type Tier = (typeof TIERS)[number];
 
 /** Tiers whose allowance is once-ever rather than per month. */
-export const TRIAL_TIERS: readonly string[] = ["free", "plus"];
+export const TRIAL_TIERS: readonly string[] = ["free"];
 export const isTrialTier = (tier: string) => TRIAL_TIERS.includes(tier);
 
-/** The lifetime trial, for `free` and `plus`. */
+/** The lifetime trial, for `free` — the only tier that is not bought. */
 export const TRIAL_CREDITS = 60;
 
 const MONTHLY: Record<string, number> = {

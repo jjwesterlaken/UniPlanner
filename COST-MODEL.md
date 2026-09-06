@@ -1079,3 +1079,36 @@ the three summaries side by side.
 **Do not re-weight photos before this runs.** Setting 33 credits against a model we
 are about to leave tells students a reading costs a third of their month when it is
 about to cost a fortieth, and a visible wrong number is worse than an invisible one.
+
+### 12.8 GATE 1 WAS CONSCIOUSLY DEFERRED, and the prices shipped anyway
+
+Recorded because "the prices are live" must never be mistaken for "the measurement
+was taken".
+
+Section 12.7 says the photo-token ratio must be measured before the photo path is
+re-weighted, and it also gated the marketing site's prices: a price per credit set
+before that ratio is known is set against a cost known to be wrong. On **6 September
+2026** Jared decided to ship prices without running it — AUD 8.99 / 44.99 / 79.99
+for Study AI and 18.99 / 94.99 / 169.99 for Study AI Max — and `FLAGS.prices` went
+true in the same commit that set the figures.
+
+**What that does and does not license.** It licenses publishing a price. It does
+**not** license moving `PHOTO_BATCH_CREDITS`, which is still held at
+`TASK_CREDITS.summarise` and still pinned by a test in three places, for the reason
+12.6 gives: re-weighting against a model we are about to leave tells a student a
+reading costs a third of their month when it is about to cost a fortieth, and a
+visible wrong number is worse than an invisible one. The measurement in 12.7 and
+the model move are unchanged and still owed.
+
+**The exposure the deferral accepts, stated so it is a decision and not a
+surprise.** A student on Study AI who photographs readings heavily can, at the held
+weight, spend 900 credits on roughly six 16-page readings. If the measurement lands
+where 12.6 predicts, that is generous by a factor of five and costs us nothing. If
+it lands where the unresolved community report suggests, the photo path is far more
+expensive than the price supports — and the remedy then is the model move, not a
+price rise, because the price is now published and a published price is the one
+number this project has never been able to take back.
+
+**The trigger to run it is unchanged:** before the photo path moves model, and
+before any re-weighting. `scripts/measure-photo-gates.mjs`, three calls, an OpenAI
+key and four photographed pages.

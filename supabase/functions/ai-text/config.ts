@@ -264,7 +264,7 @@ export const PHOTO_BATCH_CREDITS = TASK_CREDITS.summarise;
    Nothing in the four screens branches on tier, so this array and the
    limits below are the whole decision. */
 /* EVERY TIER GETS THE TEXT FEATURES. It was ["ai", "free"] when there
-   were two; the tier table has four and none of them is excluded, so
+   were two; the tier table has three and none of them is excluded, so
    this is now the same list as TIERS and exists only because the
    endpoint's validation reads a name it owns.
 
@@ -273,7 +273,7 @@ export const PHOTO_BATCH_CREDITS = TASK_CREDITS.summarise;
    per free account, and it is the best advertisement for the paid tier.
    Gating the cheapest features means nobody ever experiences the thing
    they would be buying. */
-export const TEXT_TIERS = ["free", "plus", "ai", "ai_max"];
+export const TEXT_TIERS = ["free", "ai", "ai_max"];
 
 /* THE ALLOWANCE MOVED TO _shared/credits.ts, because it is no longer a
    property of the text features: audio and text draw on the same pool.
