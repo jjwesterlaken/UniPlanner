@@ -160,3 +160,35 @@ body {
   color: rgb(var(--tone-400));
   pointer-events: none;
 }
+
+/* A TEXT-ENTRY CONTROL ON A TOUCH DEVICE IS 16px, and nothing on it
+   may say otherwise.
+
+   iOS zooms the page when a control it is about to edit computes
+   below 16px — WKContentView scales so the field's text reads at 16,
+   then pans to keep the caret on screen. `inputCls` is text-sm (14px)
+   and so was the note editor's contentEditable, so every field in the
+   app made an iPhone zoom x1.143 (440 / 385, measured on build
+   3514163) and pan 27px sideways, with the left edge cut off. The
+   `maximum-scale=1` fix is refused on purpose: it disables pinch-zoom
+   for everyone to hide a symptom, and Apple has rejected apps for it.
+
+   So the control itself computes to 16px on any COARSE primary
+   pointer — iPhone, Android, iPad; never a desktop, whose input sizes
+   Grace has not ruled on. It is `!important` because it has to beat
+   every text-* utility and any inline style: a floor that a single
+   class can step under is not a floor, and the previous guard passed
+   on exactly that. A control that should be LARGER than 16 on a phone
+   is a change to this rule, not to the control — that is the point.
+   The element list is what WebKit zooms for; checkboxes, radios and
+   file inputs never take a caret. test-focus-zoom.mjs measures the
+   computed size of every reachable control, FOCUSED, on the built
+   page — in both pointer contexts, so the scoping is proved too. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]):not([type="color"]),
+  textarea,
+  select,
+  [contenteditable]:not([contenteditable="false"]) {
+    font-size: 16px !important;
+  }
+}

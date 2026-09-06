@@ -184,6 +184,19 @@ jobs:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-paper-ink.mjs
 
+      - name: No text-entry control makes iOS zoom on focus
+        # iOS zooms the page when a focused control computes below
+        # 16px, then pans to keep the caret visible — the sideways
+        # pan with the left edge cut off on build 3514163. Every
+        # reachable control is FOCUSED on the built page with a touch
+        # pointer and its computed size read; the same walk with a
+        # fine pointer proves the floor is scoped to touch. Chromium
+        # cannot show the zoom itself — the suite's header says what
+        # to read in Safari Web Inspector for that.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-focus-zoom.mjs
+
       - name: Run the three journeys
         # Against the live Supabase project with a dedicated test account
         # (see e2e/helpers.mjs for why its data cannot accumulate).
