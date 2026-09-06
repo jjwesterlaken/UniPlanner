@@ -347,6 +347,65 @@ test("every price the page can show is a real figure in the stated currency", ()
   }
 });
 
+test("no tier sells a device limit while nothing enforces one — derived from the app, not from the copy", () => {
+  /* JARED'S RULE: we do not sell limits we do not enforce, IN EITHER
+     DIRECTION. Plus was dropped for charging for something every
+     signed-in account already had. The Free tier's "on one device"
+     was the same error mirrored — claiming a restriction that does
+     not exist, which makes the paid tiers look like they lift
+     something they do not.
+
+     DERIVED, so it relaxes on its own. Order 5 computes
+     `deviceStanding` in fetchUsage and returns it as `standing`; the
+     ACTING half — shouldSignOut / shouldClaim — is called by no
+     `.jsx`. While that is true, no tier's copy may mention a device
+     count. Wire Order 5 and this guard stops applying without anyone
+     having to remember it exists, which is the difference between a
+     guard people satisfy and one they suppress.
+
+     The alternative was a comment, and a comment is what let the
+     bullet sit there through a pricing review. */
+  const srcDir = path.join(rootDir, "src");
+  const jsx = fs
+    .readdirSync(srcDir)
+    .filter((f) => f.endsWith(".jsx"))
+    .map((f) => fs.readFileSync(path.join(srcDir, f), "utf8"))
+    // Comments first — this project has tripped that guard six times.
+    .map((t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 "))
+    .join("\n");
+  assert.ok(jsx.length > 5000, "the jsx sweep read almost nothing — it would report 'unenforced' whatever the truth is");
+
+  /* Named from deviceIdentity.js's exports rather than guessed, so a
+     rename moves this with it. */
+  const identity = fs.readFileSync(path.join(srcDir, "deviceIdentity.js"), "utf8");
+  const actors = [...identity.matchAll(/export const (shouldSignOut|shouldClaim)\b/g)].map((m) => m[1]);
+  /* assert.ok rather than assert.equal, and the shape matters: the
+     vacuous-guards detector recognises `assert.ok(...length...)` and
+     not `assert.equal(x.length, 2)`, so writing it the other way put
+     this file on the unguarded list. It caught a real omission in
+     form even though the count was asserted — worth satisfying in the
+     shape the detector can see rather than raising its ceiling. */
+  assert.ok(actors.length === 2, `deviceIdentity.js no longer exports the two acting helpers (found ${actors.join(", ") || "none"}) — re-point this guard`);
+
+  const enforced = actors.some((fn) => new RegExp(`\\b${fn}\\s*\\(`).test(jsx));
+
+  const deviceClaims = TIERS.flatMap((tier) =>
+    [tier.tagline, ...tier.features]
+      .filter((line) => /\b(one|1|single|every|all|unlimited|multiple)\s+devices?\b/i.test(line))
+      .map((line) => `${tier.name}: "${line}"`)
+  );
+
+  /* Order 5 wired: the copy may say what the app enforces. This branch
+     is why the guard does not have to be deleted to let that through. */
+  if (enforced) return;
+
+  assert.deepEqual(
+    deviceClaims,
+    [],
+    "the site sells a device limit while no screen acts on deviceStanding — Order 5's enforcing half is not wired, so this is a promise about behaviour the app does not have"
+  );
+});
+
 test("the prices flag and the numbers agree — one cannot be turned on without the other", () => {
   /* THE COMBINATION, not each alone. Flipping FLAGS.prices with figures
      still unset renders "—" where a price belongs, on the page where

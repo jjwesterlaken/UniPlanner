@@ -56,26 +56,35 @@ export const PERIODS = [
  * work; the null-renders-as-placeholder path in `priceLabel` is kept
  * for the next tier whose figure is undecided.
  *
- * A NOTE ON THE FEATURE BULLETS, because one of them nearly went
- * wrong here: Free says "on one device", which is Order 5's rule and
- * Order 5's ENFORCING HALF IS NOT WIRED — `deviceStanding` is
- * computed and no screen reads it. So that bullet describes an
- * intention, not a behaviour, and the paid tiers must NOT be given a
- * matching "on every device" bullet until it is. Selling a
- * restriction nobody enforces is the mistake that killed Plus, one
- * tier over.
+ * NO TIER CLAIMS A DEVICE LIMIT, and the rule is Jared's: we do not
+ * sell limits we do not enforce, IN EITHER DIRECTION. Free used to
+ * say "on one device" twice — in the tagline and in a bullet — which
+ * is Order 5's rule, and Order 5's ENFORCING HALF IS NOT WIRED:
+ * `deviceStanding` is computed in `fetchUsage` and no screen reads
+ * it. So both were describing an intention as a behaviour.
+ *
+ * The symmetry is the part worth keeping. Plus was dropped for
+ * charging for something every account already had; a "one device"
+ * line on Free is the same error mirrored — taking credit for a
+ * restriction that does not exist, which makes the paid tiers look
+ * like they lift something. Both halves are a page that does not
+ * describe the product.
+ *
+ * A test derives this rather than trusting the comment: while no
+ * `.jsx` acts on `deviceStanding`, no tier's copy may mention a
+ * device count. Wire Order 5 and the guard relaxes on its own.
  */
 export const TIERS = [
   {
     id: "free",
     name: "Free",
-    tagline: "Everything on one device, and enough AI to see what it does.",
+    tagline: "The whole planner, and enough AI to see what it does.",
     credits: 60,
     perMonth: false,
     prices: { monthly: 0, sixMonth: 0, annual: 0 },
     features: [
       "The whole planner: courses, assignments, readings, grades, study cards",
-      "Works offline, on one device",
+      "Works offline",
       "60 AI credits to spend once — about an hour of recorded lecture",
     ],
   },

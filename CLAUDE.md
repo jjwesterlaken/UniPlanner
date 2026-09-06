@@ -1571,11 +1571,24 @@ promises it in as many words: *"Make an account and it syncs across
 your devices."* Selling it meant charging for what the listing gives
 away, or taking a promised feature off every existing account. **The
 check worth repeating on any new tier: what does this tier GATE, and is
-that gate enforced anywhere?** The same question is now written beside
-the Free tier's "on one device" bullet in `site/pricing.js`, because
-that one describes Order 5's rule and Order 5's enforcing half is not
-wired — so the paid tiers must NOT be given a matching "every device"
-bullet until it is.
+that gate enforced anywhere?**
+
+**AND THE RULE IS SYMMETRIC — Jared, 6 September 2026: we do not sell
+limits we do not enforce, IN EITHER DIRECTION.** The Free tier said "on
+one device" twice, in its tagline and a bullet, and that is the same
+error mirrored: taking credit for a RESTRICTION that does not exist,
+which quietly makes the paid tiers look like they lift something. Both
+lines are gone. Order 5 computes `deviceStanding` and its acting half
+(`shouldSignOut` / `shouldClaim`) is called by no `.jsx`, so the claim
+was about an intention.
+
+**The guard is DERIVED and RELAXES rather than being suppressed**: while
+no `.jsx` calls either acting helper, no tier's copy may mention a
+device count; wire Order 5 and it stops applying on its own. That branch
+is the point — a guard that must be deleted to let an intended change
+through is one people learn to delete. It asserts its own precondition
+too (the jsx sweep read something) and names the helpers out of
+`deviceIdentity.js` rather than guessing them.
 
 **THE PAYLOAD IS A TRIGGER. THE SUBSCRIBER RECORD IS THE TRUTH.** The
 webhook reads nothing about entitlements out of the delivered event; it
