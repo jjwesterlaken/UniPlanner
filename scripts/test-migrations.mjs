@@ -319,8 +319,15 @@ async function run() {
       if (file.startsWith("0017_")) continue;
       /* And 0018, which WIDENS 0017's table: with 0017 excluded there
          is no billing_events to add a column to. It is skipped because
-         its dependency is skipped, not for a reason of its own. */
+         its dependency is skipped, not for a reason of its own.
+
+         0020 for the same reason one step further out: it re-creates
+         delete_my_account_data() carrying 0017's `delete from
+         public.billing_events`, which raises at CALL time on a database
+         where that table was never created. A production database has
+         0017; this fixture deliberately does not. */
       if (file.startsWith("0018_")) continue;
+      if (file.startsWith("0020_")) continue;
       applyMigration(db, file);
     }
     return db;
@@ -357,6 +364,18 @@ async function run() {
        insert into public.client_errors (user_id, message) values
          (${USER}, 'mine'), (${OTHER}, 'theirs');`
     );
+    /* Seeded only where it exists: this helper runs against fixtures
+       built from a PREFIX of the folder, so a table from a later
+       migration is legitimately absent. The derived loop below is what
+       makes that safe — a table that exists and is not seeded still
+       fails, so this cannot become a way to skip one quietly. */
+    if (one(db, `select to_regclass('public.entitlements') is not null;`) === "t") {
+      psqlOrThrow(
+        db,
+        `insert into public.entitlements (user_id, source, tier) values
+           (${USER}, 'stripe', 'ai'), (${OTHER}, 'revenuecat', 'ai_max');`
+      );
+    }
     /* The seed must cover everything the derivation finds, or the
        assertions below pass over whatever it missed. */
     for (const table of userTablesOf(db)) {
@@ -709,7 +728,10 @@ async function run() {
       `insert into public.client_errors (user_id, message) values
          (${USER}, 'boom on the deleted account'),
          (${OTHER}, 'boom on the survivor'),
-         (null, 'boom from nobody');`
+         (null, 'boom from nobody');
+       insert into public.entitlements (user_id, source, tier) values
+         (${USER}, 'stripe', 'ai'),
+         (${OTHER}, 'revenuecat', 'ai_max');`
     );
 
     const owned = one(
@@ -1234,6 +1256,7 @@ async function run() {
     "ai_usage.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
     "profiles.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
     "semester_archives.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
+    "entitlements.user_id": "the auth user id, taken from the subscriber record the provider returned or from a verified JWT — never from a request body, and never written by any client: the table has no grants to anon or authenticated at all",
     /* PROVIDER-minted, which is a third category and the reason the
        column is `text`. RevenueCat's event ids are UUID-shaped today
        and nobody promised us that; 0009 is what a foreign id crossing
@@ -1252,6 +1275,14 @@ async function run() {
        the whole point of the column is to hold the id we could NOT
        match. */
     "billing_events.app_user_id": "the id RevenueCat's client set, copied verbatim out of an authenticated delivery; typed text and unconstrained precisely because no id shape may be rejected here",
+    /* PROVIDER-MINTED, like billing_events.id, and `text` for the same
+       reason: `cus_…` is Stripe's format and not ours to assume. No
+       client ever writes it — billing-checkout creates the customer
+       under the service role for the uid in a VERIFIED JWT, and
+       billing-portal only ever reads it back scoped to that uid. It is
+       UNIQUE (0019) because a Portal session created for a customer id
+       grants access to that customer's billing. */
+    "profiles.stripe_customer_id": "minted by Stripe and stored by billing-checkout under the service role for the uid in a verified JWT; typed text because a provider's id format is not ours to assume, and unique so two accounts cannot share one customer",
   };
 
   await test("every id column is either fed by a named client generator or excused with a reason", () => {
@@ -1647,12 +1678,24 @@ async function run() {
      looks like the moment before the billing work is applied. 0018 goes
      with 0017 because it widens 0017's table — there is nothing for it
      to alter without it. */
+  /* THE DATABASE AS IT STOOD BEFORE BILLING — which means everything
+     numbered BELOW 0017, derived from the number rather than by naming
+     the billing migrations.
+
+     It used to enumerate ("not 0017 and not 0018") and that drifted the
+     moment 0019 and 0020 landed: it built a database with 0020's
+     entitlements table and no 0017, which is a state that has never
+     existed anywhere. Re-applying 0017 onto it then failed 0017's OWN
+     self-check, correctly — 0017 restates delete_my_account_data() and
+     that restatement predates entitlements, so applying 0017 after 0020
+     would really drop a table from the deletion function. 0017 refusing
+     is the guard working; the fixture asking for it was the bug. */
   const preBillingDb = () => {
     const db = freshDb();
-    const billing = (f) => f.startsWith("0017") || f.startsWith("0018");
-    for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql") && !billing(f)).sort()) {
-      applyMigration(db, file);
-    }
+    const afterBilling = (f) => Number(f.slice(0, 4)) >= 17;
+    const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql") && !afterBilling(f)).sort();
+    assert.ok(files.length >= 16, `preBillingDb found only ${files.length} migrations — the number filter is reading the wrong thing`);
+    for (const file of files) applyMigration(db, file);
     return db;
   };
 
@@ -1801,8 +1844,69 @@ async function run() {
     assert.ok(tables >= 6, `only ${tables} public tables — the sweep proved nothing`);
   });
 
-  await test("0017 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+  await test("RE-APPLYING 0017 AFTER 0020 REFUSES rather than silently dropping a table from the deletion function", () => {
+    /* Found by walking into it. 0017, 0020 and four migrations before
+       them each RESTATE delete_my_account_data()'s body, so a migration
+       re-applied out of order does not merge — it replaces, with a body
+       written before some table existed. Paste 0017 into the SQL editor
+       on a database that already has 0020 and `entitlements` silently
+       stops being deleted when a student deletes their account.
+
+       It does not, because 0017's self-check derives the table list
+       FROM THE CATALOGUE and raises. That refusal is a property worth a
+       test of its own: it is the only thing standing between a
+       plausible support action ("re-run the billing migration") and a
+       privacy regression nobody would see.
+
+       Pinned from both sides — the refusal happens AND the function is
+       left as it was, because a migration that half-applied and then
+       refused would be worse than one that did nothing. */
     const db = withArchives();
+    const before = one(db, `select prosrc from pg_proc where proname = 'delete_my_account_data';`);
+    assert.ok(before.includes("public.entitlements"), "0020 did not install a deletion function that names entitlements, so this proves nothing");
+
+    const r = psql(db, fs.readFileSync(path.join(migrationsDir, "0017_billing.sql"), "utf8"));
+    assert.ok(!r.ok, "re-applying 0017 on top of 0020 SUCCEEDED — it has just dropped entitlements from account deletion");
+    assert.match(r.err, /does not name every user_id table/, `refused for the wrong reason: ${r.err.slice(0, 200)}`);
+
+    /* AND THE REFUSAL IS NOT A ROLLBACK, which is the part worth
+       knowing before anyone acts on it. psql runs each statement in its
+       own transaction, so 0017's `create or replace` has COMMITTED by
+       the time its self-check raises — unlike 0016, which does its work
+       inside the DO block that verifies it, and where "the rollback IS
+       the feature".
+
+       So the true statement is: 0017 SHOUTS, and leaves the function
+       regressed. Asserted rather than wished away, because a test
+       claiming the database was untouched would be a false claim about
+       exactly the state somebody would be standing in when they read
+       it. 0017 is not edited to fix this — it is applied in production
+       and changing what a re-run does is its own risk — and the remedy
+       is one line, checked here so it is known to work. */
+    const after = one(db, `select prosrc from pg_proc where proname = 'delete_my_account_data';`);
+    assert.ok(
+      !after.includes("public.entitlements"),
+      "0017's create-or-replace did NOT take effect before its self-check raised — if that has become atomic, this test's warning is obsolete and should be simplified"
+    );
+
+    /* THE REMEDY: re-apply 0020. It is re-runnable, and it is the
+       latest migration that defines the function, so it restores the
+       body that names every table. */
+    applyMigration(db, "0020_cross_provider_entitlement.sql");
+    assert.equal(
+      one(db, `select prosrc from pg_proc where proname = 'delete_my_account_data';`),
+      before,
+      "re-applying 0020 did not restore the deletion function, so there is no cheap way back from a stray 0017"
+    );
+  });
+
+  await test("0017 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    /* AT 0017'S OWN POINT IN HISTORY, not on top of the whole folder.
+       Re-applying 0017 to a database that already has 0020 is a thing
+       that must NOT work — see the test below it — because 0017
+       restates delete_my_account_data() from before entitlements
+       existed. "Re-runnable" means re-runnable where it belongs. */
+    const db = preBillingDb();
     applyMigration(db, "0017_billing.sql");
     applyMigration(db, "0017_billing.sql");
     assert.equal(count(db, "pg_constraint", `conname = 'profiles_tier_check'`), 1, "a re-apply duplicated or dropped the constraint");
@@ -1813,7 +1917,8 @@ async function run() {
     /* An apply must not be able to report success while an object it
        created is absent. Demonstrated by removing one afterwards and
        re-running: the block must refuse. */
-    const db = withArchives();
+    const db = preBillingDb();
+    applyMigration(db, "0017_billing.sql");
     psqlOrThrow(db, `drop table public.billing_events;`);
     /* Re-creating it is part of the migration, so the interesting
        mutation is one the migration does NOT repair: revoke a grant

@@ -409,6 +409,64 @@ async function run() {
 
   /* ---------- 6. the shared refresh signal ---------- */
 
+  await test("NOTHING BUT A LINK IS TAKEN OFF customerInfo, anywhere in src/", () => {
+    /* THE SOURCE-LEVEL HALF of the browser test in
+       test-rendered-tabs.mjs, and it exists because the behavioural one
+       can only reach the panel. The rule is that `profiles.tier` is the
+       truth and `customerInfo` is the store's opinion — so the ONE
+       thing taken off it is `managementURL`, which is a LINK and not an
+       entitlement.
+
+       Swept over all of src/ rather than over plans.jsx, because that
+       is the claim's scope and not the file that happens to hold it
+       today — the file-scoped-guard entry in CLAUDE.md's ledger is
+       exactly this mistake. Comments are stripped first: the modules
+       below all STATE the rule they follow, and a grep that trips on
+       its own explanation gets weakened under time pressure.
+
+       WHAT IT CANNOT SEE, said rather than implied: a property reached
+       through a variable (`const c = customerInfo; c.entitlements`) or
+       through a destructure two lines away. The browser test is what
+       covers the panel behaviourally; between them the hole is small
+       and named. */
+    const ALLOWED = new Set(["managementURL"]);
+    const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+    const walk = (dir) =>
+      fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const full = path.join(dir, e.name);
+        return e.isDirectory() ? walk(full) : /\.(js|jsx)$/.test(e.name) ? [full] : [];
+      });
+
+    let readsSeen = 0;
+    const offences = [];
+    for (const abs of walk(path.join(rootDir, "src"))) {
+      const rel = path.relative(rootDir, abs).split(path.sep).join("/");
+      const code = strip(fs.readFileSync(abs, "utf8"));
+      for (const [, prop] of code.matchAll(/\bcustomerInfo\s*(?:\?\.|\.)\s*(\w+)/g)) {
+        readsSeen += 1;
+        if (!ALLOWED.has(prop)) offences.push(`${rel} reads customerInfo.${prop}`);
+      }
+      /* A destructure is the same read wearing a different hat. */
+      for (const [, inner] of code.matchAll(/\{([^{}]*)\}\s*=\s*customerInfo\b/g)) {
+        for (const name of inner.split(",").map((x) => x.split(":")[0].trim()).filter(Boolean)) {
+          readsSeen += 1;
+          if (!ALLOWED.has(name)) offences.push(`${rel} destructures ${name} out of customerInfo`);
+        }
+      }
+    }
+
+    /* NON-VACUITY FIRST: if nothing anywhere reads customerInfo, the
+       loop above is a universal claim about an empty set, which every
+       assertion satisfies. `managementURL` really is read — that is
+       what the manage-subscription link is built from. */
+    assert.ok(readsSeen >= 1, "no read of customerInfo was found in src/ at all — this guard is checking nothing");
+    assert.deepEqual(
+      offences,
+      [],
+      "profiles.tier is the truth and customerInfo is the store's opinion; the only thing that may come off it is a management LINK"
+    );
+  });
+
   await test("one bump moves every reader, and the poll ladder is bounded", () => {
     const seen = [];
     const off1 = refresh.subscribeEntitlement(() => seen.push("a"));

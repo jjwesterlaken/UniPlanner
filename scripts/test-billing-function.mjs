@@ -153,7 +153,7 @@ const subscriberWith = (entitlements, subscriptions = {}) => ({ entitlements, su
  * claim is an assertion rather than a hope, and records every filter,
  * so a mis-scoped write is visible even where its effect would not be.
  */
-function makeWorld({ profiles = {}, events = {}, subscribers = {}, fetchStatus = 200, fetchThrows = false } = {}) {
+function makeWorld({ profiles = {}, events = {}, entitlements = {}, subscribers = {}, fetchStatus = 200, fetchThrows = false } = {}) {
   const trace = [];
   const writes = [];
   const fetches = [];
@@ -183,6 +183,21 @@ function makeWorld({ profiles = {}, events = {}, subscribers = {}, fetchStatus =
         events[row.id] = row;
         return Promise.resolve({ data: row, error: null });
       },
+      /* THE PROVIDER ROW, keyed (user_id, source) the way 0020 keys it.
+         Modelled here as a map on that pair — which is a MODEL of a
+         primary key, so the claim that a redelivery does not
+         accumulate is made in section 7 against the real constraint,
+         not here. What this exists for is the ORDER tests: they need
+         the record step to succeed so the derive and the write happen
+         at all. */
+      upsert(v, opts = {}) {
+        trace.push(`db:${name}.upsert`);
+        const row = Array.isArray(v) ? v[0] : v;
+        writes.push({ table: name, op: "upsert", values: row, filters: [] });
+        if (!opts.onConflict) throw new Error(`makeWorld: upsert on ${name} with no onConflict`);
+        entitlements[`${row.user_id}|${row.source}`] = { ...row };
+        return Promise.resolve({ data: null, error: null });
+      },
       eq(col, val) {
         filters.push([col, val]);
         return chain;
@@ -203,6 +218,16 @@ function makeWorld({ profiles = {}, events = {}, subscribers = {}, fetchStatus =
       /* An update resolves when awaited; PostgREST returns a promise
          from the terminal builder, which is what the handler awaits. */
       then(resolve, reject) {
+        /* An awaited SELECT is a LIST — the derive step reads every
+           provider row for one account. Returning one row, or none,
+           would make the max trivially agree with whatever was just
+           written, which is the fake-that-swallows-calls failure. */
+        if (op === "select") {
+          trace.push(`db:${name}.select`);
+          const byId = Object.fromEntries(filters);
+          const rows = Object.values(entitlements).filter((r) => r.user_id === byId.user_id);
+          return Promise.resolve({ data: rows.map((r) => ({ ...r })), error: null }).then(resolve, reject);
+        }
         if (op !== "update") return resolve({ data: null, error: null });
         trace.push(`db:${name}.update`);
         writes.push({ table: name, op: "update", values, filters: [...filters] });
@@ -349,6 +374,31 @@ function pgClient(db, { trace, writes }) {
           );
           return Promise.resolve({ data: null, error: r.error });
         },
+        /* THE PROVIDER ROW. `on conflict (user_id, source) do update` is
+           what makes a redelivery idempotent — the same claim 0020's
+           primary key exists for, exercised here through the real
+           constraint rather than modelled. `onConflict` is passed the
+           way PostgREST takes it (a comma-separated column list) and is
+           used, not ignored: an adapter that dropped it would turn every
+           redelivery into a duplicate-key error and the test would fail
+           loudly, which is the right direction. */
+        upsert(v, opts = {}) {
+          trace.push(`db:${name}.upsert`);
+          const row = Array.isArray(v) ? v[0] : v;
+          writes.push({ table: name, op: "upsert", values: row, filters: [] });
+          const keys = Object.keys(row);
+          const conflict = String(opts.onConflict || "").trim();
+          if (!conflict) throw new Error(`pgClient: upsert on ${name} with no onConflict — PostgREST would use the primary key, and guessing it here would hide a wrong one`);
+          const setter = keys.filter((k) => !conflict.split(",").map((c) => c.trim()).includes(k));
+          const r = run(
+            `insert into public.${name} (${keys.join(", ")})
+             select ${keys.map((k) => `r.${k}`).join(", ")}
+               from jsonb_populate_record(null::public.${name}, ${jsonLit(row)}) r
+             on conflict (${conflict}) do update set
+               ${setter.map((k) => `${k} = excluded.${k}`).join(", ")};`
+          );
+          return Promise.resolve({ data: null, error: r.error });
+        },
         eq(col, val) {
           filters.push([col, val]);
           return chain;
@@ -365,6 +415,21 @@ function pgClient(db, { trace, writes }) {
           return Promise.resolve({ data: rows[0] ?? null, error: null });
         },
         then(resolve, reject) {
+          /* An awaited SELECT is a LIST. applyEntitlement reads every
+             provider row for one account this way, and the difference
+             between a list and maybeSingle is not cosmetic: the derive
+             step is a max over rows, so an adapter that returned only
+             the first would make the cross-provider tests pass for the
+             wrong reason. */
+          if (op === "select") {
+            trace.push(`db:${name}.select`);
+            const r = run(
+              `select coalesce(json_agg(row_to_json(t)), '[]'::json)::text
+                 from (select ${cols} from public.${name} where ${where()}) t;`
+            );
+            if (r.error) return Promise.resolve({ data: null, error: r.error }).then(resolve, reject);
+            return Promise.resolve({ data: JSON.parse(r.out || "[]"), error: null }).then(resolve, reject);
+          }
           if (op !== "update") throw new Error(`pgClient: awaited a ${op ?? "bare"} builder on ${name}, which this adapter does not implement`);
           trace.push(`db:${name}.update`);
           writes.push({ table: name, op: "update", values, filters: [...filters] });
@@ -421,6 +486,10 @@ function pgWorld(db, { subscribers = {} } = {}) {
 }
 
 /** An account that really exists: the signup trigger gives it a profile. */
+/** Every row of a table, read from the database rather than from a mirror. */
+const rowsOf = (db, table) =>
+  JSON.parse(pg.one(db, `select coalesce(json_agg(row_to_json(t)), '[]'::json)::text from public.${table} t;`) || "[]");
+
 function seedAccount(db, id, { tier = "free", source = null } = {}) {
   pg.psqlOrThrow(db, `insert into auth.users (id) values (${lit(id)});`);
   if (tier !== "free" || source) {
@@ -801,21 +870,107 @@ async function run() {
     assert.ok(verifyAt < parseAt, "the body is parsed before its signature is verified");
   });
 
-  await test("every profiles query in the entitlement path is scoped by user_id", () => {
+  await test("the cross-provider max: the awkward pairs, as a table", () => {
+    /* The behavioural claims are in section 7, against real rows. This
+       is the pure function's edges, which two overlapping real
+       subscriptions would be a slow way to reach. */
+    const NOW = Date.parse("2026-09-07T00:00:00Z");
+    const at = (iso) => iso;
+    const rows = (...r) => ent.tierFromProviders(r, NOW);
+
+    // Nothing at all, and `free` rows, are the same answer.
+    assert.deepEqual(rows(), { tier: "free", store: null, expiresAt: null, source: null });
+    assert.equal(rows({ source: "stripe", tier: "free" }).tier, "free");
+
+    // The higher tier wins regardless of which provider holds it.
+    assert.equal(rows({ source: "stripe", tier: "ai" }, { source: "revenuecat", tier: "ai_max" }).tier, "ai_max");
+    assert.equal(rows({ source: "revenuecat", tier: "ai" }, { source: "stripe", tier: "ai_max" }).tier, "ai_max");
+
+    // THE WINNER CARRIES THE STORE, because that is where the student
+    // has to go to cancel — naming the other one sends them somewhere
+    // that has never heard of them.
+    const won = rows(
+      { source: "revenuecat", tier: "ai", store: "app_store" },
+      { source: "stripe", tier: "ai_max", store: "stripe" }
+    );
+    assert.equal(won.store, "stripe");
+    assert.equal(won.source, "stripe");
+
+    // Equal tiers: the one that lasts LONGER, because that is the
+    // subscription still standing after the other lapses.
+    const tie = rows(
+      { source: "revenuecat", tier: "ai", store: "app_store", expires_at: at("2026-10-01T00:00:00Z") },
+      { source: "stripe", tier: "ai", store: "stripe", expires_at: at("2027-01-01T00:00:00Z") }
+    );
+    assert.equal(tie.store, "stripe");
+
+    // A non-expiring row outlasts any dated one.
+    assert.equal(
+      rows(
+        { source: "stripe", tier: "ai", store: "stripe", expires_at: at("2027-01-01T00:00:00Z") },
+        { source: "revenuecat", tier: "ai", store: "app_store", expires_at: null }
+      ).store,
+      "app_store"
+    );
+
+    // AN UNPARSEABLE DATE READS AS EXPIRED, isActive's reasoning: a
+    // student briefly losing a tier is visible and self-correcting; an
+    // entitlement that never expires is silent and permanent.
+    assert.equal(rows({ source: "stripe", tier: "ai_max", expires_at: "not a date" }).tier, "free");
+
+    // A source we do not know is ignored rather than trusted — the row
+    // could only get there by a hand-written insert.
+    assert.equal(rows({ source: "paypal", tier: "ai_max" }).tier, "free");
+
+    // Fully deterministic: the same rows in either order agree, so two
+    // runs can never disagree about which store to name.
+    const a = { source: "revenuecat", tier: "ai", store: "app_store" };
+    const b = { source: "stripe", tier: "ai", store: "stripe" };
+    assert.deepEqual(rows(a, b), rows(b, a));
+  });
+
+  await test("every query in the entitlement path is scoped to ONE user_id, whichever table it names", () => {
     /* The source-level half of the behavioural test above, and it
        exists for the same reason ai-notes has one: once the first
        lookup is scoped, a non-owner never reaches the later queries,
-       so their scopes cannot be caught by behaviour alone. */
+       so their scopes cannot be caught by behaviour alone.
+
+       TWO TABLES NOW, and `entitlements` is the one that would hurt
+       most: it is the input to the tier, so an unscoped read would let
+       one account's provider rows decide another account's plan. The
+       allowed set is enumerated because a NEW table here is a decision
+       somebody should have to make on purpose — this function runs on
+       the service-role client, which applies no policy at all.
+
+       HOW A WRITE IS SCOPED DEPENDS ON ITS SHAPE, and reading `.eq(`
+       for all of them would be wrong: an upsert has nothing to filter,
+       it carries `user_id` in the ROW. So reads and updates must have
+       the filter; inserts and upserts must have the column. */
+    const ALLOWED = new Set(["profiles", "entitlements"]);
     const mod = fs
       .readFileSync(path.join(rootDir, "supabase/functions/_shared/entitlement.ts"), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, " ")
       .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
-    const froms = [...mod.matchAll(/\.from\(\s*["'](\w+)["']\s*\)([\s\S]{0,240})/g)];
-    assert.ok(froms.length >= 2, `expected the profiles queries, found ${froms.length}`);
+    const froms = [...mod.matchAll(/\.from\(\s*["'](\w+)["']\s*\)([\s\S]{0,320})/g)];
+    assert.ok(froms.length >= 3, `expected the profiles and entitlements queries, found ${froms.length}`);
+
+    let scopedByFilter = 0;
+    let scopedByColumn = 0;
     for (const [, tableName, tail] of froms) {
-      assert.equal(tableName, "profiles", `entitlement.ts touches a table it has no business in: ${tableName}`);
-      assert.match(tail, /\.eq\(\s*["']user_id["']/, "a profiles query is not scoped to a user_id");
+      assert.ok(ALLOWED.has(tableName), `entitlement.ts touches a table it has no business in: ${tableName}`);
+      if (/^\s*\.(insert|upsert)\(/.test(tail)) {
+        assert.match(tail, /user_id:/, `an ${tableName} write does not carry a user_id — it would be scoped to nobody`);
+        scopedByColumn += 1;
+      } else {
+        assert.match(tail, /\.eq\(\s*["']user_id["']/, `a ${tableName} query is not scoped to a user_id`);
+        scopedByFilter += 1;
+      }
     }
+    /* Both shapes really occurred, so neither branch above passed over
+       an empty set — the vacuity that a for-loop over a derived list
+       reports as success. */
+    assert.ok(scopedByFilter >= 2, `only ${scopedByFilter} filtered queries were checked`);
+    assert.ok(scopedByColumn >= 1, `only ${scopedByColumn} row-scoped writes were checked — the upsert was not seen`);
   });
 
   await test("the tier written is never read out of the request body", () => {
@@ -1010,6 +1165,164 @@ async function run() {
       assert.equal(rows[0].user_id, null);
       assert.equal(rows[0].app_user_id, "$RCAnonymousID:9f2", "a non-UUID id must survive into a column that has no constraint on it");
       assert.deepEqual(w.fetches, []);
+    });
+
+    /* ---------- 7b. TWO PROVIDERS, ONE ACCOUNT ----------
+       The bug these exist for: each webhook re-reads only its OWN
+       provider, so an App Store expiry used to compute `free` and write
+       it straight over a live Stripe subscription. A student being
+       charged, losing what they pay for, with nothing erroring.
+
+       AGAINST REAL POSTGRES, not the recorder, and deliberately: the
+       claim is that the DATABASE ends up holding the right tier after
+       two events written by two different code paths, which is a claim
+       about rows and constraints. The fake with no foreign key is why
+       section 7 exists at all; a fake with no (user_id, source) primary
+       key would be the same mistake with a different column. */
+
+    /** What the Stripe half writes, through the SAME applyEntitlement the Stripe webhook calls. */
+    const stripeSays = async (db, userId, tier, { expiresAt = null, store = "stripe" } = {}) => {
+      const w = pgWorld(db);
+      const r = await ent.applyEntitlement(globalThis.__FAKE_CLIENT__, {
+        userId,
+        tier,
+        store,
+        expiresAt,
+        source: "stripe",
+      });
+      w.restore();
+      return r;
+    };
+
+    await test("A LIVE STRIPE SUBSCRIPTION SURVIVES AN APPLE EXPIRY — Stripe first, then the expiry", async () => {
+      const db = migratedDb();
+      seedAccount(db, USER_A);
+
+      const bought = await stripeSays(db, USER_A, "ai");
+      assert.equal(bought.outcome, "changed", JSON.stringify(bought));
+      assert.equal(rowsOf(db, "profiles")[0].tier, "ai", "the Stripe purchase did not take effect, so nothing below is a test");
+
+      /* Now last year's App Store subscription lapses. RevenueCat is
+         re-read, holds nothing, and asserts `free` — for ITSELF. */
+      const w = pgWorld(db, { subscribers: { [USER_A]: subscriberWith({}) } });
+      const res = await deliver(w, EVENT({ id: "evt-x1", type: "EXPIRATION" }));
+      w.restore();
+
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      const profiles = w.rows("profiles");
+      assert.equal(profiles[0].tier, "ai", "AN APPLE EXPIRY DEMOTED A PAYING STRIPE SUBSCRIBER");
+      assert.equal(profiles[0].tier_source, "stripe", "the tier is being carried by Stripe, and the row must say so");
+      assert.equal(profiles[0].store, "stripe", "a student sent to the App Store to cancel a Stripe subscription finds nothing there");
+
+      /* And the assertion itself was still recorded: RevenueCat really
+         does grant nothing now, which is what makes the account drop
+         the day the Stripe row goes too. */
+      const rows = w.rows("entitlements").sort((a, b) => a.source.localeCompare(b.source));
+      assert.deepEqual(rows.map((r) => [r.source, r.tier]), [["revenuecat", "free"], ["stripe", "ai"]]);
+    });
+
+    await test("THE SAME, IN THE OTHER ORDER — the expiry first, then the Stripe purchase", async () => {
+      /* Order is the whole point: webhook deliveries are not ordered,
+         and a fix that only works when the events arrive in the
+         convenient sequence is not a fix. */
+      const db = migratedDb();
+      seedAccount(db, USER_A);
+
+      const w = pgWorld(db, { subscribers: { [USER_A]: subscriberWith({}) } });
+      const res = await deliver(w, EVENT({ id: "evt-x2", type: "EXPIRATION" }));
+      w.restore();
+      assert.equal(res.status, 200);
+      assert.equal(w.rows("profiles")[0].tier, "free", "an account with nothing anywhere must be free — otherwise the next line proves nothing");
+
+      const bought = await stripeSays(db, USER_A, "ai_max");
+      assert.equal(bought.outcome, "changed", JSON.stringify(bought));
+      const after = rowsOf(db, "profiles")[0];
+      assert.equal(after.tier, "ai_max");
+      assert.equal(after.tier_source, "stripe");
+    });
+
+    await test("A MAX MUST STILL GO DOWN: the last live provider lapsing takes the account to free", async () => {
+      /* The half a careless max gets wrong. If "never demote" were the
+         rule, both tests above would pass and every cancellation in the
+         product would be free of charge. */
+      const db = migratedDb();
+      seedAccount(db, USER_A);
+
+      await stripeSays(db, USER_A, "ai");
+      const w = pgWorld(db, { subscribers: { [USER_A]: subscriberWith({ ai: activeEnt("p1") }) } });
+      await deliver(w, EVENT({ id: "evt-x3a" }));
+      w.restore();
+      assert.equal(rowsOf(db, "profiles")[0].tier, "ai", "both providers should be granting ai here");
+
+      /* Both go, in turn. */
+      const w2 = pgWorld(db, { subscribers: { [USER_A]: subscriberWith({}) } });
+      await deliver(w2, EVENT({ id: "evt-x3b", type: "EXPIRATION" }));
+      w2.restore();
+      assert.equal(rowsOf(db, "profiles")[0].tier, "ai", "Stripe is still live, so this one must NOT demote");
+
+      const cancelled = await stripeSays(db, USER_A, "free", { store: null });
+      assert.equal(cancelled.outcome, "changed", JSON.stringify(cancelled));
+      const after = rowsOf(db, "profiles")[0];
+      assert.equal(after.tier, "free", "with no provider granting anything the account must be free");
+      assert.equal(after.store, null, "a free account is not still pointed at a store");
+      assert.equal(after.entitlement_expires_at, null);
+    });
+
+    await test("AN EXPIRED ROW STOPS COUNTING even if its provider never says so again", async () => {
+      /* The backstop for a provider that goes quiet rather than sending
+         an expiry. Written with a date in the past, which is a state a
+         renewal legitimately produces between the old expiry and the
+         new event. */
+      const db = migratedDb();
+      seedAccount(db, USER_A);
+      await stripeSays(db, USER_A, "ai_max", { expiresAt: "2020-01-01T00:00:00Z" });
+      assert.equal(rowsOf(db, "profiles")[0].tier, "free", "an entitlement that expired in 2020 is granting a tier today");
+
+      /* And it is RECORDED, so the row still says what Stripe last
+         asserted — the account is free because the row is stale, not
+         because we forgot the row. */
+      const rows = rowsOf(db, "entitlements");
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].tier, "ai_max");
+    });
+
+    await test("a redelivery of the same provider event updates its row rather than adding one", async () => {
+      const db = migratedDb();
+      seedAccount(db, USER_A);
+      await stripeSays(db, USER_A, "ai");
+      await stripeSays(db, USER_A, "ai_max");
+      const rows = rowsOf(db, "entitlements");
+      assert.equal(rows.length, 1, `a provider accumulated ${rows.length} rows — the max would be taken over stale assertions`);
+      assert.equal(rows[0].tier, "ai_max");
+      assert.equal(rowsOf(db, "profiles")[0].tier, "ai_max");
+    });
+
+    await test("MANUAL WINS BEFORE ANY ROW IS WRITTEN, so clearing it later cannot inherit an old assertion", async () => {
+      const db = migratedDb();
+      seedAccount(db, USER_A, { tier: "ai_max", source: "manual" });
+      const r = await stripeSays(db, USER_A, "ai");
+      assert.equal(r.outcome, "manual_override");
+      assert.equal(rowsOf(db, "profiles")[0].tier, "ai_max");
+      assert.equal(rowsOf(db, "entitlements").length, 0, "a manual account recorded a provider assertion underneath its gift");
+    });
+
+    await test("a DERIVE that fails is not a demotion — the tier keeps what it had", async () => {
+      /* The fetchNote rule, with a paid subscription attached: a read
+         that failed is not a read that returned nothing. Demonstrated
+         by dropping the table the derive step reads, which is what a
+         missing migration looks like from inside the function. */
+      const db = migratedDb();
+      seedAccount(db, USER_A);
+      await stripeSays(db, USER_A, "ai");
+      assert.equal(rowsOf(db, "profiles")[0].tier, "ai");
+
+      pg.psqlOrThrow(db, "alter table public.entitlements rename to entitlements_hidden;");
+      const r = await stripeSays(db, USER_A, "free", { store: null });
+      pg.psqlOrThrow(db, "alter table public.entitlements_hidden rename to entitlements;");
+
+      assert.ok(!r.ok, "a broken entitlements table reported success");
+      assert.equal(r.outcome, "record_failed", `expected the write to fail at the record step, got ${r.outcome}`);
+      assert.equal(rowsOf(db, "profiles")[0].tier, "ai", "a failed read demoted a paying subscriber");
     });
   }
 

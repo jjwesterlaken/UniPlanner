@@ -1821,6 +1821,182 @@ whatever a refactor does to `purchases.js` — asserted in
 `test-local-only.mjs`, alongside its own non-vacuity (the SDK really is
 bundled, `errors.rev.cat` proves it).
 
+### Two providers, one account: a tier is a MAX, not a race
+
+`entitlements` (migration 0020), `tierFromProviders` and
+`applyEntitlement` in `_shared/entitlement.ts`, section 7b of
+`scripts/test-billing-function.mjs`.
+
+**THE BUG WAS WRITTEN DOWN AS ACCEPTED BEFORE IT WAS HANDLED**, in a
+comment in the file that had it — which is "a rule written beside one
+caller is not a guard" arriving as a paragraph instead of a line of
+code. Each webhook re-reads only its OWN provider and then wrote
+`profiles.tier` outright, so for a student paying through Stripe with
+last year's App Store subscription lapsing: Stripe renews and sets
+`ai`; the Apple EXPIRATION lands; RevenueCat is re-read, holds nothing
+active, computes `free` — and `free` goes over a live, paid Stripe
+entitlement. **The student is being charged and has lost what they are
+paying for, and nothing errors.**
+
+The old note pointed at `billing-checkout`'s `store_subscription_active`
+refusal as closing "the door we control". It closes a different door:
+it stops a NEW Stripe checkout while a store subscription is live, and
+says nothing about the reverse order, or about an old store
+subscription expiring months later.
+
+**RECORD THE FACT PER PROVIDER, DERIVE THE ANSWER.** `entitlements` is
+one row per `(user_id, source)`; `profiles.tier` is now a projection of
+those rows — the highest tier any provider currently grants. A provider
+can only ever speak for itself, so an expiry writes
+`('revenuecat','free')` and cannot reach across a boundary it knows
+nothing about. The winner carries `store` and `expiresAt` with it,
+because those name the subscription the student would have to go and
+cancel — the last event to arrive is the wrong thing to take them from.
+
+**AND A MAX MUST STILL BE ABLE TO GO DOWN.** That is the half a
+careless max gets wrong, and "never demote" would pass both ordering
+tests while making every cancellation in the product free of charge.
+The max is over rows that are STILL LIVE, so the last one lapsing takes
+the account to `free`, and a test is named for exactly that beside the
+two orderings. An expired row also stops counting on its own, which is
+the backstop for a provider that goes quiet rather than sending an
+expiry.
+
+**A FAILED READ IS NOT AN EMPTY ONE**, the `fetchNote` rule with a paid
+subscription attached: if the derive step's read fails, nothing is
+written and the tier keeps what it had. Deriving `free` from a failed
+read is how this fix would reintroduce the bug it exists to remove.
+
+**Ordering is the `aiNotesStore` table again**: the provider row first,
+then the derived tier. An interruption leaves an account whose recorded
+facts are ahead of its tier, which the next event of any kind repairs
+because the derive step reads every row. The reverse would put a tier
+on an account whose rows do not justify it and nothing would notice.
+**Manual short-circuits before either write** — recording assertions
+underneath a gift would mean the day somebody clears `manual` the
+account silently inherits whatever the providers last said.
+
+**THE CLAIMS ARE MADE AGAINST REAL POSTGRES, in section 7b**, because
+they are claims about what the database holds after two events written
+by two different code paths. The billing suite's fake with no foreign
+key is why section 7 exists at all; a fake with no `(user_id, source)`
+primary key would be the same mistake one column over.
+
+**AND THE RESTATEMENT LEDGER GAINED AN ENTRY WHILE THIS WAS BEING
+WRITTEN.** 0020 re-creates `delete_my_account_data()`, as 0005, 0007,
+0010 and 0017 each did — and the first draft copied **0010's** body,
+which predates `billing_events`, silently dropping a table from account
+deletion. Two independent guards caught it in the same run: the
+migration suite's derived sweep, and 0017's own self-check. **Copy the
+body from the LATEST migration that defines it, never from the one you
+happen to have open.**
+
+**A CONSEQUENCE WORTH KNOWING BEFORE SOMEBODY RE-RUNS A MIGRATION:
+applying 0017 after 0020 REFUSES** — its self-check derives the table
+list from the catalogue and raises. But **the refusal is not a
+rollback**: psql commits each statement, so the `create or replace` has
+landed by the time the check raises, and the deletion function is left
+regressed. 0017 is not edited to fix that (it is applied in production,
+and changing what a re-run does is its own risk); the remedy is to
+re-apply 0020, which is the latest migration defining the function. A
+test pins all three halves — the refusal, the residue, and the remedy.
+
+## Stripe on the web: two sources, one writer, and a flag that is two flags
+
+`supabase/functions/_shared/stripe.ts`, `billing-checkout/`,
+`billing-portal/`, `stripe-webhook/`, migration 0019,
+`src/billingFlags.js`, `src/stripeClient.js`, `src/webPrices.js`, and
+`scripts/test-stripe.mjs`. Phase 6 of BILLING-PLAN.md, **built and
+switched off**.
+
+**THE ROUTE WAS FORCED BY WHAT COULD BE VERIFIED, and that is the
+decision to read before changing any of it.** BILLING-PLAN §6 maps two
+ways for a Stripe subscription to become a tier: (A) RevenueCat ingests
+it, so it arrives as the same RevenueCat webhook the stores produce, or
+(B) Stripe's own signed webhook feeding the same `applyEntitlement()`.
+**B is built**, because every step of A is marked `[confirm every step]`
+against RevenueCat documentation this container cannot reach, while B is
+verifiable end to end against Stripe test mode with the Stripe CLI and
+nothing else. §6 names B as the fallback for exactly this case. **What B
+gives up is one dashboard listing every subscriber** — a Stripe
+subscription will not appear in RevenueCat — and that is recoverable
+later by adding the receipts POST beside this, without moving the
+writer.
+
+**Everything Phase 1 established still holds, because the writer did not
+move.** `applyEntitlement` is still the only thing that writes
+`profiles.tier`; it gained a `source` argument (`revenuecat` | `stripe`,
+enumerated in `ENTITLEMENT_SOURCES`) so `tier_source` says which
+provider wrote it, and **`manual` still wins over both**. The payload is
+still a trigger and never the evidence: the webhook takes an id out of
+the delivery, **re-reads the subscription from Stripe**, and computes the
+tier from that. Verify before parse, apply before record, unknown user
+answered 200 with a row — all four rules are the RevenueCat function's,
+kept deliberately identical so there is one shape to learn.
+
+**THE FLAG IS TWO FLAGS, AND THEY ARE NOT THE SAME SWITCH.** The
+server's flag is its *configuration*: all three functions refuse with
+`stripe_disabled` unless `STRIPE_SECRET_KEY` is set, which cannot drift
+out of step with reality the way a boolean can. The client's flag is
+`STRIPE_ENABLED` in `src/billingFlags.js` and decides only whether the
+controls are DRAWN. So the switch-on order is forced: configure, test
+against test mode, **then** flip the constant — a boolean saying "on"
+beside an unset key is a button that fails after the click, which is the
+worst of the three states. `WEB_PLANS` re-exports `PACKAGE_PLANS`
+rather than restating it, so a plan added for the stores can never be
+silently absent from the web.
+
+**AN UNRECOGNISED PRICE MUST REFUSE, NOT RETURN `free`.** The first
+version of `tierFromStripeSubscription` returned a tier for every input,
+so a subscription whose Price had lost its `lookup_key` — a dashboard
+edit, a Price recreated during a migration — would have computed `free`
+and **downgraded a paying subscriber to nothing**, in a function whose
+entire job is to be believed. It now returns `recognised: false` for an
+entitled subscription with no known price, for an unknown status, and
+for no subscription at all, and the webhook **500s with nothing
+written** so Stripe retries into a fixed dashboard rather than into a
+silent demotion. This is the `fetchNote` rule one more time: three
+outcomes, and "I don't know" is never allowed to read as "none".
+
+**`past_due` KEEPS THE TIER.** A failed renewal is a card to fix, not a
+theft; Stripe retries for days and `customer.subscription.deleted`
+arrives if it never succeeds. Cutting a student off mid-semester over a
+declined card that Stripe is still retrying is the wrong side of a
+judgement call whose other side costs a few days of credits.
+
+**IDENTITY IS TAKEN FROM THE VERIFIED JWT AND NOWHERE ELSE.**
+`billing-checkout` reads the uid from the token Supabase verified, never
+from the request body, and the **price is resolved server-side by
+`lookup_key`** from the tier and duration the client asked for — a
+client that could name a Price id could name a $0.01 one. The customer
+is created and stored on `profiles.stripe_customer_id` **before** the
+session, so a crash between them leaves a customer with no subscription
+(free, reusable) rather than a subscription we cannot match. The uid
+rides on `client_reference_id`, `metadata[uid]` and
+`subscription_data[metadata][uid]`, so three independent paths lead back
+to the account.
+
+**A STORE SUBSCRIBER IS REFUSED A WEB CHECKOUT** (`store_subscription_active`,
+409). Apple and Google cannot see a Stripe subscription and will not
+cancel one, so the student would be charged twice and could only stop
+half of it. `profiles.store` is what says so, and `fetchUsage` now
+returns it for the same reason the panel needs it.
+
+**0019 IS ONE NULLABLE COLUMN WITH A UNIQUE INDEX**, self-verifying with
+two behavioural probes, and it WIDENS — so it goes before the deploy.
+`stripe_customer_id` is unique because two accounts sharing a Stripe
+customer would make the reverse lookup ambiguous exactly when a webhook
+is trying to decide whose tier to write.
+
+**Nothing here has spoken to Stripe.** The signature scheme, the event
+shapes and whether a Checkout session with these parameters is accepted
+are all beyond this container; `test-stripe.mjs` verifies the
+arithmetic, the orderings, the refusals and the source-level invariants
+against fakes, and says in its header what it cannot see. The test-mode
+checklist is BILLING-PLAN.md Phase 6, and until it has been run this is
+**built**, not **working** — the distinction 0005 and 0009 cost weeks
+to learn.
+
 ## The marketing site: data first, design last
 
 `site/` holds everything the page READS — downloads, pricing, flags —

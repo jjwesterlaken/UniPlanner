@@ -364,7 +364,7 @@ async function run() {
     { identifier: "studyaimax_annual", product: { identifier: "uniplanner.studyaimax.annual", priceString: "A$169.99", title: "Study AI Max" } },
   ];
 
-  const bridgeScript = ({ native, packages }) => `
+  const bridgeScript = ({ native, packages, customerInfo = { managementURL: null } }) => `
     if (${native}) window.androidBridge = { postMessage() {} };
     window.__RC_CALLS__ = [];
     window.Capacitor = {
@@ -376,7 +376,8 @@ async function run() {
       nativePromise: (plugin, method) => {
         window.__RC_CALLS__.push(plugin + "." + method);
         if (method === "getOfferings") return Promise.resolve({ current: { identifier: "default", availablePackages: ${JSON.stringify(packages)} } });
-        if (method === "restorePurchases") return Promise.resolve({ customerInfo: { managementURL: null } });
+        if (method === "restorePurchases") return Promise.resolve({ customerInfo: ${JSON.stringify(customerInfo)} });
+        if (method === "getCustomerInfo") return Promise.resolve({ customerInfo: ${JSON.stringify(customerInfo)} });
         return Promise.resolve({});
       },
     };
@@ -424,7 +425,7 @@ async function run() {
      between them. Same bundle, same spy, one difference: the platform.
      (`dist-web` having no key is a separate, real property, and the
      per-tab account assertion above is what covers it.) */
-  async function mountAccount({ native }) {
+  async function mountAccount({ native, profile = PROFILE_ROW, customerInfo = { managementURL: null } }) {
     const dir = await keyedBuild();
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
@@ -453,26 +454,33 @@ async function run() {
       },
       { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consentVersion: AI_CONSENT_VERSION }
     );
-    await page.addInitScript(bridgeScript({ native, packages: PACKAGES }));
+    await page.addInitScript(bridgeScript({ native, packages: PACKAGES, customerInfo }));
     await page.route(`${SUPABASE_HOST}/**`, async (route) => {
       const url = route.request().url();
       if (url.includes("/auth/v1/user")) return route.fulfill(json({ id: USER_ID, email: "plans-probe@example.test" }));
       if (url.includes("/auth/v1/")) return route.fulfill(json({ access_token: "test-token", user: { id: USER_ID } }));
-      if (url.includes("/rest/v1/profiles")) return route.fulfill(json(PROFILE_ROW));
+      if (url.includes("/rest/v1/profiles")) return route.fulfill(json(profile));
       if (url.includes("/rest/v1/ai_usage")) return route.fulfill(json({ user_id: USER_ID, credits_used: 12 }));
       return route.fulfill(json([]));
     });
     await page.goto("file://" + path.join(dir, "index.html"));
     await page.waitForSelector("#root > *", { timeout: 15_000 });
     await page.waitForTimeout(1200);
-    const html = await page.locator("#root").innerHTML();
-    const calls = await page.evaluate(() => window.__RC_CALLS__ || []);
-    await ctx.close();
-    return { html, calls, errors };
+    const read = async () => ({
+      html: await page.locator("#root").innerHTML(),
+      calls: await page.evaluate(() => window.__RC_CALLS__ || []),
+    });
+    const first = await read();
+    /* The page is handed back so a test can DO something and read
+       again. A cold mount cannot exercise anything that only exists
+       after an interaction — which is how the first version of the
+       customerInfo test below passed while proving nothing. */
+    return { ...first, errors, page, read, close: () => ctx.close() };
   }
 
   await test("ON A NATIVE SHELL the panel shows all six packages, their prices and Restore", async () => {
-    const { html, calls, errors } = await mountAccount({ native: true });
+    const { html, calls, errors, close } = await mountAccount({ native: true });
+    await close();
     assert.deepEqual(errors, [], `the Account tab threw on a native shell:\n        ${errors.join("\n        ")}`);
     assert.match(html, /data-purchase-controls/, "a native shell is not showing purchase controls");
     for (const pkg of PACKAGES) {
@@ -494,12 +502,94 @@ async function run() {
        own: the bridge spy is installed identically, and the platform is
        the only difference. An empty array here against a non-empty one
        above is the whole claim. */
-    const { html, calls, errors } = await mountAccount({ native: false });
+    const { html, calls, errors, close } = await mountAccount({ native: false });
+    await close();
     assert.deepEqual(errors, [], `the Account tab threw on web:\n        ${errors.join("\n        ")}`);
     assert.deepEqual(calls, [], `the store SDK was called on web: ${calls.join(", ")}`);
     assert.match(html, /data-purchase-unavailable/, "web is not saying where plans are bought");
     assert.doesNotMatch(html, /data-package=/, "web is offering packages for sale");
     assert.doesNotMatch(html, /data-restore/, "web is offering to restore a purchase it cannot make");
+  });
+
+  await test("THE TIER COMES FROM profiles EVEN WITH THE SDK SAYING OTHERWISE — after a real Restore", async () => {
+    /* RULE 2 OF THE CLIENT HALF, measured rather than asserted, and the
+       FIRST VERSION OF THIS TEST PROVED NOTHING — which is the part
+       worth keeping. It mounted the tab cold and compared a disagreeing
+       `customerInfo` against `profiles`; mutating the panel to read the
+       SDK left it green, because on a cold mount `customerInfo` is
+       still null. There was nothing there to disbelieve. A guard for a
+       bug that needs a user action has to perform the action.
+
+       So it taps Restore Purchases, which is the one path that really
+       puts a customerInfo in the component's hands, and only then asks
+       what the plan line says. The store's answer and the server's are
+       made to DISAGREE — the SDK reports an active `ai_max`, `profiles`
+       says `free` — because agreement discriminates nothing.
+
+       Why it matters on a real device: a refunded, expired or
+       family-shared entitlement can read as active in customerInfo for
+       a while, so a panel trusting it grants a paid tier nobody is
+       paying for. And in the boring direction, a purchase completes on
+       the device before the webhook lands, so a client that believed
+       the SDK would show a plan the server then refuses to honour.
+       One source keeps the screen and the allowance in step even when
+       both are briefly behind. */
+    const { errors, page, read, close } = await mountAccount({
+      native: true,
+      profile: { ...PROFILE_ROW, tier: "free" },
+      customerInfo: {
+        managementURL: null,
+        entitlements: {
+          active: { ai_max: { identifier: "ai_max", isActive: true, productIdentifier: "uniplanner.studyaimax.annual" } },
+        },
+        activeSubscriptions: ["uniplanner.studyaimax.annual"],
+      },
+    });
+
+    const restore = page.locator("[data-restore]");
+    assert.equal(await restore.count(), 1, "no Restore control to press, so this test cannot reach the state it is about");
+    await restore.click();
+    await page.waitForFunction(() => (window.__RC_CALLS__ || []).includes("Purchases.restorePurchases"), null, { timeout: 10_000 });
+    await page.waitForTimeout(600);
+
+    const { html, calls } = await read();
+    await close();
+    assert.deepEqual(errors, [], `the Account tab threw:\n        ${errors.join("\n        ")}`);
+    /* NON-VACUITY: the SDK really was consulted and really did answer
+       with an entitlement. Without this the assertion below is happy
+       with a restore that silently failed. */
+    assert.ok(calls.includes("Purchases.restorePurchases"), `restore never reached the bridge: ${calls.join(", ")}`);
+
+    const line = /data-plan-line[^>]*>([\s\S]*?)<\/[a-z]+>/i.exec(html);
+    assert.ok(line, "the current-plan line is not on the page, so this test read nothing");
+    const text = line[1].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    assert.ok(!/Max/i.test(text), `the panel took its tier from the SDK: it says "${text}" while profiles says free`);
+    assert.match(text, /Free/i, `the panel does not show the server's tier: "${text}"`);
+  });
+
+  await test("WITH STRIPE SWITCHED OFF the web panel offers no way to pay, and still shows the tier", async () => {
+    /* PHASE 6, IN THE BROWSER. `STRIPE_ENABLED` is false, so this is
+       the state that ships: web and desktop show the plan READ-ONLY.
+       Two failures are being ruled out at once and they are opposite —
+       a checkout button that reaches an unconfigured server, and a
+       flag whose "off" state accidentally hid the plan itself.
+
+       Measured on the built bundle rather than by reading the flag,
+       because the flag is one of three things that have to agree (the
+       constant, the capability, and a session) and only the rendered
+       page knows whether they did. */
+    const { html, calls, errors, close } = await mountAccount({ native: false });
+    await close();
+    assert.deepEqual(errors, [], `the Account tab threw on web:\n        ${errors.join("\n        ")}`);
+    assert.deepEqual(calls, [], `the store SDK was called on web: ${calls.join(", ")}`);
+
+    for (const marker of ["data-web-purchase", "data-web-plan", "data-web-manage"]) {
+      assert.ok(!html.includes(marker), `${marker} is on the page while STRIPE_ENABLED is false — a student can start a checkout the server refuses`);
+    }
+    /* AND THE PANEL IS STILL THERE. The web ruling is "just the tier",
+       not a blank space and not a coming-soon. */
+    assert.match(html, /data-plan-line/, "the flag being off removed the whole panel, not just the purchase controls");
+    assert.match(html, /data-purchase-unavailable/, "web no longer says where plans are bought");
   });
 
   await browser.close();

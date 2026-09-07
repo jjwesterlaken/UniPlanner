@@ -293,6 +293,10 @@ test("NO MODULE CLAIMS AN ALLOWANCE IS MONTHLY WITHOUT BRANCHING ON THE TIER", (
       why: "resetLine says the 1st of the calendar month for a monthly tier and says the credits do NOT reset for a trial one; rendered per tier in test-purchases.mjs",
     },
     "src/purchasePlans.js": { kind: "not user-facing", why: "the six package ids, one of which is a six-MONTH subscription" },
+    "src/webPrices.js": {
+      kind: "not user-facing",
+      why: "the duration<->period id mapping: 'monthly' and 'sixMonth' are BILLING PERIODS on a price, which is a different claim from when an allowance resets — the reset sentence is plansCopy.js's, and it branches",
+    },
   };
 
   const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");

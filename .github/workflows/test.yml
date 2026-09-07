@@ -150,7 +150,7 @@ jobs:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-computed-ground.mjs
 
-      - name: Every tab renders from the built bundle, signed in
+      - name: Every tab renders signed in, and the Plans panel obeys its two rules
         # The guard that was missing when `allowanceForTier is not
         # defined` reached production: the unit suites import the
         # modules, which resolves the identifier through Node's module
@@ -158,6 +158,15 @@ jobs:
         # renders each tab from the BUILT bundle with a session and a
         # successful allowance read, and fails on any uncaught error.
         # No credentials — every request is intercepted.
+        #
+        # IT ALSO CARRIES THE BILLING CLIENT'S BROWSER CLAIMS, because
+        # they need the same artifact and the same faked Capacitor
+        # bridge: the store SDK is spoken to on a native shell and NOT
+        # on web (the pair is the measurement); the tier comes from
+        # profiles even after a Restore hands the panel a customerInfo
+        # that disagrees; and with STRIPE_ENABLED false the web panel
+        # offers no way to pay while still showing the plan. Named here
+        # so the step's label matches what its log will say.
         env:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-rendered-tabs.mjs

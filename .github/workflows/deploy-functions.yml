@@ -80,31 +80,36 @@ jobs:
           fi
           echo "No unmeasured billing inputs. OK to deploy."
 
-      # ONE FUNCTION IS DEPLOYED DIFFERENTLY, and this is the whole of
+      # THE WEBHOOKS ARE DEPLOYED DIFFERENTLY, and this is the whole of
       # why the loop has a branch in it.
       #
-      # billing-webhook is called by RevenueCat, which cannot mint a
-      # Supabase JWT, so the platform's verify_jwt must be OFF for that
-      # function and ON for the other two. It authenticates itself
-      # instead — a shared header compared in constant time, and an
-      # HMAC over the raw request bytes — and, because even both of
-      # those could in principle be defeated, it re-reads the
-      # subscriber from RevenueCat before writing anything, so the
-      # worst a forged delivery achieves is a wasted API call.
+      # A webhook is called by a PAYMENT PROVIDER — RevenueCat, Stripe —
+      # neither of which can mint a Supabase JWT, so the platform's
+      # verify_jwt must be OFF for those and ON for everything else.
+      # They authenticate themselves instead (an HMAC over the raw
+      # request bytes, plus a shared header in RevenueCat's case) and,
+      # because even that could in principle be defeated, each re-reads
+      # the subscription from its own provider before writing anything —
+      # so the worst a forged delivery achieves is a wasted API call.
       #
-      # DEPLOYED WITH verify_jwt ON, EVERY DELIVERY 401s. Nothing
-      # errors on our side, nothing appears in the logs beyond the
-      # platform's own rejection, and the symptom is "subscriptions
-      # never activate" — a paid feature that silently never arrives.
-      # A wiring test in test-ai-notes.mjs asserts this flag stays.
+      # DEPLOYED WITH verify_jwt ON, EVERY DELIVERY 401s. Nothing errors
+      # on our side, nothing appears in the logs beyond the platform's
+      # own rejection, and the symptom is "subscriptions never activate"
+      # — a paid feature that silently never arrives.
+      #
+      # THE REVERSE MATTERS AS MUCH: this flag on ai-notes, ai-text,
+      # billing-checkout or billing-portal would expose an endpoint that
+      # spends money or creates a payment session to anyone who can
+      # reach it. A wiring test in test-ai-notes.mjs asserts BOTH halves
+      # — the flag is on exactly the webhooks, and on nothing else.
       - name: Deploy
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           for fn in ${{ steps.functions.outputs.functions }}; do
             case "$fn" in
-              billing-webhook)
-                echo "--- $fn (no JWT verification: the caller is RevenueCat, not a signed-in student)"
+              billing-webhook|stripe-webhook)
+                echo "--- $fn (no JWT verification: the caller is a payment provider, not a signed-in student)"
                 supabase functions deploy "$fn" --no-verify-jwt \
                   --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
                 ;;
