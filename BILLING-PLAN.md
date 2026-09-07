@@ -656,6 +656,107 @@ somebody remembering. It asserts its own precondition too: if none of
 the three sentences is in the document any more, it fails rather than
 passing over nothing.
 
+### Phase 1a — the first real delivery, and what it found (7 September 2026)
+
+Jared enabled the webhook, set the secrets and sent a dashboard TEST
+event. **The authentication half worked on the first try**: the
+wrong-header probe logged an `authorize` failure and answered
+`unauthorized` with no fetch; the real event verified and parsed. Then
+it failed at the last stage:
+
+```
+stage parse   {"event":"TEST","id":"5AC2B472-…"}
+stage apply   {"outcome":"no_such_user","before":null,"after":"free"}
+FAILURE record {"name":"23503","message":"… violates foreign key
+                constraint \"billing_events_user_id_fkey\""}
+```
+
+**The event named a UUID-shaped `app_user_id` we hold no account for.**
+The apply was right — `applyEntitlement` refuses to insert a `profiles`
+row, because an absent one means a deleted account and a webhook must
+not resurrect one. The RECORD was wrong: it put that id in
+`billing_events.user_id`, which is a foreign key to `auth.users`.
+
+Three defects, one cause, and one thing to explain.
+
+**1. Unknown is not a failure.** RevenueCat retries every non-2xx, so a
+permanently unknown user answered 500 comes back until the retry window
+expires — the same event, the same answer, every time. It is 200 now,
+with `outcome: "no_such_user"`, which is honest: everything this event
+can cause has happened.
+
+**2. `user_id` means an account we MATCHED, and nothing else.**
+Migration **0018** adds `app_user_id text`, unconstrained, holding the
+id RevenueCat sent verbatim; `user_id` stays null when we hold no such
+account. The row is kept rather than skipped because a paid event for a
+user we do not have is exactly the thing to notice — a deleted account
+with a live subscription, a client configuring RevenueCat before
+sign-in, or the webhook pointed at the wrong project. Dropping it makes
+all three silent. Idempotency is untouched: the primary key is the
+EVENT id and never depended on `user_id`, so a redelivered unknown
+event is still one row. A partial index on `received_at where user_id
+is null` is the forensic query the column exists for.
+
+**And every accepted event is now recorded, whoever it turned out to be
+about.** Three paths used to end in three different places — one
+recorded, two returned early — and the one that recorded was the one
+that wrote the wrong column. One row per accepted event is both the
+simpler rule and what makes "which events arrived for accounts we do
+not have" a query rather than a log search.
+
+**3. `"after":"free"` was a tier reported for a row nobody has.**
+`applyEntitlement` already leaves `after` undefined exactly when
+nothing was written; the handler was substituting the computed tier for
+it. It logs `"after":null` and `"computed":"free"` now — the
+computation is still worth seeing, under a name that says what it is.
+
+**4. Why 33 green tests missed it, which is the part that generalises.**
+The suite drove the real handler against a hand-written fake database.
+That fake modelled `billing_events`'s PRIMARY KEY — so "a redelivery
+writes one row" was a real claim — and did not model its FOREIGN KEY.
+**Fourth instance of the stand-in being weaker than production**, after
+table default privileges, the missing `service_role`, and function
+default privileges.
+
+The remedy is not a fake that knows about this one constraint; that is
+the restatement pattern with extra steps, and the next constraint would
+be missing the same way. `scripts/lib/pg-harness.mjs` now holds the
+cluster, the Supabase shim and the psql wrappers that `test-migrations.mjs`
+had, and **the billing suite's write path runs against a database with
+every migration applied** — a PostgREST-shaped adapter turns the four
+calls the handler makes into SQL through `jsonb_populate_record`, so
+the columns are typed by the TABLE and SQLSTATEs come back as they do
+in production. The schema's constraints are the test's constraints.
+
+Section 7 opens with **"THE FOREIGN KEY REALLY BITES HERE"**, which
+inserts a stray id through the same adapter and requires 23503 — every
+other test there is of the form "the handler does not fall foul of a
+constraint", and all of them pass against a schema with no constraints
+at all. It found a second constraint the fake never modelled on the way
+through: `profiles_store_check`, which `normaliseStore` is the only
+thing standing between and a 23514 on a legitimate Amazon purchase.
+
+The fake keeps everything that is not a claim about the database: the
+ORDER of operations, the absence of a fetch before authentication, the
+log lines, and failure injection (a 500 from RevenueCat, a dropped
+connection). Neither can see PostgREST itself — the adapter speaks SQL,
+so a PostgREST-level refusal like the upsert-needs-UPDATE rule 0008
+found is still out of reach, and the suite says so rather than implying
+otherwise by passing.
+
+**One residue, recorded rather than fixed.** An event arriving for an
+account that was deleted while subscribed leaves that account's old uid
+in `app_user_id` on a row nobody can link it to — the row is created
+*after* the deletion, so no sweep run at deletion time could catch it.
+The id resolves to nothing once `auth.users` is gone, which is the same
+call `client_errors` makes for its anonymous rows, and the privacy
+policy's "deleted with your account" stays true of every row that names
+a live account (the cascade and `delete_my_account_data()` both take
+it — a migration test seeds `app_user_id` and asserts both halves,
+including that an orphan row is NOT swept by somebody else's deletion).
+Worth a retention sweep when pg_cron lands; not worth a column nobody
+can act on before then.
+
 ### Phase 2 — Client: plans on the Account tab, restore, and the documents
 
 **Changes.** The plugin installed in `mobile/`; `configure` after

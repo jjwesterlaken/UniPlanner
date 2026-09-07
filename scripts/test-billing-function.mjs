@@ -30,12 +30,41 @@
  *    written over, because that is how the App Review account keeps a
  *    tier nobody bought.
  *
- * WHAT THIS CANNOT SEE, said here rather than implied by a pass: a real
+ * AND THE WRITE PATH RUNS AGAINST A REAL POSTGRES (section 7), which is
+ * the correction this file exists in the shape it does because of.
+ *
+ * Everything above ran against a hand-written fake, and the fake
+ * modelled `billing_events`'s PRIMARY KEY — so "a redelivery writes one
+ * row" was a real claim — and did NOT model its FOREIGN KEY to
+ * auth.users. The first real delivery was a dashboard TEST event naming
+ * an id we hold no account for. The handler put that id in `user_id`
+ * anyway, Postgres refused with 23503, and the function answered 500 to
+ * a provider that retries every non-2xx. Thirty-three green tests, and
+ * the constraint that decided the outcome existed nowhere in them.
+ *
+ * The remedy is not a fake that knows about this one foreign key —
+ * that is the restatement pattern with extra steps, and the next
+ * constraint would be missing in exactly the same way. It is that the
+ * claims about what the database ACCEPTS are made against the database:
+ * scripts/lib/pg-harness.mjs applies the real migrations, and a small
+ * PostgREST-shaped adapter turns the four calls the handler makes into
+ * SQL. The schema's constraints are the test's constraints, and nobody
+ * has to remember to copy one across.
+ *
+ * WHAT THE FAKE STILL EARNS ITS PLACE FOR: the ORDER of operations, the
+ * absence of a fetch before authentication, the log lines, and the
+ * failure injection (a 500 from RevenueCat, a dropped connection). None
+ * of those is a claim about the database, and each is far cheaper to
+ * assert against a recorder than a real one.
+ *
+ * WHAT NEITHER CAN SEE, said here rather than implied by a pass: a real
  * RevenueCat delivery, a real signature from their signing secret, a
- * real subscriber record, and whether the function is deployed with JWT
- * verification off. The first three are Jared's dashboard test event
- * (BILLING-PLAN.md Phase 1); the fourth is a wiring test over
- * deploy-functions.yml in test-ai-notes.mjs.
+ * real subscriber record, PostgREST itself (the adapter speaks SQL, not
+ * HTTP, so a PostgREST-level refusal such as the upsert-needs-UPDATE
+ * rule 0008 found is out of reach), and whether the function is
+ * deployed with JWT verification off. The first three are Jared's
+ * dashboard test event (BILLING-PLAN.md Phase 1); the last is a wiring
+ * test over deploy-functions.yml in test-ai-notes.mjs.
  */
 
 import assert from "node:assert/strict";
@@ -44,6 +73,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { createPgHarness } from "./lib/pg-harness.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -242,6 +272,164 @@ async function deliver(world, event, opts = {}) {
 
 const profile = (tier, source = "signup") => ({ tier, tier_source: source });
 const EVENT = (over = {}) => ({ id: "evt-1", type: "INITIAL_PURCHASE", app_user_id: USER_A, store: "APP_STORE", ...over });
+
+
+/* ==================================================================
+   A REAL DATABASE, for the claims that are about the database.
+
+   `pgWorld` is the same recorder as `makeWorld` — same trace, same
+   writes list, same fetch stub — with the one difference that matters:
+   `from(...)` speaks SQL to a database with every migration applied,
+   so a constraint the schema has is a constraint this test has.
+   ================================================================== */
+
+const migrationsDir = path.join(rootDir, "supabase", "migrations");
+const pg = createPgHarness({ migrationsDir, label: "the billing write-path tests" });
+
+/** A database with every migration applied, and no rows. */
+function migratedDb() {
+  const db = pg.freshDb();
+  for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
+    pg.applyMigration(db, file);
+  }
+  return db;
+}
+
+const lit = (v) => (v === null || v === undefined ? "null" : `'${String(v).replace(/'/g, "''")}'`);
+const jsonLit = (obj) => `'${JSON.stringify(obj).replace(/'/g, "''")}'::jsonb`;
+
+/**
+ * PostgREST's builder shape, over psql.
+ *
+ * Deliberately tiny: it implements the four calls the handler makes and
+ * nothing else, and an unimplemented call throws rather than resolving
+ * to an empty answer — a fake that returns nothing makes everything
+ * downstream of it agree, which is how the canvas stub in
+ * test-blocks-neutral made half that suite decorative.
+ *
+ * The row values go through `jsonb_populate_record`, so the columns are
+ * typed by the TABLE rather than by this file: a bad uuid raises 22P02
+ * here exactly as it does in production (the 0009 boundary), and a
+ * column that does not exist raises 42703 instead of being quietly
+ * dropped the way an object-assign fake drops it.
+ */
+function pgClient(db, { trace, writes }) {
+  const run = (sql) => {
+    const r = pg.psqlCode(db, sql);
+    if (r.ok) return { data: null, error: null, out: r.out };
+    return { data: null, error: { code: r.code, message: r.message }, out: "" };
+  };
+  return {
+    from(name) {
+      const filters = [];
+      let op = null;
+      let cols = null;
+      let values = null;
+      const where = () => (filters.length ? filters.map(([c, v]) => `${c} = ${lit(v)}`).join(" and ") : "true");
+      const chain = {
+        select(c) {
+          op = "select";
+          cols = c;
+          return chain;
+        },
+        update(v) {
+          op = "update";
+          values = v;
+          return chain;
+        },
+        insert(v) {
+          trace.push(`db:${name}.insert`);
+          const row = Array.isArray(v) ? v[0] : v;
+          writes.push({ table: name, op: "insert", values: row, filters: [] });
+          const keys = Object.keys(row);
+          const r = run(
+            `insert into public.${name} (${keys.join(", ")})
+             select ${keys.map((k) => `r.${k}`).join(", ")}
+               from jsonb_populate_record(null::public.${name}, ${jsonLit(row)}) r;`
+          );
+          return Promise.resolve({ data: null, error: r.error });
+        },
+        eq(col, val) {
+          filters.push([col, val]);
+          return chain;
+        },
+        maybeSingle() {
+          trace.push(`db:${name}.select`);
+          const r = run(
+            `select coalesce(json_agg(row_to_json(t)), '[]'::json)::text
+               from (select ${cols} from public.${name} where ${where()} limit 2) t;`
+          );
+          if (r.error) return Promise.resolve({ data: null, error: r.error });
+          const rows = JSON.parse(r.out || "[]");
+          if (rows.length > 1) return Promise.resolve({ data: null, error: { code: "PGRST116", message: "more than one row" } });
+          return Promise.resolve({ data: rows[0] ?? null, error: null });
+        },
+        then(resolve, reject) {
+          if (op !== "update") throw new Error(`pgClient: awaited a ${op ?? "bare"} builder on ${name}, which this adapter does not implement`);
+          trace.push(`db:${name}.update`);
+          writes.push({ table: name, op: "update", values, filters: [...filters] });
+          const keys = Object.keys(values);
+          const r = run(
+            `update public.${name} set (${keys.join(", ")}) =
+               (select ${keys.map((k) => `r.${k}`).join(", ")}
+                  from jsonb_populate_record(null::public.${name}, ${jsonLit(values)}) r)
+             where ${where()};`
+          );
+          return Promise.resolve({ data: null, error: r.error }).then(resolve, reject);
+        },
+      };
+      return chain;
+    },
+  };
+}
+
+/** The same world as `makeWorld`, with a real database behind `from`. */
+function pgWorld(db, { subscribers = {} } = {}) {
+  const trace = [];
+  const writes = [];
+  const fetches = [];
+  const logs = [];
+
+  globalThis.__FAKE_CLIENT__ = pgClient(db, { trace, writes });
+  globalThis.Deno = { env: { get: (k) => ENV[k] }, serve: () => {} };
+  globalThis.fetch = async (url) => {
+    fetches.push(String(url));
+    trace.push("fetch:subscriber");
+    const id = String(url).split("/").pop();
+    const sub = subscribers[id];
+    if (!sub) return { ok: false, status: 404, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ subscriber: sub }) };
+  };
+
+  const origLog = console.log;
+  const origErr = console.error;
+  console.log = (...a) => logs.push(a.join(" "));
+  console.error = (...a) => logs.push(a.join(" "));
+
+  return {
+    trace,
+    writes,
+    fetches,
+    logs,
+    restore: () => {
+      console.log = origLog;
+      console.error = origErr;
+    },
+    /** Every row of a table, as objects. Read from the database, not from a mirror. */
+    rows: (table) => JSON.parse(pg.one(db, `select coalesce(json_agg(row_to_json(t)), '[]'::json)::text from public.${table} t;`) || "[]"),
+  };
+}
+
+/** An account that really exists: the signup trigger gives it a profile. */
+function seedAccount(db, id, { tier = "free", source = null } = {}) {
+  pg.psqlOrThrow(db, `insert into auth.users (id) values (${lit(id)});`);
+  if (tier !== "free" || source) {
+    pg.psqlOrThrow(
+      db,
+      `update public.profiles set tier = ${lit(tier)}${source ? `, tier_source = ${lit(source)}` : ""} where user_id = ${lit(id)};`
+    );
+  }
+}
 
 async function run() {
   /* ---------- 1. the pure rules ---------- */
@@ -465,6 +653,36 @@ async function run() {
     assert.ok(w.logs.some((l) => l.includes("no_such_user")), "the outcome must be identifiable in the log");
   });
 
+  await test("an unknown account is ACKNOWLEDGED, not retried at us forever", async () => {
+    /* RevenueCat retries every non-2xx. The first real delivery was a
+       dashboard TEST event naming an id we hold no profile for; the
+       handler answered 500, and the same event would have come back
+       until its retry window expired. Nothing about it is different on
+       the fourth attempt. */
+    const w = makeWorld({ profiles: {}, subscribers: { [USER_A]: subscriberWith({ ai: activeEnt("p") }) } });
+    const res = await deliver(w, EVENT());
+    w.restore();
+    assert.equal(res.status, 200, "a permanently unknown user answered non-2xx is redelivered until the window expires");
+    assert.equal(res.body.outcome, "no_such_user", "the response says 'applied' for an event that applied to nobody");
+    assert.equal(res.body.matched, 0);
+  });
+
+  await test("the log never reports a tier that was not written", async () => {
+    /* `"after":"free"` on no_such_user was a tier reported for a row
+       nobody has. applyEntitlement already leaves `after` undefined
+       exactly when nothing was written; the handler was substituting
+       the computed tier for it. The computation is still worth seeing,
+       under a name that says what it is. */
+    const w = makeWorld({ profiles: {}, subscribers: { [USER_A]: subscriberWith({ ai_max: activeEnt("p") }) } });
+    await deliver(w, EVENT());
+    w.restore();
+    const apply = w.logs.find((l) => l.includes('"stage":"apply"'));
+    assert.ok(apply, "no apply line was logged at all, so this proves nothing");
+    assert.match(apply, /"outcome":"no_such_user"/);
+    assert.match(apply, /"after":null/, `the apply line still reports a tier for an account that does not exist: ${apply}`);
+    assert.match(apply, /"computed":"ai_max"/, "the tier RevenueCat implies is worth seeing — under a name that is not 'after'");
+  });
+
   /* ---------- 5. idempotency and ordering ---------- */
 
   await test("a redelivery changes nothing and records nothing — one row, whatever arrives twice", async () => {
@@ -504,7 +722,8 @@ async function run() {
     assert.equal(row.event_type, "PRODUCT_CHANGE");
     assert.equal(row.tier_before, "free");
     assert.equal(row.tier_after, "ai_max");
-    const allowed = new Set(["id", "user_id", "event_type", "store", "tier_before", "tier_after"]);
+    assert.equal(row.app_user_id, USER_A, "the id the store sent is kept beside the account we matched");
+    const allowed = new Set(["id", "user_id", "app_user_id", "event_type", "store", "tier_before", "tier_after"]);
     for (const k of Object.keys(row)) assert.ok(allowed.has(k), `billing_events row carries an undeclared field: ${k}`);
     const blob = JSON.stringify(row).toLowerCase();
     for (const forbidden of ["price", "receipt", "token", "currency", "revenue"]) {
@@ -535,14 +754,21 @@ async function run() {
     assert.deepEqual(w.fetches, [], "it asked RevenueCat about a user before checking the event was usable");
   });
 
-  await test("an anonymous app_user_id is answered 200 and written nowhere", async () => {
+  await test("an anonymous app_user_id touches no account, and is still recorded", async () => {
     const w = makeWorld({ profiles: { [USER_A]: profile("free") }, subscribers: {} });
     const res = await deliver(w, EVENT({ app_user_id: "$RCAnonymousID:9f2", original_app_user_id: "$RCAnonymousID:9f2" }));
     w.restore();
     assert.equal(res.status, 200, "retrying will not turn an anonymous id into one of our accounts");
-    assert.deepEqual(w.writes, []);
-    assert.deepEqual(w.fetches, []);
+    assert.deepEqual(w.writes.filter((x) => x.table === "profiles"), []);
+    assert.deepEqual(w.fetches, [], "an id that is not ours is not worth a RevenueCat request");
     assert.ok(w.logs.some((l) => l.includes("no_account")), "a run of these means the client configures RevenueCat before sign-in");
+    /* RECORDED, because a run of these is the thing to notice, and one
+       row per accepted event is the rule that stopped the three paths
+       ending in three different places — the one that recorded being
+       the one that wrote the wrong column. */
+    const row = w.writes.find((x) => x.table === "billing_events").values;
+    assert.equal(row.user_id, null, "an id that is not one of our accounts reached user_id");
+    assert.equal(row.app_user_id, "$RCAnonymousID:9f2", "the id the store sent was not kept");
   });
 
   /* ---------- 6. source-level invariants ---------- */
@@ -622,6 +848,170 @@ async function run() {
       assert.ok(!w.logs.join("\n").includes(secret), `a log line leaked ${secret.slice(0, 8)}…`);
     }
   });
+
+  /* ---------- 7. the write path, against the real schema ----------
+     Everything above this line runs against a recorder. Everything
+     below runs against a database with every migration applied,
+     because the claims below are about what the database ACCEPTS —
+     and that is the exact question the fake answered wrongly. */
+
+  if (!pg.available) {
+    /* Not silent, and not free: REQUIRE_POSTGRES (which CI sets) turns
+       this into a hard failure rather than a skip, the same
+       arrangement test-migrations.mjs has. A write-path suite that
+       quietly stops running is how the fake came to be the only thing
+       checking these. */
+    pg.skipOrFail(false);
+    console.log("  --  section 7 (the write path against the real schema) did not run");
+  } else {
+    pg.start();
+
+    await test("THE FOREIGN KEY REALLY BITES HERE — without this, section 7 proves nothing", async () => {
+      /* NON-VACUITY FIRST. Every test below is of the form "the handler
+         does not fall foul of a constraint", and all of them pass
+         against a schema with no constraints at all. So the constraint
+         is demonstrated biting before anything is claimed about the
+         handler avoiding it — and it is demonstrated through the SAME
+         adapter the handler uses, not by a bare psql, because a fault
+         in the adapter would otherwise look like a schema that permits
+         everything. */
+      const db = migratedDb();
+      const w = pgWorld(db);
+      w.restore();
+      const stray = "33333333-3333-4333-8333-333333333333";
+      const res = await globalThis.__FAKE_CLIENT__
+        .from("billing_events")
+        .insert({ id: "evt-fk-probe", user_id: stray, event_type: "TEST" });
+      assert.ok(res.error, "billing_events accepted a user_id that is not an account — the FK this suite exists for is absent");
+      assert.equal(res.error.code, "23503", `expected a foreign key violation, got ${res.error.code}: ${res.error.message}`);
+      assert.equal(w.rows("billing_events").length, 0, "the refused row landed anyway");
+    });
+
+    await test("THE PRODUCTION FAILURE: an event for an account we do not have is recorded, and answered 200", async () => {
+      /* The delivery that broke it: correct header, correct signature,
+         a UUID-shaped app_user_id with no profiles row. Before the fix
+         this was a 23503 and a 500, and RevenueCat would have
+         redelivered it until the retry window expired. */
+      const db = migratedDb();
+      const w = pgWorld(db, { subscribers: { [USER_A]: subscriberWith({ ai: activeEnt("p1") }) } });
+      const res = await deliver(w, EVENT({ id: "5AC2B472-66A2-4969-8630-033F5A6B2ED0", type: "TEST" }));
+      w.restore();
+
+      assert.equal(res.status, 200, `answered ${res.status}: ${JSON.stringify(res.body)}`);
+      assert.equal(res.body.outcome, "no_such_user");
+      const rows = w.rows("billing_events");
+      assert.equal(rows.length, 1, "the event was not recorded, so nobody can see that it arrived");
+      assert.equal(rows[0].user_id, null, "an id that is not one of our accounts reached a column that means 'one of our accounts'");
+      assert.equal(rows[0].app_user_id, USER_A, "the id the store sent was thrown away, which is the whole forensic value");
+      assert.equal(rows[0].tier_before, null, "a tier was recorded for a row nobody has");
+      assert.equal(rows[0].tier_after, null, "a tier was recorded as written when nothing was written");
+      assert.equal(w.rows("profiles").length, 0, "a webhook resurrected an account that does not exist");
+    });
+
+    await test("...and its redelivery is still ONE row", async () => {
+      /* Idempotency has never depended on user_id — the primary key is
+         the event id — but "never depended on" is a reading of the
+         schema, and this is the run of it. */
+      const db = migratedDb();
+      const subscribers = { [USER_A]: subscriberWith({ ai: activeEnt("p1") }) };
+      const first = pgWorld(db, { subscribers });
+      await deliver(first, EVENT({ id: "evt-unknown-twice" }));
+      first.restore();
+
+      const second = pgWorld(db, { subscribers });
+      const res = await deliver(second, EVENT({ id: "evt-unknown-twice" }));
+      second.restore();
+      assert.equal(res.status, 200);
+      assert.equal(res.body.outcome, "duplicate");
+      assert.equal(second.rows("billing_events").length, 1, "a redelivered unknown event wrote a second row");
+      assert.deepEqual(second.fetches, [], "a redelivery cost a RevenueCat request");
+    });
+
+    await test("AN EVENT FOR A REAL USER: the existing path, unchanged", async () => {
+      /* The other direction of the mutation check. A fix for the
+         unknown case that quietly stopped writing user_id for a known
+         one would pass every test above. */
+      const db = migratedDb();
+      seedAccount(db, USER_A);
+      const w = pgWorld(db, {
+        subscribers: { [USER_A]: subscriberWith({ ai_max: activeEnt("p1") }, { p1: { store: "play_store" } }) },
+      });
+      const res = await deliver(w, EVENT({ id: "evt-real", type: "INITIAL_PURCHASE" }));
+      w.restore();
+
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.equal(res.body.outcome, "applied");
+      assert.equal(res.body.matched, 1);
+
+      const profiles = w.rows("profiles");
+      assert.equal(profiles.length, 1);
+      assert.equal(profiles[0].tier, "ai_max", "the tier did not move for an account we do hold");
+      assert.equal(profiles[0].tier_source, "revenuecat");
+      assert.equal(profiles[0].store, "play_store");
+      assert.ok(profiles[0].tier_updated_at, "the write happened but left no timestamp");
+
+      const rows = w.rows("billing_events");
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].user_id, USER_A, "a real account's event was recorded against nobody");
+      assert.equal(rows[0].app_user_id, USER_A);
+      assert.equal(rows[0].tier_before, "free");
+      assert.equal(rows[0].tier_after, "ai_max");
+      assert.equal(rows[0].store, "app_store", "the event's own store is recorded lowercased");
+
+      const order = w.trace.filter((t) => t === "fetch:subscriber" || t === "db:profiles.update" || t === "db:billing_events.insert");
+      assert.deepEqual(order, ["fetch:subscriber", "db:profiles.update", "db:billing_events.insert"], `re-read, apply, record — in that order: ${w.trace.join(" -> ")}`);
+    });
+
+    await test("a store profiles.store cannot hold is written as null, not as the nearest match", async () => {
+      /* profiles_store_check is a constraint the fake never modelled
+         either, and normaliseStore is the only thing between it and a
+         23514 on a legitimate purchase. Amazon is a store RevenueCat
+         really reports and profiles.store really refuses. */
+      const db = migratedDb();
+      seedAccount(db, USER_A);
+
+      const direct = pg.psqlCode(db, `update public.profiles set store = 'amazon' where user_id = ${lit(USER_A)};`);
+      assert.equal(direct.code, "23514", "profiles_store_check is not enforcing, so this test could not fail");
+
+      const w = pgWorld(db, {
+        subscribers: { [USER_A]: subscriberWith({ ai: activeEnt("p1") }, { p1: { store: "amazon" } }) },
+      });
+      const res = await deliver(w, EVENT({ id: "evt-amazon" }));
+      w.restore();
+      assert.equal(res.status, 200, `a purchase from a store we do not model failed the write: ${JSON.stringify(res.body)}`);
+      assert.equal(w.rows("profiles")[0].tier, "ai", "the entitlement was lost because of where it was bought");
+      assert.equal(w.rows("profiles")[0].store, null);
+    });
+
+    await test("a manual tier survives a real EXPIRATION, and the event still says so", async () => {
+      const db = migratedDb();
+      seedAccount(db, USER_A, { tier: "ai_max", source: "manual" });
+      const w = pgWorld(db, { subscribers: { [USER_A]: subscriberWith({}) } });
+      const res = await deliver(w, EVENT({ id: "evt-manual", type: "EXPIRATION" }));
+      w.restore();
+      assert.equal(res.status, 200);
+      assert.equal(w.rows("profiles")[0].tier, "ai_max", "a webhook took away a hand-granted tier");
+      assert.equal(w.rows("profiles")[0].tier_source, "manual");
+      const row = w.rows("billing_events")[0];
+      assert.equal(row.user_id, USER_A, "the event is about an account we hold, whatever we declined to write");
+      assert.equal(row.tier_before, "ai_max");
+      assert.equal(row.tier_after, "ai_max", "an untouched row must record what it still holds, not what RevenueCat implied");
+    });
+
+    await test("an anonymous id is recorded against no account, against the real FK", async () => {
+      const db = migratedDb();
+      const w = pgWorld(db);
+      const res = await deliver(w, EVENT({ id: "evt-anon", app_user_id: "$RCAnonymousID:9f2" }));
+      w.restore();
+      assert.equal(res.status, 200);
+      assert.equal(res.body.outcome, "no_account");
+      const rows = w.rows("billing_events");
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].user_id, null);
+      assert.equal(rows[0].app_user_id, "$RCAnonymousID:9f2", "a non-UUID id must survive into a column that has no constraint on it");
+      assert.deepEqual(w.fetches, []);
+    });
+  }
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);

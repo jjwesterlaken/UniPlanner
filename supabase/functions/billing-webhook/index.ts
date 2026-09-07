@@ -38,6 +38,28 @@
 //    as a duplicate. Same rule as aiNotesStore's two orderings: never
 //    claim done for work that is not done.
 //
+// AND ONE RULE ABOUT WHAT IS RECORDED, which cost a production 500 on
+// the very first real delivery. `billing_events.user_id` is a foreign
+// key to auth.users: it means AN ACCOUNT WE MATCHED, and nothing else.
+// An event naming a UUID-shaped id we hold no profile for is not an
+// error — it is a deleted account with a live subscription, or a client
+// configuring RevenueCat before sign-in, or the wrong project — so the
+// id RevenueCat sent goes in `app_user_id`, which has no constraint on
+// it, and `user_id` stays null.
+//
+// EVERY event that gets past the duplicate check is recorded, whoever
+// it turned out to be about. Three paths used to end in three different
+// places (one recorded, two returned early), and the one that recorded
+// was the one that wrote the wrong column. One row per accepted event
+// is both the simpler rule and the one that makes "which events arrived
+// for accounts we do not have" a query rather than a log search.
+//
+// AND UNKNOWN IS NOT A FAILURE. RevenueCat retries any non-2xx, so a
+// permanently unknown user answered with 5xx is redelivered until the
+// retry window expires — the same event, the same answer, every time.
+// 200 is what stops that, and it is honest: we did everything this
+// event can cause.
+//
 // AND THE SERVICE-ROLE RULE, in full. Every query here runs on the
 // client that bypasses RLS, so every `.eq("user_id", …)` a policy would
 // have applied is written by hand — and the id is always one RevenueCat
@@ -262,21 +284,69 @@ export async function handle(req: Request): Promise<Response> {
       return jsonResponse({ ok: true, outcome: "duplicate" });
     }
 
+    /* The id the store sent, verbatim and unvalidated — a Supabase
+       UUID for a signed-in client, "$RCAnonymousID:…" for one that is
+       not, and whatever a future integration decides. Bounded because
+       nothing upstream bounds it. */
+    const rawAppUserId = typeof event.app_user_id === "string" ? event.app_user_id.slice(0, 255) : null;
+
+    /* ---- record: one row per accepted event, whoever it was about ----
+       `matched` is the account we actually hold, or null. It is the
+       ONLY thing that may reach user_id — see the header. */
+    const recordEvent = async (matched: { userId: string | null; before: string | null; after: string | null }) => {
+      stage = "record";
+      const { error: recordErr } = await admin.from("billing_events").insert({
+        id: eventId,
+        user_id: matched.userId,
+        app_user_id: rawAppUserId,
+        event_type: eventType,
+        store: typeof event.store === "string" ? event.store.toLowerCase() : null,
+        tier_before: matched.before,
+        tier_after: matched.after,
+      });
+      if (!recordErr) return null;
+      /* 23505 is a CONCURRENT duplicate — two deliveries of the same
+         event racing. Definitive, and it means the work is done, so it
+         is read as success rather than retried. Every other code is a
+         real write failure: the tier IS applied at this point, so a
+         retry re-applies it harmlessly and records it, which is the
+         direction the apply-before-record ordering was chosen for. */
+      if ((recordErr as { code?: string }).code === "23505") {
+        logStage("record", { id: eventId, outcome: "duplicate_race" });
+        return jsonResponse({ ok: true, outcome: "duplicate" });
+      }
+      logFailure(stage, recordErr, { id: eventId });
+      return jsonResponse({ ok: false, code: "server_error" }, 500);
+    };
+
     /* ---- who is this about? ---- */
     const userIds = affectedUserIds(event);
     if (userIds.length === 0) {
       /* An anonymous RevenueCat id, or one that is not UUID-shaped, is
          not one of our accounts. 200, because retrying will not change
-         it — but logged, because a run of these means the client is
-         configuring RevenueCat before sign-in, which is the thing
-         _shared/entitlement.ts and the Phase 2 client rule exist to
-         prevent. */
-      logStage("no_account", { id: eventId, event: eventType, app_user_id: String(event.app_user_id ?? "").slice(0, 48) });
-      return jsonResponse({ ok: true, outcome: "no_account" });
+         it — but logged AND recorded, because a run of these means the
+         client is configuring RevenueCat before sign-in, which is the
+         thing _shared/entitlement.ts and the Phase 2 client rule exist
+         to prevent. */
+      logStage("no_account", { id: eventId, event: eventType, app_user_id: (rawAppUserId ?? "").slice(0, 48) });
+      const halted = await recordEvent({ userId: null, before: null, after: null });
+      return halted ?? jsonResponse({ ok: true, outcome: "no_account" });
     }
 
     /* ---- re-read, then apply, per affected account ---- */
-    const results: Array<{ userId: string; tier: BillingTier; outcome: string; before?: string | null }> = [];
+    const results: Array<{
+      userId: string;
+      tier: BillingTier;
+      outcome: string;
+      before: string | null;
+      /* What the profiles row NOW HOLDS, or null when there is no such
+         row. Distinct from `tier` on purpose: `tier` is what RevenueCat
+         says this subscriber is entitled to, which for an account we do
+         not have is a computation about nobody. */
+      after: string | null;
+      /** Do we hold this account? Only then may the id reach user_id. */
+      matched: boolean;
+    }> = [];
     for (const userId of userIds) {
       stage = "subscriber_read";
       const fetched = await fetchSubscriber(userId, env("REVENUECAT_SECRET_KEY"));
@@ -296,37 +366,46 @@ export async function handle(req: Request): Promise<Response> {
         logFailure(stage, applied.error, { id: eventId, outcome: applied.outcome });
         return jsonResponse({ ok: false, code: "server_error" }, 500);
       }
-      logStage("apply", { id: eventId, event: eventType, outcome: applied.outcome, before: applied.before ?? null, after: tier });
-      results.push({ userId, tier, outcome: applied.outcome, before: applied.before ?? null });
+      /* `after` IS WHAT WAS WRITTEN, and applyEntitlement leaves it
+         undefined precisely when nothing was. Logging the computed
+         tier there said `"after":"free"` for an account that does not
+         exist — a tier reported for a row nobody has. The computation
+         is still worth seeing, under a name that says what it is. */
+      const matched = applied.after !== undefined;
+      logStage("apply", {
+        id: eventId,
+        event: eventType,
+        outcome: applied.outcome,
+        before: applied.before ?? null,
+        after: applied.after ?? null,
+        computed: tier,
+      });
+      results.push({ userId, tier, outcome: applied.outcome, before: applied.before ?? null, after: applied.after ?? null, matched });
     }
 
-    /* ---- record, AFTER applying ---- */
-    stage = "record";
-    const primary = results[0];
-    const { error: recordErr } = await admin.from("billing_events").insert({
-      id: eventId,
-      user_id: primary.userId,
-      event_type: eventType,
-      store: typeof event.store === "string" ? event.store.toLowerCase() : null,
-      tier_before: primary.before ?? null,
-      tier_after: primary.tier,
+    /* ---- record, AFTER applying ----
+       A TRANSFER names two accounts and we may hold only one of them,
+       so the row is written about the one we matched rather than
+       whichever id sorted first. With none matched, user_id is null and
+       app_user_id is what the store sent — the whole point of 0018. */
+    const primary = results.find((r) => r.matched) ?? results[0];
+    const halted = await recordEvent({
+      userId: primary.matched ? primary.userId : null,
+      before: primary.before,
+      after: primary.after,
     });
-    if (recordErr) {
-      /* 23505 is a CONCURRENT duplicate — two deliveries of the same
-         event racing. Definitive, and it means the work is done, so it
-         is read as success rather than retried. Every other code is a
-         real write failure: the tier IS applied at this point, so a
-         retry re-applies it harmlessly and records it, which is the
-         direction the apply-before-record ordering was chosen for. */
-      if ((recordErr as { code?: string }).code === "23505") {
-        logStage("record", { id: eventId, outcome: "duplicate_race" });
-        return jsonResponse({ ok: true, outcome: "duplicate" });
-      }
-      logFailure(stage, recordErr, { id: eventId });
-      return jsonResponse({ ok: false, code: "server_error" }, 500);
-    }
+    if (halted) return halted;
 
-    return jsonResponse({ ok: true, outcome: "applied", accounts: results.length });
+    /* 200 EITHER WAY, and the outcome says which. An event for an
+       account we do not have is finished, not failed: nothing about it
+       will be different on the fourth delivery, and answering 5xx only
+       buys a retry storm ending in RevenueCat's dead-letter. */
+    return jsonResponse({
+      ok: true,
+      outcome: results.some((r) => r.matched) ? "applied" : "no_such_user",
+      accounts: results.length,
+      matched: results.filter((r) => r.matched).length,
+    });
   } catch (err) {
     logFailure(stage, err);
     return jsonResponse({ ok: false, code: "server_error" }, 500);
