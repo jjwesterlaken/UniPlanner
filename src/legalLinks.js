@@ -43,3 +43,16 @@ export const PASSWORD_RESET_REDIRECT = SITE_URL;
 
 export const PRIVACY_EMAIL = "privacy@uniplannerapp.com";
 export const SUPPORT_EMAIL = "support@uniplannerapp.com";
+
+/* APPLE'S STANDARD EULA, which is the Terms of Use for 1.1.0 (Jared,
+   Phase 0). A UniPlanner Terms document is a Phase 6 prerequisite, not
+   a 1.1.0 one — Apple accepts its own standard licence where an app has
+   not written its own, and writing one badly is worse than using the
+   one their review already knows.
+
+   IT IS APPLE'S URL AND NOT OURS, which is the single exception to
+   everything else in this file. It is here rather than typed into the
+   Plans panel for the same reason as the rest: the app, the store
+   listing metadata and any future document must not drift to different
+   strings, and a store listing cannot be edited as easily as a deploy. */
+export const APPLE_EULA_URL = "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/";

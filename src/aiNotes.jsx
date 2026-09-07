@@ -10,7 +10,7 @@
    rest of the app's CRUD-over-array sections.
    ================================================================== */
 
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { Mic, Square, Pause, Play, Check, X, TriangleAlert, RefreshCw, Globe, Download } from "lucide-react";
 import { ConsentGate } from "./aiNotesConsent.jsx";
 import { SummariseReading } from "./aiText.jsx";
@@ -57,6 +57,7 @@ import {
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
 import { noteCache } from "./noteCache.js";
 import { MONTHLY_CREDITS_LIMIT, allowanceForTier } from "./aiTextLimits.js";
+import { subscribeEntitlement, entitlementVersion as readEntitlementVersion } from "./entitlementRefresh.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes, callResummarise } from "./aiNotesClient.js";
 import { nowISO, supabase } from "./sync.js";
@@ -68,6 +69,12 @@ import { inputCls, labelCls, btnPrimary, btnGhost, iconBtn, Card, CourseSelect, 
 
 function UsageBadge({ session }) {
   const [usage, setUsage] = useState(null);
+  /* THE SHARED SIGNAL. A purchase happens on the Account tab, and this
+     badge lives on a tab that is very likely not even mounted at the
+     time — so without this it would keep showing the old allowance
+     until somebody happened to remount it, which is precisely the
+     "not on next AI-tab mount" that was ruled out. */
+  const entitlementVersion = useSyncExternalStore(subscribeEntitlement, readEntitlementVersion, readEntitlementVersion);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,7 +84,7 @@ function UsageBadge({ session }) {
     return () => {
       cancelled = true;
     };
-  }, [session && session.user.id]);
+  }, [session && session.user.id, entitlementVersion]);
 
   if (!usage || usage.unavailable) return null;
   /* THE SHAPE, NOT JUST THE NUMBER. A trial tier's 60 credits are

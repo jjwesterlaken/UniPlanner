@@ -177,7 +177,7 @@ const FIRST_PAINT_PROBE = () => {
   obs.observe(document, { childList: true, subtree: true });
 };
 
-async function measure(browser, bundleDir, dev, insets) {
+async function measure(browser, bundleDir, dev, insets, tab = "planner") {
   const ctx = await browser.newContext({
     viewport: { width: dev.w, height: dev.h },
     isMobile: true,
@@ -186,10 +186,13 @@ async function measure(browser, bundleDir, dev, insets) {
   const page = await ctx.newPage();
   const cdp = await ctx.newCDPSession(page);
   await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets });
+  await page.addInitScript((t) => {
+    window.__TAB__ = t;
+  }, tab);
   await page.addInitScript(FIRST_PAINT_PROBE);
   await page.addInitScript(() => {
     localStorage.setItem("uni-planner-mode", "light");
-    localStorage.setItem("uni-planner-tab", "planner");
+    localStorage.setItem("uni-planner-tab", window.__TAB__ || "planner");
   });
   await page.goto("file://" + path.join(rootDir, bundleDir, "index.html"));
   await page.waitForSelector("#root > *", { timeout: 15_000 });
@@ -246,6 +249,10 @@ async function measure(browser, bundleDir, dev, insets) {
       headerTop: +hb.top.toFixed(1),
       headerPaddingTop: parseFloat(getComputedStyle(header).paddingTop) || 0,
       gapAboveHeaderContent: +(inner.top - hb.top).toFixed(1),
+      /* Reported so the Plans pass below can prove it measured a page
+         with the panel on it rather than an Account tab that failed to
+         render one. */
+      plansPanel: !!document.querySelector("[data-plan-line]"),
       deadBandAboveHeader: +hb.top.toFixed(1),
       firstPaint: window.__firstPaint,
     };
@@ -392,6 +399,63 @@ async function run() {
       assert.equal(nat.gapAboveHeaderContent, web.gapAboveHeaderContent, `header content sits differently in the two bundles at ${dev.w}px`);
     }
   });
+
+  /* ---------------------------------------------------------------- */
+  /*  The Plans panel, at every width, in both bundles                  */
+  /* ---------------------------------------------------------------- */
+
+  /* WHY IT NEEDS ITS OWN PASS: everything above renders the planner
+     tab, and the panel is on Account — so none of it has ever had the
+     longest strings in the app (four disclosure paragraphs and a row of
+     four links) in front of it at 320px.
+
+     SIGNED OUT ON PURPOSE. The panel renders its plan line, its
+     disclosures and its links with no session, which is the layout
+     worth measuring; the buy buttons need a keyed store build and are
+     `w-full`, and test-rendered-tabs.mjs mounts those. What this pass
+     covers is stated so nobody reads it as covering the other. */
+  const plans = {};
+  const browser2 = await launch();
+  if (browser2) {
+    for (const b of BUNDLES) {
+      plans[b.dir] = {};
+      for (const dev of DEVICES) {
+        plans[b.dir][dev.w] = await measure(browser2, b.dir, dev, { top: dev.inset, left: 0, right: 0, bottom: dev.inset ? 34 : 0 }, "account");
+      }
+    }
+    await browser2.close();
+
+    for (const b of BUNDLES) {
+      for (const dev of DEVICES) {
+        const m = plans[b.dir][dev.w];
+        await test(`${b.label} @ ${dev.w}px: the Plans panel is really on the page`, () => {
+          assert.ok(m.plansPanel, "the Account tab rendered without the Plans panel — every assertion about its layout would be vacuous");
+          assert.ok(m.examined > 40, `only ${m.examined} elements were laid out — the page did not render`);
+        });
+        await test(`${b.label} @ ${dev.w}px: nothing in the Plans panel is laid out past the viewport`, () => {
+          assert.deepEqual(
+            m.past,
+            [],
+            `${m.past.length} element(s) past the ${dev.w}px viewport on the Account tab:\n        ` +
+              m.past.map((e) => `<${e.tag}> "${e.text}" ${e.left}..${e.right}`).join("\n        ")
+          );
+        });
+      }
+    }
+
+    await test("the two bundles render the Plans panel identically", () => {
+      /* The assertion that would have caught the native-only body
+         padding: a panel that laid out differently in mobile/www is a
+         difference no desktop screenshot could ever show. */
+      for (const dev of DEVICES) {
+        const web = plans["dist-web"][dev.w];
+        const nat = plans["mobile/www"][dev.w];
+        assert.ok(web && nat, `a bundle was not measured at ${dev.w}px`);
+        assert.equal(nat.plansPanel, web.plansPanel, `the panel is present in one bundle and not the other at ${dev.w}px`);
+        assert.equal(nat.past.length, web.past.length, `the panel overflows differently in the two bundles at ${dev.w}px`);
+      }
+    });
+  }
 
   await test("every device width was really measured, in both bundles", () => {
     for (const b of BUNDLES) {

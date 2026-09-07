@@ -363,12 +363,31 @@ function test_thirdParty() {
   for (const m of config.matchAll(/https:\/\/([a-z0-9.-]+)/gi)) ours.add(m[1].toLowerCase());
   const links = fs.readFileSync(path.join(rootDir, "src/legalLinks.js"), "utf8");
   for (const m of links.matchAll(/https:\/\/([a-z0-9.-]+)/gi)) ours.add(m[1].toLowerCase());
+  /* THE STORES' OWN SUBSCRIPTION PAGES are links this app renders, so
+     they are ours in the sense this check cares about — a destination we
+     chose — and they are DERIVED from the module that holds them rather
+     than typed here, for the reason the whole ledger exists. Neither
+     Apple nor Google lets an app cancel a subscription, so a link out is
+     the only shape this can take. */
+  const plans = fs.readFileSync(path.join(rootDir, "src/purchasePlans.js"), "utf8");
+  const planHosts = [...plans.matchAll(/https:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1].toLowerCase());
+  check(planHosts.length >= 2, "the store management URLs were read from purchasePlans.js", planHosts.length ? null : "found none — this derivation is reading the wrong file");
+  for (const h of planHosts) ours.add(h);
 
   const excused = {
     "www.w3.org": "XML/SVG namespace identifiers, never fetched",
     "reactjs.org": "React's error-decoder URL, printed in a message",
     "github.com": "a comment in supabase-js pointing at a discussion",
     localhost: "the Capacitor origin check",
+    /* THE PURCHASE SDK'S DOCUMENTATION LINKS, both printed into error
+       messages and neither ever fetched. Worth knowing rather than
+       waving at: the SDK's actual endpoint, api.revenuecat.com, is NOT
+       in this bundle at all — the network half of that plugin is native
+       code in the iOS and Android projects, so the web build could not
+       reach RevenueCat even if something called it. That is asserted
+       below rather than left as a claim. */
+    "errors.rev.cat": "a documentation URL in a RevenueCat error message, never fetched",
+    "capacitorjs.com": "a documentation URL in a Capacitor error message, never fetched",
   };
 
   const unexplained = hosts.filter((h) => !ours.has(h) && !excused[h]);
@@ -383,6 +402,26 @@ function test_thirdParty() {
   for (const marker of ["google-analytics", "googletagmanager", "sentry.io", "posthog", "mixpanel", "segment.io", "bugsnag", "datadoghq"]) {
     check(!bundle.includes(marker), `no ${marker} in the bundle`);
   }
+
+  /* THE PURCHASE SDK IS IN THE BUNDLE AND ITS ENDPOINT IS NOT, which is
+     a much stronger fact than "we promise not to call it". The plugin's
+     JavaScript half only marshals arguments across the Capacitor
+     bridge; every request it makes is made by native code that exists
+     in the iOS and Android projects and nowhere in this file. So the
+     web build cannot reach RevenueCat, whatever any future refactor
+     does to the calling conventions in src/purchases.js.
+
+     Checked rather than assumed, and it is the reason the excuses above
+     are only for documentation URLs. */
+  check(
+    !bundle.includes("api.revenuecat.com"),
+    "the purchase SDK's endpoint is not in the web bundle",
+    bundle.includes("api.revenuecat.com") ? "api.revenuecat.com is now in dist-web/app.js — the web build can reach RevenueCat, and the privacy policy says it cannot" : null
+  );
+  /* And the non-vacuity of that: the SDK really IS bundled, so the
+     absence above is a fact about the SDK rather than about a missing
+     import. */
+  check(bundle.includes("errors.rev.cat"), "the purchase SDK really is in the bundle, so the check above is not vacuous");
 }
 
 /* ------------------------------------------------------------------ */

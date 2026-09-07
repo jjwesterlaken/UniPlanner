@@ -799,20 +799,145 @@ promise. `test-focus-zoom` and `test-viewport-layout` walk the new panel
 purchase, or observe the customer-info listener firing. Those are
 Phase 4.
 
+### Phase 2 — BUILT, 7 September 2026 (client; nothing sells until Phase 3)
+
+**Five modules, and the split between them is forced rather than
+chosen.** The RevenueCat package ships extensionless relative imports
+(`./web`), which esbuild resolves and Node's ESM loader refuses — so a
+module that touches the SDK **cannot be imported by a plain-Node test at
+all**. Everything decidable without a handset therefore lives on the
+pure side:
+
+- `src/purchasePlans.js` — PURE. The platform→store map, the capability
+  rule, the six packages, the manage-subscription URL, and the poll
+  ladder. Imported directly by the tests.
+- `src/purchases.js` — the only place the SDK is spoken to. Every action
+  asks the capability FIRST and returns a refusal without touching the
+  plugin; exercised through an esbuild bundle, which is the artifact
+  rule getting what it wants for free.
+- `src/purchaseKeys.js` — the two public keys, from the build.
+- `src/plansCopy.js` — every word, rendered per tier by a test.
+- `src/entitlementRefresh.js` — one shared signal, three readers.
+- `src/plans.jsx` — the panel.
+
+**THE KEYS ARE BUILD-TIME ENVIRONMENT VALUES**, `REVENUECAT_IOS_KEY` and
+`REVENUECAT_ANDROID_KEY`, substituted by `scripts/build-web.mjs` into
+`__REVENUECAT_IOS_KEY__` / `__REVENUECAT_ANDROID_KEY__`. A phone has no
+environment to read, so the key that ships in an IPA is the one that was
+set when THAT bundle was built. Unset is not a crash: it is
+`available: false, reason: "no-key"`, which the panel says in **its own
+sentence**, different from the web one — a keyless store build and a web
+build look identical to a student and are completely different to
+whoever is debugging.
+
+The source form is `typeof __X__ === "string" ? __X__ : ""` and NOT
+`process.env.X`, deliberately. esbuild substitutes exactly the
+expression named in `define`; write it as `process.env["X"]` one day and
+the substitution stops, `process` is undefined in a browser, and the app
+throws. That is `import.meta.env` in a new costume, and it shipped once
+already. `typeof` on an undeclared identifier is the one expression that
+cannot throw, so the module imports cleanly in Node and in a bundle that
+forgot the define.
+
+**THE SHARED SIGNAL is why the badge moves without a tab change.** A
+purchase happens on the Account tab; the AI credit badge lives on a tab
+that is very probably not mounted. `entitlementRefresh.js` is a
+module-level version counter that the badge, the text allowance and the
+panel all read through `useSyncExternalStore`, so one bump moves all
+three. It holds a NUMBER, never an entitlement — every reader still asks
+the server, which is what makes a bug there cost a stale figure for a
+few seconds rather than a tier nobody bought.
+
+**AND THE GAP IT COVERS.** A purchase completes on the device BEFORE our
+server hears about it: the store confirms, RevenueCat delivers the
+webhook, the webhook writes `profiles.tier`, and only then does a
+re-read see it. One immediate read almost always lands first, so the
+panel would say Free to somebody who has just paid. It re-reads on a
+BOUNDED ladder — 0, 2, 5, 10 seconds — and past that says the plan is
+still activating, which is true, rather than that it failed, which
+usually is not. Bounded because a webhook that never arrives would
+otherwise leave every device that ever tried to buy polling forever.
+
+**Web and desktop show the tier and stop.** Not a "coming soon": the
+plan is the same account wherever a student signs in, and hiding it
+would leave somebody who paid on their phone wondering whether the
+laptop knew. Promising a purchase flow on a surface that will never have
+one is the worse sentence.
+
+**Verification, and what each run really exercises.**
+
+| Check | Instrument | What it would catch |
+|---|---|---|
+| the SDK is never spoken to off a native shell | all five actions driven against a TRACED fake on a web capability, with the same five on a native capability asserted to reach it | a capability check that runs and then calls anyway |
+| the same claim, in a browser | the real bundle, with Capacitor's OWN bridge faked (`androidBridge` + `PluginHeaders` + `nativePromise`) — native records calls, web records none | our module being stubbed against itself |
+| the panel at every width | 7 phone widths × BOTH bundles, nothing past the viewport, panel presence asserted | a native-only layout difference no desktop screenshot shows |
+| the reads are wired to the real entitlement | the intercepted `profiles` row says `ai`; the panel must name Study AI | a panel that renders a hardcoded plan |
+| every sentence agrees with the server | every copy function × every tier vs `allowanceForTier` | "this month" on a once-ever trial |
+| the build carries the keys | both define names derived from `purchaseKeys.js`, checked in `build-web.mjs` AND absent-unsubstituted from `dist-web/app.js` | a store build that silently cannot sell |
+
+**THE BROWSER PAIR IS A CONTROL, and it took a second pass to make it
+one.** The web half first ran against `dist-web` — which has no key — so
+an empty call list was explained by TWO things at once and discriminated
+between neither. Both halves now run the same keyed build with the same
+spy, and the platform is the only difference. That is the
+colour-coincidence rule, caught while writing the test rather than after
+it.
+
+**The privacy policy was rewritten, not appended to**, and the tripwire
+armed in Phase 1 is what forced it: the moment `mobile/package.json`
+gained the plugin, three sentences became false. All three are gone —
+"the only part that sends anything overseas", "made from our server
+rather than from your device", "the only server the app itself contacts
+is our own" — replaced by a **Payments** section naming Apple, Google
+and RevenueCat and saying the thing that is actually different about a
+purchase: unlike every AI request, it is made FROM THE DEVICE, because
+that is how the stores work and there is no version of it that goes
+through our server. The tripwire now also asserts the replacement
+exists, since deleting three sentences satisfies "they are gone" and
+says nothing.
+
+**Not a consent bump.** Consent governs what happens to a student's
+CONTENT, and no content is involved in a purchase. The sentence
+`test-local-only` pins — nothing leaves the device without an account —
+stays true, because RevenueCat is never configured without one.
+
+**One fact worth keeping: `api.revenuecat.com` is not in the web
+bundle.** The plugin's JavaScript half only marshals arguments across
+the Capacitor bridge; every request it makes is made by native code in
+the iOS and Android projects. So the web build could not reach
+RevenueCat whatever a future refactor does to `src/purchases.js` — and
+that is asserted, alongside its own non-vacuity (the SDK really is
+bundled), rather than left as a claim.
+
+**What Phase 2 cannot do**, listed so a green suite is read for what it
+is: render a real paywall, complete a purchase, observe the
+customer-info listener, or find out what an App Review reviewer thinks.
+MOBILE-BUILD.md's "Subscriptions" section is the device list.
+
 ### Phase 3 — Store and dashboard setup (Jared; dashboards, no code)
 
 Apple: sign the Paid Applications agreement and enter banking and tax
 in App Store Connect — **sandbox purchases do not work until this is
-done**, and it can take days to clear; create the subscription group
-and nine products with the ids above; create at least two sandbox
+done**, and it can take days to clear; create ONE subscription group
+and SIX products with the ids above; create at least two sandbox
 tester accounts (one for Grace's iPhone, one for a "second account"
 transfer test). Google: a payments/merchant profile in Play Console;
-three subscriptions with three base plans each; an internal-testing
+TWO subscriptions with three base plans each; an internal-testing
 track with license testers (the moto g05's account). RevenueCat: the
 project, both store apps with their credentials (App Store Connect API
-key or shared secret; Play service-account JSON), three entitlements,
-the `default` offering, the webhook URL with the `Authorization` value,
-and the two public SDK keys into `config.js`.
+key or shared secret; Play service-account JSON), TWO entitlements
+(`ai` and `ai_max`), the `default` offering carrying the six packages
+named in `src/purchasePlans.js` (`studyai_monthly` … `studyaimax_annual`
+— those identifiers are what the client groups by), the webhook URL
+with the `Authorization` value, and the two public SDK keys.
+
+**Corrected here rather than left to be found in a console.** This
+paragraph said nine products and three entitlements, which predates
+Phase 0 dropping Plus, and said the SDK keys go "into `config.js`",
+which Phase 2 superseded: they are BUILD-TIME environment values
+(`REVENUECAT_IOS_KEY`, `REVENUECAT_ANDROID_KEY`) read by
+`scripts/build-web.mjs`, because a key committed to `config.js` would
+be the same key in every build including the web one.
 
 **Lead items:** the Apple agreement and the Play merchant profile are
 the two things with an external clock. Start them the day Phase 0 closes.
@@ -843,7 +968,7 @@ nothing.
 
 Root `package.json` → `1.1.0` (`stamp-native.mjs` propagates it to both
 shells; the build number is derived). Apply 0017 → deploy the three
-functions → Phase 4 → submit iOS with the nine products attached to the
+functions → Phase 4 → submit iOS with the six products attached to the
 version (the first in-app products must be submitted with a binary
 **[confirm]**), the App Privacy questionnaire updated, the Terms URL in
 the metadata; Play with Data safety updated and the subscriptions

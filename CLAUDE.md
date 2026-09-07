@@ -1720,6 +1720,107 @@ Stripe's secrets use an UNDERSCORE (`sk_live_`, `sk_test_`, `rk_live_`,
 ship, and forbidding them would be a gate that has to be suppressed the
 day Phase 2 lands.
 
+## Selling it: the client half, and the two things it must never do
+
+`src/purchasePlans.js` (pure), `src/purchases.js` (the SDK),
+`src/purchaseKeys.js`, `src/plansCopy.js`, `src/entitlementRefresh.js`,
+`src/plans.jsx`, and `scripts/test-purchases.mjs`. Phase 2 of
+BILLING-PLAN.md; nothing sells until the store dashboards exist.
+
+**THE SPLIT BETWEEN THE TWO PURCHASE MODULES IS FORCED, NOT CHOSEN.**
+The RevenueCat package ships extensionless relative imports (`./web`),
+which esbuild resolves and **Node's ESM loader refuses** — so any module
+that touches the SDK cannot be imported by a plain-Node test at all.
+Everything decidable without a handset therefore lives in
+`purchasePlans.js` and is imported directly; the thin SDK layer is
+exercised through an esbuild bundle. That is the artifact rule getting
+what it wants for free, and it is worth knowing before somebody
+"tidies" the two files back into one and finds half the suite
+unrunnable.
+
+**RULE 1: THE PLUGIN IS NEVER SPOKEN TO OFF A NATIVE SHELL.** Every
+action asks the capability first and returns a refusal without touching
+the plugin. Asserted behaviourally in two places, because a grep for
+"every function starts with a check" passes on a function that checks
+and then calls anyway: a traced fake drives all five actions on a web
+capability and the trace must be empty, and the real bundle is mounted
+in Chromium with **Capacitor's own bridge faked** (`androidBridge` plus
+`PluginHeaders` plus `nativePromise`) so the real plugin marshals real
+calls — native records them, web records none.
+
+**AND THAT PAIR ONLY BECAME A CONTROL ON THE SECOND PASS.** The web half
+first ran against `dist-web`, which has no RevenueCat key — so it showed
+no purchase controls for TWO reasons at once and discriminated between
+neither. Both halves now run the same KEYED build with the same spy and
+the platform is the only difference. Colour-coincidence class, caught
+while writing the test rather than after it.
+
+**RULE 2: `profiles.tier` IS THE TRUTH, NEVER `customerInfo`.** The
+webhook is the only writer; the client reads what it wrote. That is what
+lets the panel work read-only on web and desktop, and it is why the one
+thing taken off the SDK's customer info is `managementURL` — a LINK, not
+an entitlement.
+
+**THE KEYS ARE BUILD-TIME, AND THE FORM MATTERS.**
+`REVENUECAT_IOS_KEY` / `REVENUECAT_ANDROID_KEY` are read from the
+environment by `build-web.mjs` and substituted into
+`__REVENUECAT_IOS_KEY__` / `__REVENUECAT_ANDROID_KEY__`. A phone has no
+environment, so the key in an IPA is the one that was set when THAT
+bundle was built — MOBILE-BUILD.md names both in the store-build steps.
+The source reads them as `typeof __X__ === "string" ? __X__ : ""` and
+**not** `process.env.X`: esbuild substitutes exactly the expression
+named in `define`, so `process.env["X"]` one day stops the substitution,
+`process` is undefined in a browser, and the app throws. That is
+`import.meta.env` in a new costume, and it shipped once already.
+`typeof` on an undeclared identifier is the one expression that cannot
+throw. A missing key is `reason: "no-key"` with **its own sentence**,
+deliberately different from the web one: a keyless store build and a web
+build look identical to a student and are opposite problems to whoever
+is debugging.
+
+**ONE SIGNAL, THREE READERS.** A purchase happens on the Account tab and
+the AI credit badge lives on a tab that is very likely not mounted, so
+`entitlementRefresh.js` is a module-level version counter that the
+badge, the text allowance and the panel read through
+`useSyncExternalStore`. It holds a NUMBER and never an entitlement —
+every reader still asks the server — which is what makes a bug there
+cost a stale figure for a few seconds rather than a tier nobody bought.
+
+**AND THE GAP IT COVERS.** A purchase completes on the device BEFORE our
+server hears about it: store, then webhook, then `profiles.tier`, then a
+re-read. One immediate read lands first almost every time, so the panel
+would say Free to somebody who has just paid. It re-reads on a BOUNDED
+ladder (0/2/5/10s) and then says the plan is still activating, which is
+true, rather than that it failed, which usually is not. Bounded because
+a webhook that never arrives would leave every device that ever tried to
+buy polling forever.
+
+**THE PACKAGE TABLE IS A DASHBOARD RESTATEMENT and is guarded on both
+sides.** Six package ids map to tier and duration; a test asserts they
+are exactly the pairs BILLING-PLAN.md's product table names, and an
+UNRECOGNISED package is still SHOWN with whatever the store called it.
+Hiding a plan a student is entitled to buy because an id was mistyped is
+the worse of the two failures.
+
+**THE POLICY WAS REWRITTEN, AND THE TRIPWIRE IS WHAT FORCED IT.** The
+guard armed in Phase 1 fired the moment `mobile/package.json` gained the
+plugin: three sentences became false and all three are gone, replaced by
+a **Payments** section naming Apple, Google and RevenueCat and saying
+the thing that is genuinely different — unlike every AI request, a
+purchase is made FROM THE DEVICE, because that is how the stores work.
+The tripwire now also asserts the replacement exists, since deleting
+three sentences satisfies "they are gone" and says nothing. **Not a
+consent bump**: consent governs what happens to a student's CONTENT and
+no content is involved.
+
+**One fact worth keeping: `api.revenuecat.com` is not in the web
+bundle.** The plugin's JavaScript half only marshals arguments across
+the Capacitor bridge; every request is made by native code in the iOS
+and Android projects. So the web build could not reach RevenueCat
+whatever a refactor does to `purchases.js` — asserted in
+`test-local-only.mjs`, alongside its own non-vacuity (the SDK really is
+bundled, `errors.rev.cat` proves it).
+
 ## The marketing site: data first, design last
 
 `site/` holds everything the page READS — downloads, pricing, flags —
@@ -4173,6 +4274,12 @@ no framework, matching the style of the build scripts.
   foreign key, and that is what let the first real delivery 500. It
   opens with "THE FOREIGN KEY REALLY BITES HERE", which is the
   non-vacuity assertion the rest of the section depends on
+- `scripts/test-purchases.mjs` — the client half of billing. The claim
+  it exists for is that the store SDK is never spoken to off a native
+  shell, driven against a traced fake rather than greped for; the rest
+  is the capability matrix, the six packages, and every plan sentence
+  rendered per tier. The SDK layer goes through an esbuild bundle
+  because Node cannot import it
 - `scripts/test-practice.mjs` — practice attempts store state, not the
   questions, and prune their own tombstones
 - `scripts/test-ai-store.mjs` — the storage move: both ordering rules, the

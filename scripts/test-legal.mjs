@@ -744,6 +744,19 @@ async function run() {
       /RevenueCat/i,
       "the purchase SDK is a dependency but the policy does not name RevenueCat in its list of who else sees your data"
     );
+    /* THE REPLACEMENT PROMISE, asserted rather than assumed. Deleting
+       three sentences satisfies the check above and says nothing; what
+       makes the document true again is a section describing what a
+       purchase actually does, which is the thing a reviewer and a
+       student both look for. Named by its anchor, because the two
+       rewritten sentences link to it and a dead link is worse than no
+       link. */
+    assert.match(policy, /id="payments"/, "the exclusivity sentences are gone and nothing replaced them — the policy now describes no payment at all");
+    assert.match(policy, /Apple/i, "the payments section does not name who takes the payment");
+    assert.match(policy, /Google/i, "the payments section does not name who takes the payment");
+    for (const anchor of policy.matchAll(/href="#([a-z-]+)"/g)) {
+      assert.match(policy, new RegExp(`id="${anchor[1]}"`), `the policy links to #${anchor[1]} and has no such section`);
+    }
   });
 
   await test("npm test still runs the legal tests", () => {

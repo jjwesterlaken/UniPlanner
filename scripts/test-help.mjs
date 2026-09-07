@@ -288,6 +288,11 @@ test("NO MODULE CLAIMS AN ALLOWANCE IS MONTHLY WITHOUT BRANCHING ON THE TIER", (
       phrase: /one-off trial rather than a monthly allowance/i,
     },
     "src/aiTextCopy.js": { kind: "branches", why: "allowanceNoun and resetsSentence; rendered per tier in test-ai-text-function.mjs" },
+    "src/plansCopy.js": {
+      kind: "branches",
+      why: "resetLine says the 1st of the calendar month for a monthly tier and says the credits do NOT reset for a trial one; rendered per tier in test-purchases.mjs",
+    },
+    "src/purchasePlans.js": { kind: "not user-facing", why: "the six package ids, one of which is a six-MONTH subscription" },
   };
 
   const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");

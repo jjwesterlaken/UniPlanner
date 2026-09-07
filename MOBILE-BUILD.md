@@ -735,6 +735,84 @@ device rather than a decision.
     `"never"` and keep whichever is right. Do this before the store
     screenshots, since the screenshots are what expose it.
 
+### Subscriptions — nothing here has run, and none of it can
+
+**Phase 2 shipped the client half of billing on 7 September 2026.**
+Everything below needs a real device with a real store test account, and
+NONE of it is reachable from a build machine: the container reaches no
+Apple, Google or RevenueCat host, so the whole of this section is
+verified at the precondition and not at the symptom.
+
+**What the suite DOES prove, so this list is read for what it adds:**
+the panel renders in both bundles at all seven phone widths with nothing
+past the viewport; a native shell shows all six packages with the store's
+prices, a Restore control, a Manage link and both legal links; a web
+build shows the plan and no purchase controls; and the store SDK is
+called exactly zero times on web against a bridge spy that records a
+non-zero number on native. What it cannot prove is that any of it works
+against a real store.
+
+**PRECONDITIONS — none of this runs without them.** Phase 3 of
+BILLING-PLAN.md is the full list; the two that block everything are the
+**Paid Applications agreement** in App Store Connect (sandbox purchases
+do not work until banking and tax are entered, and it can take days) and
+a **Play merchant profile**. Then: the six products, the `default`
+offering with the six packages named in `src/purchasePlans.js`, and both
+RevenueCat public SDK keys.
+
+**THE KEYS ARE BUILD-TIME AND A BUILD WITHOUT THEM SELLS NOTHING.**
+`REVENUECAT_IOS_KEY` and `REVENUECAT_ANDROID_KEY` are read from the
+environment by `scripts/build-web.mjs`. A store build must set them:
+
+```
+REVENUECAT_IOS_KEY=appl_… REVENUECAT_ANDROID_KEY=goog_… npm run build
+cd mobile && npm run sync
+```
+
+Get this wrong and nothing errors — the app installs, the Plans panel
+shows the plan and says "In-app purchases aren't set up in this build",
+and no purchase control ever appears. That sentence is deliberately
+different from the web one so the two are told apart at a glance.
+
+**On Grace's iPhone, in the sandbox:**
+
+1. **The panel as a reviewer sees it.** Price, period, that it renews
+   automatically, how to cancel, Restore, Terms and Privacy — all on
+   screen without scrolling past anything that looks like a footer.
+   Screenshot it; that screenshot is what settles an App Review query.
+2. **Buy `uniplanner.studyai.monthly`** with a sandbox account. Expect
+   the plan line to change within a few seconds — it re-reads on a
+   0/2/5/10-second ladder — and the AI tab's credit badge to read
+   `… of 900` **without switching tabs first**, which is the shared
+   signal doing its job.
+3. **Check the server agrees**: one new `billing_events` row with a real
+   `user_id`, and `profiles.tier = 'ai'`, `tier_source = 'revenuecat'`,
+   `store = 'app_store'`.
+4. **Restore on a second install.** Delete the app, reinstall, sign in,
+   tap Restore. The tier comes back with no new `INITIAL_PURCHASE`.
+5. **Cancel from the sandbox subscription settings**, then let it lapse.
+   `CANCELLATION`, then `EXPIRATION`, then `tier = 'free'`.
+6. **Press Cancel on the purchase sheet.** Nothing must be said at all —
+   no error banner. That is copy the suite pins and a device confirms.
+7. **Sign out.** The SDK is logged out; sign in as a second account and
+   confirm the first account's plan does NOT appear.
+
+**On the moto g05** (the handset the Android build is already verified
+on), with a Play **license tester** account and the app on an
+**internal-testing** track — a sideloaded APK cannot buy anything:
+
+8. The same panel check, and one purchase with a test card.
+9. Cancel from the Play subscription centre and refund from Play Console
+   orders; expect the same three transitions with `store = 'play_store'`.
+10. **Android inputs are 16px now** (the focus-zoom floor), which is a
+    visible change on this handset — flag it to Grace with a screenshot
+    rather than letting her find it.
+
+**The one that is easy to skip and expensive to miss:** kill the network
+mid-purchase and reopen the app. The store completes the transaction
+later, RevenueCat delivers the webhook, and the tier must appear without
+a second charge.
+
 ### Handwriting — removed
 
 The two iPad items that used to sit here (Apple Pencil pressure, and a

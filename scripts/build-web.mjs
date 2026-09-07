@@ -23,7 +23,26 @@ await build({
   minify: true,
   format: "iife",
   jsx: "automatic",
-  define: { "process.env.NODE_ENV": '"production"' },
+  /* THE TWO PUBLIC REVENUECAT KEYS, from the environment.
+
+     ALWAYS DEFINED, even when unset — an empty string is what
+     src/purchaseKeys.js reads as "this build cannot sell anything",
+     which is the correct and permanent answer for every web build. A
+     store build with the variables missing produces an app whose
+     purchase controls never appear, so scripts/test-purchases.mjs
+     asserts that BOTH names are substituted here and MOBILE-BUILD.md
+     names them in the store-build steps.
+
+     Read from `process.env` HERE, in Node, where process.env exists;
+     what reaches the bundle is a string literal. The source side is
+     deliberately `typeof __X__ === "string" ? __X__ : ""` rather than
+     `process.env.X`, so a bundle that somehow missed this define
+     reports no key instead of throwing on an undefined `process`. */
+  define: {
+    "process.env.NODE_ENV": '"production"',
+    __REVENUECAT_IOS_KEY__: JSON.stringify(process.env.REVENUECAT_IOS_KEY || ""),
+    __REVENUECAT_ANDROID_KEY__: JSON.stringify(process.env.REVENUECAT_ANDROID_KEY || ""),
+  },
   outfile: path.join(OUT, "app.js"),
   logLevel: "info",
 });
