@@ -1668,6 +1668,37 @@ logged, and the symptom is "students pay and their plan never changes".
 The wiring test asserts BOTH halves: the flag is present, and it occurs
 exactly once, so it cannot leak onto the two functions that spend money.
 
+**`user_id` MEANS AN ACCOUNT WE MATCHED. THE FIRST REAL DELIVERY PROVED
+NOBODY BELIEVED THAT.** The dashboard TEST event named a UUID-shaped
+`app_user_id` with no `profiles` row. The apply was right — an absent
+profile means a deleted account, so `applyEntitlement` writes nothing
+rather than resurrecting one — and the RECORD put that id straight into
+`billing_events.user_id`, which is a foreign key to `auth.users`. 23503,
+a 500, and **RevenueCat retries every non-2xx**, so a permanently
+unknown user would have been redelivered until the window expired.
+
+Migration 0018 gives the id the store sent its own unconstrained `text`
+column (`app_user_id`) and leaves `user_id` null when we hold no such
+account. **The row is kept rather than skipped**: a paid event for a
+user we do not have is exactly the thing to notice — a deleted account
+with a live subscription, a client configuring RevenueCat before
+sign-in, or the webhook pointed at the wrong project — and dropping it
+makes all three silent. Idempotency is untouched because the primary key
+is the EVENT id and never depended on `user_id`.
+
+**Every accepted event is recorded now, whoever it turned out to be
+about.** Three paths used to end in three different places — one
+recorded, two returned early — and the one that recorded was the one
+that wrote the wrong column. Unknown is answered **200**, not 5xx:
+nothing about that event is different on the fourth delivery.
+
+And the log stopped naming a tier nobody has. `"after":"free"` on
+`no_such_user` was the computed tier substituted for the written one;
+`applyEntitlement` already leaves `after` undefined exactly when nothing
+was written, so the fix was to stop overriding it and to log the
+computation under `computed`. The `fetchNote` three-outcomes rule, in a
+log line.
+
 **A TRIPWIRE ARMED FOR A CHANGE THAT HAS NOT HAPPENED.** Three
 sentences in the privacy policy become false the day the purchase SDK
 ships — "the AI features are the only part that sends anything
@@ -3144,6 +3175,28 @@ the same way: it hardcoded the value it was supposed to be guarding.
   here it would have failed a good one. A stand-in that restates the
   environment is wrong in whichever direction it happens to differ.
 
+- **The billing suite's fake database, and it is the FOURTH stand-in
+  instance rather than another restatement.** It modelled
+  `billing_events`'s PRIMARY KEY — so "a redelivery writes one row" was
+  a real claim — and did not model its FOREIGN KEY to `auth.users`. The
+  first real webhook delivery was an event for an account we do not
+  have, the handler put that id in `user_id`, Postgres refused, the
+  function 500'd, and **33 green tests contained no trace of the
+  constraint that decided the outcome.** The remedy is the one this
+  ledger always reaches for: not a fake that knows about this one key —
+  that is a restatement with extra steps, and the next constraint would
+  be missing identically — but the suite's write path running against a
+  database with every migration applied. `scripts/lib/pg-harness.mjs`
+  now holds the cluster, the Supabase shim and the psql wrappers, shared
+  by `test-migrations.mjs` and the billing suite, so a constraint added
+  to the shim protects both. It found a second missing constraint on the
+  way in (`profiles_store_check`, which `normaliseStore` is the only
+  thing between and a 23514 on an Amazon purchase). The section opens
+  with a test that inserts a stray id THROUGH THE SAME ADAPTER and
+  requires 23503, because every other test there is "the handler does
+  not fall foul of a constraint" and all of them pass against a schema
+  with no constraints at all.
+
 - The grant audit's own **"the app's own queries still work" test**
   enumerated those queries by hand, from reading the client. It
   included `planner_data`'s upsert and omitted `ai_notes`, so 0008
@@ -3183,8 +3236,9 @@ the same way: it hardcoded the value it was supposed to be guarding.
   the browser/Deno mirrors this one is avoidable: both functions are
   Deno, in the same repository, and `ai-notes/_shared/` already exists.
 
-One is an anecdote. Fifteen is a rule: **derive a guard from its source
-of truth, don't restate it.** The cache name is hashed from the built bytes,
+One is an anecdote. Seventeen is a rule — the sixteen above plus the
+file-scoped sibling below: **derive a guard from its source of truth,
+don't restate it.** The cache name is hashed from the built bytes,
 the allowlist is read from `SITE_URL`, the drift test compares whole URLs
 against the exported constants, the table list is matched out of the
 migrations, and the mirrored constants are asserted equal to the ones
@@ -3403,10 +3457,16 @@ the deletion functions"* therefore passed locally while being false in
 production. Adding the function defaults to the shim reproduced the
 live error exactly, and the mechanism is now pinned on a synthetic
 function (*"REVOKING FROM public DOES NOT REMOVE A ROLE-SPECIFIC
-GRANT"*) so it survives any later edit to 0002. Three instances now —
-table defaults, the missing `service_role`, and function defaults — and
-the pattern is always the same: **the stand-in is weaker than
-production, so the guard is weaker than it reads.**
+GRANT"*) so it survives any later edit to 0002. Four instances now —
+table defaults, the missing `service_role`, function defaults, and the
+billing suite's fake database with no foreign key — and the pattern is
+always the same: **the stand-in is weaker than production, so the guard
+is weaker than it reads.** The fourth changed the arrangement rather
+than the shim: `scripts/lib/pg-harness.mjs` is shared by
+`test-migrations.mjs` and the billing suite now, so a constraint added
+to the stand-in protects both, and the write-path claims are made
+against a database with every migration applied instead of against a
+hand-written model of one.
 
 **The audit that followed:** every other function in the folder already
 revokes from `anon` explicitly. `handle_new_profile()` does not, and
@@ -4104,6 +4164,15 @@ no framework, matching the style of the build scripts.
 - `scripts/test-ai-text-function.mjs` — the text endpoint: the allowance
   read that must precede the provider call, the two source-level
   invariants, and that every returnable code has wording
+- `scripts/test-billing-function.mjs` — the entitlement writer. Sections
+  1–6 run the real handler against a traced fake, for the claims that
+  are about ORDER and about what did NOT happen (no fetch before
+  authentication, no write on a forged body). **Section 7 runs the write
+  path against a real postgres** with every migration applied, because
+  the claims there are about what the database ACCEPTS — the fake had no
+  foreign key, and that is what let the first real delivery 500. It
+  opens with "THE FOREIGN KEY REALLY BITES HERE", which is the
+  non-vacuity assertion the rest of the section depends on
 - `scripts/test-practice.mjs` — practice attempts store state, not the
   questions, and prune their own tombstones
 - `scripts/test-ai-store.mjs` — the storage move: both ordering rules, the

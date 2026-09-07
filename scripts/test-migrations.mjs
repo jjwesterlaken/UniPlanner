@@ -42,248 +42,29 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
 const migrationsDir = path.join(rootDir, "supabase", "migrations");
 
-/* ---------- strict mode ---------- */
+/* ---------- the database, and where the machinery lives ---------- */
 
-const strict = process.env.REQUIRE_POSTGRES === "1" || process.argv.includes("--require-postgres");
+/* THE CLUSTER, THE SHIM AND THE psql WRAPPERS MOVED to scripts/lib/
+   pg-harness.mjs. Not for tidiness: billing-webhook's suite needs the
+   same real database, because its fake did not model the foreign key
+   that decided the outcome of the first real delivery. Two suites
+   sharing one stand-in is the only arrangement in which a constraint
+   added to the shim protects both — the alternative is two shims that
+   drift apart, which is the pattern this project has paid for four
+   times already. The module's header has the full account. */
+import { createPgHarness } from "./lib/pg-harness.mjs";
 
-/** In strict mode a skip is a failure; otherwise it's a quiet exit 0. */
-function skip(reason, fix) {
-  if (strict) {
-    console.error(`migration tests could NOT run: ${reason}`);
-    console.error(`Strict mode (REQUIRE_POSTGRES / --require-postgres) is on, so this is a failure rather than a skip. ${fix}`);
-    process.exit(1);
-  }
-  console.log(`migration tests skipped: ${reason}`);
-  console.log("(fine locally — CI runs them for real against a postgres service container)");
-  process.exit(0);
-}
+const pg = createPgHarness({ migrationsDir, label: "migration tests" });
 
-/* ---------- locating postgres ---------- */
+/* Skips itself (exit 0) when there is no database, which is the normal
+   case on the machines this app is usually built from. That skip is
+   only acceptable because somewhere always runs it for real:
+   REQUIRE_POSTGRES=1 turns every skip path into a hard failure, and CI
+   sets it, so a test that quietly stops running fails the build. */
+if (!pg.available) pg.skipOrFail();
 
-/* PGHOST means "a server is already running, just connect to it" — the CI
-   service container, or a local server someone would rather reuse. Only
-   psql is needed then; initdb and pg_ctl aren't in the picture at all. */
-const useExistingServer = Boolean(process.env.PGHOST);
+const { psql, psqlAsync, psqlOrThrow, applyMigration, freshDb, one, count } = pg;
 
-function findBinDir(required) {
-  // A packaged postgres usually isn't on PATH (Debian/Ubuntu hides it in
-  // /usr/lib/postgresql/<version>/bin), so look there too before giving up.
-  const onPath = spawnSync(required, ["--version"], { stdio: "ignore" });
-  if (onPath.status === 0) return "";
-
-  const candidates = [];
-  for (const base of ["/usr/lib/postgresql", "/usr/local/opt", "/opt/homebrew/opt"]) {
-    if (!fs.existsSync(base)) continue;
-    for (const entry of fs.readdirSync(base)) {
-      const bin = path.join(base, entry, "bin");
-      if (fs.existsSync(path.join(bin, required))) candidates.push(bin);
-    }
-  }
-  // Highest version number wins.
-  candidates.sort();
-  return candidates.length ? candidates[candidates.length - 1] : null;
-}
-
-const binDir = findBinDir(useExistingServer ? "psql" : "initdb");
-if (binDir === null) {
-  skip(
-    useExistingServer
-      ? "PGHOST is set but no psql client was found"
-      : "no PostgreSQL install found",
-    useExistingServer
-      ? "Install the postgres client package on the runner."
-      : "Install postgres, or point PGHOST at a running server."
-  );
-}
-
-const bin = (name) => (binDir ? path.join(binDir, name) : name);
-
-/* initdb and postgres refuse to run as root. In a root container (some
-   Docker images) fall back to the `postgres` system user, which owns the
-   data dir in that setup anyway. Irrelevant when connecting to a server
-   someone else started — psql is happy to run as root. */
-const asRoot = !useExistingServer && typeof process.getuid === "function" && process.getuid() === 0;
-const unprivilegedUser = asRoot ? "postgres" : null;
-
-function exec(command, args, { input, allowFail = false } = {}) {
-  const [cmd, cmdArgs] = unprivilegedUser
-    ? ["su", [unprivilegedUser, "-c", [command, ...args].map((a) => `'${a}'`).join(" ")]]
-    : [command, args];
-  const result = spawnSync(cmd, cmdArgs, { input, encoding: "utf8" });
-  if (!allowFail && result.status !== 0) {
-    // result.error covers the case where the command couldn't be launched
-    // at all (missing binary), where stderr is undefined and reporting it
-    // alone would print a bare "undefined".
-    const detail = result.error ? result.error.message : result.stderr || result.stdout;
-    throw new Error(`${path.basename(command)} failed:\n${detail}`);
-  }
-  return result;
-}
-
-/* ---------- cluster lifecycle ---------- */
-
-const tmpRoot = useExistingServer ? null : fs.mkdtempSync(path.join(os.tmpdir(), "uniplanner-pg-"));
-const dataDir = tmpRoot && path.join(tmpRoot, "data");
-const sockDir = tmpRoot && path.join(tmpRoot, "sock");
-if (tmpRoot) {
-  fs.mkdirSync(sockDir);
-  if (asRoot) {
-    // The unprivileged user needs to traverse in and write to both.
-    fs.chmodSync(tmpRoot, 0o777);
-    fs.chmodSync(sockDir, 0o777);
-  }
-}
-
-let started = false;
-
-function stopCluster() {
-  if (started) {
-    exec(bin("pg_ctl"), ["-D", dataDir, "-m", "immediate", "stop"], { allowFail: true });
-    started = false;
-  }
-  if (tmpRoot) fs.rmSync(tmpRoot, { recursive: true, force: true });
-}
-
-process.on("exit", stopCluster);
-
-function psql(db, sql) {
-  // -v ON_ERROR_STOP=1 makes a failing statement fail the whole script
-  // rather than psql plowing on and exiting 0.
-  const connection = useExistingServer ? [] : ["-h", sockDir];
-  const result = exec(bin("psql"), [...connection, "-d", db, "-v", "ON_ERROR_STOP=1", "-X", "-q", "-t", "-A", "-f", "-"], {
-    input: sql,
-    allowFail: true,
-  });
-  return { ok: result.status === 0, out: result.stdout.trim(), err: result.stderr.trim() };
-}
-
-/* Two psql processes at once, which is the only way to demonstrate a
-   lost update: it needs two sessions holding two snapshots. `exec` is
-   synchronous by design (everything else here is a single statement
-   batch), so this is its async twin, with the same su-as-postgres
-   handling. */
-function psqlAsync(db, sql) {
-  const connection = useExistingServer ? [] : ["-h", sockDir];
-  const args = [...connection, "-d", db, "-v", "ON_ERROR_STOP=1", "-X", "-q", "-t", "-A", "-f", "-"];
-  const [cmd, cmdArgs] = unprivilegedUser
-    ? ["su", [unprivilegedUser, "-c", [bin("psql"), ...args].map((a) => `'${a}'`).join(" ")]]
-    : [bin("psql"), args];
-  return new Promise((resolve) => {
-    const child = spawn(cmd, cmdArgs, { stdio: ["pipe", "pipe", "pipe"] });
-    let out = "";
-    let err = "";
-    child.stdout.on("data", (d) => (out += d));
-    child.stderr.on("data", (d) => (err += d));
-    child.on("close", (code) => resolve({ ok: code === 0, out: out.trim(), err: err.trim() }));
-    child.stdin.end(sql);
-  });
-}
-
-function psqlOrThrow(db, sql) {
-  const r = psql(db, sql);
-  if (!r.ok) throw new Error(r.err || r.out);
-  return r;
-}
-
-function applyMigration(db, file) {
-  return psqlOrThrow(db, fs.readFileSync(path.join(migrationsDir, file), "utf8"));
-}
-
-/* ---------- Supabase stand-ins ---------- */
-
-/* Just enough of what Supabase's platform provides for the migrations to
-   have something to bind to. auth.uid() reads a GUC so a test can act as
-   any user — that's the whole mechanism these functions are built on.
-
-   THE DEFAULT PRIVILEGES ARE PART OF THE ENVIRONMENT, learned the hard
-   way: a real Supabase project runs ALTER DEFAULT PRIVILEGES so every
-   table created in the SQL editor arrives with ALL verbs — UPDATE
-   included — already granted to anon and authenticated. This shim used
-   to omit that, so a check asserting "update is not granted" passed
-   here and failed on the real project (found by Jared re-checking 0007
-   by hand). A stand-in that restates the environment more weakly than
-   production is the restatement drift in one more costume. */
-const SUPABASE_STUBS = `
-  do $$ begin
-    if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
-    if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
-    -- service_role is the one the Edge Functions authenticate as, and it
-    -- was MISSING here until 0011 named it in a grant. A migration that
-    -- referenced it would have failed on this shim while applying
-    -- perfectly to the real project -- the same "the stand-in is weaker
-    -- than production" lesson as the default privileges below, running
-    -- in the opposite direction: there the shim let a bad migration
-    -- pass, here it would have failed a good one. Both are the shim
-    -- restating the environment instead of matching it.
-    if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
-  end $$;
-
-  alter default privileges in schema public grant all on tables to anon, authenticated;
-  /* AND ON FUNCTIONS, which is the omission that let 0002's revoke look
-     correct here and fail on the real project. Supabase runs
-     "alter default privileges ... grant all on functions to postgres,
-     anon, authenticated, service_role", so a function created in the SQL
-     editor arrives with EXECUTE granted DIRECTLY to anon — not merely
-     via PUBLIC. "revoke all on function ... from public" does not remove
-     a role-specific grant, so anon keeps it.
-
-     That is exactly why 0011, 0012, 0014 and 0015 each revoke from
-     public AND anon; 0002 predates the lesson and revokes only from
-     public. Without this line the shim says 0002 is correct. With it,
-     the shim agrees with production. Third instance of the stand-in
-     restating the environment more weakly than it is -- see the default
-     privileges on tables above, and the missing service_role. */
-  alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
-  grant usage on schema public to anon, authenticated, service_role;
-
-  create schema if not exists auth;
-  create table auth.users (id uuid primary key default gen_random_uuid(), email text);
-  create function auth.uid() returns uuid language sql stable as $$
-    select nullif(current_setting('test.uid', true), '')::uuid;
-  $$;
-
-  create schema if not exists storage;
-  create table storage.objects (
-    id uuid primary key default gen_random_uuid(),
-    bucket_id text, name text, owner uuid
-  );
-  alter table storage.objects enable row level security;
-  create function storage.foldername(name text) returns text[] language sql immutable as $$
-    select string_to_array(name, '/');
-  $$;
-`;
-
-/* Documented in SUPABASE-SETUP.md §1 rather than created by a migration,
-   so it's set up separately — some tests deliberately leave it out. */
-/* Its POLICIES are part of it, and were missing here until the grant
-   audit: without them the stand-in said planner_data had grants no
-   policy backed, which is the very state the audit exists to find.
-   Copied from SUPABASE-SETUP.md §1 — select, insert and update, and
-   deliberately no delete (account deletion runs through the security
-   definer function). */
-const PLANNER_DATA = `
-  create table public.planner_data (
-    user_id uuid primary key references auth.users(id) on delete cascade,
-    data jsonb not null,
-    updated_at timestamptz not null default now()
-  );
-  alter table public.planner_data enable row level security;
-  create policy "planner_data_select_own" on public.planner_data for select using (auth.uid() = user_id);
-  create policy "planner_data_upsert_own" on public.planner_data for insert with check (auth.uid() = user_id);
-  create policy "planner_data_update_own" on public.planner_data for update using (auth.uid() = user_id);
-`;
-
-let dbCounter = 0;
-function freshDb({ withPlannerData = true } = {}) {
-  const name = `uniplanner_test_${dbCounter++}`;
-  psqlOrThrow("postgres", `drop database if exists ${name}; create database ${name};`);
-  psqlOrThrow(name, SUPABASE_STUBS);
-  if (withPlannerData) psqlOrThrow(name, PLANNER_DATA);
-  return name;
-}
-
-const one = (db, sql) => psqlOrThrow(db, sql).out;
-const count = (db, table, where = "true") => Number(one(db, `select count(*) from ${table} where ${where};`));
 
 /* ---------- tiny test harness (same shape as test-ai-notes.mjs) ---------- */
 
@@ -342,27 +123,22 @@ function seedTwoUsers(db, { withPlannerData = true } = {}) {
          insert into public.billing_events (id, user_id, event_type, tier_before, tier_after)
          values ('evt-seed-mine', ${USER}, 'INITIAL_PURCHASE', 'free', 'ai'),
                 ('evt-seed-theirs', ${OTHER}, 'RENEWAL', 'ai', 'ai');
+         /* app_user_id too, once 0018 has added it, so the deletion
+            tests cover the column that holds the id the store sent —
+            a row carrying a live account's id must go with that
+            account, and the FK cascade only knows about user_id. */
+         if exists (select 1 from information_schema.columns
+                     where table_schema = 'public' and table_name = 'billing_events'
+                       and column_name = 'app_user_id') then
+           update public.billing_events set app_user_id = user_id::text;
+         end if;
        end if;
      end $do$;`
   );
 }
 
 async function run() {
-  if (useExistingServer) {
-    console.log(`connecting to the postgres already running at ${process.env.PGHOST}:${process.env.PGPORT || 5432}`);
-    // A server that's named but unreachable is a broken setup, never a
-    // skip — skipping here is exactly the silence this mode exists to
-    // prevent, so it fails loudly in both modes.
-    const reachable = psql("postgres", "select 1;");
-    if (!reachable.ok) {
-      throw new Error(`PGHOST is set but the server can't be reached:\n${reachable.err}`);
-    }
-  } else {
-    console.log(`using postgres at ${binDir || "(on PATH)"}`);
-    exec(bin("initdb"), ["-D", dataDir, "-A", "trust", "-U", "postgres"]);
-    exec(bin("pg_ctl"), ["-D", dataDir, "-o", `-k ${sockDir} -h ""`, "-l", path.join(tmpRoot, "log"), "-w", "start"]);
-    started = true;
-  }
+  pg.start();
 
   await test("every migration applies cleanly to an empty database, in order", () => {
     const db = freshDb();
@@ -541,6 +317,10 @@ async function run() {
       if (file.startsWith("0002_")) continue;
       if (file.startsWith("0016_")) continue;
       if (file.startsWith("0017_")) continue;
+      /* And 0018, which WIDENS 0017's table: with 0017 excluded there
+         is no billing_events to add a column to. It is skipped because
+         its dependency is skipped, not for a reason of its own. */
+      if (file.startsWith("0018_")) continue;
       applyMigration(db, file);
     }
     return db;
@@ -1463,6 +1243,15 @@ async function run() {
        it has already authenticated. */
     "billing_events.id": "minted by RevenueCat and copied from an authenticated webhook delivery; typed text because a provider's id format is not ours to assume",
     "billing_events.user_id": "the auth user id, taken from the subscriber record RevenueCat returned — never from the request body, which is the service-role rule",
+    /* THE SAME CATEGORY AS billing_events.id, and it is `text` for a
+       stronger version of the same reason: this one is not even
+       RevenueCat's own format. It is whatever the CLIENT set the
+       app_user_id to — a Supabase uuid when signed in,
+       "$RCAnonymousID:…" when not, and anything at all after a future
+       integration. A typed column here is 0009 waiting to happen, and
+       the whole point of the column is to hold the id we could NOT
+       match. */
+    "billing_events.app_user_id": "the id RevenueCat's client set, copied verbatim out of an authenticated delivery; typed text and unconstrained precisely because no id shape may be rejected here",
   };
 
   await test("every id column is either fed by a named client generator or excused with a reason", () => {
@@ -1854,11 +1643,14 @@ async function run() {
 
   /* ---------- 0017: the entitlement writer's half of the schema ---------- */
 
-  /* Every migration EXCEPT 0017, which is what the project looks like
-     the moment before the billing work is applied. */
+  /* Every migration EXCEPT the billing pair, which is what the project
+     looks like the moment before the billing work is applied. 0018 goes
+     with 0017 because it widens 0017's table — there is nothing for it
+     to alter without it. */
   const preBillingDb = () => {
     const db = freshDb();
-    for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql") && !f.startsWith("0017")).sort()) {
+    const billing = (f) => f.startsWith("0017") || f.startsWith("0018");
+    for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql") && !billing(f)).sort()) {
       applyMigration(db, file);
     }
     return db;
@@ -2069,6 +1861,113 @@ async function run() {
     const after = psqlOrThrow(afterDb, check).out;
     assert.match(after, /ALL PASS/, `the live check still fails after 0017:\n${after}`);
     assert.ok(!/\|\s*FAIL\s*\|/.test(after), `a property still fails after 0017:\n${after}`);
+  });
+
+  /* ---------- 0018: an event for an account we do not have ---------- */
+
+  /* WHY THIS MIGRATION EXISTS, because the tests below only make sense
+     with it. The first real webhook delivery was a dashboard TEST event
+     naming a UUID-shaped app_user_id with no profiles row. The handler
+     read the profile (`no_such_user`), correctly wrote nothing, and
+     then recorded the event with that id in billing_events.user_id —
+     a foreign key to auth.users. 23503, a 500, and RevenueCat retries
+     every non-2xx. user_id was ALREADY nullable, so this was never a
+     NOT NULL fault: it was a real id in a column that means "an account
+     we hold". 0018 gives the id the store sent a column of its own. */
+
+  const billingDb = () => {
+    const db = freshDb();
+    for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
+      applyMigration(db, file);
+    }
+    return db;
+  };
+
+  await test("0018: an event for an account we do not have can be RECORDED, and the same event still cannot be recorded twice", () => {
+    /* The production failure and the idempotency guarantee, at the SQL
+       level — independent of the handler, which is tested against this
+       same schema in test-billing-function.mjs section 7. */
+    const db = billingDb();
+    const orphan = "'44444444-4444-4444-4444-444444444444'";
+
+    psqlOrThrow(
+      db,
+      `insert into public.billing_events (id, user_id, app_user_id, event_type)
+       values ('evt-unknown', null, ${orphan}, 'TEST');`
+    );
+    assert.equal(count(db, "public.billing_events", "id = 'evt-unknown'"), 1);
+    assert.equal(count(db, "public.billing_events", "id = 'evt-unknown' and user_id is null"), 1, "the row was recorded against an account");
+
+    const again = psql(
+      db,
+      `insert into public.billing_events (id, user_id, app_user_id, event_type)
+       values ('evt-unknown', null, ${orphan}, 'TEST');`
+    );
+    assert.equal(again.ok, false, "a redelivered unknown event was accepted a second time");
+    assert.equal(count(db, "public.billing_events", "id = 'evt-unknown'"), 1, "a redelivered unknown event left two rows");
+
+    /* And the FK still bites, which is what makes the null meaningful:
+       user_id is not merely nullable, it is CHECKED when present. */
+    const bad = psql(db, `insert into public.billing_events (id, user_id, event_type) values ('evt-bad', ${orphan}, 'TEST');`);
+    assert.equal(bad.ok, false, "user_id accepted an id that is not an account, so it no longer means 'one of our accounts'");
+  });
+
+  await test("0018's self-check RAISES rather than reporting success", () => {
+    /* 0016's lesson: a migration that can report success while the end
+       state is wrong is unobservable. The mutation is the one a future
+       migration would plausibly make — user_id looks like it should be
+       NOT NULL — and it is exactly the state that reproduces the
+       production 500. */
+    const db = billingDb();
+    psqlOrThrow(db, "alter table public.billing_events alter column user_id set not null;");
+    const r = psql(db, fs.readFileSync(path.join(migrationsDir, "0018_billing_unknown_user.sql"), "utf8"));
+    assert.equal(r.ok, false, "0018 reported success over a schema that cannot record an unknown-user event");
+    assert.match(r.err, /0018 FAILED/, `the failure did not name itself:\n${r.err}`);
+    assert.match(r.err, /NOT NULL/, "the failure did not name the property that broke");
+
+    const sql = fs.readFileSync(path.join(migrationsDir, "0018_billing_unknown_user.sql"), "utf8");
+    assert.match(sql, /if checked <> 6 then/, "0018's self-check lost its count, so it could pass having asserted nothing");
+  });
+
+  await test("0018 is re-runnable (a second apply changes nothing and fails nothing)", () => {
+    const db = billingDb();
+    applyMigration(db, "0018_billing_unknown_user.sql");
+    applyMigration(db, "0018_billing_unknown_user.sql");
+    assert.equal(count(db, "public.billing_events"), 0, "the self-check's probe rows survived the apply");
+  });
+
+  await test("0018: an account's deletion takes the events carrying its id, and leaves an orphan event alone", () => {
+    /* TWO HALVES, and the second is why the first is not enough. A row
+       naming a live account must go with that account — the seed sets
+       app_user_id as well as user_id, so this covers the column the
+       cascade does not know about. A row whose user_id is null names
+       an account that did not exist when the event arrived; it belongs
+       to nobody, and sweeping it would delete a different signed-out
+       situation's evidence — the same call client_errors makes for its
+       anonymous rows. */
+    const db = billingDb();
+    seedTwoUsers(db);
+    psqlOrThrow(
+      db,
+      `insert into public.billing_events (id, user_id, app_user_id, event_type)
+       values ('evt-orphan', null, 'someone-else-entirely', 'CANCELLATION');`
+    );
+    assert.equal(count(db, "public.billing_events", "app_user_id is not null"), 3, "the seed did not set app_user_id, so this proves nothing about it");
+
+    psqlOrThrow(db, `set test.uid = ${USER}; select public.delete_my_account();`);
+    assert.equal(count(db, "public.billing_events", `app_user_id = ${USER}`), 0, "an event carrying the deleted account's id survived");
+    assert.equal(count(db, "public.billing_events", `app_user_id = ${OTHER}`), 1, "another account's event was deleted");
+    assert.equal(count(db, "public.billing_events", "id = 'evt-orphan'"), 1, "an event that belongs to nobody was swept with somebody's deletion");
+  });
+
+  await test("the LIVE BILLING check is still ALL PASS with 0018 applied", () => {
+    /* 0018 changes nothing verify-billing.sql asserts, and that is a
+       claim rather than an observation until it is run. A widening
+       migration that broke the live check would be found by whoever
+       pasted it into production, which is the wrong place. */
+    const check = fs.readFileSync(path.join(rootDir, "supabase/checks/verify-billing.sql"), "utf8");
+    const out = psqlOrThrow(billingDb(), check).out;
+    assert.match(out, /ALL PASS/, `the live billing check fails once 0018 is applied:\n${out}`);
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

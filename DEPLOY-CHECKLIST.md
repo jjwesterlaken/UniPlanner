@@ -155,6 +155,58 @@ stop — the function must not be deployed against a schema that is not there.
 
 ---
 
+## 1d. Apply 0018 — the column the first real delivery needed
+
+**0018 WIDENS too**, and it goes with the function deploy that writes it:
+paste it before running step 2 again. It adds one nullable column,
+`billing_events.app_user_id`, and is inert until the new function ships.
+
+**Why it exists.** The first real delivery was a dashboard TEST event
+naming a UUID-shaped `app_user_id` with no `profiles` row. The handler
+correctly wrote no tier — an absent profile means a deleted account, and
+a webhook must not resurrect one — and then recorded the event with that
+id in `billing_events.user_id`, a foreign key to `auth.users`. 23503, a
+500, and RevenueCat retries every non-2xx, so that event would have come
+back until its window expired. `user_id` now means *an account we
+matched* and stays null otherwise; the id the store sent goes in the new
+column, and the event is recorded and answered 200.
+
+Paste `supabase/migrations/0018_billing_unknown_user.sql`. It verifies
+itself — including by performing the exact insert that failed in
+production and the redelivery it must stay idempotent under — and a
+successful apply ends with
+
+```
+NOTICE:  0018 applied and verified: 6 properties checked.
+```
+
+`verify-billing.sql` is unchanged by this and must still read
+`ALL PASS`; re-run it if you want the belt as well as the braces.
+
+**Then re-send the test event** from RevenueCat → Integrations →
+Webhooks → Send test event. Expect, in the function logs:
+
+```
+billing-webhook stage parse  {"stage":"parse","event":"TEST","id":"…"}
+billing-webhook stage apply  {"stage":"apply","outcome":"no_such_user","before":null,"after":null,"computed":"free"}
+```
+
+and a 200 with `{"ok":true,"outcome":"no_such_user","accounts":1,"matched":0}`.
+**`"after":null` is the point** — the old line said `"after":"free"`,
+which reported a tier for a row nobody has. No `FAILURE record` line at
+all. Then check the row landed:
+
+```sql
+select id, user_id, app_user_id, event_type, tier_before, tier_after
+  from public.billing_events order by received_at desc limit 5;
+```
+
+One row, `user_id` null, `app_user_id` holding the id the dashboard
+sent. A second send of the same test event answers
+`{"ok":true,"outcome":"duplicate"}` and adds no row.
+
+---
+
 ## 2. Deploy the Edge Functions — ALL of them, and one differently
 
 GitHub → Actions → **Deploy functions** → Run workflow.
