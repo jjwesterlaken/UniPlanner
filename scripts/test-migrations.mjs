@@ -1252,6 +1252,14 @@ async function run() {
        the whole point of the column is to hold the id we could NOT
        match. */
     "billing_events.app_user_id": "the id RevenueCat's client set, copied verbatim out of an authenticated delivery; typed text and unconstrained precisely because no id shape may be rejected here",
+    /* PROVIDER-MINTED, like billing_events.id, and `text` for the same
+       reason: `cus_…` is Stripe's format and not ours to assume. No
+       client ever writes it — billing-checkout creates the customer
+       under the service role for the uid in a VERIFIED JWT, and
+       billing-portal only ever reads it back scoped to that uid. It is
+       UNIQUE (0019) because a Portal session created for a customer id
+       grants access to that customer's billing. */
+    "profiles.stripe_customer_id": "minted by Stripe and stored by billing-checkout under the service role for the uid in a verified JWT; typed text because a provider's id format is not ours to assume, and unique so two accounts cannot share one customer",
   };
 
   await test("every id column is either fed by a named client generator or excused with a reason", () => {

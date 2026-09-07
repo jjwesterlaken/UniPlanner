@@ -49,6 +49,30 @@ export type BillingTier = (typeof TIER_RANK)[number];
 /** The entitlement ids a subscriber can hold. Not `free`, which is the absence of all of them. */
 export const PAID_ENTITLEMENTS: readonly string[] = TIER_RANK.slice(1);
 
+/* WHO WROTE THIS TIER. `signup` and `manual` are set elsewhere (the
+   trigger, and a human in the dashboard); these two are the automated
+   writers, and 0017's CHECK names all four.
+
+   TWO SOURCES, ONE WRITER — the phrase is BILLING-PLAN §6's and it is
+   the whole design. A Stripe subscription and an App Store one reach
+   `profiles.tier` through this same function, each having re-read its
+   OWN provider first, so there is exactly one place that decides what a
+   write to that column looks like. What differs is the sentence in
+   `tier_source`, which is how a support question ("where did this plan
+   come from?") is answerable at all.
+
+   THE HAZARD THAT COMES WITH TWO SOURCES, named rather than assumed
+   away: an account holding BOTH an App Store subscription and a Stripe
+   one has two writers that each re-read only their own provider, so the
+   last event to arrive wins and the tier flaps. `billing-checkout`
+   refuses to start a Stripe checkout for an account that already holds
+   a store subscription, which closes the door we control; the other
+   direction (buying in the App Store while a Stripe subscription is
+   live) is not ours to refuse, and the student would be paying twice —
+   so it is worth a support note rather than a silent guess here. */
+export const ENTITLEMENT_SOURCES = ["revenuecat", "stripe"] as const;
+export type EntitlementSource = (typeof ENTITLEMENT_SOURCES)[number];
+
 /* RevenueCat's store names to ours. Ours are the three
    `profiles.store` accepts (migration 0017); anything else — amazon,
    promotional, a store that does not exist yet — becomes null rather
@@ -193,7 +217,13 @@ export function affectedUserIds(event: Record<string, unknown> | null | undefine
 // deno-lint-ignore no-explicit-any
 export async function applyEntitlement(
   admin: any,
-  { userId, tier, store, expiresAt }: { userId: string; tier: BillingTier; store: string | null; expiresAt: string | null }
+  {
+    userId,
+    tier,
+    store,
+    expiresAt,
+    source = "revenuecat",
+  }: { userId: string; tier: BillingTier; store: string | null; expiresAt: string | null; source?: EntitlementSource }
 ): Promise<{ ok: boolean; outcome: string; before?: string | null; after?: string | null; error?: unknown }> {
   const { data: profile, error: readErr } = await admin
     .from("profiles")
@@ -213,7 +243,7 @@ export async function applyEntitlement(
     .from("profiles")
     .update({
       tier,
-      tier_source: "revenuecat",
+      tier_source: source,
       tier_updated_at: new Date().toISOString(),
       entitlement_expires_at: expiresAt,
       store,

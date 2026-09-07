@@ -134,6 +134,52 @@ export function outcomeMessage(kind, reason) {
 /** Shown while the ladder in ENTITLEMENT_POLL_DELAYS_MS is still running. */
 export const ACTIVATING_NOTICE = "Waiting for the store to confirm — you can keep using the app.";
 
+/* ---------- buying on the web (Phase 6, behind STRIPE_ENABLED) ----------
+
+   THE SAME PANEL, A DIFFERENT PAYMENT PROVIDER, and the copy has to be
+   honest about which one — because "manage your subscription" sends
+   somebody to a completely different place depending on where they
+   bought, and sending a Stripe subscriber to Apple's page (or the other
+   way) is a dead end that reads as the app being broken. */
+export const WEB = {
+  buyHint: "Card payment, in your browser. You can cancel any time.",
+  manage: "Manage or cancel",
+  /* THE REFUSAL THAT NEEDS A SPECIFIC SENTENCE. An account already
+     holding a store subscription cannot buy again here: two providers
+     writing the same tier would flap it between them, and the student
+     would be paying twice. Naming WHICH store is the whole value —
+     "you already have a subscription" leaves somebody hunting. */
+  alreadySubscribed: (store) =>
+    store === "play_store"
+      ? "You already subscribe through Google Play. Change or cancel it there, and it stays in step here."
+      : "You already subscribe through the App Store. Change or cancel it there, and it stays in step here.",
+  /* Not "something went wrong": the two failures a student can act on
+     differently are "we could not reach the payment service" and "this
+     plan is not set up yet", and only one of them is worth retrying. */
+  checkoutFailed: "We couldn't start the payment just now. Nothing has been charged — try again in a minute.",
+  planUnavailable: "That plan isn't available to buy here yet.",
+  portalFailed: "We couldn't open your billing page just now. Try again in a minute.",
+  noCustomer: "There's no card subscription on this account.",
+};
+
+/**
+ * What to say when a web purchase or a portal request fails.
+ *
+ * Codes come from the Edge Functions, so a new one lands as the generic
+ * sentence rather than as a blank — and `stripe_disabled` deliberately
+ * has no sentence at all, because the controls that could produce it
+ * are not drawn when the flag is off. If a student ever sees it,
+ * something is wired wrong rather than broken, and the generic line is
+ * the honest thing to show.
+ */
+export function webFailureMessage(code, store) {
+  if (code === "store_subscription_active") return WEB.alreadySubscribed(store);
+  if (code === "plan_unavailable") return WEB.planUnavailable;
+  if (code === "no_stripe_customer") return WEB.noCustomer;
+  if (code === "unauthenticated") return "Please sign in again.";
+  return WEB.checkoutFailed;
+}
+
 /**
  * Why there are no purchase controls here.
  *

@@ -1821,6 +1821,102 @@ whatever a refactor does to `purchases.js` — asserted in
 `test-local-only.mjs`, alongside its own non-vacuity (the SDK really is
 bundled, `errors.rev.cat` proves it).
 
+## Stripe on the web: two sources, one writer, and a flag that is two flags
+
+`supabase/functions/_shared/stripe.ts`, `billing-checkout/`,
+`billing-portal/`, `stripe-webhook/`, migration 0019,
+`src/billingFlags.js`, `src/stripeClient.js`, `src/webPrices.js`, and
+`scripts/test-stripe.mjs`. Phase 6 of BILLING-PLAN.md, **built and
+switched off**.
+
+**THE ROUTE WAS FORCED BY WHAT COULD BE VERIFIED, and that is the
+decision to read before changing any of it.** BILLING-PLAN §6 maps two
+ways for a Stripe subscription to become a tier: (A) RevenueCat ingests
+it, so it arrives as the same RevenueCat webhook the stores produce, or
+(B) Stripe's own signed webhook feeding the same `applyEntitlement()`.
+**B is built**, because every step of A is marked `[confirm every step]`
+against RevenueCat documentation this container cannot reach, while B is
+verifiable end to end against Stripe test mode with the Stripe CLI and
+nothing else. §6 names B as the fallback for exactly this case. **What B
+gives up is one dashboard listing every subscriber** — a Stripe
+subscription will not appear in RevenueCat — and that is recoverable
+later by adding the receipts POST beside this, without moving the
+writer.
+
+**Everything Phase 1 established still holds, because the writer did not
+move.** `applyEntitlement` is still the only thing that writes
+`profiles.tier`; it gained a `source` argument (`revenuecat` | `stripe`,
+enumerated in `ENTITLEMENT_SOURCES`) so `tier_source` says which
+provider wrote it, and **`manual` still wins over both**. The payload is
+still a trigger and never the evidence: the webhook takes an id out of
+the delivery, **re-reads the subscription from Stripe**, and computes the
+tier from that. Verify before parse, apply before record, unknown user
+answered 200 with a row — all four rules are the RevenueCat function's,
+kept deliberately identical so there is one shape to learn.
+
+**THE FLAG IS TWO FLAGS, AND THEY ARE NOT THE SAME SWITCH.** The
+server's flag is its *configuration*: all three functions refuse with
+`stripe_disabled` unless `STRIPE_SECRET_KEY` is set, which cannot drift
+out of step with reality the way a boolean can. The client's flag is
+`STRIPE_ENABLED` in `src/billingFlags.js` and decides only whether the
+controls are DRAWN. So the switch-on order is forced: configure, test
+against test mode, **then** flip the constant — a boolean saying "on"
+beside an unset key is a button that fails after the click, which is the
+worst of the three states. `WEB_PLANS` re-exports `PACKAGE_PLANS`
+rather than restating it, so a plan added for the stores can never be
+silently absent from the web.
+
+**AN UNRECOGNISED PRICE MUST REFUSE, NOT RETURN `free`.** The first
+version of `tierFromStripeSubscription` returned a tier for every input,
+so a subscription whose Price had lost its `lookup_key` — a dashboard
+edit, a Price recreated during a migration — would have computed `free`
+and **downgraded a paying subscriber to nothing**, in a function whose
+entire job is to be believed. It now returns `recognised: false` for an
+entitled subscription with no known price, for an unknown status, and
+for no subscription at all, and the webhook **500s with nothing
+written** so Stripe retries into a fixed dashboard rather than into a
+silent demotion. This is the `fetchNote` rule one more time: three
+outcomes, and "I don't know" is never allowed to read as "none".
+
+**`past_due` KEEPS THE TIER.** A failed renewal is a card to fix, not a
+theft; Stripe retries for days and `customer.subscription.deleted`
+arrives if it never succeeds. Cutting a student off mid-semester over a
+declined card that Stripe is still retrying is the wrong side of a
+judgement call whose other side costs a few days of credits.
+
+**IDENTITY IS TAKEN FROM THE VERIFIED JWT AND NOWHERE ELSE.**
+`billing-checkout` reads the uid from the token Supabase verified, never
+from the request body, and the **price is resolved server-side by
+`lookup_key`** from the tier and duration the client asked for — a
+client that could name a Price id could name a $0.01 one. The customer
+is created and stored on `profiles.stripe_customer_id` **before** the
+session, so a crash between them leaves a customer with no subscription
+(free, reusable) rather than a subscription we cannot match. The uid
+rides on `client_reference_id`, `metadata[uid]` and
+`subscription_data[metadata][uid]`, so three independent paths lead back
+to the account.
+
+**A STORE SUBSCRIBER IS REFUSED A WEB CHECKOUT** (`store_subscription_active`,
+409). Apple and Google cannot see a Stripe subscription and will not
+cancel one, so the student would be charged twice and could only stop
+half of it. `profiles.store` is what says so, and `fetchUsage` now
+returns it for the same reason the panel needs it.
+
+**0019 IS ONE NULLABLE COLUMN WITH A UNIQUE INDEX**, self-verifying with
+two behavioural probes, and it WIDENS — so it goes before the deploy.
+`stripe_customer_id` is unique because two accounts sharing a Stripe
+customer would make the reverse lookup ambiguous exactly when a webhook
+is trying to decide whose tier to write.
+
+**Nothing here has spoken to Stripe.** The signature scheme, the event
+shapes and whether a Checkout session with these parameters is accepted
+are all beyond this container; `test-stripe.mjs` verifies the
+arithmetic, the orderings, the refusals and the source-level invariants
+against fakes, and says in its header what it cannot see. The test-mode
+checklist is BILLING-PLAN.md Phase 6, and until it has been run this is
+**built**, not **working** — the distinction 0005 and 0009 cost weeks
+to learn.
+
 ## The marketing site: data first, design last
 
 `site/` holds everything the page READS — downloads, pricing, flags —

@@ -977,10 +977,148 @@ decided and the `PLACEHOLDER` markers are removed in the same commit —
 `test-site` refuses either half alone. Promote the web bundle so the web
 shows the tier read-only from the same day.
 
-### Phase 6 — Later: Stripe and desktop purchase
+### Phase 6 — BUILT AND SWITCHED OFF, 7 September 2026 (Stripe on the web)
 
-§6 and §7 as written, after RevenueCat's Stripe page has been read
-against the gap list. Not in 1.1.0.
+Jared: *"Stripe, built behind a flag, tested against Stripe test mode,
+switched on with 1.1.0."* All of it exists; none of it is reachable.
+
+**THE ROUTE DECISION, AND IT IS THE ONE THING TO DISAGREE WITH FIRST.**
+§6 mapped two ways for a Stripe subscription to become a tier:
+
+- **A — RevenueCat ingests it.** Stripe's webhooks point at RevenueCat,
+  the subscription is registered by POSTing to their receipts endpoint
+  with `X-Platform: stripe` and the Stripe subscription id as
+  `fetch_token`, and from then on it arrives as the same RevenueCat
+  webhook the stores produce. One writer, one dashboard.
+- **B — Stripe's own webhook**, HMAC-signed, feeding the same
+  `applyEntitlement()`. Two sources, one writer.
+
+**B IS WHAT WAS BUILT**, and the reason is the same one this project
+applies to every third-hand figure: every step of A is marked
+`[confirm every step]` in §6 because it rests on RevenueCat
+documentation the build container cannot reach, and a container cannot
+close that gap by trying harder. B is verifiable end to end against
+Stripe test mode with the Stripe CLI and nothing else — which is
+exactly what the instruction asks for — and §6 names it as the fallback
+for precisely this case.
+
+**What B gives up, stated rather than discovered later:** a Stripe
+subscription does not appear in RevenueCat, so there is no single
+dashboard listing every subscriber. That is recoverable without moving
+the writer — the receipts POST can be added inside `billing-checkout`'s
+completion path later, and nothing about the tier route changes.
+**If somebody reads RevenueCat's Stripe page and it does carry Portal
+plan changes, trials and grace periods end to end, that is the moment
+to revisit — not before.**
+
+**What exists.**
+
+| | |
+|---|---|
+| `supabase/migrations/0019_stripe.sql` | `profiles.stripe_customer_id`, UNIQUE, self-verifying with two behavioural checks |
+| `supabase/functions/_shared/stripe.ts` | the six lookup keys, the status table, the signature, a form-encoded client — no SDK |
+| `billing-checkout` | JWT-verified; the uid and the PRICE both come from the server |
+| `billing-portal` | a Customer Portal session from the STORED customer id |
+| `stripe-webhook` | verify → parse → dedupe → re-read → apply → record |
+| `src/billingFlags.js` | `STRIPE_ENABLED = false` |
+| `src/stripeClient.js`, `src/webPrices.js`, the panel's web branch | the client half |
+
+**TWO FLAGS, DELIBERATELY NOT THE SAME SWITCH.** The server's flag is
+its CONFIGURATION — all three functions refuse with `stripe_disabled`
+unless their Stripe secrets are set — because a boolean saying "on"
+beside an unset key is a button that fails after the click. The
+client's flag is `STRIPE_ENABLED`, and it decides only whether the
+controls are DRAWN. So the order is forced and is the order the
+instruction names: configure, test against test mode, then flip.
+
+**THE ONE THAT WOULD HAVE COST THE MOST, and it is not the signature.**
+A subscription in an entitled status whose price matches no lookup key
+we know is **not** a student entitled to nothing — it is a question the
+code cannot answer. A `lookup_key` absent from a response, or a Price
+created in the dashboard without one, would otherwise downgrade every
+paying Stripe subscriber to free on their next renewal event.
+`tierFromStripeSubscription` returns `recognised: false` for that and
+the webhook answers 500 with nothing written, so Stripe retries while
+somebody fixes the dashboard. The same distinction covers a status
+Stripe adds after this was written: known-and-not-entitled is
+definitive, unknown is not.
+
+**`past_due` KEEPS THE PLAN.** Stripe is retrying the card; the App
+Store's billing grace period behaves the same way and this document
+already says the re-read design carries a tier through it. `unpaid` —
+retries exhausted — does not.
+
+**AN ACCOUNT WITH A STORE SUBSCRIPTION CANNOT BUY HERE.**
+`billing-checkout` refuses with `store_subscription_active` and the
+panel says *which* store. Two providers each re-reading only their own
+would flap the tier between them and the student would be paying twice.
+That closes the door we control; buying in the App Store while a Stripe
+subscription is live is not ours to refuse and is a support note.
+
+**Identity, and the two things a client never supplies.** The uid comes
+out of the verified JWT and goes into `client_reference_id`, the
+session metadata AND the subscription metadata — the third is what
+makes a renewal a year later attributable. The PRICE is resolved
+server-side from a tier and a duration, because a client that could
+name a price could name a cheaper one. The customer is matched by the
+id stored on `profiles`, **never by email**, and the column is UNIQUE
+so two accounts cannot share one — a Portal session created for a
+customer id grants access to that customer's billing.
+
+**Prices are derived from `site/pricing.js`**, not restated, because a
+restatement of a price is the worst entry in the ledger: the screen
+would promise one figure while Stripe charged another. What no test in
+this repository can check is that the Stripe Price actually charges it
+— that is step 4 below.
+
+#### Switching it on — the checklist, in this order
+
+1. **Apply 0019.** It WIDENS, so it goes first. A successful apply ends
+   `NOTICE: 0019 applied and verified: 6 properties checked.`
+2. **Create the six Prices in Stripe TEST mode**, on two Products, each
+   carrying the `lookup_key` from `_shared/stripe.ts`:
+   `uniplanner_studyai_monthly` · `_sixmonth` · `_annual` and
+   `uniplanner_studyaimax_monthly` · `_sixmonth` · `_annual`. Set them
+   to the AUD figures in `site/pricing.js` — 8.99 / 44.99 / 79.99 and
+   18.99 / 94.99 / 169.99.
+3. **Configure the Customer Portal once** in the Stripe dashboard.
+   Stripe refuses to create a portal session until it has been set up,
+   and that failure only appears when a real student taps Manage.
+4. **Set the two secrets** in Supabase → Edge Functions → Secrets:
+   `STRIPE_SECRET_KEY` (the `sk_test_…` one to begin with) and
+   `STRIPE_WEBHOOK_SECRET` (`whsec_…`, from the endpoint in step 5).
+5. **Deploy the functions** and point a Stripe webhook endpoint at
+   `…/functions/v1/stripe-webhook`, subscribed to
+   `checkout.session.completed` and `customer.subscription.*`.
+   `stripe-webhook` is deployed `--no-verify-jwt` automatically — the
+   workflow's branch now names both webhooks and a wiring test asserts
+   the flag is on exactly those and nothing else.
+6. **Run it locally first:** `stripe listen --forward-to
+   <url>/functions/v1/stripe-webhook` prints a signing secret to use in
+   step 4, and `stripe trigger customer.subscription.updated` sends a
+   real signed delivery. **Watch a delivery arrive and a row appear in
+   `billing_events` before flipping anything.**
+7. **Flip `STRIPE_ENABLED` to true** in `src/billingFlags.js`, merge,
+   promote. Only then is any control drawn.
+
+**What test mode has to show, because no suite can:** a completed
+checkout writes `profiles.tier`, `tier_source = 'stripe'`,
+`store = 'stripe'` and a `stripe_customer_id`; the plan line updates
+within the 0/2/5/10-second ladder without a reload; Manage opens the
+Portal for the right customer; cancelling drops the tier at the period
+end and not before; a card that fails leaves the tier alone while
+`past_due`; and the price on the button is the price Stripe charges.
+
+**Desktop needs no code** (§7): Electron already hands an `http` link to
+the system browser, the panel opens checkout with `window.open`, and
+the tier arrives by the same webhook and the same re-read ladder.
+
+### Phase 7 — Later: what Phase 6 deliberately did not take
+
+The receipts POST that would also register a Stripe subscription with
+RevenueCat, so one dashboard lists every subscriber. It is additive and
+changes no writer. Read RevenueCat's Stripe page against §6's gap list
+first.
 
 ---
 

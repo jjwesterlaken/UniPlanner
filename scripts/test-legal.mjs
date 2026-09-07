@@ -759,6 +759,40 @@ async function run() {
     }
   });
 
+  await test("THE DAY WEB PURCHASES ARE SWITCHED ON, the policy must already name Stripe", () => {
+    /* THE SAME MOVE AS THE PURCHASE-SDK TRIPWIRE ABOVE, keyed on the
+       thing that makes the claim false rather than on a date: the
+       moment `STRIPE_ENABLED` is true, a student's account id and what
+       they are buying go to a third company that is not named anywhere
+       else in this document.
+
+       IT IS ALREADY SATISFIED, deliberately. Being slightly over-broad
+       ahead of a feature costs nothing; being under-broad after it
+       ships is the failure that matters, and it is the one that would
+       happen here — the flag is a one-line commit and the policy is
+       not. So the paragraph is written now and this stops it being
+       removed later as "we don't use Stripe yet".
+
+       The precondition is asserted too: if the flag has gone from
+       billingFlags.js entirely this fails rather than passing over
+       nothing. */
+    const flags = fs.readFileSync(path.join(rootDir, "src/billingFlags.js"), "utf8");
+    const m = /export const STRIPE_ENABLED = (true|false)/.exec(flags);
+    assert.ok(m, "STRIPE_ENABLED is gone from src/billingFlags.js — this tripwire is guarding nothing");
+
+    const policy = fs.readFileSync(path.join(rootDir, "public/privacy.html"), "utf8").replace(/\s+/g, " ");
+    assert.match(policy, /Stripe/, "the policy does not name Stripe among the companies a payment reaches");
+    assert.match(policy, /card details|card/i, "the payments section does not say who holds the card");
+
+    /* And whichever way the flag is set, deleting must be told apart
+       from cancelling — the one thing a student can get wrong that
+       costs them money after the account is gone. */
+    for (const doc of ["public/privacy.html", "public/delete-account.html"]) {
+      const text = fs.readFileSync(path.join(rootDir, doc), "utf8").replace(/\s+/g, " ");
+      assert.match(text, /does not cancel|cannot cancel|Cancel it BEFORE/i, `${doc} does not say that deleting an account is not cancelling a subscription`);
+    }
+  });
+
   await test("npm test still runs the legal tests", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     assert.match(pkg.scripts.test, /test-legal\.mjs/, "the legal tests were dropped from `npm test`");

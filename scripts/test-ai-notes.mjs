@@ -2703,29 +2703,64 @@ async function run() {
     }
   });
 
-  await test("billing-webhook is deployed WITHOUT jwt verification, and it is the only one that is", () => {
-    /* THE FLAG THAT DECIDES WHETHER SUBSCRIPTIONS WORK AT ALL.
-       RevenueCat cannot mint a Supabase JWT, so with verify_jwt on,
-       every delivery is refused by the platform before our code runs:
-       nothing is logged by us, nothing errors, and the symptom is
+  await test("the WEBHOOKS are deployed without jwt verification, and nothing else is", () => {
+    /* THE FLAG THAT DECIDES WHETHER SUBSCRIPTIONS WORK AT ALL. A
+       payment provider cannot mint a Supabase JWT, so with verify_jwt
+       on, every delivery is refused by the platform before our code
+       runs: nothing is logged by us, nothing errors, and the symptom is
        "students pay and never get their tier".
 
-       The reverse matters just as much — --no-verify-jwt on ai-notes
-       or ai-text would expose an endpoint that spends money to anyone
-       who can reach it — so this asserts BOTH halves, which is what
-       stops somebody "simplifying" the branch away by applying the
-       flag to the whole loop. */
+       The reverse matters just as much — this flag on ai-notes or
+       ai-text would expose an endpoint that SPENDS MONEY to anyone who
+       can reach it, and on billing-checkout or billing-portal it would
+       let anyone create a payment session or open somebody's billing
+       portal.
+
+       IT USED TO ASSERT "EXACTLY ONCE", which was right while there was
+       one webhook and became wrong the moment there were two. The
+       replacement is not a bigger number — that would drift the same
+       way — but the SET: the functions whose directory name ends in
+       `-webhook` are exactly the ones deployed with the flag, derived
+       from the directory on one side and the workflow on the other. A
+       third webhook is covered without anybody editing this; a
+       non-webhook that acquires the flag goes red. */
     const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/deploy-functions.yml"), "utf8");
-    assert.match(workflow, /billing-webhook\)/, "the deploy workflow has no billing-webhook branch");
-    const branch = workflow.slice(workflow.indexOf("billing-webhook)"), workflow.indexOf(";;", workflow.indexOf("billing-webhook)")));
-    assert.match(branch, /--no-verify-jwt/, "billing-webhook is deployed WITH jwt verification, so every RevenueCat delivery will 401");
-    /* And exactly one occurrence in the file, so the flag cannot have
-       leaked onto the default arm of the case. */
+    const fnDir = path.join(rootDir, "supabase/functions");
+    const functions = fs
+      .readdirSync(fnDir)
+      .filter((d) => fs.existsSync(path.join(fnDir, d, "index.ts")))
+      .sort();
+    assert.ok(functions.length >= 3, `expected the Edge Functions, found ${functions.length} — this guard is reading the wrong directory`);
+
+    const webhooks = functions.filter((f) => f.endsWith("-webhook"));
+    const others = functions.filter((f) => !f.endsWith("-webhook"));
+    assert.ok(webhooks.length >= 1, "no function is named as a webhook, so this guard would pass over nothing");
+    assert.ok(others.length >= 1, "every function is a webhook, so the 'and nothing else' half proves nothing");
+
+    /* The branch that carries the flag, read out of the case label
+       rather than assumed to name one function. */
+    const m = /\n\s*([a-z0-9|-]*-webhook[a-z0-9|-]*)\)\n/.exec(workflow);
+    assert.ok(m, "the deploy workflow has no webhook branch in its case statement");
+    const labelled = m[1].split("|").sort();
+    assert.deepEqual(labelled, webhooks, "the workflow's no-jwt branch does not name exactly the webhook functions");
+
+    const branch = workflow.slice(workflow.indexOf(`${m[1]})`), workflow.indexOf(";;", workflow.indexOf(`${m[1]})`)));
+    assert.match(branch, /--no-verify-jwt/, "the webhook branch deploys WITH jwt verification, so every delivery will 401");
+
+    /* And exactly once in the file, so the flag cannot also sit on the
+       default arm of the case — which is what would put it on every
+       function that spends money. */
     assert.equal(
       (workflow.match(/--no-verify-jwt/g) || []).length,
       1,
       "--no-verify-jwt appears more than once; a function that spends money must not be reachable without a session"
     );
+    for (const fn of others) {
+      assert.ok(
+        !new RegExp(`\\n\\s*${fn}\\)`).test(workflow),
+        `${fn} has its own branch in the deploy case — the only branch there may be is the webhooks'`
+      );
+    }
   });
 
   await test("the function deploy refuses to ship an unmeasured billing constant", () => {

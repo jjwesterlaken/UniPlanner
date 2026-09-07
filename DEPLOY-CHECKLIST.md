@@ -207,24 +207,54 @@ sent. A second send of the same test event answers
 
 ---
 
+## 1e. Stripe — 0019 is NOT part of this sequence
+
+**Do not apply `0019_stripe.sql` here, and do not set any Stripe
+secret.** Phase 6 is built and switched off: `STRIPE_ENABLED` in
+`src/billingFlags.js` is `false`, so no web build shows a purchase
+control, and every one of the three Stripe functions refuses with
+`stripe_disabled` while `STRIPE_SECRET_KEY` is unset. Nothing in
+1.1.0's store launch depends on any of it.
+
+It is listed here only so the next person does not read its absence as
+an oversight. The seven-step switch-on order — apply 0019, create the
+six Prices in test mode, configure the Customer Portal, set the two
+secrets, deploy, run `stripe listen` / `stripe trigger`, then flip the
+flag — lives in **BILLING-PLAN.md, Phase 6**, and belongs to whoever
+turns web purchases on, not to this deploy.
+
+**What you WILL see in step 2 regardless:** the deploy workflow derives
+its list from the directory, so `billing-checkout`, `billing-portal`
+and `stripe-webhook` are deployed by it today. That is intended and
+inert — each refuses before doing anything while the secret is absent.
+
+---
+
 ## 2. Deploy the Edge Functions — ALL of them, and one differently
 
 GitHub → Actions → **Deploy functions** → Run workflow.
 
 **Check:** the run is green AND its log names **every** function the repo
-has — today `ai-notes`, `ai-text` and `billing-webhook`. The workflow no
-longer enumerates them (it derives the list from
-`supabase/functions/*/index.ts`), so the thing to read in the log is the
-"Deploying: ..." line, and the thing that would go wrong is a function
+has. The workflow does not enumerate them — it derives the list from
+`supabase/functions/*/index.ts` — so the thing to read in the log is the
+"Deploying: ..." line, and the way to know what it should say is to run
+`ls -d supabase/functions/*/index.ts` on the commit you deployed rather
+than to trust a list written here, which would drift the same way the
+workflow's own list did. The thing that would go wrong is a function
 whose directory has no `index.ts`.
 
-**AND CHECK THE ONE THAT IS DIFFERENT.** `billing-webhook` must be
-deployed with `--no-verify-jwt`; the log shows it on its own line. Its
-caller is RevenueCat, which cannot mint a Supabase JWT, so with
-verification on every delivery is refused by the platform before our code
-runs — nothing errors, nothing appears in our logs, and the symptom is
-"students pay and their plan never changes". The other two must NOT carry
-that flag: they spend money and require a signed-in student.
+**AND CHECK THE ONES THAT ARE DIFFERENT.** Every function whose name
+ends `-webhook` must be deployed with `--no-verify-jwt`; the log shows
+each on its own line. Their callers are payment providers — RevenueCat,
+Stripe — neither of which can mint a Supabase JWT, so with verification
+on every delivery is refused by the platform before our code runs:
+nothing errors, nothing appears in our logs, and the symptom is
+"students pay and their plan never changes". **Nothing else may carry
+that flag.** `ai-notes` and `ai-text` spend money; `billing-checkout`
+and `billing-portal` create payment sessions. All four require a
+signed-in student, and a test in `test-ai-notes.mjs` asserts both
+halves — the flag is on exactly the webhook set, derived from the
+directory, and on nothing else.
 
 **And its three secrets must exist before the first delivery**, in
 Supabase → Edge Functions → Secrets. They are invisible to every test in

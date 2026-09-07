@@ -27,7 +27,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { CreditCard, ExternalLink, RefreshCw } from "lucide-react";
 import { fetchUsage } from "./aiNotesClient.js";
-import { groupPackages, manageSubscriptionUrl } from "./purchasePlans.js";
+import { DURATION_ORDER, SELLABLE_TIERS, groupPackages, manageSubscriptionUrl } from "./purchasePlans.js";
 import { purchaseCapability, loadPackages, purchasePackage, restorePurchases } from "./purchases.js";
 import {
   ACTIONS,
@@ -35,13 +35,18 @@ import {
   DISCLOSURES,
   LINKS,
   PANEL_TITLE,
+  WEB,
   buyLabel,
   currentPlanLine,
   outcomeMessage,
   resetLine,
   unavailableLine,
+  webFailureMessage,
 } from "./plansCopy.js";
 import { bumpEntitlement, entitlementVersion, refreshEntitlementSoon, subscribeEntitlement } from "./entitlementRefresh.js";
+import { STRIPE_ENABLED, WEB_PLANS } from "./billingFlags.js";
+import { openPortal, startCheckout } from "./stripeClient.js";
+import { webPriceLabel } from "./webPrices.js";
 import { btnPrimary, btnGhost, Card } from "./PlannerApp.jsx";
 
 /**
@@ -57,6 +62,10 @@ export const useEntitlementVersion = () => useSyncExternalStore(subscribeEntitle
 export function PlansPanel({ session }) {
   const version = useEntitlementVersion();
   const [tier, setTier] = useState(null);
+  /* WHERE the plan came from, so "manage" points at the right place —
+     Stripe's Customer Portal and a store's own page are different
+     destinations and sending somebody to the wrong one is a dead end. */
+  const [store, setStore] = useState(null);
   const [packages, setPackages] = useState([]);
   const [customerInfo, setCustomerInfo] = useState(null);
   const [busy, setBusy] = useState("");
@@ -71,7 +80,9 @@ export function PlansPanel({ session }) {
   useEffect(() => {
     let cancelled = false;
     fetchUsage(session).then((u) => {
-      if (!cancelled) setTier(u && !u.unavailable ? u.tier : null);
+      if (cancelled) return;
+      setTier(u && !u.unavailable ? u.tier : null);
+      setStore(u && !u.unavailable ? u.store || null : null);
     });
     return () => {
       cancelled = true;
@@ -125,6 +136,61 @@ export function PlansPanel({ session }) {
     }
   };
 
+  /* WEB PURCHASES ARE OFF UNTIL THE FLAG SAYS OTHERWISE. Three
+     conditions, and each is doing work: the flag (a reviewable commit,
+     not a dashboard toggle), a session (the uid comes from the JWT and
+     there is no anonymous purchase), and `reason === "web"` — because a
+     phone with no RevenueCat key is ALSO `!capability.available`, and
+     offering it a card payment instead of fixing the build would be the
+     wrong answer to the wrong question. */
+  const webPurchases = STRIPE_ENABLED && !capability.available && capability.reason === "web" && !!session;
+
+  /* Derived from the same six plans the phones sell, so the web cannot
+     silently be missing one — grouped here rather than in a constant
+     because the shape the buttons want is tier-then-duration. */
+  const webGroups = SELLABLE_TIERS.map((t) => ({
+    tier: t,
+    durations: DURATION_ORDER.filter((d) =>
+      Object.values(WEB_PLANS).some((plan) => plan.tier === t && plan.duration === d)
+    ),
+  })).filter((g) => g.durations.length > 0);
+
+  const token = session && session.access_token;
+
+  const buyOnWeb = async (t, duration) => {
+    setBusy(`${t}-${duration}`);
+    setMessage(null);
+    try {
+      const { url } = await startCheckout({ token, tier: t, duration });
+      /* A NEW TAB, not a redirect. On the web it keeps the planner
+         where it was; on the desktop build it is what makes Electron
+         hand the link to the system browser rather than opening
+         Stripe inside the app window. */
+      window.open(url, "_blank", "noopener,noreferrer");
+      /* The webhook writes the tier once the payment completes, which
+         is not now — so the same bounded ladder the store path uses
+         picks it up when the student comes back. */
+      startPolling();
+    } catch (err) {
+      setMessage(webFailureMessage(err && err.code, err && err.store));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const manageOnWeb = async () => {
+    setBusy("manage");
+    setMessage(null);
+    try {
+      const { url } = await openPortal({ token });
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setMessage(webFailureMessage(err && err.code, err && err.store));
+    } finally {
+      setBusy("");
+    }
+  };
+
   const grouped = groupPackages(packages);
   const manageUrl = manageSubscriptionUrl({ customerInfo, store: capability.store });
   const unavailable = unavailableLine(capability.reason);
@@ -147,7 +213,40 @@ export function PlansPanel({ session }) {
           sentence saying where plans are bought and nothing else — not a
           "coming soon", which would promise a surface this one is never
           going to have. */}
-      {!capability.available ? (
+      {!capability.available && webPurchases ? (
+        /* PHASE 6, BEHIND STRIPE_ENABLED. The same panel, a different
+           payment provider: the web cannot reach a store, so a card
+           payment through Stripe Checkout is the only way it can sell
+           anything at all. The button opens Stripe's own hosted page —
+           in a new tab on the web, and in the system browser on the
+           desktop build, which already refuses to open an http link
+           in-app (desktop/main.js) and hands it to the OS. */
+        <div className="mt-4 space-y-4" data-web-purchase>
+          {webGroups.map((group) => (
+            <div key={group.tier} className="space-y-1.5">
+              {group.durations.map((duration) => (
+                <button
+                  key={`${group.tier}-${duration}`}
+                  type="button"
+                  className={`${btnPrimary} w-full`}
+                  disabled={!!busy}
+                  onClick={() => buyOnWeb(group.tier, duration)}
+                  data-web-plan={`${group.tier}-${duration}`}
+                >
+                  {buyLabel(group.tier, duration, webPriceLabel(group.tier, duration))}
+                </button>
+              ))}
+            </div>
+          ))}
+          <p className="text-xs text-stone-500">{WEB.buyHint}</p>
+          {store === "stripe" && (
+            <button type="button" className={`${btnGhost} w-full`} disabled={!!busy} onClick={manageOnWeb} data-web-manage>
+              <ExternalLink size={14} />
+              {WEB.manage}
+            </button>
+          )}
+        </div>
+      ) : !capability.available ? (
         <p className="mt-3 text-xs text-stone-500" data-purchase-unavailable>
           {unavailable}
         </p>

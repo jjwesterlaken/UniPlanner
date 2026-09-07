@@ -47,7 +47,12 @@ export async function fetchUsage(session, { supabaseClient = supabase, isDemo = 
        put the trial counter on `profiles` rather than in `ai_usage`.
        It also puts the check exactly where the allowance is SPENT,
        which is the thing the rule exists to protect. */
-    .select("tier, trial_credits_used, active_device_id, active_device_at")
+    /* `store` rides along too (0017). The Plans panel needs it to know
+       WHERE a subscription is managed — Stripe's Customer Portal and
+       the App Store's page are different places, and sending somebody
+       to the wrong one is a dead end that reads as the app being
+       broken. Another column on a read that already happens. */
+    .select("tier, trial_credits_used, active_device_id, active_device_at, store")
     .eq("user_id", session.user.id)
     .maybeSingle();
   if (profileErr || !profile) return { creditsUsed: 0, tier: null, unavailable: true };
@@ -62,6 +67,7 @@ export async function fetchUsage(session, { supabaseClient = supabase, isDemo = 
     return {
       creditsUsed: Number(profile.trial_credits_used) || 0,
       tier: profile.tier,
+      store: profile.store || null,
       unavailable: false,
       standing,
     };
@@ -76,8 +82,8 @@ export async function fetchUsage(session, { supabaseClient = supabase, isDemo = 
   /* A FAILED READ IS "UNKNOWN", NEVER "NONE LEFT". Same rule as
      fetchNote and the archive list: the badge disappears rather than
      telling a student on a train that they are out of credits. */
-  if (error) return { creditsUsed: 0, tier: profile.tier, unavailable: true, standing };
-  return { creditsUsed: (data && data.credits_used) || 0, tier: profile.tier, unavailable: false, standing };
+  if (error) return { creditsUsed: 0, tier: profile.tier, store: profile.store || null, unavailable: true, standing };
+  return { creditsUsed: (data && data.credits_used) || 0, tier: profile.tier, store: profile.store || null, unavailable: false, standing };
 }
 
 /**
