@@ -100,7 +100,7 @@ const OTHER = "22222222-2222-4222-8222-222222222222";
  * write with its filters, so a mis-scoped one is visible even where its
  * effect would not be.
  */
-function makeWorld({ profiles = {}, events = {}, env = {}, stripeRoutes = {} } = {}) {
+function makeWorld({ profiles = {}, events = {}, entitlements = {}, env = {}, stripeRoutes = {} } = {}) {
   const trace = [];
   const writes = [];
   const stripeCalls = [];
@@ -130,6 +130,20 @@ function makeWorld({ profiles = {}, events = {}, env = {}, stripeRoutes = {} } =
         events[row.id] = row;
         return Promise.resolve({ data: row, error: null });
       },
+      /* One row per (user_id, source), the shape migration 0020 keys.
+         Modelled, so the idempotency claim is made in the billing
+         suite's section 7b against the real constraint and not here —
+         what this needs is for the record step to SUCCEED, so the
+         derive and the write happen and the order tests are about
+         order rather than about a missing table. */
+      upsert(v, opts = {}) {
+        trace.push(`db:${name}.upsert`);
+        const row = Array.isArray(v) ? v[0] : v;
+        writes.push({ table: name, op: "upsert", values: row, filters: [] });
+        if (!opts.onConflict) throw new Error(`makeWorld: upsert on ${name} with no onConflict`);
+        entitlements[`${row.user_id}|${row.source}`] = { ...row };
+        return Promise.resolve({ data: null, error: null });
+      },
       eq(col, val) {
         filters.push([col, val]);
         return chain;
@@ -147,6 +161,16 @@ function makeWorld({ profiles = {}, events = {}, env = {}, stripeRoutes = {} } =
         return Promise.resolve({ data: null, error: null });
       },
       then(resolve, reject) {
+        /* An awaited SELECT is a LIST — the derive step reads every
+           provider row for the account. Returning one row would make
+           the max agree with whatever was just written, which is the
+           fake-that-swallows-calls failure. */
+        if (op === "select") {
+          trace.push(`db:${name}.select`);
+          const by = Object.fromEntries(filters);
+          const rows = Object.values(entitlements).filter((r) => r.user_id === by.user_id);
+          return Promise.resolve({ data: rows.map((r) => ({ ...r })), error: null }).then(resolve, reject);
+        }
         if (op !== "update") return resolve({ data: null, error: null });
         trace.push(`db:${name}.update`);
         writes.push({ table: name, op: "update", values, filters: [...filters] });

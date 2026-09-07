@@ -375,6 +375,17 @@ async function run() {
       privacy: /record of subscription events/i,
       deletion: /record of subscription events/i,
     },
+    /* WHAT EACH PROVIDER SAYS YOU ARE ENTITLED TO — the input the plan
+       level is derived from, rather than the plan level itself. Worth
+       its own sentence in both documents rather than being folded into
+       "your plan level": a student reading the deletion page is
+       entitled to know that the record of having subscribed through
+       Apple or Stripe goes too, and it is a different fact from the
+       tier it currently produces. */
+    entitlements: {
+      privacy: /which plan each app store or payment provider says/i,
+      deletion: /which plan each app store or payment provider says/i,
+    },
   };
 
   await test("every table in the schema is accounted for in both published documents", () => {

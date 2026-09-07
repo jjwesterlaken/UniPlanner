@@ -1821,6 +1821,86 @@ whatever a refactor does to `purchases.js` — asserted in
 `test-local-only.mjs`, alongside its own non-vacuity (the SDK really is
 bundled, `errors.rev.cat` proves it).
 
+### Two providers, one account: a tier is a MAX, not a race
+
+`entitlements` (migration 0020), `tierFromProviders` and
+`applyEntitlement` in `_shared/entitlement.ts`, section 7b of
+`scripts/test-billing-function.mjs`.
+
+**THE BUG WAS WRITTEN DOWN AS ACCEPTED BEFORE IT WAS HANDLED**, in a
+comment in the file that had it — which is "a rule written beside one
+caller is not a guard" arriving as a paragraph instead of a line of
+code. Each webhook re-reads only its OWN provider and then wrote
+`profiles.tier` outright, so for a student paying through Stripe with
+last year's App Store subscription lapsing: Stripe renews and sets
+`ai`; the Apple EXPIRATION lands; RevenueCat is re-read, holds nothing
+active, computes `free` — and `free` goes over a live, paid Stripe
+entitlement. **The student is being charged and has lost what they are
+paying for, and nothing errors.**
+
+The old note pointed at `billing-checkout`'s `store_subscription_active`
+refusal as closing "the door we control". It closes a different door:
+it stops a NEW Stripe checkout while a store subscription is live, and
+says nothing about the reverse order, or about an old store
+subscription expiring months later.
+
+**RECORD THE FACT PER PROVIDER, DERIVE THE ANSWER.** `entitlements` is
+one row per `(user_id, source)`; `profiles.tier` is now a projection of
+those rows — the highest tier any provider currently grants. A provider
+can only ever speak for itself, so an expiry writes
+`('revenuecat','free')` and cannot reach across a boundary it knows
+nothing about. The winner carries `store` and `expiresAt` with it,
+because those name the subscription the student would have to go and
+cancel — the last event to arrive is the wrong thing to take them from.
+
+**AND A MAX MUST STILL BE ABLE TO GO DOWN.** That is the half a
+careless max gets wrong, and "never demote" would pass both ordering
+tests while making every cancellation in the product free of charge.
+The max is over rows that are STILL LIVE, so the last one lapsing takes
+the account to `free`, and a test is named for exactly that beside the
+two orderings. An expired row also stops counting on its own, which is
+the backstop for a provider that goes quiet rather than sending an
+expiry.
+
+**A FAILED READ IS NOT AN EMPTY ONE**, the `fetchNote` rule with a paid
+subscription attached: if the derive step's read fails, nothing is
+written and the tier keeps what it had. Deriving `free` from a failed
+read is how this fix would reintroduce the bug it exists to remove.
+
+**Ordering is the `aiNotesStore` table again**: the provider row first,
+then the derived tier. An interruption leaves an account whose recorded
+facts are ahead of its tier, which the next event of any kind repairs
+because the derive step reads every row. The reverse would put a tier
+on an account whose rows do not justify it and nothing would notice.
+**Manual short-circuits before either write** — recording assertions
+underneath a gift would mean the day somebody clears `manual` the
+account silently inherits whatever the providers last said.
+
+**THE CLAIMS ARE MADE AGAINST REAL POSTGRES, in section 7b**, because
+they are claims about what the database holds after two events written
+by two different code paths. The billing suite's fake with no foreign
+key is why section 7 exists at all; a fake with no `(user_id, source)`
+primary key would be the same mistake one column over.
+
+**AND THE RESTATEMENT LEDGER GAINED AN ENTRY WHILE THIS WAS BEING
+WRITTEN.** 0020 re-creates `delete_my_account_data()`, as 0005, 0007,
+0010 and 0017 each did — and the first draft copied **0010's** body,
+which predates `billing_events`, silently dropping a table from account
+deletion. Two independent guards caught it in the same run: the
+migration suite's derived sweep, and 0017's own self-check. **Copy the
+body from the LATEST migration that defines it, never from the one you
+happen to have open.**
+
+**A CONSEQUENCE WORTH KNOWING BEFORE SOMEBODY RE-RUNS A MIGRATION:
+applying 0017 after 0020 REFUSES** — its self-check derives the table
+list from the catalogue and raises. But **the refusal is not a
+rollback**: psql commits each statement, so the `create or replace` has
+landed by the time the check raises, and the deletion function is left
+regressed. 0017 is not edited to fix that (it is applied in production,
+and changing what a re-run does is its own risk); the remedy is to
+re-apply 0020, which is the latest migration defining the function. A
+test pins all three halves — the refusal, the residue, and the remedy.
+
 ## Stripe on the web: two sources, one writer, and a flag that is two flags
 
 `supabase/functions/_shared/stripe.ts`, `billing-checkout/`,

@@ -61,15 +61,33 @@ export const PAID_ENTITLEMENTS: readonly string[] = TIER_RANK.slice(1);
    `tier_source`, which is how a support question ("where did this plan
    come from?") is answerable at all.
 
-   THE HAZARD THAT COMES WITH TWO SOURCES, named rather than assumed
-   away: an account holding BOTH an App Store subscription and a Stripe
-   one has two writers that each re-read only their own provider, so the
-   last event to arrive wins and the tier flaps. `billing-checkout`
-   refuses to start a Stripe checkout for an account that already holds
-   a store subscription, which closes the door we control; the other
-   direction (buying in the App Store while a Stripe subscription is
-   live) is not ours to refuse, and the student would be paying twice —
-   so it is worth a support note rather than a silent guess here. */
+   THE HAZARD THAT COMES WITH TWO SOURCES — and it was WRITTEN DOWN
+   HERE AS ACCEPTED before it was handled, which is this project's own
+   "a rule written beside one caller is not a guard" one more time.
+
+   Each writer re-reads only its OWN provider. So for a student paying
+   through Stripe who also has last year's App Store subscription
+   lapsing: Stripe renews and sets `ai`; the Apple EXPIRATION lands,
+   RevenueCat is re-read, holds nothing active, `tierFromSubscriber`
+   returns `free` — and `free` is written over a live, paid Stripe
+   entitlement. The student is being charged and has lost what they are
+   paying for, and nothing errors.
+
+   The old note pointed at `billing-checkout`'s `store_subscription_active`
+   refusal as closing "the door we control". It does not close this one:
+   that refusal stops a NEW Stripe checkout while a store subscription
+   is live, and says nothing about the reverse order or about an OLD
+   store subscription expiring months later.
+
+   SO A TIER IS A MAX, NOT A RACE. `applyEntitlement` records what the
+   calling provider asserts in `entitlements` (one row per provider,
+   migration 0020) and then sets `profiles.tier` to the highest tier any
+   provider currently grants. A provider can only ever speak for itself.
+
+   AND A MAX MUST STILL BE ABLE TO GO DOWN, which is the half that gets
+   forgotten: the max is over rows that are STILL LIVE, so the last one
+   lapsing takes the account to `free`. A test is named for exactly
+   that, beside the two orderings. */
 export const ENTITLEMENT_SOURCES = ["revenuecat", "stripe"] as const;
 export type EntitlementSource = (typeof ENTITLEMENT_SOURCES)[number];
 
@@ -194,25 +212,105 @@ export function affectedUserIds(event: Record<string, unknown> | null | undefine
 }
 
 /**
- * Write a tier, unless a human decided it.
+ * The tier a set of PER-PROVIDER assertions implies: the highest one
+ * that is still live.
+ *
+ * Pure, so the awkward cases are a table in a test rather than
+ * something only two overlapping subscriptions can answer. Takes the
+ * rows of `entitlements` for one account.
+ *
+ * A ROW WHOSE EXPIRY HAS PASSED DOES NOT COUNT. Normally a provider
+ * tells us — an expiry arrives and writes `free` — so this filter is
+ * the backstop for the provider that goes quiet instead, which is the
+ * failure that would otherwise hold a tier open forever. Same reading
+ * of null as `isActive`: no expiry means non-expiring.
+ *
+ * AN UNPARSEABLE DATE READS AS EXPIRED, for `isActive`'s reason: a
+ * student briefly losing a tier is visible and self-correcting, an
+ * entitlement that never expires is silent and permanent.
+ *
+ * The winner carries `store` and `expiresAt` with it, because those
+ * describe the subscription the student would have to go and cancel —
+ * so they must come from the row that is actually granting the tier,
+ * not from whichever provider happened to send the last event.
+ */
+export function tierFromProviders(
+  rows: Array<{ source?: string; tier?: string; store?: string | null; expires_at?: string | null }> | null | undefined,
+  now = Date.now()
+): { tier: BillingTier; store: string | null; expiresAt: string | null; source: EntitlementSource | null } {
+  let best: { rank: number; store: string | null; expiresAt: string | null; source: EntitlementSource; until: number } | null = null;
+
+  for (const row of rows ?? []) {
+    const rank = TIER_RANK.indexOf(row?.tier as BillingTier);
+    if (rank <= 0) continue;                       // absent, unknown, or `free` — not an entitlement
+    if (!ENTITLEMENT_SOURCES.includes(row?.source as EntitlementSource)) continue;
+
+    const raw = row?.expires_at;
+    const until = raw === null || raw === undefined ? Infinity : Date.parse(String(raw));
+    if (!(until > now)) continue;                  // expired, or a date we cannot read
+
+    /* Highest tier wins; between two providers granting the SAME tier,
+       the one that lasts longer, because that is the subscription the
+       student still has after the other lapses. Deterministic to the
+       end: the source order breaks a remaining tie, so two runs over
+       the same rows can never disagree about which store to name. */
+    const better =
+      !best ||
+      rank > best.rank ||
+      (rank === best.rank && until > best.until) ||
+      (rank === best.rank &&
+        until === best.until &&
+        ENTITLEMENT_SOURCES.indexOf(row.source as EntitlementSource) < ENTITLEMENT_SOURCES.indexOf(best.source));
+
+    if (better) {
+      best = {
+        rank,
+        store: row?.store ?? null,
+        expiresAt: raw === null || raw === undefined ? null : String(raw),
+        source: row.source as EntitlementSource,
+        until,
+      };
+    }
+  }
+
+  if (!best) return { tier: "free", store: null, expiresAt: null, source: null };
+  return { tier: TIER_RANK[best.rank], store: best.store, expiresAt: best.expiresAt, source: best.source };
+}
+
+/**
+ * Record what ONE provider asserts, then set the tier to what ALL of
+ * them together imply.
  *
  * MANUAL WINS, ALWAYS. `tier_source = 'manual'` is how the App Review
  * account, and anyone granted a tier by hand, keeps a tier nobody
  * bought. Apple's reviewer needs working paid features or sees none of
  * them (IOS-RELEASE.md line 154), and an account whose tier is a gift
  * has no subscription for a webhook to read — so the first event that
- * touched it would take the gift away.
+ * touched it would take the gift away. It short-circuits BEFORE the
+ * provider row is written: a manual tier is a decision about the
+ * account, and recording assertions underneath it would mean the day
+ * somebody clears `manual` the account silently inherits whatever the
+ * providers last said.
+ *
+ * TWO WRITES, IN THIS ORDER, AND THE ORDER IS THE USUAL ONE. The
+ * provider row goes first, then the derived tier. An interruption
+ * between them leaves an account whose recorded facts are ahead of its
+ * tier — which the next event of ANY kind repairs, because the derive
+ * step reads every row. The reverse would put a tier on an account
+ * whose rows do not justify it, and nothing would ever notice.
  *
  * SCOPED BY HAND, ON EVERY STATEMENT. This runs on the service-role
  * client, which exists to bypass RLS, so every `.eq("user_id", …)` that
  * a policy would have applied has to be written here. The id is the one
- * that came back FROM RevenueCat for this subscriber, never one lifted
- * out of a request.
+ * that came back FROM the provider for this subscriber, never one
+ * lifted out of a request.
  *
  * An account we have no row for is a no-op, not an insert: a
  * `profiles` row is created by the signup trigger, so its absence means
  * a deleted account or an id that was never ours. Inserting one would
- * resurrect a deleted account as a side effect of a webhook.
+ * resurrect a deleted account as a side effect of a webhook — and the
+ * `entitlements` row is not written either, for the same reason and
+ * because its foreign key would refuse it anyway.
  */
 // deno-lint-ignore no-explicit-any
 export async function applyEntitlement(
@@ -223,8 +321,24 @@ export async function applyEntitlement(
     store,
     expiresAt,
     source = "revenuecat",
-  }: { userId: string; tier: BillingTier; store: string | null; expiresAt: string | null; source?: EntitlementSource }
-): Promise<{ ok: boolean; outcome: string; before?: string | null; after?: string | null; error?: unknown }> {
+    now = Date.now(),
+  }: {
+    userId: string;
+    tier: BillingTier;
+    store: string | null;
+    expiresAt: string | null;
+    source?: EntitlementSource;
+    now?: number;
+  }
+): Promise<{
+  ok: boolean;
+  outcome: string;
+  before?: string | null;
+  after?: string | null;
+  asserted?: BillingTier;
+  effectiveSource?: EntitlementSource | null;
+  error?: unknown;
+}> {
   const { data: profile, error: readErr } = await admin
     .from("profiles")
     .select("tier, tier_source")
@@ -235,21 +349,65 @@ export async function applyEntitlement(
   if (!profile) return { ok: true, outcome: "no_such_user" };
   if (profile.tier_source === "manual") return { ok: true, outcome: "manual_override", before: profile.tier, after: profile.tier };
 
-  /* Written even when the tier is unchanged, because the other three
-     columns move on a renewal that changes nothing else: a new
-     expiry, and sometimes a new store after a cross-platform restore.
-     A no-op guard here would freeze those. */
+  /* 1. WHAT THIS PROVIDER SAYS. Keyed (user_id, source), so a
+        redelivery updates rather than accumulating — the max would
+        otherwise be taken over a growing pile of stale assertions. */
+  const { error: recordErr } = await admin
+    .from("entitlements")
+    .upsert(
+      { user_id: userId, source, tier, store, expires_at: expiresAt, updated_at: new Date(now).toISOString() },
+      { onConflict: "user_id,source" }
+    );
+
+  if (recordErr) return { ok: false, outcome: "record_failed", before: profile.tier, asserted: tier, error: recordErr };
+
+  /* 2. WHAT EVERY PROVIDER SAYS. Read back rather than merged in
+        memory: another provider's row may have been written by another
+        request between the two statements, and the database holds the
+        only complete answer. A FAILED READ IS NOT AN EMPTY ONE — it
+        returns without writing, so the tier keeps its previous value
+        and the retry re-derives. Deriving `free` from a failed read is
+        the `fetchNote` mistake with a paid subscription attached. */
+  const { data: rows, error: rowsErr } = await admin
+    .from("entitlements")
+    .select("source, tier, store, expires_at")
+    .eq("user_id", userId);
+
+  if (rowsErr) return { ok: false, outcome: "derive_failed", before: profile.tier, asserted: tier, error: rowsErr };
+
+  const effective = tierFromProviders(rows, now);
+
+  /* 3. THE PROJECTION. Written even when the tier is unchanged,
+        because the other three columns move on a renewal that changes
+        nothing else: a new expiry, and sometimes a new store after a
+        cross-platform restore. A no-op guard here would freeze those.
+
+        `tier_source` names the provider whose subscription is actually
+        granting the tier — not the one that sent this event. On the
+        expiry that used to cause the demotion, that is the difference
+        between the row saying `revenuecat` over a Stripe subscription
+        and saying what is true. */
   const { error: writeErr } = await admin
     .from("profiles")
     .update({
-      tier,
-      tier_source: source,
-      tier_updated_at: new Date().toISOString(),
-      entitlement_expires_at: expiresAt,
-      store,
+      tier: effective.tier,
+      tier_source: effective.source ?? source,
+      tier_updated_at: new Date(now).toISOString(),
+      entitlement_expires_at: effective.expiresAt,
+      store: effective.store,
     })
     .eq("user_id", userId);
 
-  if (writeErr) return { ok: false, outcome: "write_failed", before: profile.tier, error: writeErr };
-  return { ok: true, outcome: profile.tier === tier ? "unchanged" : "changed", before: profile.tier, after: tier };
+  if (writeErr) return { ok: false, outcome: "write_failed", before: profile.tier, asserted: tier, error: writeErr };
+  return {
+    ok: true,
+    outcome: profile.tier === effective.tier ? "unchanged" : "changed",
+    before: profile.tier,
+    after: effective.tier,
+    /* What THIS provider asserted, kept distinct from what the account
+       ended up with. They differ exactly when another provider is
+       carrying the tier, which is the case worth seeing in a log. */
+    asserted: tier,
+    effectiveSource: effective.source,
+  };
 }

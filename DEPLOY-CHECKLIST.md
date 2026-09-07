@@ -210,7 +210,9 @@ sent. A second send of the same test event answers
 ## 1e. Stripe — 0019 is NOT part of this sequence
 
 **Do not apply `0019_stripe.sql` here, and do not set any Stripe
-secret.** Phase 6 is built and switched off: `STRIPE_ENABLED` in
+secret.** (0020 in the step above IS part of this sequence — it is not
+a Stripe migration, it is the cross-provider fix, and the functions
+being deployed need it.) Phase 6 is built and switched off: `STRIPE_ENABLED` in
 `src/billingFlags.js` is `false`, so no web build shows a purchase
 control, and every one of the three Stripe functions refuses with
 `stripe_disabled` while `STRIPE_SECRET_KEY` is unset. Nothing in
@@ -227,6 +229,55 @@ turns web purchases on, not to this deploy.
 its list from the directory, so `billing-checkout`, `billing-portal`
 and `stripe-webhook` are deployed by it today. That is intended and
 inert — each refuses before doing anything while the secret is absent.
+
+---
+
+## 1f. Apply 0020 — the one migration on this branch that IS part of the sequence
+
+**0020 WIDENS and it is NOT optional**, which is the difference between
+it and 0019 above. It adds `public.entitlements` and re-creates
+`delete_my_account_data()` to empty it, and the Edge Functions in step 2
+carry an `applyEntitlement` that WRITES that table. Deploy without it
+and every entitlement write fails at the record step — logged, nothing
+billed, and the student's tier never changes. So it goes first, the
+0003/0004/0015/0018 direction.
+
+**Why it exists.** Each webhook re-reads only its own provider and then
+wrote `profiles.tier` outright, so an App Store expiry computed `free`
+and wrote it over a live Stripe subscription. `profiles.tier` is now the
+MAX over one row per provider; a provider can only speak for itself.
+
+Paste `supabase/migrations/0020_cross_provider_entitlement.sql`. It
+verifies itself and a successful apply ends with
+
+```
+NOTICE:  0020 applied and verified: 7 properties checked.
+```
+
+**Check, and the second one is the one that matters:**
+
+```sql
+-- the table, keyed per provider
+select column_name from information_schema.columns
+ where table_schema='public' and table_name='entitlements';     -- 6 rows
+
+-- THE DELETION FUNCTION STILL NAMES EVERY TABLE. 0020 restates the
+-- body, and a restatement copied from the wrong migration is how a
+-- table silently stops being deleted when a student asks for it to be.
+select count(*) from information_schema.columns col
+ where col.table_schema = 'public' and col.column_name = 'user_id'
+   and not exists (
+     select 1 from pg_proc p
+      where p.oid = 'public.delete_my_account_data()'::regprocedure
+        and p.prosrc like '%' || col.table_name || '%');          -- 0
+```
+
+**DO NOT RE-APPLY 0017 AFTER THIS.** It restates the same function from
+before `entitlements` existed. Its self-check refuses — but the refusal
+is not a rollback (psql commits each statement, so the replace has
+already landed), and it leaves account deletion missing a table. If it
+happens: re-apply 0020, which restores the correct body. The whole
+sequence is pinned by a test named for it.
 
 ---
 
