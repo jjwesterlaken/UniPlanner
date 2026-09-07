@@ -12,7 +12,8 @@
    editing one file.
    ================================================================== */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { subscribeEntitlement, entitlementVersion as readEntitlementVersion } from "./entitlementRefresh.js";
 import { Sparkles, X, TriangleAlert, RefreshCw, Check, Camera } from "lucide-react";
 import {
   AI_TEXT_FAILURES,
@@ -44,6 +45,11 @@ import { btnPrimary, btnGhost, iconBtn, inputCls, labelCls, Card } from "./Plann
 export function useTextAllowance(session) {
   const [state, setState] = useState(null);
   const [nonce, setNonce] = useState(0);
+  /* The same shared signal the AI badge uses, so a purchase made on the
+     Account tab moves this line too — it is read by four screens that
+     are mounted at different times, and a local nonce could only ever
+     refresh the one that fired it. */
+  const entitlementVersion = useSyncExternalStore(subscribeEntitlement, readEntitlementVersion, readEntitlementVersion);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,7 +59,7 @@ export function useTextAllowance(session) {
     return () => {
       cancelled = true;
     };
-  }, [session && session.user.id, nonce]);
+  }, [session && session.user.id, nonce, entitlementVersion]);
 
   /* Called after a successful action so the line moves without a
      refetch. The server's fraction is authoritative -- this is the

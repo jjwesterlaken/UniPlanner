@@ -229,12 +229,32 @@ tracking, and there is no third-party SDK to disagree
 (migration 0010); Apple has no partial option, so declare linked — the
 conservative direction, same call as on Play.
 
-**Declared as NOT collected**, flatly: Location, Financial Info,
+**PURCHASES: FLIPPED FOR 1.1.0, and this is one of the two console
+answers that must change before the version with subscriptions is
+submitted.** 1.0.0 declared Purchases NOT collected and that was true —
+there was no billing in the app at all. Phase 2 of BILLING-PLAN.md
+shipped the client half, so 1.1.0 declares **Purchases: collected,
+LINKED to identity, NOT used for tracking.** Linked because the
+RevenueCat app user id IS the Supabase user id, deliberately — an
+anonymous id would attach a purchase to an account we do not have (see
+`billing-webhook`'s `no_account` path), so the link is a design
+decision rather than an accident, and declaring it is the honest
+answer. **Do not flip this until the build being submitted actually
+contains the SDK**; a declaration ahead of the binary is as wrong as
+one behind it.
+
+`PrivacyInfo.xcprivacy` (tracking: none) stays TRUE, provided Apple
+Search Ads attribution is never enabled on the RevenueCat SDK. It is
+off by default and nothing in `src/purchases.js` turns it on.
+
+**Still declared as NOT collected**, flatly: Location, Financial Info,
 Health & Fitness, Contacts, Browsing History, Search History,
-Purchases, **Usage Data** (there is no analytics of any kind), and
-Sensitive Info. **Data Used to Track You: none** — which is also what
-`PrivacyInfo.xcprivacy` declares, so the questionnaire and the
-manifest agree.
+**Usage Data** (there is no analytics of any kind), and Sensitive
+Info. Financial Info stays NOT collected and is worth saying out loud:
+the payment is taken by Apple, we never see a card, and nothing in the
+app handles one. **Data Used to Track You: none** — which is also what
+`PrivacyInfo.xcprivacy` declares, so the questionnaire and the manifest
+agree.
 
 **PHOTOS: DECLARED. Decided-conservative, Jared, and recorded here so
 the question does not reopen next submission.** The relay-not-retained

@@ -267,8 +267,16 @@ supports:
   `auth.uid() = user_id`. This is the answer that keeps the rating
   low, and it is provable.
 - **Does the app share the user's location? NO.**
-- **Does the app allow purchases? NO** — there is no billing in the
-  app at all yet; tiers are flipped by hand in the dashboard.
+- **Does the app allow purchases? YES, from 1.1.0** — and this is one
+  of the two console answers that must change before the version with
+  subscriptions is uploaded. 1.0.0 answered NO and that was true: there
+  was no billing in the app at all and tiers were flipped by hand.
+  Phase 2 of BILLING-PLAN.md shipped the client half, so the app now
+  sells two subscriptions through Google Play Billing (via RevenueCat).
+  Data safety gains **Purchase history: collected, linked to the user,
+  not used for tracking** — linked because the RevenueCat app user id
+  IS the Supabase user id, on purpose. **Do not flip it until the AAB
+  being uploaded actually contains the SDK.**
 - **AI-generated content.** The questionnaire has begun asking about
   this and it is the one place to answer carefully rather than
   reflexively: the app **does** display model-generated text (lecture

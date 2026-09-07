@@ -45,11 +45,13 @@
       <p>
         <strong>The short version.</strong> Your planner is stored in Australia. There is no
         advertising, no tracking and no analytics of any kind, and nothing is sold or shared for
-        marketing. The AI features are the only part that sends anything overseas, and only when
-        you choose to use them: a lecture you record, a piece of text you paste in or have already
-        written, or photos of pages you are studying. A recording is deleted as soon as it has been
-        transcribed, and text and photos you supply are never stored at all. You can delete
-        your account and everything in it at any time.
+        marketing. Two things send anything overseas, and both only when you choose them. The AI
+        features send what you gave them to use: a lecture you record, a piece of text you paste in
+        or have already written, or photos of pages you are studying. A recording is deleted as soon
+        as it has been transcribed, and text and photos you supply are never stored at all. And if
+        you subscribe, your purchase goes through Apple or Google and is recorded for us by
+        RevenueCat &mdash; that is your account id and what you bought, never your card. You can
+        delete your account and everything in it at any time.
       </p>
     </div>
 
@@ -72,8 +74,8 @@
     <p>
       Creating an account stores your <strong>email address</strong> and a
       <strong>securely hashed password</strong>, handled by our authentication provider. We never
-      see your password. Accounts also carry a plan level (<code>free</code> or <code>ai</code>)
-      and the date the account was created.
+      see your password. Accounts also carry a plan level (<code>free</code>, <code>ai</code> or
+      <code>ai_max</code>) and the date the account was created.
     </p>
 
     <h3>Your planner</h3>
@@ -212,11 +214,42 @@
         photos you supply have no server-side copy at any point.
       </p>
       <p>
-        Both services are operated by companies based in the United States, and every request is
-        made from our server rather than from your device. Nothing else in the app is sent
-        overseas, and none of it happens unless you use an AI feature.
+        Both services are operated by companies based in the United States. Every AI request reaches
+        them from our own server: they never hear from your phone or your browser at all, and none
+        of it happens unless you use an AI feature. (Buying a subscription is the one other thing
+        that leaves the country, and it works the other way round: see
+        <a href="#payments">Payments</a>.)
       </p>
     </div>
+
+    <h2 id="payments">Payments</h2>
+    <p>
+      Subscriptions are sold only in the UniPlanner app on iPhone and Android, and the payment is
+      taken by <strong>Apple</strong> or <strong>Google</strong>. We never see your card, and no
+      part of this app ever handles a payment. On the web and on the desktop app you can see which
+      plan you are on, and nothing can be bought.
+    </p>
+    <p>
+      Unlike the AI features, a purchase is made <strong>from your device</strong> &mdash; that is
+      how the App Store and Google Play work, and there is no version of it that goes through our
+      server instead. Two companies are involved:
+    </p>
+    <ul>
+      <li>
+        <strong>Apple</strong> or <strong>Google</strong>, who take the payment. What they collect
+        is covered by their own privacy policies, not ours, and we receive none of it.
+      </li>
+      <li>
+        <strong>RevenueCat</strong> (United States), who record the purchase and tell our server
+        which plan you are on. What reaches them is your account id and the receipt the store
+        issued &mdash; never your name, your email address, your card, or anything you have
+        written in the app.
+      </li>
+    </ul>
+    <p>
+      This only ever happens after you have made an account and signed in. Without an account
+      nothing about payments runs at all, and the app on its own contacts no payment service.
+    </p>
 
     <h2>What the app keeps on your device</h2>
     <p>
@@ -283,8 +316,9 @@
     <ul>
       <li><strong>No advertising and no ad networks.</strong></li>
       <li><strong>No analytics and no tracking of any kind.</strong> There is no Google Analytics,
-          no tracking pixel, no third-party script and no behavioural logging in the app. The only
-          server the app itself contacts is our own.</li>
+          no tracking pixel, no third-party script and no behavioural logging in the app. Nothing in
+          it talks to anybody but our own server, with one exception: buying a subscription, which
+          goes to Apple or Google and is described under <a href="#payments">Payments</a>.</li>
       <li><strong>No selling or sharing your data</strong> with anyone for marketing.</li>
       <li><strong>No reading your notes for training.</strong> We do not use your content to train
           AI models, and text sent to an AI feature is sent to answer that one request — it is not

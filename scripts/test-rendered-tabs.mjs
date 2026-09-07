@@ -30,6 +30,7 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -316,12 +317,189 @@ async function run() {
             "so the allowance badge never mounted and this check proves nothing"
         );
       }
+      /* THE PLANS PANEL, on the surface that cannot sell anything. The
+         tier still has to show — it is the same account wherever a
+         student signs in, and hiding it would leave somebody who paid
+         on their phone wondering whether the laptop knew — and the
+         purchase controls must not. Asserted on the far side of the
+         gate, the AI-tab lesson: "the account tab rendered" would pass
+         with the panel missing entirely. */
+      if (id === "account") {
+        assert.match(html, /data-plan-line/, "the Account tab rendered without the Plans panel at all");
+        assert.match(html, /Study AI/, "the plan line does not name the tier the profiles read returned");
+        assert.match(html, /data-purchase-unavailable/, "web does not say where plans are bought");
+        assert.doesNotMatch(html, /data-purchase-controls/, "the web build is showing purchase controls");
+        assert.doesNotMatch(html, /data-package=/, "the web build is showing buyable packages");
+        assert.match(html, /Privacy Policy/, "the panel does not link the privacy policy, which Apple requires on a subscription screen");
+      }
       visited.push(id);
     });
   }
 
   await test("every tab was actually visited, so none of the above passed over nothing", () => {
     assert.deepEqual(visited, ids, `visited ${visited.length} of ${ids.length} tabs`);
+  });
+
+  /* ------------------------------------------------------------------ */
+  /*  The Plans panel, on a shell that CAN sell                          */
+  /* ------------------------------------------------------------------ */
+
+  /* FAKED AT CAPACITOR'S OWN BOUNDARY, not at ours. `window.androidBridge`
+     is what `getPlatformId()` looks for, and `Capacitor.PluginHeaders`
+     plus `Capacitor.nativePromise` are what a real native bridge
+     injects — so the REAL RevenueCat plugin code marshals the REAL
+     calls, and only the last hop is ours. Stubbing src/purchases.js
+     instead would have tested a module against itself.
+
+     It is also what makes the web half above a measurement rather than
+     an assumption: the same spy is installed WITHOUT androidBridge, so
+     "nothing called the SDK on web" is an empty array rather than a
+     hope. */
+  const PACKAGES = [
+    { identifier: "studyai_monthly", product: { identifier: "uniplanner.studyai.monthly", priceString: "A$8.99", title: "Study AI" } },
+    { identifier: "studyai_sixmonth", product: { identifier: "uniplanner.studyai.sixmonth", priceString: "A$44.99", title: "Study AI" } },
+    { identifier: "studyai_annual", product: { identifier: "uniplanner.studyai.annual", priceString: "A$79.99", title: "Study AI" } },
+    { identifier: "studyaimax_monthly", product: { identifier: "uniplanner.studyaimax.monthly", priceString: "A$18.99", title: "Study AI Max" } },
+    { identifier: "studyaimax_sixmonth", product: { identifier: "uniplanner.studyaimax.sixmonth", priceString: "A$94.99", title: "Study AI Max" } },
+    { identifier: "studyaimax_annual", product: { identifier: "uniplanner.studyaimax.annual", priceString: "A$169.99", title: "Study AI Max" } },
+  ];
+
+  const bridgeScript = ({ native, packages }) => `
+    if (${native}) window.androidBridge = { postMessage() {} };
+    window.__RC_CALLS__ = [];
+    window.Capacitor = {
+      PluginHeaders: [{
+        name: "Purchases",
+        methods: ["configure", "logOut", "getOfferings", "purchasePackage", "restorePurchases", "getCustomerInfo"]
+          .map((name) => ({ name, rtype: "promise" })),
+      }],
+      nativePromise: (plugin, method) => {
+        window.__RC_CALLS__.push(plugin + "." + method);
+        if (method === "getOfferings") return Promise.resolve({ current: { identifier: "default", availablePackages: ${JSON.stringify(packages)} } });
+        if (method === "restorePurchases") return Promise.resolve({ customerInfo: { managementURL: null } });
+        return Promise.resolve({});
+      },
+    };
+  `;
+
+  /* A STORE BUILD, made here, because dist-web is deliberately not one.
+     `purchaseCapability` refuses without a RevenueCat key, and a web
+     build has none — that is correct and is asserted elsewhere. So the
+     native half of this file needs the artifact a phone would actually
+     get: the same sources through the same esbuild defines, with the
+     two keys set, exactly as MOBILE-BUILD.md's store-build steps do it.
+
+     Built once and reused. It is still an ARTIFACT rather than a
+     source read; what it is not is `dist-web`, and saying so is the
+     difference between this and reading a build that answers a
+     different question. */
+  const KEYED_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "keyed-build-"));
+  let keyedBuilt = false;
+  async function keyedBuild() {
+    if (keyedBuilt) return KEYED_DIR;
+    for (const f of fs.readdirSync(OUT)) fs.cpSync(path.join(OUT, f), path.join(KEYED_DIR, f), { recursive: true });
+    const { build } = await import("esbuild");
+    await build({
+      entryPoints: [path.join(rootDir, "src/main.jsx")],
+      bundle: true,
+      minify: true,
+      format: "iife",
+      jsx: "automatic",
+      define: {
+        "process.env.NODE_ENV": '"production"',
+        __REVENUECAT_IOS_KEY__: '"appl_testkeyforrendering"',
+        __REVENUECAT_ANDROID_KEY__: '"goog_testkeyforrendering"',
+      },
+      outfile: path.join(KEYED_DIR, "app.js"),
+      logLevel: "silent",
+    });
+    keyedBuilt = true;
+    return KEYED_DIR;
+  }
+
+  /* BOTH HALVES USE THE KEYED BUILD, and that is the whole point of
+     building one. Running the web half against `dist-web` would have it
+     show no purchase controls for TWO reasons at once — no native
+     platform AND no key — so an empty call list would not discriminate
+     between them. Same bundle, same spy, one difference: the platform.
+     (`dist-web` having no key is a separate, real property, and the
+     per-tab account assertion above is what covers it.) */
+  async function mountAccount({ native }) {
+    const dir = await keyedBuild();
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+    await page.addInitScript(
+      ({ ref, userId, tabKey, consentVersion }) => {
+        const hour = Math.floor(Date.now() / 1000) + 3600;
+        localStorage.setItem(
+          `sb-${ref}-auth-token`,
+          JSON.stringify({
+            access_token: "test-token",
+            token_type: "bearer",
+            expires_at: hour,
+            expires_in: 3600,
+            refresh_token: "test-refresh",
+            user: { id: userId, email: "plans-probe@example.test", aud: "authenticated", role: "authenticated" },
+          })
+        );
+        localStorage.setItem("uni-planner-mode", "light");
+        localStorage.setItem(tabKey, "account");
+        localStorage.setItem(
+          "uni-planner-v1",
+          JSON.stringify({ semester: "Semester 1", semesters: {}, meta: { aiConsent: { version: consentVersion, acceptedAt: new Date().toISOString() } } })
+        );
+      },
+      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consentVersion: AI_CONSENT_VERSION }
+    );
+    await page.addInitScript(bridgeScript({ native, packages: PACKAGES }));
+    await page.route(`${SUPABASE_HOST}/**`, async (route) => {
+      const url = route.request().url();
+      if (url.includes("/auth/v1/user")) return route.fulfill(json({ id: USER_ID, email: "plans-probe@example.test" }));
+      if (url.includes("/auth/v1/")) return route.fulfill(json({ access_token: "test-token", user: { id: USER_ID } }));
+      if (url.includes("/rest/v1/profiles")) return route.fulfill(json(PROFILE_ROW));
+      if (url.includes("/rest/v1/ai_usage")) return route.fulfill(json({ user_id: USER_ID, credits_used: 12 }));
+      return route.fulfill(json([]));
+    });
+    await page.goto("file://" + path.join(dir, "index.html"));
+    await page.waitForSelector("#root > *", { timeout: 15_000 });
+    await page.waitForTimeout(1200);
+    const html = await page.locator("#root").innerHTML();
+    const calls = await page.evaluate(() => window.__RC_CALLS__ || []);
+    await ctx.close();
+    return { html, calls, errors };
+  }
+
+  await test("ON A NATIVE SHELL the panel shows all six packages, their prices and Restore", async () => {
+    const { html, calls, errors } = await mountAccount({ native: true });
+    assert.deepEqual(errors, [], `the Account tab threw on a native shell:\n        ${errors.join("\n        ")}`);
+    assert.match(html, /data-purchase-controls/, "a native shell is not showing purchase controls");
+    for (const pkg of PACKAGES) {
+      assert.ok(html.includes(`data-package="${pkg.identifier}"`), `${pkg.identifier} is missing from the panel`);
+      assert.ok(html.includes(pkg.product.priceString), `${pkg.identifier} renders without the store's price — Apple requires the price on the screen`);
+    }
+    assert.match(html, /data-restore/, "no Restore Purchases control, which Apple requires to be visible");
+    assert.match(html, /data-manage/, "no way to manage or cancel the subscription");
+    assert.match(html, /1 month[\s\S]*6 months[\s\S]*12 months/, "the periods are missing or out of order");
+    assert.match(html, /data-terms/, "no Terms of Use link");
+    /* AND THE SDK WAS REALLY SPOKEN TO, which is what makes the web
+       assertion below a comparison rather than a coincidence. */
+    assert.ok(calls.includes("Purchases.configure"), `configure never reached the bridge: ${calls.join(", ") || "(no calls at all)"}`);
+    assert.ok(calls.includes("Purchases.getOfferings"), "the offering was never fetched");
+  });
+
+  await test("ON WEB the same page speaks to the SDK not once", async () => {
+    /* The measurement the web tab assertion above cannot make on its
+       own: the bridge spy is installed identically, and the platform is
+       the only difference. An empty array here against a non-empty one
+       above is the whole claim. */
+    const { html, calls, errors } = await mountAccount({ native: false });
+    assert.deepEqual(errors, [], `the Account tab threw on web:\n        ${errors.join("\n        ")}`);
+    assert.deepEqual(calls, [], `the store SDK was called on web: ${calls.join(", ")}`);
+    assert.match(html, /data-purchase-unavailable/, "web is not saying where plans are bought");
+    assert.doesNotMatch(html, /data-package=/, "web is offering packages for sale");
+    assert.doesNotMatch(html, /data-restore/, "web is offering to restore a purchase it cannot make");
   });
 
   await browser.close();

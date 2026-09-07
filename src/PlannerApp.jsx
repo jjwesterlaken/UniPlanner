@@ -161,6 +161,8 @@ import {
 } from "./aiNotesStore.js";
 import { noteCache } from "./noteCache.js";
 import { deleteAccount, confirmationMatches, DELETE_CONFIRMATION_PHRASE } from "./accountDeletion.js";
+import { PlansPanel } from "./plans.jsx";
+import { configurePurchases, logOutPurchases } from "./purchases.js";
 import {
   nextReadState,
   readingProgress,
@@ -5235,6 +5237,25 @@ export default function PlannerApp() {
     await runSync(s);
   };
 
+  /* THE STORE SDK LEARNS WHO THIS IS, AND ONLY AFTER SIGN-IN.
+     `configurePurchases` refuses on web, refuses without a key and
+     refuses without a session, so this effect is a no-op on every shell
+     but a phone with a real build — and it is keyed on the user id, so
+     signing out and back in as somebody else re-identifies the device
+     rather than leaving the last account's id on it.
+
+     NEVER ANONYMOUS (Jared, Phase 2). An anonymous RevenueCat id
+     produces exactly the delivery billing-webhook answers `no_account`
+     to: a purchase attached to an account we do not have. */
+  const signedInUserId = session && session.user ? session.user.id : null;
+  useEffect(() => {
+    if (signedInUserId) {
+      configurePurchases({ session });
+      return;
+    }
+    logOutPurchases();
+  }, [signedInUserId]);
+
   /* Supabase fires PASSWORD_RECOVERY once it has processed a recovery
      token out of the URL -- which only happens because detectSessionInUrl
      is now on for http(s) origins (see sync.js). Listening for the event
@@ -6140,6 +6161,13 @@ export default function PlannerApp() {
               onKeepLate={keepLateEdits}
               onOpenNote={openSummaryNote}
             />
+            {/* THE PLAN, ON EVERY SHELL. Read-only on web and desktop —
+                the tier still shows, because it is the same account
+                wherever a student signs in, and a screen that hid it
+                would leave somebody who paid on their phone wondering
+                whether the laptop knew. Only the PURCHASE controls are
+                native-only, and the panel decides that itself. */}
+            <PlansPanel session={session} />
             <AccountPanel
               session={session}
               syncing={syncing}
