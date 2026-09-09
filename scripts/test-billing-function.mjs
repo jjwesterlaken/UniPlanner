@@ -153,7 +153,7 @@ const subscriberWith = (entitlements, subscriptions = {}) => ({ entitlements, su
  * claim is an assertion rather than a hope, and records every filter,
  * so a mis-scoped write is visible even where its effect would not be.
  */
-function makeWorld({ profiles = {}, events = {}, entitlements = {}, subscribers = {}, fetchStatus = 200, fetchThrows = false } = {}) {
+function makeWorld({ profiles = {}, events = {}, entitlements = {}, subscribers = {}, fetchStatus = 200, fetchThrows = false, seenError = null } = {}) {
   const trace = [];
   const writes = [];
   const fetches = [];
@@ -210,6 +210,10 @@ function makeWorld({ profiles = {}, events = {}, entitlements = {}, subscribers 
           return Promise.resolve({ data: row ? { ...row } : null, error: null });
         }
         if (name === "billing_events") {
+          /* The idempotency READ, made to fail on demand — PGRST303
+             ("JWT issued at future") is the skew a real delivery hit.
+             The path must not care which error it was. */
+          if (seenError) return Promise.resolve({ data: null, error: seenError });
           const row = events[byId.id];
           return Promise.resolve({ data: row ? { ...row } : null, error: null });
         }
@@ -769,6 +773,46 @@ async function run() {
     assert.equal(Object.keys(shared.events).length, 1, "a redelivery wrote a second row");
     assert.deepEqual(second.fetches, [], "a redelivery cost a RevenueCat request");
     assert.deepEqual(second.writes, [], "a redelivery wrote something");
+  });
+
+  await test("A FAILED IDEMPOTENCY READ IS NOT A REFUSAL — the primary key is the guarantee", async () => {
+    /* THE SAME CHANGE AS stripe-webhook's, and it is here because the
+       two functions are kept deliberately identical — same import,
+       same `getSupabaseAdmin()` call, same first database call. That
+       symmetry is the finding: the skew that produced PGRST303 ("JWT
+       issued at future") on the first Stripe deliveries has nothing to
+       do with Stripe, nothing here mints that token, and the reason
+       this function had never shown it is that it has had a handful of
+       deliveries against the other's burst. Absence over three samples
+       is not a difference in code.
+
+       The read is an optimisation over `billing_events`' primary key.
+       Both halves asserted: the delivery goes through, and a
+       redelivery with the read STILL broken is still one row. */
+    const shared = {
+      profiles: { [USER_A]: profile("free") },
+      subscribers: { [USER_A]: subscriberWith({ ai: activeEnt("p") }) },
+      events: {},
+      seenError: { code: "PGRST303", message: "JWT issued at future" },
+    };
+
+    const first = makeWorld(shared);
+    const res = await deliver(first, EVENT());
+    first.restore();
+    assert.equal(res.status, 200, `a transient read failure refused the delivery: ${JSON.stringify(res.body)}`);
+    assert.equal(shared.profiles[USER_A].tier, "ai", "the entitlement was not applied");
+    assert.equal(Object.keys(shared.events).length, 1, "nothing was recorded");
+    assert.ok(
+      first.logs.some((l) => l.includes("PGRST303")),
+      `the read failure was swallowed rather than logged: ${first.logs.join(" | ")}`
+    );
+
+    const second = makeWorld(shared);
+    const again = await deliver(second, EVENT());
+    second.restore();
+    assert.equal(again.status, 200, `the redelivery was refused: ${JSON.stringify(again.body)}`);
+    assert.equal(again.body.outcome, "duplicate", "the PK did not catch a redelivery the broken read could not");
+    assert.equal(Object.keys(shared.events).length, 1, "a redelivery wrote a second row while the read was failing");
   });
 
   await test("APPLY BEFORE RECORD, so a crash between them retries into a fix rather than a lie", async () => {
