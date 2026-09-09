@@ -100,7 +100,7 @@ const OTHER = "22222222-2222-4222-8222-222222222222";
  * write with its filters, so a mis-scoped one is visible even where its
  * effect would not be.
  */
-function makeWorld({ profiles = {}, events = {}, entitlements = {}, env = {}, stripeRoutes = {} } = {}) {
+function makeWorld({ profiles = {}, events = {}, entitlements = {}, env = {}, stripeRoutes = {}, seenError = null } = {}) {
   const trace = [];
   const writes = [];
   const stripeCalls = [];
@@ -157,7 +157,15 @@ function makeWorld({ profiles = {}, events = {}, entitlements = {}, env = {}, st
             : Object.values(profiles).find((r) => by.stripe_customer_id && r.stripe_customer_id === by.stripe_customer_id);
           return Promise.resolve({ data: row ? { ...row } : null, error: null });
         }
-        if (name === "billing_events") return Promise.resolve({ data: events[by.id] ? { ...events[by.id] } : null, error: null });
+        if (name === "billing_events") {
+          /* The idempotency READ, made to fail on demand. PGRST303
+             ("JWT issued at future") is what a real skew between the
+             edge runtime and PostgREST produced on the first Stripe
+             deliveries; the point of the option is that the code path
+             must not care WHICH error it was. */
+          if (seenError) return Promise.resolve({ data: null, error: seenError });
+          return Promise.resolve({ data: events[by.id] ? { ...events[by.id] } : null, error: null });
+        }
         return Promise.resolve({ data: null, error: null });
       },
       then(resolve, reject) {
@@ -453,6 +461,96 @@ async function run() {
     assert.ok(res.status >= 500, `answered ${res.status}, so Stripe will not retry and nobody will notice`);
     assert.equal(w.profiles[USER].tier, "ai_max", "a paying subscriber was downgraded because a price was not recognised");
     assert.deepEqual(w.writes, [], "something was written for a subscription we could not price");
+  });
+
+  await test("AN UNKNOWN PRICE IS A REFUSAL ONLY WHEN THERE IS SOMEBODY TO PROTECT", async () => {
+    /* THE ORDERING FIX, and the case that produced it: the very first
+       `stripe trigger` at a new endpoint sends a fixture product with
+       no uid, so it is BOTH unpriceable and about nobody. The
+       unrecognised-price refusal is a 500 so Stripe keeps retrying
+       while somebody adds the missing lookup key — right when an
+       account's tier is at stake, and retrying on behalf of nobody
+       when there is no account at all. So the account question is
+       answered first.
+
+       RUN AS A PAIR, because either half alone is satisfiable by the
+       wrong rule: "always accept" passes the first, "always refuse"
+       passes the second. The ONE difference between the two worlds is
+       whether the profile exists — same event, same unrecognised
+       price, same route — so it is the account that decides, which is
+       the claim. */
+    const priced = (extra) => ({
+      "/subscriptions/sub_1": subscription({ items: { data: [{ price: { lookup_key: "cli_fixture_price" } }] }, ...extra }),
+    });
+
+    const nobody = makeWorld({ profiles: {}, stripeRoutes: priced({ metadata: {}, customer: "cus_nobody" }) });
+    const forNobody = await deliver(event({ subscription: { metadata: {} } }));
+    nobody.restore();
+
+    const somebody = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe" }) },
+      stripeRoutes: priced({}),
+    });
+    const forSomebody = await deliver(event());
+    somebody.restore();
+
+    /* The pair really discriminates — asserted before either branch,
+       so neither can pass by both answers being the same. */
+    assert.notEqual(forNobody.status, forSomebody.status, "the two worlds answered identically, so nothing here is about the account");
+
+    assert.equal(forNobody.status, 200, `an event about nobody: answered ${forNobody.status}, so Stripe retries until the window expires`);
+    assert.equal(forNobody.body.outcome, "no_account");
+    const row = nobody.writes.find((x) => x.table === "billing_events");
+    assert.ok(row, "an event about nobody was answered 200 and recorded nowhere — the retry stops and so does the evidence");
+    assert.equal(row.values.user_id, null);
+    assert.equal(row.values.tier_after, null);
+    assert.deepEqual(nobody.writes.filter((x) => x.table === "profiles"), [], "a tier was written for an account we do not hold");
+
+    assert.ok(forSomebody.status >= 500, `a real subscriber on an unknown price: answered ${forSomebody.status}, so nobody is told to fix the dashboard`);
+    assert.equal(somebody.profiles[USER].tier, "ai", "a paying subscriber was downgraded because a price was not recognised");
+    assert.deepEqual(somebody.writes, [], "something was written for a subscription we could not price");
+  });
+
+  await test("A FAILED IDEMPOTENCY READ IS NOT A REFUSAL — the primary key is the guarantee", async () => {
+    /* The first real Stripe deliveries hit PGRST303 ("JWT issued at
+       future") on this read — clock skew between the edge runtime and
+       PostgREST, which Stripe's own retry cleared 18 seconds later.
+       Nothing in this repository mints that token, so the `iat` is not
+       ours to backdate; what is ours is not turning a transient read
+       failure into a refused delivery, because if whatever broke the
+       read is NOT momentary then every delivery becomes a retry that
+       fails the same way.
+
+       The read is an optimisation over `billing_events`' primary key.
+       Both halves are asserted here: the delivery goes through, and a
+       redelivery with the read still broken is STILL one row, because
+       the insert refuses it. */
+    const shared = {
+      profiles: { [USER]: profile() },
+      events: {},
+      stripeRoutes: { "/subscriptions/sub_1": subscription() },
+      seenError: { code: "PGRST303", message: "JWT issued at future" },
+    };
+
+    const first = makeWorld(shared);
+    const res = await deliver(event());
+    first.restore();
+    assert.equal(res.status, 200, `a transient read failure refused the delivery: ${JSON.stringify(res.body)}`);
+    assert.equal(shared.profiles[USER].tier, "ai", "the entitlement was not applied");
+    assert.equal(Object.keys(shared.events).length, 1, "nothing was recorded");
+    /* The failure is LOUD. A silent fallback would make a permanent
+       fault look like normal operation. */
+    assert.ok(
+      first.logs.some((l) => l.includes("PGRST303")),
+      `the read failure was swallowed rather than logged: ${first.logs.join(" | ")}`
+    );
+
+    const second = makeWorld(shared);
+    const again = await deliver(event());
+    second.restore();
+    assert.equal(again.status, 200, `the redelivery was refused: ${JSON.stringify(again.body)}`);
+    assert.equal(again.body.outcome, "duplicate", "the PK did not catch a redelivery the broken read could not");
+    assert.equal(Object.keys(shared.events).length, 1, "a redelivery wrote a second row while the read was failing");
   });
 
   await test("a failed Stripe read is UNKNOWN — 5xx so it retries, and the tier is untouched", async () => {
@@ -755,7 +853,23 @@ async function run() {
     assert.equal(stripe.SITE_URL, links.SITE_URL, "the checkout return URL and the app's own origin have drifted");
     assert.match(stripe.CHECKOUT_SUCCESS_URL, new RegExp(`^${links.SITE_URL}/`));
     assert.match(stripe.CHECKOUT_CANCEL_URL, new RegExp(`^${links.SITE_URL}/`));
-    assert.match(stripe.STRIPE_API_VERSION, /^\d{4}-\d{2}-\d{2}$/, "the Stripe API version is not pinned to a date");
+    /* A DATE, WITH STRIPE'S OPTIONAL RELEASE NAME. Versions used to be
+       a bare date; they now carry a channel suffix
+       ("2026-04-22.dahlia"), and the first version of this assertion
+       allowed only the old shape — so pinning to the version the
+       endpoint actually delivers failed the test that exists to
+       require a pin. The date half stays strict, because that is the
+       part that orders two versions; the suffix is Stripe's to name. */
+    assert.match(
+      stripe.STRIPE_API_VERSION,
+      /^\d{4}-\d{2}-\d{2}(\.[a-z]+)?$/,
+      "the Stripe API version is not pinned to a date (optionally with Stripe's release name)"
+    );
+    /* AND IT IS SENT. A pinned constant that reaches no header is a
+       comment: Stripe would answer every request at the account
+       default and nothing here would look wrong. */
+    const shared = fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/stripe.ts"), "utf8");
+    assert.match(shared, /"Stripe-Version":\s*STRIPE_API_VERSION/, "STRIPE_API_VERSION is pinned but never sent as a header");
     const code = stripSrc(fs.readFileSync(path.join(rootDir, "supabase/functions/billing-checkout/index.ts"), "utf8"));
     assert.ok(!/headers\.get\(\s*["']origin/i.test(code), "the return URL is taken from the request's Origin header");
   });

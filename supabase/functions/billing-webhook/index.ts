@@ -268,7 +268,35 @@ export async function handle(req: Request): Promise<Response> {
 
     const admin = getSupabaseAdmin();
 
-    /* ---- already handled? a retry must cost nothing ---- */
+    /* ---- already handled? a retry must cost nothing ----
+
+       THE PRIMARY KEY IS THE GUARANTEE. THIS READ IS AN OPTIMISATION.
+       So a failure here is LOGGED AND IGNORED rather than answered
+       5xx, and that distinction is the whole of this block.
+
+       What the read buys is skipping a provider round-trip on a
+       redelivery. What actually stops a duplicate being applied twice
+       is `billing_events`' primary key on the event id, which the
+       record stage below already reads as 23505 -> duplicate. Proceed
+       without the read and the worst case is one wasted provider call
+       before that insert refuses.
+
+       Returning 500 instead costs strictly more: the provider retries,
+       and if whatever broke the read is not momentary it breaks the
+       next read too, so every delivery becomes a retry that fails the
+       same way. The first real Stripe deliveries produced exactly the
+       momentary version — PGRST303 "JWT issued at future", clock skew
+       between the edge runtime and PostgREST, which the provider's own
+       retry cleared 18 seconds later. Nothing in this repository mints
+       that token or can backdate its `iat`; what is in our control is
+       not turning a transient read failure into a refused delivery.
+
+       This is NOT the fetchNote rule being broken. That rule forbids
+       reading a failed request as evidence of ABSENCE, and nothing
+       here does: the failure is not read as "not yet handled", it is
+       read as "unknown", and the unknown is resolved by the insert
+       rather than guessed at. A guessed answer would be acting on it;
+       deferring to the constraint is refusing to. */
     stage = "already_handled";
     const { data: seen, error: seenErr } = await admin
       .from("billing_events")
@@ -276,8 +304,11 @@ export async function handle(req: Request): Promise<Response> {
       .eq("id", eventId)
       .maybeSingle();
     if (seenErr) {
-      logFailure(stage, seenErr, { id: eventId });
-      return jsonResponse({ ok: false, code: "server_error" }, 500);
+      /* Logged loudly and NOT failed: see above. `duplicate_skipped`
+         names the consequence rather than the error, so a run of these
+         in the logs reads as "the optimisation is off" rather than as
+         a fault nobody can place. */
+      logFailure(stage, seenErr, { id: eventId, outcome: "duplicate_skipped" });
     }
     if (seen) {
       logStage("already_handled", { id: eventId, outcome: "duplicate" });

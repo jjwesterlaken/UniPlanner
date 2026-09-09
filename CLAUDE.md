@@ -1997,6 +1997,81 @@ checklist is BILLING-PLAN.md Phase 6, and until it has been run this is
 **built**, not **working** — the distinction 0005 and 0009 cost weeks
 to learn.
 
+### The first real Stripe deliveries, and a difference that was not there
+
+Three findings from Jared's first `stripe trigger` run at the test
+endpoint. The first is the one worth carrying, because the fix that
+was asked for did not exist to make.
+
+**PGRST303 "JWT issued at future" at `already_handled`**, cleared by
+Stripe's own retry 18 seconds later — clock skew between the edge
+runtime and PostgREST. The brief asked which of two things
+`stripe-webhook` was doing differently: minting its own JWT with
+`Date.now()`, or constructing a client differently from
+`billing-webhook`.
+
+**NEITHER. THE TWO FUNCTIONS ARE IDENTICAL AT EVERY POINT THAT COULD
+MATTER**, and the check is three greps: the same `getSupabaseAdmin`
+import, the same `const admin = getSupabaseAdmin()` call, the same
+`already_handled` as their FIRST database call — and no `iat`, no
+`SignJWT`, no `jose`, nothing that mints a token anywhere under
+`supabase/functions/`. The service-role key is a static credential
+this repository never signs.
+
+So "billing-webhook has never produced this" is a statement about
+DELIVERY COUNTS, not about code: it has had a handful of dashboard
+test events against the other's burst. **Absence over three samples is
+not a difference**, which is the same rule as *let the spread decide
+whether extrapolation is available* — and the cost of guessing wrong
+here would have been a fix applied to a difference that does not
+exist, leaving the real exposure open in both functions.
+
+**WHAT WAS ACTUALLY IN OUR CONTROL: the read is an optimisation, so
+its failure must not refuse the delivery.** `billing_events`' PRIMARY
+KEY is the idempotency guarantee — the record stage already reads
+23505 as `duplicate` — and the `already_handled` SELECT only saves a
+provider round-trip on a redelivery. It now logs and proceeds. Worst
+case is one wasted provider call before the insert refuses; the old
+500 cost strictly more, because whatever breaks the read once breaks
+the next one too and every delivery becomes a retry that fails
+identically. **Both functions changed**, because they are kept
+deliberately identical and the skew was never Stripe's.
+
+**This is not the `fetchNote` rule being broken, and the distinction
+is the point.** That rule forbids reading a failed request as evidence
+of ABSENCE. Nothing here does: the failure is not read as "not yet
+handled", it is read as *unknown*, and the unknown is resolved by the
+constraint rather than guessed at. Deferring to the primary key is the
+opposite of acting on a guess.
+
+**THE ORDERING: refuse only when there is somebody to protect.** The
+unrecognised-price refusal is a 500 so Stripe keeps retrying while
+somebody adds the missing lookup key — right when an account's tier is
+at stake, and retrying on behalf of nobody when there is no account.
+It sat BEFORE the user was resolved, so a subscription for a customer
+we do not hold on a price we do not know would have retried until the
+window expired. The CLI's first `stripe trigger` produces exactly that
+pair — a fixture product and no uid — so **the very first delivery
+anyone sends at a new endpoint was the case that retried forever.**
+The account question is answered first now; an event about nobody is
+recorded and answered 200, the `no_such_user` shape one integration
+over. The test runs BOTH worlds and asserts they DIFFER before
+asserting either, because "always accept" and "always refuse" each
+satisfy one half.
+
+**`STRIPE_API_VERSION` is `2026-04-22.dahlia`**, matching the
+endpoint. Two things fell out. Stripe versions now carry a release
+name, and the guard requiring a pin matched only a bare `YYYY-MM-DD` —
+so **pinning to the version the endpoint really delivers failed the
+test that exists to require a pin**, which is the wording-guard shape
+from the ledger in a new costume. And the pin is now asserted to reach
+the `Stripe-Version` HEADER: a pinned constant that reaches no request
+is a comment, and Stripe would answer at the account default with
+nothing looking wrong. **The match itself is not verifiable from this
+repository** — no test here can ask the dashboard what the endpoint is
+set to — so it is stated in the file: move one, move the other, same
+commit.
+
 ## The marketing site: data first, design last
 
 `site/` holds everything the page READS — downloads, pricing, flags —

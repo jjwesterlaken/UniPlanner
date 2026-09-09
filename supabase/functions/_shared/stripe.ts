@@ -50,12 +50,27 @@ const STRIPE_API = "https://api.stripe.com/v1";
    its history and a const read above its declaration reads wrong even
    where it is legal.
 
+   IT MUST MATCH THE VERSION THE ENDPOINT DELIVERS, and that is a
+   second reason on top of the first. The pin decides the shape of the
+   subscription we RE-READ; the endpoint's own version decides the
+   shape of the event we were SENT. Nothing here trusts the delivered
+   body for anything but an id, so a mismatch is not immediately
+   fatal — which is exactly why it would sit unnoticed until a field
+   moved between versions and the re-read stopped carrying it.
+
+   2026-04-22.dahlia, set to match the endpoint Jared's first real
+   deliveries came from. **This pin is not verifiable from this
+   repository**: no test here can reach Stripe to ask what the endpoint
+   is set to, so the two are kept in step by whoever changes either
+   one. If the dashboard endpoint is moved, move this in the same
+   commit.
+
    WHERE A COMPLETED CHECKOUT RETURNS TO. Derived from nothing at
    runtime: taking it from the request's Origin header would be an open
    redirect with a signed-in session attached. It MIRRORS
    src/legalLinks.js's SITE_URL — a browser bundle and a Deno function
    cannot share a module — and a test asserts the two are equal. */
-export const STRIPE_API_VERSION = "2024-06-20";
+export const STRIPE_API_VERSION = "2026-04-22.dahlia";
 export const SITE_URL = "https://www.uniplannerapp.com";
 export const CHECKOUT_SUCCESS_URL = `${SITE_URL}/?checkout=done`;
 export const CHECKOUT_CANCEL_URL = `${SITE_URL}/?checkout=cancelled`;
