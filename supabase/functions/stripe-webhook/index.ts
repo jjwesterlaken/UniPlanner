@@ -292,7 +292,7 @@ export async function handle(req: Request): Promise<Response> {
     }
 
     stage = "tier";
-    const { tier, expiresAt, lookupKey, recognised } = tierFromStripeSubscription(subscription);
+    const { tier, expiresAt, lookupKey, recognised, periodSource, periodType } = tierFromStripeSubscription(subscription);
     if (!recognised) {
       /* NOT "entitled to nothing" — unanswerable. Writing `free` here
          would downgrade every paying subscriber the day a price was
@@ -310,7 +310,36 @@ export async function handle(req: Request): Promise<Response> {
       return jsonResponse({ ok: false, code: "server_error" }, 500);
     }
 
+    /* AN ENTITLED SUBSCRIPTION WITH NO READABLE PERIOD END IS AN
+       ANOMALY, and it is logged at error level while the tier is still
+       written. Both halves are deliberate.
+
+       Writing it: the student is paying and the tier is right; refusing
+       would 500 and retry forever over a field that does not change
+       which plan they are on.
+
+       Shouting: a null `expires_at` is read by tierFromProviders as
+       NON-EXPIRING, so it silently disables the backstop that catches a
+       provider going quiet. That is the direction isActive calls silent
+       and permanent, and it is exactly how this arrived — a live
+       subscription wrote a null expiry and nothing anywhere said so.
+
+       `periodType` names WHY, which is the part a fix needs: "absent"
+       is a shape that carries it somewhere else again, and
+       "item:string" is a value we refused to coerce. */
+    if (!expiresAt) {
+      logFailure("period", new Error("entitled subscription carried no readable current_period_end"), {
+        id: eventId,
+        subscriptionId,
+        periodType,
+      });
+    }
+
     stage = "apply";
+    /* periodSource is logged on EVERY apply, not only on failure: which
+       shape the live API carries is a question this repository cannot
+       ask Stripe, so the answer has to come back from a real delivery. */
+    logStage("period", { id: eventId, periodSource, periodType });
     const applied = await applyEntitlement(admin, { userId, tier, store: "stripe", expiresAt, source: "stripe" });
     if (!applied.ok) {
       logFailure(stage, applied.error, { id: eventId, outcome: applied.outcome });

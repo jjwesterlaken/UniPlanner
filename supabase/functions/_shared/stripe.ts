@@ -166,7 +166,7 @@ export const ALL_KNOWN_STATUSES: readonly string[] = [
  */
 export function tierFromStripeSubscription(
   subscription: Record<string, unknown> | null | undefined
-): { tier: BillingTier; expiresAt: string | null; lookupKey: string | null; recognised: boolean } {
+): { tier: BillingTier; expiresAt: string | null; lookupKey: string | null; recognised: boolean; periodSource?: string; periodType?: string } {
   const none = { tier: "free" as BillingTier, expiresAt: null, lookupKey: null, recognised: true };
   /* NOT recognised: there is nothing here to read at all. */
   if (!subscription || typeof subscription !== "object") return { ...none, recognised: false };
@@ -185,26 +185,89 @@ export function tierFromStripeSubscription(
      with two items is not something we create, but a Portal plan change
      can leave one mid-flight, and answering with whichever item sorted
      first would be a coin toss over somebody's plan. */
-  let best: { rank: number; key: string } | null = null;
+  let best: { rank: number; key: string; item: Record<string, unknown> } | null = null;
   for (const item of items) {
     const price = (item?.price ?? {}) as { lookup_key?: unknown };
     const key = typeof price.lookup_key === "string" ? price.lookup_key : "";
     const plan = STRIPE_LOOKUP_KEYS[key];
     if (!plan) continue;
     const rank = TIER_RANK.indexOf(plan.tier);
-    if (!best || rank > best.rank) best = { rank, key };
+    if (!best || rank > best.rank) best = { rank, key, item };
   }
   /* Entitled, and nothing matched. See the note above: this is the
      downgrade-everybody case, so it is reported as unanswerable. */
   if (!best) return { ...none, recognised: false };
 
-  /* `current_period_end` is a UNIX SECONDS integer, and it is the one
-     field here that would silently be wrong rather than absent: read as
-     milliseconds it lands in 1970 and every entitlement reads expired. */
-  const end = (subscription as { current_period_end?: unknown }).current_period_end;
-  const expiresAt = typeof end === "number" && Number.isFinite(end) ? new Date(end * 1000).toISOString() : null;
+  const period = periodEndOf(subscription, best.item);
 
-  return { tier: TIER_RANK[best.rank], expiresAt, lookupKey: best.key, recognised: true };
+  return {
+    tier: TIER_RANK[best.rank],
+    expiresAt: period.expiresAt,
+    lookupKey: best.key,
+    recognised: true,
+    /* Which shape carried it, for the log. See periodEndOf. */
+    periodSource: period.source,
+    periodType: period.type,
+  };
+}
+
+/**
+ * When this subscription's paid period ends — read from EITHER place
+ * Stripe puts it, because which one depends on the API version and
+ * this repository cannot ask Stripe which.
+ *
+ * THE BUG THIS EXISTS FOR. A live subscription wrote an `entitlements`
+ * row with `expires_at` NULL while `current_period_end: 1791547235` was
+ * plainly there in the payload. The read was
+ * `subscription.current_period_end` and nothing else, so a version that
+ * moved the field onto the ITEMS produced a null with no error
+ * anywhere — and the pin moved to `2026-04-22.dahlia` the same morning,
+ * which is the coherent (not confirmed) explanation for why it appeared
+ * exactly then.
+ *
+ * A NULL EXPIRY IS NOT MERELY MISSING DATA HERE, and that is why this
+ * is worth its own function. `tierFromProviders` reads a null
+ * `expires_at` as NON-EXPIRING — correct for a lifetime grant, and for
+ * a Stripe subscription it is the opposite of the truth. It disables
+ * the one backstop that catches a provider going quiet, in the silent
+ * and permanent direction `isActive` names.
+ *
+ * SO IT READS BOTH, and reports WHICH. The item comes first because on
+ * a version that carries it there it is the per-line answer, and a
+ * subscription mid-plan-change can hold two items with different
+ * periods — the one granting the tier is the one that decides. The
+ * subscription's own field is the fallback, which is the older shape
+ * and still correct when it is the only one present.
+ *
+ * ONLY THE WINNING ITEM IS CONSULTED, never a sibling: taking another
+ * line's period would answer a question about a plan the student is
+ * not on.
+ *
+ * A UNIX SECONDS INTEGER, and it is the one field here that would
+ * silently be WRONG rather than absent: read as milliseconds it lands
+ * in 1970 and every entitlement reads expired. Nothing is coerced —
+ * a value that is not a finite number is reported with its TYPE rather
+ * than parsed, so the next delivery says what actually arrived instead
+ * of being guessed at now.
+ */
+export function periodEndOf(
+  subscription: Record<string, unknown> | null | undefined,
+  item: Record<string, unknown> | null | undefined
+): { expiresAt: string | null; source: "item" | "subscription" | "absent"; type: string } {
+  const fromItem = (item ?? {})["current_period_end"];
+  const fromSub = (subscription ?? {})["current_period_end"];
+
+  const usable = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+  const picked = usable(fromItem) ? { v: fromItem, source: "item" as const } : usable(fromSub) ? { v: fromSub, source: "subscription" as const } : null;
+
+  if (!picked) {
+    /* Named so a log line distinguishes "the field was absent" from
+       "the field was there and was not a number", which are different
+       failures with different fixes. */
+    const type = fromItem !== undefined ? `item:${typeof fromItem}` : fromSub !== undefined ? `subscription:${typeof fromSub}` : "absent";
+    return { expiresAt: null, source: "absent", type };
+  }
+  return { expiresAt: new Date((picked.v as number) * 1000).toISOString(), source: picked.source, type: "number" };
 }
 
 /* ---------- talking to Stripe ---------- */

@@ -2072,6 +2072,64 @@ repository** — no test here can ask the dashboard what the endpoint is
 set to — so it is stated in the file: move one, move the other, same
 commit.
 
+### A FIELD MOVED, AND THE FIXTURE STILL DESCRIBED WHERE IT USED TO BE
+
+A live Stripe subscription wrote an `entitlements` row with
+`expires_at` NULL while `current_period_end: 1791547235` was plainly in
+the payload. `tierFromStripeSubscription` read
+`subscription.current_period_end` and nothing else; on an API version
+that carries the field on the subscription ITEMS that produces a null,
+with no error anywhere.
+
+**THE NULL IS NOT MERELY MISSING DATA, which is why this is worth more
+than a one-line fix.** `tierFromProviders` reads a null `expires_at` as
+NON-EXPIRING — correct for a lifetime grant, and the exact opposite of
+the truth for a subscription. It silently disables the one backstop
+that catches a provider going quiet, in the direction `isActive` names
+as silent and permanent. Two rules in this file were agreeing with each
+other and both were wrong about the same row.
+
+**THE FIXTURE IS WHY THE SUITE COULD NOT HAVE CAUGHT IT.** The default
+`subscription()` in `test-stripe.mjs` put `current_period_end` at the
+top level — the 2024-06-20 shape — so every assertion in that file
+agreed with a production that had moved on. **Fifth instance of the
+stand-in-weaker-than-production pattern, and the first where the
+stand-in was a FIXTURE rather than a database or a shim.** The remedy is
+the one that ledger always reaches for: not a fixture that knows about
+this one field, but both shapes named explicitly, plus an end-to-end
+test that drives the real handler in the shape production sends and
+asserts on the ROW.
+
+**`periodEndOf` reads both and reports WHICH.** The item first (on a
+version that carries it there it is the per-line answer, and a
+subscription mid-plan-change can hold two items with different
+periods), the subscription as the fallback. **Only the WINNING item is
+consulted** — a sibling line's period answers a question about a plan
+the student is not on. Nothing is coerced: a value that is not a finite
+number comes back with its TYPE (`item:string`), because a string means
+something upstream changed and parsing it would hide that while looking
+correct.
+
+**WHICH SHAPE THE LIVE API SENDS IS NOT ANSWERABLE FROM THIS
+REPOSITORY**, and that is the whole reason `periodSource` is logged on
+EVERY apply rather than only on failure. No test here can ask Stripe
+what `2026-04-22.dahlia` carries; the answer has to come back from a
+real delivery saying so. That is the hardware-step shape of the
+artifact rule, applied to a third party.
+
+**A MISSING PERIOD APPLIES THE TIER AND SHOUTS**, and both halves are
+the decision. Refusing would 500 and retry forever over a field that
+does not change which plan somebody is on. Writing it silently is how
+this arrived. So the tier is written and `logFailure` names the type.
+
+**AND THE PIN IS THE COHERENT EXPLANATION FOR THE TIMING, stated as
+that rather than as a finding.** `STRIPE_API_VERSION` moved from
+`2024-06-20` to `2026-04-22.dahlia` the same morning, and the
+subscription we map is the one WE re-read at that version — so the
+event's payload and our re-read need not have the same shape at all.
+Confirming it costs nothing now: the next delivery's `periodSource`
+says which location carried it.
+
 ## The marketing site: data first, design last
 
 `site/` holds everything the page READS — downloads, pricing, flags —
