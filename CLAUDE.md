@@ -2117,10 +2117,14 @@ what `2026-04-22.dahlia` carries; the answer has to come back from a
 real delivery saying so. That is the hardware-step shape of the
 artifact rule, applied to a third party.
 
-**A MISSING PERIOD APPLIES THE TIER AND SHOUTS**, and both halves are
-the decision. Refusing would 500 and retry forever over a field that
-does not change which plan somebody is on. Writing it silently is how
-this arrived. So the tier is written and `logFailure` names the type.
+**A MISSING PERIOD IS REFUSED AND SHOUTS — AND THE SENTENCE THIS
+REPLACES IS THE LESSON.** It read: *"A MISSING PERIOD APPLIES THE TIER
+AND SHOUTS ... refusing would 500 and retry forever over a field that
+does not change which plan somebody is on."* The field decides whether
+the row EVER expires, so it changes the plan **permanently** — the very
+thing the paragraph above it had just finished explaining. A correct
+finding and a wrong conclusion, written four paragraphs apart, in the
+same pass. See the section below for what replaced it.
 
 **AND THE PIN IS THE COHERENT EXPLANATION FOR THE TIMING, stated as
 that rather than as a finding.** `STRIPE_API_VERSION` moved from
@@ -2129,6 +2133,89 @@ subscription we map is the one WE re-read at that version — so the
 event's payload and our re-read need not have the same shape at all.
 Confirming it costs nothing now: the next delivery's `periodSource`
 says which location carried it.
+
+### ONLY A MANUAL GRANT MAY BE OPEN-ENDED
+
+Jared's ruling, 10 September 2026, and it closes the hole the field
+move opened rather than the one it fixed. `periodEndOf` reads the
+period end from wherever the API carries it; what neither half
+addressed is what happens when it genuinely cannot be read.
+
+**THE BUG IS AT THE READER AND THE CURE IS AT THE WRITER, and they
+are not the same change.** `tierFromProviders` read a null
+`expires_at` as `Infinity` — correct for a lifetime grant, and the
+exact opposite of the truth for every row in `entitlements`, because
+every source in `ENTITLEMENT_SOURCES` is a provider talking about a
+SUBSCRIPTION and a subscription has a period end. So the one backstop
+that catches a provider going quiet was disabled for precisely the row
+whose data we already knew was wrong.
+
+The reader now skips such a row. **That alone would be a
+regression**, which is the part worth slowing down for: the row still
+gets WRITTEN, the reader skips it, and a paying student is demoted on
+the strength of a field nobody could parse. Silently. So the writer
+refuses: `applyEntitlement` returns `open_ended_refused`, writes
+nothing, and both webhooks already turn `!ok` into a 5xx, so the
+provider retries into a fix. **Nothing written means the tier the
+student has STANDS** — and that is the direction to choose when the
+two available answers are "demote somebody who is paying" and "retry
+loudly until a person looks".
+
+The two halves are not redundant. The writer stops new bad rows; the
+reader is what stops the one **already in production** — written
+before the refusal existed — from holding a tier open for ever. A
+build deployed either side of this can write another.
+
+**`free` IS EXEMPT AND THE EXEMPTION IS LOAD-BEARING.** Every lapse
+is asserted as `{ tier: "free", expiresAt: null }`, so a refusal
+covering `free` would make cancellation unrecordable and hold every
+expired tier open — this rule running backwards. The mutation that
+drops the paid-tier guard reddens seven tests, which is the shape of
+a guard worth having.
+
+**IT SITS BELOW `manual` AND BELOW `no_such_user`**, which is the
+unrecognised-price ordering one integration over: refuse only when
+there is somebody to protect. Above `manual` it would 5xx over a gift
+nothing was going to touch; above `no_such_user` it would retry for
+ever on behalf of an account we do not hold, which is the bug #67
+removed.
+
+**`manual` NEEDS NO CARVE-OUT, because it is not a source.** It is
+`profiles.tier_source`, it short-circuits before any row is written,
+and a test asserts `ENTITLEMENT_SOURCES` does not contain it — so
+"only a manual grant may be open-ended" is true by construction
+rather than by a branch. The sweeps are written over that constant,
+so a source added later inherits the rule and a source meant NOT to
+inherit it goes red, which is the only place that decision would be
+visible.
+
+**THE COST IS STATED, NOT HIDDEN: a RevenueCat lifetime or
+promotional entitlement now retries until somebody looks.**
+`isActive` still reports it live, deliberately — it is a reader of
+RevenueCat's record and must not answer `false` to something they
+consider live; the policy lives in one place, the writer. We sell no
+lifetime plan (the product table is six subscriptions), so the shape
+can only arrive from a hand-made grant, and the remedy is to set
+`tier_source = 'manual'` on that account. A test drives both halves,
+because **a rule with no route through it is a rule that gets
+deleted under pressure.**
+
+**A DATABASE CHECK WAS CONSIDERED AND NOT TAKEN.** `(tier = 'free'
+or expires_at is not null)` on `entitlements` is the strongest form
+of this, and it NARROWS — so it goes after the deploy, and it would
+refuse to apply while the bad production row is still there, needing
+the refuse-first-naming-the-count shape 0017 established. Recorded
+rather than built: it is a third change on top of two that have not
+been deployed, and the row it would trip over is the one the reader
+change exists to neutralise.
+
+**AND THE TEST FIXTURES DEFAULTED TO THE SHAPE THAT IS NOW
+REFUSED** — `stripeSays(db, user, "ai")` passed `expiresAt = null`,
+and the cross-provider table omitted the column on most rows. Sixth
+instance of the stand-in-weaker-than-production pattern, and the
+second in a fixture. Both now default to a real future date, because
+that is what a live provider row carries, and the null case is opted
+into by name.
 
 ## The marketing site: data first, design last
 

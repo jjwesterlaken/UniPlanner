@@ -311,23 +311,30 @@ export async function handle(req: Request): Promise<Response> {
     }
 
     /* AN ENTITLED SUBSCRIPTION WITH NO READABLE PERIOD END IS AN
-       ANOMALY, and it is logged at error level while the tier is still
-       written. Both halves are deliberate.
+       ANOMALY, AND IT IS NOW REFUSED rather than written — the refusal
+       is `applyEntitlement`'s, three lines below, because only a manual
+       grant may be open-ended and an entitlements row is never one.
 
-       Writing it: the student is paying and the tier is right; refusing
-       would 500 and retry forever over a field that does not change
-       which plan they are on.
+       THIS IS A CORRECTION TO WHAT STOOD HERE. It said refusing would
+       "500 and retry forever over a field that does not change which
+       plan they are on", and that was wrong: the field decides whether
+       the row EVER expires. It did so as non-expiring then, and it does
+       so as not-live now, which are opposite wrong answers to a question
+       that had a right answer sitting in the payload. Either way the
+       plan somebody is on is decided by a field we could not read.
 
-       Shouting: a null `expires_at` is read by tierFromProviders as
-       NON-EXPIRING, so it silently disables the backstop that catches a
-       provider going quiet. That is the direction isActive calls silent
-       and permanent, and it is exactly how this arrived — a live
-       subscription wrote a null expiry and nothing anywhere said so.
+       What stays is the SHOUT, and it is not redundant with the apply
+       failure: this line names the subscription and `periodType`, which
+       is the part a fix needs — "absent" is a shape that carries the
+       field somewhere else again, "item:string" is a value we refused to
+       coerce.
 
-       `periodType` names WHY, which is the part a fix needs: "absent"
-       is a shape that carries it somewhere else again, and
-       "item:string" is a value we refused to coerce. */
-    if (!expiresAt) {
+       GATED ON A PAID TIER, because `tierFromStripeSubscription`
+       answers a cancelled subscription with `{ tier: "free", expiresAt:
+       null }`. That is the normal shape of every lapse, logging it at
+       error level would make the ordinary case look like the anomaly,
+       and `applyEntitlement` exempts it for the same reason. */
+    if (tier !== "free" && !expiresAt) {
       logFailure("period", new Error("entitled subscription carried no readable current_period_end"), {
         id: eventId,
         subscriptionId,
