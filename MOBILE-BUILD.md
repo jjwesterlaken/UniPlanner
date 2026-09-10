@@ -774,6 +774,46 @@ shows the plan and says "In-app purchases aren't set up in this build",
 and no purchase control ever appears. That sentence is deliberately
 different from the web one so the two are told apart at a glance.
 
+**THE CHEAPEST CHECK COMES FIRST, AND IT NEEDS NO STORE ACCOUNT.**
+Everything numbered below needs the Paid Applications agreement, a
+merchant profile and a sandbox tester. This one needs only a KEYED
+build and the `default` offering existing — so it is the first thing
+to look at on the first build that has keys, and it fails for a reason
+none of the purchase steps would diagnose.
+
+Open the Plans panel and read the buttons. **The LABEL is what tells
+them apart, not the width — every button on this panel is full-width.**
+Each package our table recognises renders as a PRIMARY button reading
+`Study AI · 1 month · $4.99` — tier name, period, the store's own
+price — grouped by tier, shortest period first. A package the table
+does NOT recognise renders as a GHOST button below those, showing the
+store's raw product title (or the bare package identifier) and the
+price, in one flat list with no tier grouping and no period.
+
+Note that a ghost button is not by itself the symptom: **Restore is
+always a ghost button** and sits below the packages with its own
+refresh icon. What you are looking for is a ghost button whose text is
+a product title rather than an action.
+
+**Ghost buttons mean a package identifier does not match, and every
+purchase step below would still pass.** `groupPackages` resolves on
+`pkg.identifier` — the PACKAGE id from the RevenueCat dashboard, never
+the product id and never the package TYPE, which is a value RevenueCat
+assigns rather than one we choose. So an offering built from the
+standard Monthly / Six Month / Annual types cannot match
+`studyai_monthly` whatever those reserved ids spell, and all six
+packages fall through. Buying still works and the tier still lands,
+because the webhook computes entitlement from the subscriber record
+and never from this table — which is exactly why a purchase test does
+not catch it. Showing them rather than hiding them is deliberate
+(`purchasePlans.js`: hiding a plan somebody is entitled to buy because
+our table was mistyped is the worse failure), so the symptom is a
+panel that works and reads wrong.
+
+The six identifiers the client expects are in `src/purchasePlans.js`
+and are the ones BILLING-PLAN.md Phase 3 tells you to enter. Nothing
+in this repository can see a dashboard, so this look IS the check.
+
 **On Grace's iPhone, in the sandbox:**
 
 1. **The panel as a reviewer sees it.** Price, period, that it renews
@@ -801,7 +841,8 @@ different from the web one so the two are told apart at a glance.
 on), with a Play **license tester** account and the app on an
 **internal-testing** track — a sideloaded APK cannot buy anything:
 
-8. The same panel check, and one purchase with a test card.
+8. The button check above, the same panel check as 1, and one purchase
+    with a test card.
 9. Cancel from the Play subscription centre and refund from Play Console
    orders; expect the same three transitions with `store = 'play_store'`.
 10. **Android inputs are 16px now** (the focus-zoom floor), which is a

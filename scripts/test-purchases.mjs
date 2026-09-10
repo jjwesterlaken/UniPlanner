@@ -390,6 +390,40 @@ async function run() {
     assert.match(copy.LINKS.terms, /^https:\/\/www\.apple\.com\//, "the Terms link is not Apple's standard EULA");
   });
 
+  await test("MOBILE-BUILD's button example is the label buyLabel really renders", () => {
+    /* The hardware list tells somebody what a CORRECTLY resolved package
+       looks like, so they can tell it from an unrecognised one at a
+       glance — and it quotes the label to do it. That is a restatement
+       of buyLabel + TIER_NAMES + DURATION_LABELS, and this file already
+       has a ledger entry about restating a dashboard, so the quoted
+       string is re-derived rather than trusted.
+
+       It matters more than a typo would: the whole check is "does this
+       button read like THIS or like a product title", and a stale
+       example turns the one cheap pre-purchase check into a false
+       alarm on a correct build. */
+    const doc = fs.readFileSync(path.join(rootDir, "MOBILE-BUILD.md"), "utf8");
+    const quoted = [...doc.matchAll(/`(Study AI[^`]*·[^`]*)`/g)].map((m) => m[1]);
+    assert.ok(quoted.length >= 1, "no example label is quoted in MOBILE-BUILD.md — this guard would pass over nothing");
+
+    for (const example of quoted) {
+      /* Take the price off the end and re-derive the rest, so the
+         illustrative figure stays free to change and the STRUCTURE
+         cannot. */
+      const parts = example.split(" · ");
+      assert.equal(parts.length, 3, `"${example}" is not tier · period · price`);
+      const price = parts[2];
+      const match = Object.entries(plans.PACKAGE_PLANS).find(
+        ([, plan]) => copy.buyLabel(plan.tier, plan.duration, price) === example
+      );
+      assert.ok(
+        match,
+        `MOBILE-BUILD quotes "${example}", which buyLabel renders for no package we sell — ` +
+          `it renders e.g. "${copy.buyLabel("ai", "monthly", price)}"`
+      );
+    }
+  });
+
   await test("the refund sentence says credits are not returned, because they are not", () => {
     /* BILLING-PLAN's refund rule, in the words a student reads: the
        entitlement ends, the tier goes back to free, and credits already
