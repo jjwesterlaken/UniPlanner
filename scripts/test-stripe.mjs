@@ -605,10 +605,13 @@ async function run() {
        real handler, the real applyEntitlement and the real
        tierFromProviders, in the ITEM-ONLY shape.
 
-       A null here is not cosmetic: tierFromProviders reads a null
-       `expires_at` as non-expiring, so the backstop that catches a
-       provider going quiet is off and the account keeps its tier
-       forever on the strength of a field nobody could read. */
+       A null here is not cosmetic. It used to be read as non-expiring,
+       which held a tier open for ever on the strength of a field nobody
+       could read; it is now read as NOT LIVE, which demotes the same
+       student instead. Both are wrong answers to a question that had a
+       right one sitting in the payload, which is why the mapper is what
+       had to be fixed and why this test asserts the date rather than
+       merely asserting that something was written. */
     const itemOnly = subscription({
       current_period_end: undefined,
       items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: 1791547235 }] },
@@ -637,25 +640,80 @@ async function run() {
     );
   });
 
-  await test("AN ENTITLED SUBSCRIPTION WITH NO READABLE PERIOD still applies the tier, and SHOUTS", async () => {
-    /* Both halves are the decision. Refusing would 500 and retry
-       forever over a field that does not change which plan the student
-       is on — so the tier is written. But a null expiry disables the
-       expiry backstop, so it cannot be silent, and it is the silence
-       that let the live one through. */
+  await test("AN ENTITLED SUBSCRIPTION WITH NO READABLE PERIOD IS REFUSED, and the previous tier STANDS", async () => {
+    /* THIS INVERTS WHAT THIS FILE USED TO ASSERT, and the old reasoning
+       is the interesting part: it said refusing would retry "over a
+       field that does not change which plan the student is on". The
+       field decides whether the row EVER expires, so it changes the plan
+       permanently — which makes it exactly the kind of thing to refuse.
+
+       Only a manual grant may be open-ended (Jared, 10 September 2026).
+
+       THE DIRECTION IS WHY IT IS A REFUSAL AND NOT A NOT-LIVE WRITE.
+       Writing the row and letting tierFromProviders skip it would
+       demote a paying student on the strength of an unparseable field.
+       Writing nothing leaves the tier they have, loudly. */
     const noPeriod = subscription({
       current_period_end: undefined,
       items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" } }] },
     });
-    const w = makeWorld({ profiles: { [USER]: profile() }, stripeRoutes: { "/subscriptions/sub_1": noPeriod } });
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe" }) },
+      stripeRoutes: { "/subscriptions/sub_1": noPeriod },
+    });
     const res = await deliver(event());
     w.restore();
 
-    assert.equal(res.status, 200, "a missing period refused a delivery for a paying subscriber");
-    assert.equal(Object.values(w.entitlements)[0].tier, "ai", "the tier was withheld over a period field");
+    assert.ok(res.status >= 500, `a paid tier with no expiry was accepted (${res.status}) — nothing will retry it`);
+    assert.deepEqual(w.entitlements, {}, "an open-ended paid row was recorded");
+    assert.equal(w.profiles[USER].tier, "ai", "the tier moved on a delivery that was refused");
+    assert.deepEqual(
+      w.writes.filter((x) => x.table === "profiles"),
+      [],
+      "profiles was written for a subscription whose period we could not read"
+    );
+
+    /* BOTH SHOUTS, because they carry different halves. The period line
+       names the subscription and WHY the field was unusable, which is
+       what a fix needs; the apply line names the refusal. */
     assert.ok(
       w.logs.some((l) => l.includes("no readable current_period_end")),
-      `a null expiry was written with nothing said: ${w.logs.join(" | ")}`
+      `the unreadable period was not reported: ${w.logs.join(" | ")}`
+    );
+    assert.ok(
+      w.logs.some((l) => l.includes("open_ended_refused")),
+      `the refusal was not reported: ${w.logs.join(" | ")}`
+    );
+  });
+
+  await test("A CANCELLATION IS NOT AN OPEN-ENDED GRANT — `free` with no expiry still records", async () => {
+    /* The exemption, and it is load-bearing rather than a convenience:
+       tierFromStripeSubscription answers every lapse with `{ tier:
+       "free", expiresAt: null }`. If the refusal applied to `free`, no
+       cancellation could ever be recorded and every expired tier would
+       be held open — the failure the refusal exists to close, running
+       backwards.
+
+       It also must not SHOUT: the period line is gated on a paid tier,
+       because logging the ordinary case at error level is how the real
+       anomaly stops being visible. */
+    const cancelled = subscription({ status: "canceled", current_period_end: undefined });
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe" }) },
+      stripeRoutes: { "/subscriptions/sub_1": cancelled },
+    });
+    const res = await deliver(event());
+    w.restore();
+
+    assert.equal(res.status, 200, `a cancellation was refused: ${JSON.stringify(res.body)}`);
+    const row = Object.values(w.entitlements)[0];
+    assert.ok(row, "the cancellation was not recorded, so the tier can never lapse");
+    assert.equal(row.tier, "free");
+    assert.equal(row.expires_at, null);
+    assert.equal(w.profiles[USER].tier, "free", "the student kept a tier their subscription no longer grants");
+    assert.ok(
+      !w.logs.some((l) => l.includes("no readable current_period_end")),
+      `an ordinary cancellation was logged as the period anomaly: ${w.logs.join(" | ")}`
     );
   });
 

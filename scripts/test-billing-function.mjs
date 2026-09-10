@@ -920,7 +920,12 @@ async function run() {
        subscriptions would be a slow way to reach. */
     const NOW = Date.parse("2026-09-07T00:00:00Z");
     const at = (iso) => iso;
-    const rows = (...r) => ent.tierFromProviders(r, NOW);
+    /* EVERY ROW CARRIES AN EXPIRY unless the case is about not having
+       one. A provider row always does in production, and a default of
+       "absent" would have made most of this table a shape the writer now
+       refuses to create. */
+    const LATER = at("2026-12-01T00:00:00Z");
+    const rows = (...r) => ent.tierFromProviders(r.map((x) => ({ expires_at: LATER, ...x })), NOW);
 
     // Nothing at all, and `free` rows, are the same answer.
     assert.deepEqual(rows(), { tier: "free", store: null, expiresAt: null, source: null });
@@ -948,14 +953,47 @@ async function run() {
     );
     assert.equal(tie.store, "stripe");
 
-    // A non-expiring row outlasts any dated one.
-    assert.equal(
-      rows(
-        { source: "stripe", tier: "ai", store: "stripe", expires_at: at("2027-01-01T00:00:00Z") },
-        { source: "revenuecat", tier: "ai", store: "app_store", expires_at: null }
-      ).store,
-      "app_store"
+    /* A ROW WITH NO EXPIRY AT ALL IS NOT LIVE, WHICH INVERTS WHAT THIS
+       TABLE USED TO ASSERT. It read "a non-expiring row outlasts any
+       dated one", because a null was taken as Infinity — which is right
+       for a lifetime grant and wrong for every row in this table, since
+       every source in ENTITLEMENT_SOURCES is a provider talking about a
+       SUBSCRIPTION and a subscription has a period end. Only a manual
+       grant may be open-ended (Jared, 10 September 2026), and a manual
+       grant is `profiles.tier_source`, never a row here.
+
+       Asserted over the CONSTANT rather than over "stripe" and
+       "revenuecat" by name, so a source added later inherits the rule
+       and a source that is meant NOT to inherit it fails here — which is
+       the only place the decision would be visible. */
+    assert.ok(ent.ENTITLEMENT_SOURCES.length >= 2, "the source list is too short for this to be a sweep");
+    for (const source of ent.ENTITLEMENT_SOURCES) {
+      assert.equal(
+        ent.tierFromProviders([{ source, tier: "ai_max", store: "stripe", expires_at: null }], NOW).tier,
+        "free",
+        `a ${source} row with no expiry granted a tier for ever`
+      );
+      assert.equal(
+        ent.tierFromProviders([{ source, tier: "ai_max", store: "stripe" }], NOW).tier,
+        "free",
+        `a ${source} row with the expiry column ABSENT granted a tier for ever`
+      );
+    }
+
+    // And a dated row beside an undated one wins, rather than losing to
+    // it — the same claim from the other side, so neither "nulls always
+    // win" nor "nulls always lose and so does everything else" passes.
+    const beside = rows(
+      { source: "stripe", tier: "ai", store: "stripe", expires_at: at("2027-01-01T00:00:00Z") },
+      { source: "revenuecat", tier: "ai", store: "app_store", expires_at: null }
     );
+    assert.equal(beside.store, "stripe");
+    assert.equal(beside.expiresAt, at("2027-01-01T00:00:00Z"));
+
+    // `manual` IS NOT A SOURCE HERE, which is what makes "only a manual
+    // grant may be open-ended" true by construction rather than by a
+    // branch: there is no row it could be.
+    assert.ok(!ent.ENTITLEMENT_SOURCES.includes("manual"), "manual is a provider row, so an open-ended grant can be one");
 
     // AN UNPARSEABLE DATE READS AS EXPIRED, isActive's reasoning: a
     // student briefly losing a tier is visible and self-correcting; an
@@ -1197,6 +1235,46 @@ async function run() {
       assert.equal(row.tier_after, "ai_max", "an untouched row must record what it still holds, not what RevenueCat implied");
     });
 
+    await test("A REVENUECAT ENTITLEMENT WITH NO expires_date IS REFUSED, and the remedy is `manual`", async () => {
+      /* RevenueCat really can hold a non-expiring entitlement — a
+         lifetime purchase, or a promotional grant made in their
+         dashboard — and `isActive` reports it live, because that is what
+         their record says and this function is a reader of their record.
+
+         WE DO NOT HONOUR IT. Only a manual grant may be open-ended
+         (Jared, 10 September 2026), so it reaches applyEntitlement and
+         is refused there. The cost is stated rather than hidden: this
+         retries until somebody looks, and the remedy is to set
+         `tier_source = 'manual'` on the account, which short-circuits
+         before the refusal — asserted below, because a rule with no
+         route through it is a rule that gets deleted under pressure.
+
+         WE SELL NO LIFETIME PLAN (BILLING-PLAN's product table is six
+         subscriptions), so today this shape can only arrive from a hand
+         made grant, which is precisely the thing `manual` is for. */
+      const forever = { product_identifier: "p1", purchase_date: new Date(Date.now() - 864e5).toISOString() };
+      assert.equal(ent.isActive(forever), true, "the fixture is not the non-expiring shape, so this proves nothing");
+
+      const db = migratedDb();
+      seedAccount(db, USER_A);
+      const w = pgWorld(db, { subscribers: { [USER_A]: subscriberWith({ ai_max: forever }, { p1: { store: "app_store" } }) } });
+      const res = await deliver(w, EVENT({ id: "evt-forever" }));
+      w.restore();
+
+      assert.ok(res.status >= 500, `an open-ended entitlement was accepted (${res.status}) — nothing will retry it`);
+      assert.equal(rowsOf(db, "profiles")[0].tier, "free", "an open-ended entitlement granted a tier");
+      assert.equal(rowsOf(db, "entitlements").length, 0, "an open-ended row was recorded");
+
+      // THE ROUTE THROUGH: the same event, on an account granted by hand.
+      const db2 = migratedDb();
+      seedAccount(db2, USER_A, { tier: "ai_max", source: "manual" });
+      const w2 = pgWorld(db2, { subscribers: { [USER_A]: subscriberWith({ ai_max: forever }, { p1: { store: "app_store" } }) } });
+      const res2 = await deliver(w2, EVENT({ id: "evt-forever-2" }));
+      w2.restore();
+      assert.equal(res2.status, 200, `the manual route is blocked too: ${JSON.stringify(res2.body)}`);
+      assert.equal(rowsOf(db2, "profiles")[0].tier, "ai_max");
+    });
+
     await test("an anonymous id is recorded against no account, against the real FK", async () => {
       const db = migratedDb();
       const w = pgWorld(db);
@@ -1225,14 +1303,22 @@ async function run() {
        key would be the same mistake with a different column. */
 
     /** What the Stripe half writes, through the SAME applyEntitlement the Stripe webhook calls. */
-    const stripeSays = async (db, userId, tier, { expiresAt = null, store = "stripe" } = {}) => {
+    /* THE DEFAULT EXPIRY IS A REAL FUTURE DATE, not null, and that is a
+       fixture-realism fix rather than a convenience: every live provider
+       row carries a period end, `applyEntitlement` now REFUSES a paid
+       tier without one, and a default of null would have described a
+       shape production cannot produce — the same stand-in-weaker-than-
+       production mistake the Stripe fixture made about
+       `current_period_end`. The null case is opted into by name, below. */
+    const FAR_OFF = "2099-01-01T00:00:00Z";
+    const stripeSays = async (db, userId, tier, { expiresAt = FAR_OFF, store = "stripe", source = "stripe" } = {}) => {
       const w = pgWorld(db);
       const r = await ent.applyEntitlement(globalThis.__FAKE_CLIENT__, {
         userId,
         tier,
         store,
         expiresAt,
-        source: "stripe",
+        source,
       });
       w.restore();
       return r;
@@ -1348,6 +1434,79 @@ async function run() {
       assert.equal(r.outcome, "manual_override");
       assert.equal(rowsOf(db, "profiles")[0].tier, "ai_max");
       assert.equal(rowsOf(db, "entitlements").length, 0, "a manual account recorded a provider assertion underneath its gift");
+    });
+
+    await test("A PAID TIER WITH NO EXPIRY IS REFUSED, and the tier the student has STANDS", async () => {
+      /* Only a manual grant may be open-ended (Jared, 10 September
+         2026). Every source here is a provider talking about a
+         SUBSCRIPTION, so a null period end is a field we failed to read
+         — which is exactly how a live Stripe subscription wrote
+         `expires_at = NULL` with `current_period_end` sitting in the
+         payload.
+
+         REFUSING RATHER THAN RECORDING IS THE WHOLE POINT. The reader
+         now skips such a row, so writing it would demote a paying
+         student on the strength of the unparseable field. Writing
+         nothing keeps what they have, and the 5xx the caller returns
+         puts the provider on a retry that lands once the field is
+         readable.
+
+         SWEPT OVER THE CONSTANT so a source added later inherits the
+         rule rather than quietly escaping it. */
+      assert.ok(ent.ENTITLEMENT_SOURCES.length >= 2, "the source list is too short for this to be a sweep");
+      for (const source of ent.ENTITLEMENT_SOURCES) {
+        const db = migratedDb();
+        seedAccount(db, USER_A);
+        await stripeSays(db, USER_A, "ai_max", { source });
+        assert.equal(rowsOf(db, "profiles")[0].tier, "ai_max", `${source}: the dated assertion did not apply, so the next half proves nothing`);
+
+        const r = await stripeSays(db, USER_A, "ai", { expiresAt: null, source });
+        assert.equal(r.ok, false, `${source}: an open-ended paid assertion reported success`);
+        assert.equal(r.outcome, "open_ended_refused", `${source}: got ${r.outcome}`);
+        assert.match(String(r.error?.message ?? ""), /open-ended/, `${source}: the refusal carries no message for the log`);
+
+        assert.equal(rowsOf(db, "profiles")[0].tier, "ai_max", `${source}: a refused delivery moved the tier`);
+        const rows = rowsOf(db, "entitlements").filter((x) => x.source === source);
+        assert.equal(rows.length, 1, `${source}: the refused assertion was recorded anyway`);
+        assert.equal(rows[0].tier, "ai_max", `${source}: the refused assertion overwrote the good row`);
+        assert.equal(rows[0].expires_at !== null, true, `${source}: the good row lost its expiry`);
+      }
+    });
+
+    await test("A CANCELLATION IS EXEMPT — `free` with no expiry still records, or nothing could ever lapse", async () => {
+      /* The exemption is load-bearing rather than a convenience. Every
+         lapse is asserted as `{ tier: "free", expiresAt: null }`, so a
+         refusal that covered `free` would make cancellation unrecordable
+         and hold every expired tier open — the failure this rule exists
+         to close, running backwards. */
+      const db = migratedDb();
+      seedAccount(db, USER_A);
+      await stripeSays(db, USER_A, "ai_max");
+      assert.equal(rowsOf(db, "profiles")[0].tier, "ai_max");
+
+      const r = await stripeSays(db, USER_A, "free", { expiresAt: null, store: null });
+      assert.equal(r.ok, true, `a cancellation was refused: ${r.outcome}`);
+      assert.equal(rowsOf(db, "profiles")[0].tier, "free", "the student kept a tier their subscription no longer grants");
+      assert.equal(rowsOf(db, "entitlements")[0].tier, "free");
+      assert.equal(rowsOf(db, "entitlements")[0].expires_at, null);
+    });
+
+    await test("THE REFUSAL SITS BELOW `manual` AND BELOW `no_such_user` — refuse only for somebody to protect", async () => {
+      /* The same ordering the unrecognised-price refusal uses. Above
+         `manual` it would 5xx over a gift nothing was going to touch;
+         above `no_such_user` it would retry for ever on behalf of an
+         account we do not have, which is the bug #67 removed one
+         integration over. */
+      const db = migratedDb();
+      seedAccount(db, USER_A, { tier: "ai_max", source: "manual" });
+      const gift = await stripeSays(db, USER_A, "ai", { expiresAt: null });
+      assert.equal(gift.ok, true, "an open-ended assertion 5xx'd over a manual account");
+      assert.equal(gift.outcome, "manual_override", `expected manual to win first, got ${gift.outcome}`);
+      assert.equal(rowsOf(db, "profiles")[0].tier, "ai_max");
+
+      const nobody = await stripeSays(db, "22222222-2222-4222-8222-222222222222", "ai", { expiresAt: null });
+      assert.equal(nobody.ok, true, "an event about an account we do not have was put on an endless retry");
+      assert.equal(nobody.outcome, "no_such_user", `expected no_such_user first, got ${nobody.outcome}`);
     });
 
     await test("a DERIVE that fails is not a demotion — the tier keeps what it had", async () => {

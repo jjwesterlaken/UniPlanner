@@ -315,6 +315,41 @@ this repository, so nothing but this line will tell you:
 delivery with a 500 rather than granting anything, which is the right
 direction and still a dead endpoint.
 
+### 2a. THE ONE ROW THIS DEPLOY CHANGES THE MEANING OF
+
+A paid `entitlements` row with `expires_at` NULL used to be read as
+NON-EXPIRING and is now read as NOT LIVE. There is at least one in
+production — the live Stripe subscription whose `current_period_end`
+sat on the subscription ITEM, written before `periodEndOf` read it —
+and the account holding it will drop to `free` on the next event from
+any provider, including the one that would otherwise have fixed it.
+
+**Find them, after the deploy:**
+
+```sql
+select user_id, source, tier, expires_at, updated_at
+from public.entitlements
+where tier <> 'free' and expires_at is null;
+```
+
+**Expected: no rows.** A row here is an account that is paying and
+about to lose its plan, not a cosmetic defect. The fix is the next
+real event, since the mapper now reads the item — so the cheapest
+remedy is to make one happen: in the Stripe dashboard, open the
+subscription and resend the latest event, or `stripe trigger` against
+the live endpoint. Confirm the row gains a date.
+
+Only if an event cannot be produced, set the date by hand from
+Stripe's own `current_period_end` for that subscription — never from a
+guess, because the value is what decides when the plan ends.
+
+**Nothing NEW can land in that shape**: `applyEntitlement` refuses a
+paid tier with no expiry, writes nothing, and the webhook answers 5xx
+so the provider retries. A `free` row with a null expiry is normal and
+is every cancellation — the query above excludes it deliberately.
+
+---
+
 ---
 
 ## 3. Verify a real action bills the NEW counter — before 0013
