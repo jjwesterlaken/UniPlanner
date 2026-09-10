@@ -26,6 +26,7 @@ export const SITE_URL = "https://www.uniplannerapp.com";
    a reviewer will see. */
 export const PRIVACY_URL = `${SITE_URL}/privacy`;
 export const DELETE_ACCOUNT_URL = `${SITE_URL}/delete-account`;
+export const TERMS_URL = `${SITE_URL}/terms`;
 
 /* Where a password-reset email sends someone back to.
 
@@ -44,15 +45,26 @@ export const PASSWORD_RESET_REDIRECT = SITE_URL;
 export const PRIVACY_EMAIL = "privacy@uniplannerapp.com";
 export const SUPPORT_EMAIL = "support@uniplannerapp.com";
 
-/* APPLE'S STANDARD EULA, which is the Terms of Use for 1.1.0 (Jared,
-   Phase 0). A UniPlanner Terms document is a Phase 6 prerequisite, not
-   a 1.1.0 one — Apple accepts its own standard licence where an app has
-   not written its own, and writing one badly is worse than using the
-   one their review already knows.
+/* APPLE'S STANDARD EULA. It WAS the Terms of Use outright (Jared, Phase
+   0: a UniPlanner Terms document is a Phase 6 prerequisite, not a 1.1.0
+   one). Phase 6 has arrived, `TERMS_URL` now exists, and the division
+   between them is this:
+
+   - OUR terms govern the service, and a purchase made on the WEB, where
+     Apple has nothing to do with it and its licence would be a document
+     about the wrong transaction.
+   - APPLE'S licence governs a purchase made inside the iOS app, in
+     addition to ours. Section 10 of our document says so and links
+     here, which is what lets the native panel keep offering this link —
+     Apple's review expects it, and removing it to look tidy is the
+     wrong trade.
+
+   So `termsLink` in plansCopy.js picks by platform rather than one of
+   these winning outright.
 
    IT IS APPLE'S URL AND NOT OURS, which is the single exception to
    everything else in this file. It is here rather than typed into the
    Plans panel for the same reason as the rest: the app, the store
-   listing metadata and any future document must not drift to different
+   listing metadata and the document must not drift to different
    strings, and a store listing cannot be edited as easily as a deploy. */
 export const APPLE_EULA_URL = "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/";

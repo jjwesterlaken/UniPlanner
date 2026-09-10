@@ -107,14 +107,29 @@ async function run() {
 
   /* ---------- what gets served from where ---------- */
 
-  await test("legal documents are never served from a cache", () => {
+  await test("legal documents are never served from a cache", async () => {
+    /* DERIVED FROM legalLinks.js, not typed here. This named
+       "/privacy.html" and "/delete-account.html" as literals, so the day
+       a third legal document arrived it would have gone on passing over
+       two of them — and the cost of that is a stale legal document
+       served from a cache, which is the exact thing this test exists to
+       prevent. Demonstrated: dropping "/terms.html" from the list left
+       this green.
+
+       Both spellings are required because Pages 301s /x.html -> /x and
+       a navigation can arrive as either. */
     const src = pub("sw.js");
-    assert.match(src, /privacy/, "the privacy path isn't listed as network-only");
-    assert.match(src, /delete-account/, "the deletion path isn't listed as network-only");
+    const links = await import(pathToUrl(path.join(rootDir, "src/legalLinks.js")));
+    const paths = Object.entries(links)
+      .filter(([n, v]) => n.endsWith("_URL") && typeof v === "string" && v.startsWith(`${links.SITE_URL}/`))
+      .map(([, v]) => new URL(v).pathname);
+    assert.ok(paths.length >= 3, `expected the published documents, found ${paths.length}`);
+
     const list = /const NETWORK_ONLY = \[([^\]]*)\]/.exec(src);
     assert.ok(list, "there is no NETWORK_ONLY list");
-    for (const p of ["/privacy.html", "/delete-account.html"]) {
-      assert.ok(list[1].includes(p), `${p} is not network-only`);
+    for (const p of paths) {
+      assert.ok(list[1].includes(`"${p}"`), `${p} is not network-only — a stale legal document can be served from cache`);
+      assert.ok(list[1].includes(`"${p}.html"`), `${p}.html is not network-only, and Pages serves both spellings`);
     }
   });
 

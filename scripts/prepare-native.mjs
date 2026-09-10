@@ -92,6 +92,7 @@ const NATIVE_SHIPPED = {
   "apple-touch-icon.png": "referenced by index.html",
   "privacy.html": "the published policy — a local copy costs nothing and works offline",
   "delete-account.html": "as above, and Google Play requires the page to be reachable",
+  "terms.html": "the published Terms — shipped for the same reason as the policy, and Apple's review looks for terms reachable from the subscription screen",
 };
 
 for (const entry of fs.readdirSync(SRC)) {
