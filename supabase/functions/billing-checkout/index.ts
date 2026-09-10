@@ -201,6 +201,26 @@ export async function handle(req: Request): Promise<Response> {
            sets `allow_promotion_codes` AND `discounts` together. We
            pass no `discounts`, and adding one means dropping this. */
         allow_promotion_codes: "true",
+        /* THE TERMS LINK ON THE CHECKOUT PAGE. Stripe renders an "I
+           agree to the terms of service" checkbox and links it, and the
+           acceptance is recorded on the session — which is worth more
+           than a link on our own page, because it is evidence somebody
+           agreed at the moment they paid.
+
+           IT NEEDS A DASHBOARD FIELD AND FAILS LOUDLY WITHOUT IT. The
+           URL comes from Stripe → Settings → Public details → Terms of
+           service, NOT from this request, and Stripe REFUSES to create a
+           session when `terms_of_service: "required"` is sent with no
+           such URL configured. So the failure is a checkout that cannot
+           start rather than a missing link — which is the right
+           direction (nobody pays without agreeing) and is a hard
+           dependency, not a nicety.
+
+           Set it to the TERMS_URL in src/legalLinks.js. It is step 2b of
+           DEPLOY-CHECKLIST and it is listed beside the Stripe switch-on
+           order in BILLING-PLAN.md, because the server flag being unset
+           is what keeps this unreachable until somebody has done it. */
+        "consent_collection[terms_of_service]": "required",
       },
     });
     if (!session.ok) {

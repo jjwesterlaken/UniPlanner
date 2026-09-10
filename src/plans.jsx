@@ -37,6 +37,7 @@ import {
   PANEL_TITLE,
   WEB,
   buyLabel,
+  termsLink,
   currentPlanLine,
   outcomeMessage,
   resetLine,
@@ -194,6 +195,7 @@ export function PlansPanel({ session }) {
   const grouped = groupPackages(packages);
   const manageUrl = manageSubscriptionUrl({ customerInfo, store: capability.store });
   const unavailable = unavailableLine(capability.reason);
+  const terms = termsLink(capability.reason);
 
   return (
     <Card>
@@ -310,8 +312,11 @@ export function PlansPanel({ session }) {
             <ExternalLink size={11} />
           </a>
         )}
-        <a className="inline-flex items-center gap-1 text-stone-500 hover:u-accent-text" href={LINKS.terms} target="_blank" rel="noreferrer" data-terms>
-          {ACTIONS.terms}
+        {/* Our terms on web and desktop, Apple's licence on a native
+            shell. termsLink returns the href and the label together so
+            the two cannot disagree about which agreement this is. */}
+        <a className="inline-flex items-center gap-1 text-stone-500 hover:u-accent-text" href={terms.href} target="_blank" rel="noreferrer" data-terms>
+          {terms.label}
           <ExternalLink size={11} />
         </a>
         <a className="inline-flex items-center gap-1 text-stone-500 hover:u-accent-text" href={LINKS.privacy} target="_blank" rel="noreferrer" data-privacy>

@@ -29,7 +29,7 @@
    ================================================================== */
 
 import { allowanceForTier } from "./aiTextLimits.js";
-import { PRIVACY_URL, APPLE_EULA_URL } from "./legalLinks.js";
+import { PRIVACY_URL, TERMS_URL, APPLE_EULA_URL } from "./legalLinks.js";
 
 /** What each tier is called on screen. `free` is a state, not a product. */
 export const TIER_NAMES = {
@@ -99,11 +99,39 @@ export const ACTIONS = {
   restore: "Restore Purchases",
   restoreHint: "Already subscribed on another device, or reinstalled? This brings your plan back.",
   manage: "Manage subscription",
-  terms: "Terms of Use (EULA)",
   privacy: "Privacy Policy",
 };
 
-export const LINKS = { terms: APPLE_EULA_URL, privacy: PRIVACY_URL };
+/**
+ * WHICH TERMS DOCUMENT THIS PLATFORM IS GOVERNED BY.
+ *
+ * Returns the href AND the label TOGETHER, deliberately. They were two
+ * values before, and a label reading "(EULA)" over our own URL — or the
+ * reverse — is a wrong statement about which agreement somebody is
+ * being shown, which is the one thing a legal link must not get wrong.
+ * One object means there is no pair to keep in step.
+ *
+ * WEB AND DESKTOP GET OUR TERMS. `capabilityFrom` answers `"web"` for
+ * anything that is not a native shell, which is the hosted app and the
+ * Electron build — and on both of those a purchase is made through
+ * Stripe, so Apple's licence is a document about a transaction that did
+ * not happen.
+ *
+ * NATIVE KEEPS APPLE'S. A purchase inside the iOS app really is
+ * governed by Apple's standard licence, in addition to ours; section 10
+ * of our document says so and links to it. Apple's review expects that
+ * link on the subscription screen, so swapping it for ours would trade
+ * a rejection risk for tidiness. Android gets it too today, which is
+ * not right and is not worse than before — see the note in
+ * scripts/test-purchases.mjs, which names it rather than hiding it.
+ */
+export function termsLink(reason) {
+  return reason === "web"
+    ? { href: TERMS_URL, label: "Terms of Use" }
+    : { href: APPLE_EULA_URL, label: "Terms of Use (EULA)" };
+}
+
+export const LINKS = { privacy: PRIVACY_URL };
 
 /** The buy button for one package. Price and period come from the STORE. */
 export const buyLabel = (tier, duration, priceString) =>

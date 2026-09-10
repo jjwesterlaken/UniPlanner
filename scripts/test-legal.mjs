@@ -19,13 +19,33 @@ import {
   DELETE_CONFIRMATION_PHRASE,
   LECTURE_AUDIO_BUCKET,
 } from "../src/accountDeletion.js";
-import { PRIVACY_URL, DELETE_ACCOUNT_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL } from "../src/legalLinks.js";
+import * as links from "../src/legalLinks.js";
+import { PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL } from "../src/legalLinks.js";
 import { CONSENT_TEXT, AI_CONSENT_VERSION } from "../src/aiNotesLogic.js";
+import { TIERS, allowanceForTier } from "../src/aiTextLimits.js";
+import { TIER_NAMES, resetLine } from "../src/plansCopy.js";
 import { RESULT_RETENTION_DAYS, FAILED_RESULT_RETENTION_DAYS } from "../src/aiNotesRetention.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
 const page = (f) => fs.readFileSync(path.join(rootDir, "public", f), "utf8");
+
+/* THE PUBLISHED DOCUMENTS, DERIVED FROM legalLinks.js RATHER THAN
+   TYPED HERE. Every exported `*_URL` that lives under SITE_URL is a
+   document we publish, and its path is its filename — `/terms` is
+   public/terms.html. SITE_URL itself is the site root and not a
+   document, so it is excluded by having no path.
+
+   This list was `["privacy.html", "delete-account.html"]`, written out
+   twice in this file, which is the restatement pattern the CLAUDE.md
+   ledger has seventeen instances of: adding a third document would
+   have left every sweep below silently covering two of them. Derived,
+   a new document is swept the moment its URL constant exists, and a
+   URL constant with no file fails immediately. */
+const LEGAL_PAGES = Object.entries(links)
+  .filter(([name, value]) => name.endsWith("_URL") && typeof value === "string" && value.startsWith(`${SITE_URL}/`))
+  .map(([, value]) => `${new URL(value).pathname.replace(/^\//, "")}.html`)
+  .sort();
 /* Prose assertions run against the rendered text with whitespace
    collapsed: HTML wraps lines wherever it likes, and a sentence that
    happens to break across two lines is still the same sentence. */
@@ -172,20 +192,42 @@ async function run() {
 
   /* ---------- the published documents ---------- */
 
-  for (const file of ["privacy.html", "delete-account.html"]) {
+  for (const file of LEGAL_PAGES) {
     await test(`${file} is a complete static page that needs no JavaScript`, () => {
       const html = page(file);
       assert.match(html, /^<!doctype html>/i, "not a complete document");
       assert.match(html, /<title>/, "no title");
       assert.doesNotMatch(html, /<script/i, "a legal page must render with no JavaScript at all");
-      /* No external hosts: an off-site resource would break the page
-         offline and leak a request from a privacy policy of all things.
-         The allowed host is read from SITE_URL rather than hardcoded, so
-         moving the canonical domain can't quietly widen this. */
-      const allowed = new Set([new URL(SITE_URL).host, "www.oaic.gov.au"]);
-      const hosts = [...html.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]);
-      const external = [...new Set(hosts)].filter((h) => !allowed.has(h));
-      assert.deepEqual(external, [], `links to ${external.join(", ")} — an external resource leaks a request`);
+
+      /* A FETCHED RESOURCE AND A LINK ARE NOT THE SAME RISK, and this
+         used to treat them as one. A resource is requested when the page
+         LOADS — it breaks the document offline and leaks a request from
+         a legal page of all things. An href costs nothing until somebody
+         clicks it, which is the reasoning the marketing site's
+         no-third-party rule already uses for its download buttons.
+
+         Conflating them meant the Terms document could not link Apple's
+         licence, which section 10 of it is REQUIRED to do. So the rule
+         splits, and the resource half gets STRICTER rather than looser:
+         it is now absolute, where before an external `src` would have
+         passed on any host that happened to be in the allow-set. */
+      const resources = [...html.matchAll(/(?:\bsrc=|<link\b[^>]*?\bhref=)["']([^"']+)["']/gi)].map((m) => m[1]);
+      const externalResources = resources.filter((u) => /^(https?:)?\/\//i.test(u));
+      assert.deepEqual(externalResources, [], `${file} fetches ${externalResources.join(", ")} on load`);
+
+      /* Anchors may leave the site, but only to a host DECLARED here
+         with a reason — the device-store guard's shape. Our own host is
+         read from SITE_URL rather than hardcoded, so moving the
+         canonical domain cannot quietly widen it. */
+      const LINKABLE = {
+        [new URL(SITE_URL).host]: "our own pages",
+        "www.oaic.gov.au": "the Australian privacy regulator, for a complaint",
+        "www.apple.com": "Apple's standard licence, which really does govern an App Store purchase (Terms section 10)",
+      };
+      const anchors = [...html.matchAll(/<a\b[^>]*?\bhref=["'](https?:\/\/[^"']+)["']/gi)].map((m) => new URL(m[1]).host);
+      assert.ok(anchors.length > 0, `${file} has no absolute links at all — this check would pass over nothing`);
+      const undeclared = [...new Set(anchors)].filter((h) => !(h in LINKABLE));
+      assert.deepEqual(undeclared, [], `${file} links to ${undeclared.join(", ")}, which no reason here covers`);
     });
 
     await test(`${file} carries no unfilled placeholder`, () => {
@@ -195,6 +237,131 @@ async function run() {
       }
     });
   }
+
+  await test("the Terms quote the allowances the SERVER enforces, not figures somebody typed", () => {
+    /* The reason this document exists at all is that a web purchase is
+       not governed by Apple's licence — and the moment we write our own,
+       every number in it is a promise made to somebody about to pay.
+       They are re-derived from credits.ts rather than read, the way the
+       help text's grades example is.
+
+       DERIVED OVER THE TIER LIST, so a tier added later is either
+       described here or goes red; a hand-written list of three would
+       have gone on passing. */
+    const text = prose("terms.html");
+    assert.ok(TIERS.length >= 3, "the tier list is too short for this to be a sweep");
+
+    /* The names come from TIER_NAMES, which is what the app itself
+       renders. Typing them here would let the document call a plan
+       something no screen calls it. */
+    for (const tier of TIERS) {
+      const { credits, perMonth } = allowanceForTier(tier);
+      const name = TIER_NAMES[tier];
+      assert.ok(name, `no display name is declared for the tier "${tier}" — decide what the Terms call it`);
+      assert.ok(text.includes(name), `the Terms never name the ${tier} plan`);
+
+      /* The figure, with a thousands separator where the document uses
+         one, because 3000 and 3,000 are the same promise. */
+      const spelt = credits.toLocaleString("en-AU");
+      assert.ok(
+        text.includes(spelt) || text.includes(String(credits)),
+        `the Terms never state ${name}'s allowance of ${spelt} credits`
+      );
+
+      /* A TRIAL TIER MUST NOT BE DESCRIBED AS RESETTING. This is the
+         same claim aiTextCopy.js is swept for, one document over: the
+         free 60 are once-ever, and letting somebody infer a monthly
+         reset is how they wait until November for one that is not
+         coming. */
+      if (!perMonth) {
+        assert.match(
+          text,
+          /once only|do not reset|don't reset|one-off/i,
+          `the Terms describe ${name} without saying its credits never reset`
+        );
+      }
+    }
+  });
+
+  await test("the Terms say what the reset really is: a UTC calendar month, not the billing date", () => {
+    /* currentMonthKey is `${getUTCFullYear()}-${getUTCMonth()+1}`, so
+       the allowance turns over at 00:00 UTC on the 1st regardless of
+       when somebody subscribed. That is genuinely surprising — subscribe
+       on the 28th and a fresh allowance arrives three days later — so a
+       Terms document that said "monthly" without saying which month
+       would be true and misleading at once. */
+    const text = prose("terms.html");
+    assert.match(text, /calendar month/i, "the Terms don't say the reset is a calendar month");
+    assert.match(text, /UTC/, "the Terms don't say which timezone the reset happens in");
+    assert.match(
+      text,
+      /whichever day|regardless of|not tied to your billing/i,
+      "the Terms don't say the reset is independent of the subscribe date"
+    );
+
+    /* And the app's own sentence agrees with the document, since a
+       student reads one on the panel and the other in the Terms. */
+    assert.match(resetLine("ai"), /calendar month/i, "the panel and the Terms disagree about the reset");
+    assert.match(resetLine("ai"), /UTC/, "the panel's reset sentence lost its timezone");
+  });
+
+  await test("the Terms say credits do not roll over, which is true by construction", () => {
+    const text = prose("terms.html");
+    assert.match(text, /do not carry over|don't carry over|does not carry over/i, "the Terms don't rule out rollover");
+    /* The prepaid-term case is the one somebody would otherwise assume:
+       six months bought at once is NOT six months of credits pooled. */
+    assert.match(text, /not 18,000|not 18000/, "the Terms don't say a longer term does not pool its credits");
+    const max = allowanceForTier("ai_max").credits;
+    assert.equal(max * 6, 18000, `the pooling example in the Terms is stale: 6 x ${max} is not 18,000`);
+  });
+
+  await test("the Terms cover every subject the document exists to cover", () => {
+    /* An enumerated checklist, because a legal document can lose a
+       whole section to an edit and still read fine. Each entry is the
+       CLAIM rather than a phrase, so rewording is free and deleting is
+       not. */
+    const text = prose("terms.html");
+    const SUBJECTS = [
+      ["auto-renewal", /renews? automatically/i],
+      ["cancellation taking effect at period end", /end of the term you have already paid for/i],
+      ["refunds", /refund/i],
+      ["the Australian Consumer Law", /Australian Consumer Law/],
+      ["who takes payment", /Stripe/],
+      ["account deletion", /delete your account/i],
+      ["deleting an account does not cancel a store subscription", /does not cancel a subscription/i],
+      ["governing law", /laws of Australia/i],
+      ["Apple's standard licence", /End User Licence Agreement|standard licence/i],
+      ["price changes not applying mid-term", /never applies to a term you have already paid for/i],
+    ];
+    assert.ok(SUBJECTS.length >= 10, "the subject checklist shrank");
+    for (const [name, pattern] of SUBJECTS) {
+      assert.match(text, pattern, `the Terms no longer cover ${name}`);
+    }
+  });
+
+  await test("the Terms link Apple's licence at the SAME url the app does", () => {
+    /* The panel offers this link on a native shell and the document
+       names it in section 10. Two copies of a URL is the mirror case the
+       ledger allows only when the EQUALITY is asserted. */
+    const html = page("terms.html");
+    assert.ok(html.includes(links.APPLE_EULA_URL), "the Terms don't link the same Apple licence URL the app links");
+  });
+
+  await test("the Terms do not promise a refund Apple and Google will not give us", () => {
+    /* The trap in writing this section is offering a blanket refund. We
+       cannot refund a purchase we never took payment for, and promising
+       one is a support conversation that ends in a chargeback — the same
+       rule the AI failure copy follows about charging quietly. */
+    const text = prose("terms.html");
+    assert.match(
+      text,
+      /refunded by Apple or Google, not by us|cannot issue a refund/i,
+      "the Terms don't say store purchases are refunded by the store"
+    );
+    /* And the web half must NOT be disclaimed away, or the section is
+       one-sided in the direction that suits us. */
+    assert.match(text, /can be refunded by us/i, "the Terms don't say we refund what we did charge for");
+  });
 
   await test("the canonical URLs are the extensionless form Pages actually serves", () => {
     assert.equal(PRIVACY_URL, `${SITE_URL}/privacy`);
@@ -211,8 +378,8 @@ async function run() {
        this project to have been weaker than it looked — see the rule in
        CLAUDE.md about deriving a guard from its source of truth rather
        than restating it. */
-    const canonical = new Set([`${SITE_URL}/`, PRIVACY_URL, DELETE_ACCOUNT_URL]);
-    for (const file of ["privacy.html", "delete-account.html"]) {
+    const canonical = new Set([`${SITE_URL}/`, PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL]);
+    for (const file of LEGAL_PAGES) {
       const urls = [...new Set([...page(file).matchAll(/https?:\/\/[^"'\s<>]+/g)].map((m) => m[0]))]
         .filter((u) => u.includes("uniplannerapp.com"));
       for (const u of urls) {
@@ -227,7 +394,7 @@ async function run() {
   });
 
   await test("both documents give the contact address", () => {
-    for (const file of ["privacy.html", "delete-account.html"]) {
+    for (const file of LEGAL_PAGES) {
       assert.ok(page(file).includes(PRIVACY_EMAIL), `${file} has no privacy contact`);
     }
     assert.ok(page("delete-account.html").includes(SUPPORT_EMAIL), "the deletion page should offer support too");

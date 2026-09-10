@@ -350,6 +350,35 @@ is every cancellation — the query above excludes it deliberately.
 
 ---
 
+### 2b. STRIPE'S TERMS URL — a dashboard field the code now depends on
+
+`billing-checkout` sends `consent_collection[terms_of_service]:
+"required"`, which makes Stripe render an "I agree to the terms of
+service" checkbox and link it. **The URL comes from the dashboard, not
+from the request**, and Stripe REFUSES to create a session when that
+field is empty.
+
+So the failure is not a missing link — it is a checkout that cannot
+start. That is the right direction (nobody pays without agreeing) and
+it is a hard dependency.
+
+**Set it before the first web checkout:** Stripe → Settings → Public
+details → **Terms of service**, to the `TERMS_URL` in
+`src/legalLinks.js`:
+
+```
+https://www.uniplannerapp.com/terms
+```
+
+**This is unreachable until Stripe is switched on**, because all three
+Stripe functions refuse without `STRIPE_SECRET_KEY` and the client
+draws no purchase controls while `STRIPE_ENABLED` is false. It belongs
+in the switch-on order in BILLING-PLAN.md Phase 6 rather than being a
+blocker for this deploy — but it is the step that turns "the button
+does nothing" into a five-minute diagnosis instead of an afternoon.
+
+---
+
 ---
 
 ## 3. Verify a real action bills the NEW counter — before 0013

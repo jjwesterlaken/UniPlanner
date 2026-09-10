@@ -372,7 +372,8 @@ async function run() {
       copy.DISCLOSURES.managedByStore,
       copy.ACTIONS.restore,
       copy.ACTIONS.manage,
-      copy.ACTIONS.terms,
+      copy.termsLink("web").label,
+      copy.termsLink("unknown-platform").label,
       copy.ACTIONS.privacy,
       copy.ACTIVATING_NOTICE,
       copy.buyLabel("ai", "monthly", "$8.99"),
@@ -386,8 +387,33 @@ async function run() {
     assert.match(copy.buyLabel("ai_max", "annual", "$169.99"), /12 months/, "the buy button does not show the period");
     assert.doesNotMatch(all, /\bunits?\b/i, '"units" is an internal weight and never reaches a screen');
     assert.equal(copy.LINKS.privacy, links.PRIVACY_URL);
-    assert.equal(copy.LINKS.terms, links.APPLE_EULA_URL);
-    assert.match(copy.LINKS.terms, /^https:\/\/www\.apple\.com\//, "the Terms link is not Apple's standard EULA");
+
+    /* THE TERMS LINK IS PLATFORM-DEPENDENT, and both branches are
+       asserted because either one alone would pass on a function that
+       ignored its argument.
+
+       Native keeps Apple's standard licence: it really does govern an
+       App Store purchase, and Apple's review looks for it on the
+       subscription screen. Web and desktop get OURS, because a purchase
+       there goes through Stripe and Apple's licence would be a document
+       about a transaction that did not happen. */
+    const native = copy.termsLink("unknown-platform");
+    const web = copy.termsLink("web");
+    assert.notEqual(native.href, web.href, "termsLink ignores its argument, so neither branch below is about anything");
+
+    assert.equal(native.href, links.APPLE_EULA_URL);
+    assert.match(native.href, /^https:\/\/www\.apple\.com\//, "the native Terms link is not Apple's standard EULA");
+    assert.match(native.label, /EULA/, "the native link does not say it is Apple's licence");
+
+    assert.equal(web.href, links.TERMS_URL);
+    assert.doesNotMatch(web.label, /EULA/, "our own Terms are labelled as Apple's licence");
+
+    /* THE LABEL AND THE HREF TRAVEL TOGETHER so they cannot disagree
+       about which agreement somebody is being shown — the one thing a
+       legal link must not get wrong. */
+    for (const [name, got] of [["native", native], ["web", web]]) {
+      assert.ok(got.href && got.label, `termsLink("${name}") is missing half of the pair`);
+    }
   });
 
   await test("MOBILE-BUILD's button example is the label buyLabel really renders", () => {

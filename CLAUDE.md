@@ -2217,6 +2217,87 @@ second in a fixture. Both now default to a real future date, because
 that is what a live provider row carries, and the null case is opted
 into by name.
 
+### The Terms of Use, and the two things it had to get right
+
+`public/terms.html`, `TERMS_URL` in `legalLinks.js`, `termsLink` in
+`plansCopy.js`, and the claim tests in `scripts/test-legal.mjs`.
+
+**It exists because a WEB purchase is not governed by Apple's
+licence.** `legalLinks.js` recorded Jared's Phase 0 ruling that
+Apple's standard EULA *was* the Terms of Use for 1.1.0, and that our
+own document was a **Phase 6 prerequisite**. Phase 6 is Stripe on the
+web, so the prerequisite came due: money now changes hands in a
+transaction Apple has nothing to do with, and pointing that student at
+Apple's licence is a document about the wrong contract.
+
+**Neither document wins outright, so `termsLink` picks by platform.**
+Web and desktop (`capability.reason === "web"`) get ours; a native
+shell keeps Apple's, because an App Store purchase really is governed
+by it and Apple's review looks for that link on the subscription
+screen. Section 10 of our document says the same thing in prose, which
+is what makes the split coherent rather than two answers to one
+question. **The href and the label travel together** as one object —
+they were two values, and a label reading "(EULA)" over our own URL is
+a false statement about which agreement somebody is being shown.
+
+**EVERY FIGURE IS RE-DERIVED, because this is the first document that
+quotes a price-shaped number.** The allowances, the plan names
+(`TIER_NAMES`, so the document cannot call a plan something no screen
+calls it), and the "not 18,000" pooling example are all computed from
+`credits.ts` in the test. The trial tier gets its own assertion: a
+document that describes 60 credits without saying they never reset is
+true and misleading at once — the same claim `aiTextCopy.js` is swept
+for, one document over.
+
+**THE RESET IS A UTC CALENDAR MONTH AND THE DOCUMENT HAD TO SAY SO.**
+`currentMonthKey` is `getUTCFullYear()`/`getUTCMonth()`, so the
+allowance turns over at 00:00 UTC on the 1st **regardless of the
+billing date** — subscribe on the 28th and a fresh allowance arrives
+three days later. "Monthly" alone would have been accurate and
+misleading, so the test requires the calendar month, the timezone, and
+the independence from the subscribe date, and checks the panel's own
+sentence agrees.
+
+**The refund section is the one that could have been quietly
+self-serving.** It says store purchases are refunded by the store and
+not by us — true, and we cannot refund what we never charged — but the
+test ALSO requires the other half, that web purchases *can* be
+refunded by us. A section with only the first half is one-sided in the
+direction that suits us. And it opens by preserving the Australian
+Consumer Law guarantees, which cannot be excluded: a blanket
+"no refunds" clause is void here and is itself a representation the
+ACL treats as misleading.
+
+**A FETCHED RESOURCE AND A LINK ARE NOT THE SAME RISK, which the
+legal-page guard used to conflate.** One rule banned every external
+host, so the Terms could not link Apple's licence — the thing section
+10 is required to do. It splits now, and the resource half got
+STRICTER rather than looser: no external `src` or `<link href>` at
+all, where before one on an allowed host would have passed. Anchor
+hosts are declared with reasons, the device-store guard's shape, and
+the check asserts the page has absolute links at all so it cannot pass
+over nothing.
+
+**The document list is DERIVED now.** It was `["privacy.html",
+"delete-account.html"]`, written out twice in `test-legal.mjs`, so
+adding a third document would have left every sweep silently covering
+two. It is read from `legalLinks.js` — every exported `*_URL` under
+`SITE_URL` is a document, and its path is its filename. A new document
+is swept the moment its constant exists; a constant with no file
+fails at once.
+
+**The Checkout link is a DASHBOARD dependency that fails closed.**
+`consent_collection[terms_of_service]: "required"` makes Stripe render
+and link the terms and record the acceptance — but the URL comes from
+Stripe → Settings → Public details, and Stripe **refuses to create a
+session** when it is empty. So a forgotten dashboard field is a
+checkout that cannot start rather than a missing link, which is the
+right direction and a hard dependency. DEPLOY-CHECKLIST §2b.
+
+**Not reviewed by a lawyer.** Neither this nor the privacy policy is
+legal advice, and the governing-law clause names Australia without a
+state, which is the first thing a solicitor will want to change.
+
 ## The marketing site: data first, design last
 
 `site/` holds everything the page READS — downloads, pricing, flags —
