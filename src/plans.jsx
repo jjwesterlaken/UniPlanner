@@ -38,6 +38,7 @@ import {
   WEB,
   buyLabel,
   termsLink,
+  managedByStoreLine,
   currentPlanLine,
   outcomeMessage,
   resetLine,
@@ -302,7 +303,7 @@ export function PlansPanel({ session }) {
         <p>{DISCLOSURES.autoRenew}</p>
         <p>{DISCLOSURES.noRollover}</p>
         <p>{DISCLOSURES.refund}</p>
-        <p>{DISCLOSURES.managedByStore}</p>
+        <p>{managedByStoreLine(capability.reason, capability.store)}</p>
       </div>
 
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs">

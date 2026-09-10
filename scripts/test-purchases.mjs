@@ -369,7 +369,8 @@ async function run() {
       copy.DISCLOSURES.autoRenew,
       copy.DISCLOSURES.noRollover,
       copy.DISCLOSURES.refund,
-      copy.DISCLOSURES.managedByStore,
+      copy.managedByStoreLine("web", null),
+      copy.managedByStoreLine("unknown-platform", "app_store"),
       copy.ACTIONS.restore,
       copy.ACTIONS.manage,
       copy.termsLink("web").label,
@@ -382,6 +383,12 @@ async function run() {
     assert.match(copy.DISCLOSURES.autoRenew, /cancel/i);
     assert.match(copy.DISCLOSURES.noRollover, /roll over|rollover/i);
     assert.match(copy.DISCLOSURES.refund, /refund/i);
+    /* Apple's reviewer is looking at a NATIVE screen, so the element
+       they require is the native sentence — naming the store, not
+       Stripe. The web variant is checked in test-legal.mjs against the
+       Terms; here the claim is that the native screen still carries
+       what review looks for. */
+    assert.match(copy.managedByStoreLine("unknown-platform", "app_store"), /App Store/, "the native panel no longer names the store that charges");
     assert.match(copy.ACTIONS.restore, /restore/i);
     assert.match(copy.buyLabel("ai", "monthly", "$8.99"), /\$8\.99/, "the buy button does not show the store's price");
     assert.match(copy.buyLabel("ai_max", "annual", "$169.99"), /12 months/, "the buy button does not show the period");

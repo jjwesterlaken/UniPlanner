@@ -91,8 +91,42 @@ export const DISCLOSURES = {
   refund:
     "If a subscription is refunded, the plan ends straight away and goes back to Free. " +
     "Credits you have already spent stay spent — a refund returns money, not credits.",
-  managedByStore: "Payment is taken by the App Store or Google Play, not by us. We never see your card details.",
 };
+
+/* The two stores, in the words their own guidelines use. Kept beside
+   WEB.alreadySubscribed, which needs exactly the same pair — one place
+   to change if a third store ever appears. */
+const STORE_NAMES = { app_store: "the App Store", play_store: "Google Play" };
+
+/**
+ * WHO TAKES THE PAYMENT, on THIS platform.
+ *
+ * It was one flat sentence — "the App Store or Google Play" — written
+ * when those were the only two ways to buy. Phase 6 made it FALSE on
+ * the web, where Stripe takes the payment and Apple and Google are not
+ * involved at all, and a subscription screen that misnames who charged
+ * you is the line somebody quotes back during a refund argument.
+ *
+ * Section 6 of the Terms says the same thing in prose, per platform,
+ * and a test checks the two agree — because this is the sentence a
+ * student reads and that is the document they are pointed at.
+ *
+ * AN UNKNOWN STORE STILL GETS A TRUE SENTENCE rather than a guess. A
+ * native shell whose store we do not recognise is an anomaly, and
+ * naming the wrong one is worse than naming none: the whole point of
+ * the line is where to go and who to ask.
+ *
+ * The second half holds everywhere and is why it is not conditional:
+ * no path in this app ever sees a card number. Stripe Checkout is
+ * hosted, and the stores never hand one over.
+ */
+export function managedByStoreLine(reason, store) {
+  if (reason === "web") return "Payment is taken by Stripe, our payment processor, not by us. We never see your card details.";
+  const named = STORE_NAMES[store];
+  return named
+    ? `Payment is taken by ${named}, not by us. We never see your card details.`
+    : "Payment is taken by the app store you bought through, not by us. We never see your card details.";
+}
 
 /** The three controls, named once so the tests and the panel agree. */
 export const ACTIONS = {
@@ -178,9 +212,7 @@ export const WEB = {
      would be paying twice. Naming WHICH store is the whole value —
      "you already have a subscription" leaves somebody hunting. */
   alreadySubscribed: (store) =>
-    store === "play_store"
-      ? "You already subscribe through Google Play. Change or cancel it there, and it stays in step here."
-      : "You already subscribe through the App Store. Change or cancel it there, and it stays in step here.",
+    `You already subscribe through ${STORE_NAMES[store] || "your app store"}. Change or cancel it there, and it stays in step here.`,
   /* Not "something went wrong": the two failures a student can act on
      differently are "we could not reach the payment service" and "this
      plan is not set up yet", and only one of them is worth retrying. */

@@ -2294,9 +2294,22 @@ session** when it is empty. So a forgotten dashboard field is a
 checkout that cannot start rather than a missing link, which is the
 right direction and a hard dependency. DEPLOY-CHECKLIST §2b.
 
-**Not reviewed by a lawyer.** Neither this nor the privacy policy is
-legal advice, and the governing-law clause names Australia without a
-state, which is the first thing a solicitor will want to change.
+**Governing law is the Australian Capital Territory** (Jared, 10
+September 2026), named rather than left at "Australia" — a
+governing-law clause without a jurisdiction is the first thing a
+solicitor changes. **Still not reviewed by a lawyer**, and neither
+this nor the privacy policy is legal advice.
+
+**`managedByStore` was the drift this work exposed**, and it is fixed
+here rather than left for Grace: the panel said payment is taken by
+"the App Store or Google Play", which Phase 6 made FALSE on the web,
+where Stripe takes it and neither store is involved. It is
+`managedByStoreLine(reason, store)` now — Stripe on web and desktop,
+the named store on a native shell, and a true sentence rather than a
+guess when the store is unrecognised. A test checks the panel and
+section 6 of the Terms name the SAME processor per platform, and that
+the three answers really differ, since a helper ignoring its
+arguments would satisfy the first half alone.
 
 ## The marketing site: data first, design last
 

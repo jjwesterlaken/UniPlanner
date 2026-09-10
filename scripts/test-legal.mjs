@@ -23,7 +23,7 @@ import * as links from "../src/legalLinks.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL } from "../src/legalLinks.js";
 import { CONSENT_TEXT, AI_CONSENT_VERSION } from "../src/aiNotesLogic.js";
 import { TIERS, allowanceForTier } from "../src/aiTextLimits.js";
-import { TIER_NAMES, resetLine } from "../src/plansCopy.js";
+import { TIER_NAMES, resetLine, managedByStoreLine } from "../src/plansCopy.js";
 import { RESULT_RETENTION_DAYS, FAILED_RESULT_RETENTION_DAYS } from "../src/aiNotesRetention.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -329,7 +329,7 @@ async function run() {
       ["who takes payment", /Stripe/],
       ["account deletion", /delete your account/i],
       ["deleting an account does not cancel a store subscription", /does not cancel a subscription/i],
-      ["governing law", /laws of Australia/i],
+      ["governing law", /laws of the Australian Capital Territory/i],
       ["Apple's standard licence", /End User Licence Agreement|standard licence/i],
       ["price changes not applying mid-term", /never applies to a term you have already paid for/i],
     ];
@@ -337,6 +337,58 @@ async function run() {
     for (const [name, pattern] of SUBJECTS) {
       assert.match(text, pattern, `the Terms no longer cover ${name}`);
     }
+  });
+
+  await test("the panel and the Terms name the SAME payment processor, per platform", () => {
+    /* Section 6 of the Terms says who charges you, split by where you
+       bought; the Plans panel says it in one line on the screen. Two
+       statements of one fact, and this is the fact somebody quotes back
+       during a refund argument — so the pair is checked rather than
+       trusted.
+
+       It cannot be a shared string: the document is static HTML with no
+       JavaScript, deliberately, so it cannot import the module. The
+       mirror is therefore allowed and the EQUALITY is the guard, which
+       is what the ledger requires of every mirror that cannot be
+       avoided. */
+    const text = prose("terms.html");
+    /* BOTH SIDES ARE ASSERTED, and the first version of this checked
+       only the document — so a helper that had stopped answering per
+       platform satisfied it completely, demonstrated by mutation. The
+       panel's own words are half the claim.
+
+       The two columns differ because the two audiences do: the panel
+       names the thing on the receipt ("the App Store"), the Terms name
+       the company ("Apple"). */
+    const CASES = [
+      ["web", null, /Stripe/, "Stripe"],
+      ["unknown-platform", "app_store", /App Store/, "Apple"],
+      ["unknown-platform", "play_store", /Google Play/, "Google"],
+    ];
+    assert.ok(CASES.length >= 3, "the platform table shrank");
+
+    for (const [reason, store, onPanel, inTerms] of CASES) {
+      const line = managedByStoreLine(reason, store);
+      assert.match(line, onPanel, `the panel does not name who charges a ${store || reason} student: "${line}"`);
+      assert.match(line, /never see your card details/i, `${inTerms}: the panel dropped the card-details promise`);
+      assert.ok(
+        text.includes(inTerms),
+        `the Terms never name ${inTerms}, which the panel tells a ${store || reason} student takes their payment`
+      );
+    }
+
+    /* AND THE THREE REALLY DIFFER, so a helper that ignored its
+       arguments could not satisfy the loop above. */
+    const rendered = CASES.map(([r, st]) => managedByStoreLine(r, st));
+    assert.equal(new Set(rendered).size, CASES.length, "managedByStoreLine gives the same answer on every platform");
+
+    /* The old flat sentence named the two stores on the web, where
+       neither takes the money. Pinned so it cannot come back. */
+    assert.doesNotMatch(
+      managedByStoreLine("web", null),
+      /App Store|Google Play/,
+      "the web line still names a store that does not charge a web purchase"
+    );
   });
 
   await test("the Terms link Apple's licence at the SAME url the app does", () => {
