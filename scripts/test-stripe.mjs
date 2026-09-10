@@ -875,6 +875,115 @@ async function run() {
     }
   });
 
+  await test("the session offers promotion codes, as the STRING the form API reads", async () => {
+    const w = makeWorld({
+      profiles: { [USER]: profile() },
+      stripeRoutes: {
+        "/prices?": { data: [{ id: "price_1" }] },
+        "/customers": { id: "cus_new" },
+        "/checkout/sessions": { url: "https://checkout.stripe.com/c/pay/x" },
+      },
+    });
+    const res = await post(CHECKOUT, { token: `token:${USER}`, body: { tier: "ai", duration: "monthly" } });
+    w.restore();
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const session = w.stripeCalls.find((c) => c.url.includes("/checkout/sessions"));
+    assert.ok(session, "no checkout session was created");
+    assert.match(
+      session.body,
+      /(^|&)allow_promotion_codes=true(&|$)/,
+      `the promo-code field is absent or not the string "true": ${session.body}`
+    );
+
+    /* STRIPE REFUSES A SESSION THAT SETS BOTH. Recorded as a test
+       rather than only as a comment, because the day somebody adds a
+       server-side discount this is the line that says why the two
+       cannot both be here. */
+    assert.ok(!session.body.includes("discounts"), "a session cannot set allow_promotion_codes AND discounts");
+  });
+
+  await test("A DISCOUNT NEVER CHANGES WHICH PLAN SOMEBODY IS ON — behaviour", () => {
+    /* Turning promo codes on means discounted subscriptions start
+       arriving at the webhook. The tier must be identical to the
+       undiscounted one, because a coupon changes what is CHARGED for a
+       Price and does not replace the Price on the line item.
+
+       BOTH DISCOUNT SHAPES, named rather than assumed. Stripe has
+       carried this as a singular `discount` and as a `discounts` array
+       across versions, and #68 was this repository being wrong about
+       exactly that kind of move — so neither shape is the fixture's
+       default and both are here by name. A 100%-off coupon is included
+       because that is the case where an amount-reading mapper would
+       most obviously break. */
+    const plain = subscription();
+    const base = stripe.tierFromStripeSubscription(plain);
+    assert.equal(base.tier, "ai", "the undiscounted fixture does not resolve, so the comparison below is meaningless");
+    assert.equal(base.recognised, true);
+
+    const discounted = [
+      ["singular `discount`", { ...plain, discount: { coupon: { id: "SAVE20", percent_off: 20 } } }],
+      ["`discounts` array", { ...plain, discounts: [{ coupon: { id: "SAVE20", percent_off: 20 } }] }],
+      ["100% off", { ...plain, discounts: [{ coupon: { id: "FREEYEAR", percent_off: 100 } }] }],
+      ["a fixed amount off", { ...plain, discounts: [{ coupon: { id: "TENOFF", amount_off: 1000, currency: "aud" } }] }],
+    ];
+    assert.ok(discounted.length >= 4, "the discount table shrank");
+
+    for (const [name, sub] of discounted) {
+      /* Non-vacuity: the fixture really carries a discount, so an
+         assertion of "unchanged" is about something. */
+      assert.ok(
+        JSON.stringify(sub).includes("coupon"),
+        `${name}: the fixture carries no discount, so this row proves nothing`
+      );
+      const got = stripe.tierFromStripeSubscription(sub);
+      assert.deepEqual(got, base, `${name}: a discount changed what the mapper returned`);
+    }
+  });
+
+  await test("A DISCOUNT NEVER CHANGES WHICH PLAN SOMEBODY IS ON — the invariant that outlives the fixture", () => {
+    /* THE TEST ABOVE IS ONLY AS GOOD AS MY MODEL OF STRIPE'S SHAPE, and
+       this repository has already been wrong about one (#68: the period
+       end moved onto the subscription ITEMS and every fixture still
+       described the old place). So the load-bearing guard is not "these
+       four shapes are ignored" but "no amount-shaped field is read at
+       ALL" — which holds however Stripe represents a discount,
+       including in a shape nobody here has seen.
+
+       Scoped to the two functions that decide a tier, read from source
+       with comments stripped so the prose above does not match itself
+       — the grep rule this codebase has six instances of. */
+    const src = fs
+      .readFileSync(path.join(rootDir, "supabase/functions/_shared/stripe.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+
+    const from = src.indexOf("export function tierFromStripeSubscription");
+    assert.ok(from > 0, "tierFromStripeSubscription was not found — this guard would pass over nothing");
+    const body = src.slice(from);
+    assert.ok(body.length > 400, "the mapper body looks empty, so nothing below is being checked");
+
+    /* What the tier MAY depend on, and it is a short list. */
+    assert.ok(body.includes("lookup_key"), "the mapper no longer reads lookup_key, so what is deciding the tier?");
+
+    const FORBIDDEN = [
+      "discount",
+      "coupon",
+      "promotion_code",
+      "amount_off",
+      "percent_off",
+      "unit_amount",
+      "amount_total",
+      "amount_due",
+      "currency",
+    ];
+    for (const field of FORBIDDEN) {
+      assert.ok(
+        !body.includes(field),
+        `the tier mapper reads \`${field}\` — a discount can now change which plan somebody is on`
+      );
+    }
+  });
+
   await test("checkout refuses without a session, and refuses a plan that is not ours", async () => {
     const w = makeWorld({ profiles: { [USER]: profile() } });
     assert.equal((await post(CHECKOUT, { body: { tier: "ai", duration: "monthly" } })).status, 401);

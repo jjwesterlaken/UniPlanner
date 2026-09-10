@@ -179,6 +179,28 @@ export async function handle(req: Request): Promise<Response> {
         client_reference_id: userId,
         "metadata[uid]": userId,
         "subscription_data[metadata][uid]": userId,
+        /* PROMOTION CODES. `"true"` and not `true`: this is a
+           form-encoded API and `formEncode`'s body is deliberately
+           `string | number`, so the literal boolean does not typecheck
+           — which is the right failure, because Stripe reads the
+           STRING "true" and a widened type would let something less
+           obvious through.
+
+           A DISCOUNT CANNOT CHANGE WHICH PLAN SOMEBODY IS ON, and that
+           is a property of the mapper rather than a promise made here:
+           `tierFromStripeSubscription` resolves the tier from
+           `price.lookup_key` alone and reads no amount, no currency and
+           no discount anywhere. A coupon discounts what is charged for
+           a Price; it does not replace the Price on the line item. A
+           test pins both halves — the behaviour, and the invariant that
+           no amount-shaped field is read at all, which is what makes
+           the claim survive Stripe moving the discount to somewhere we
+           have not seen.
+
+           Note for whoever extends this: Stripe refuses a session that
+           sets `allow_promotion_codes` AND `discounts` together. We
+           pass no `discounts`, and adding one means dropping this. */
+        allow_promotion_codes: "true",
       },
     });
     if (!session.ok) {
