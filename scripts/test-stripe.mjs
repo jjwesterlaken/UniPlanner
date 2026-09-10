@@ -232,6 +232,7 @@ function makeWorld({ profiles = {}, events = {}, entitlements = {}, env = {}, st
     logs,
     profiles,
     events,
+    entitlements,
     restore: () => {
       console.log = origLog;
       console.error = origErr;
@@ -330,6 +331,93 @@ async function run() {
     assert.equal(got.expiresAt, new Date(seconds * 1000).toISOString());
     assert.ok(new Date(got.expiresAt).getUTCFullYear() > 2020, "the expiry landed in 1970 — it was read as milliseconds");
     assert.equal(stripe.tierFromStripeSubscription(subscription({ current_period_end: null })).expiresAt, null);
+  });
+
+  await test("THE PERIOD END IS READ FROM THE ITEM AS WELL AS THE SUBSCRIPTION — the live NULL", () => {
+    /* THE BUG, from a real delivery: an entitlement row landed with
+       `expires_at` NULL while `current_period_end: 1791547235` was
+       plainly in the payload. The read was `subscription.current_period_end`
+       and nothing else, so an API version that carries the field on the
+       ITEMS produces a null with no error anywhere.
+
+       AND THE FIXTURE IS WHY THE SUITE COULD NOT HAVE CAUGHT IT. The
+       default `subscription()` above puts the field at the TOP LEVEL —
+       the 2024-06-20 shape — so every test here agreed with a
+       production that had moved on. Stand-in weaker than production,
+       fifth instance, and this time the stand-in was a fixture rather
+       than a database. Hence the explicit shapes below rather than a
+       tweak to the default: naming both is what stops the next version
+       move being invisible again. */
+    const ITEM_ONLY = {
+      items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: 1791547235 }] },
+      current_period_end: undefined,
+    };
+
+    const onItem = stripe.tierFromStripeSubscription(subscription(ITEM_ONLY));
+    assert.equal(onItem.expiresAt, "2026-10-09T12:00:35.000Z", "the reported payload still maps to null");
+    assert.equal(onItem.periodSource, "item");
+    assert.equal(onItem.tier, "ai", "the tier must be unaffected by where the period lives");
+
+    /* The OLD shape still works — this is a widening, not a move. */
+    const onSub = stripe.tierFromStripeSubscription(subscription({ current_period_end: 1791547235 }));
+    assert.equal(onSub.expiresAt, "2026-10-09T12:00:35.000Z");
+    assert.equal(onSub.periodSource, "subscription");
+
+    /* BOTH PRESENT AND DELIBERATELY DIFFERENT, so the preference is
+       measured rather than assumed. The item wins: on a version that
+       carries it there it is the per-line answer, and a subscription
+       mid-plan-change can hold two items with different periods. */
+    const both = stripe.tierFromStripeSubscription(
+      subscription({
+        current_period_end: 1_700_000_000,
+        items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: 1791547235 }] },
+      })
+    );
+    assert.equal(both.expiresAt, "2026-10-09T12:00:35.000Z", "the subscription's field won over the item's");
+    assert.equal(both.periodSource, "item");
+
+    /* ONLY THE WINNING ITEM. A sibling line's period answers a question
+       about a plan the student is not on. Study AI Max wins on rank; its
+       own period must be the one that comes back. */
+    const twoLines = stripe.tierFromStripeSubscription(
+      subscription({
+        current_period_end: undefined,
+        items: {
+          data: [
+            { price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: 1_700_000_000 },
+            { price: { lookup_key: "uniplanner_studyaimax_annual" }, current_period_end: 1791547235 },
+          ],
+        },
+      })
+    );
+    assert.equal(twoLines.tier, "ai_max", "the rank rule moved — the rest of this assertion is about the wrong line");
+    assert.equal(twoLines.expiresAt, "2026-10-09T12:00:35.000Z", "a sibling item's period was used");
+  });
+
+  await test("a period end that is absent, or present and not a number, is REPORTED rather than coerced", () => {
+    /* Three outcomes again. A null expiry is read by tierFromProviders
+       as NON-EXPIRING, so guessing here would disable the backstop
+       quietly; the type is carried out instead so the next delivery
+       says what really arrived. */
+    const absent = stripe.tierFromStripeSubscription(
+      subscription({ current_period_end: undefined, items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" } }] } })
+    );
+    assert.equal(absent.expiresAt, null);
+    assert.equal(absent.periodSource, "absent");
+    assert.equal(absent.periodType, "absent", "an absent field must be distinguishable from an unusable one");
+
+    /* Present and a STRING — not parsed. Stripe sends integers; a
+       string means something upstream changed, and coercing it would
+       hide that while looking correct. */
+    const stringy = stripe.tierFromStripeSubscription(
+      subscription({ current_period_end: undefined, items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: "1791547235" }] } })
+    );
+    assert.equal(stringy.expiresAt, null, "a string was coerced to a date");
+    assert.equal(stringy.periodType, "item:string", `the type was not carried out: ${stringy.periodType}`);
+
+    /* The tier survives every one of these: where the period lives
+       never decides which plan somebody is on. */
+    for (const got of [absent, stringy]) assert.equal(got.tier, "ai");
   });
 
   /* ---------- 2. the six prices ---------- */
@@ -509,6 +597,66 @@ async function run() {
     assert.ok(forSomebody.status >= 500, `a real subscriber on an unknown price: answered ${forSomebody.status}, so nobody is told to fix the dashboard`);
     assert.equal(somebody.profiles[USER].tier, "ai", "a paying subscriber was downgraded because a price was not recognised");
     assert.deepEqual(somebody.writes, [], "something was written for a subscription we could not price");
+  });
+
+  await test("THE ROW THAT LANDS carries the expiry, in the shape the live API sends", async () => {
+    /* The unit tests above are about the mapper. This is about the ROW,
+       because that is where the null was seen — and it goes through the
+       real handler, the real applyEntitlement and the real
+       tierFromProviders, in the ITEM-ONLY shape.
+
+       A null here is not cosmetic: tierFromProviders reads a null
+       `expires_at` as non-expiring, so the backstop that catches a
+       provider going quiet is off and the account keeps its tier
+       forever on the strength of a field nobody could read. */
+    const itemOnly = subscription({
+      current_period_end: undefined,
+      items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: 1791547235 }] },
+    });
+    const w = makeWorld({ profiles: { [USER]: profile() }, stripeRoutes: { "/subscriptions/sub_1": itemOnly } });
+    const res = await deliver(event());
+    w.restore();
+
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    const row = Object.values(w.entitlements)[0];
+    assert.ok(row, "no entitlements row was written at all, so this proves nothing");
+    assert.equal(row.tier, "ai");
+    assert.equal(row.expires_at, "2026-10-09T12:00:35.000Z", "THE LIVE BUG: the row landed with a null expiry");
+
+    /* And profiles carries it too — the projection reads the row it
+       just wrote, so a null there would mean the same thing one table
+       over. */
+    assert.equal(w.profiles[USER].entitlement_expires_at, "2026-10-09T12:00:35.000Z");
+
+    /* WHICH SHAPE CARRIED IT REACHES THE LOG. This repository cannot
+       ask Stripe which location a given API version uses, so the only
+       way that question gets answered is a real delivery saying so. */
+    assert.ok(
+      w.logs.some((l) => l.includes('"periodSource":"item"')),
+      `the log does not say where the period came from: ${w.logs.join(" | ")}`
+    );
+  });
+
+  await test("AN ENTITLED SUBSCRIPTION WITH NO READABLE PERIOD still applies the tier, and SHOUTS", async () => {
+    /* Both halves are the decision. Refusing would 500 and retry
+       forever over a field that does not change which plan the student
+       is on — so the tier is written. But a null expiry disables the
+       expiry backstop, so it cannot be silent, and it is the silence
+       that let the live one through. */
+    const noPeriod = subscription({
+      current_period_end: undefined,
+      items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" } }] },
+    });
+    const w = makeWorld({ profiles: { [USER]: profile() }, stripeRoutes: { "/subscriptions/sub_1": noPeriod } });
+    const res = await deliver(event());
+    w.restore();
+
+    assert.equal(res.status, 200, "a missing period refused a delivery for a paying subscriber");
+    assert.equal(Object.values(w.entitlements)[0].tier, "ai", "the tier was withheld over a period field");
+    assert.ok(
+      w.logs.some((l) => l.includes("no readable current_period_end")),
+      `a null expiry was written with nothing said: ${w.logs.join(" | ")}`
+    );
   });
 
   await test("A FAILED IDEMPOTENCY READ IS NOT A REFUSAL — the primary key is the guarantee", async () => {
