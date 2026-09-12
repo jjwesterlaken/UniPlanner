@@ -3308,7 +3308,12 @@ rather than an update. A test derives it from `SITE_URL` rather than
 restating it.
 
 **Two version numbers, and only one of them matters to a store.** The
-marketing version (`1.0.0`, from the root `package.json`) is cosmetic.
+marketing version (`1.1.0` since the billing release, from the root
+`package.json`) is cosmetic, and `stamp-native.mjs` writes it into
+BOTH `desktop/package.json` and `mobile/package.json` — mobile's was a
+hand-typed copy that happened to match until the first bump moved the
+root, which is the matching-is-not-deriving trap recorded above, in a
+version number.
 Android's `versionCode` and iOS's `CFBundleVersion` are enforced: they
 must strictly increase on every upload, and a store rejects a build that
 reuses one — after the upload, when you are already trying to ship a fix.

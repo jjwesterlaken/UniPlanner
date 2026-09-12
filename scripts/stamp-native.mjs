@@ -21,8 +21,13 @@ const pkg = JSON.parse(read(path.join(rootDir, "package.json")));
 
 /* ---------- the two kinds of version, and why they differ ----------
 
-   MARKETING VERSION is what a person reads: 1.0.0, semantic, from the
-   root package.json. Cosmetic — no store enforces it.
+   MARKETING VERSION is what a person reads: semantic, from the root
+   package.json, and stamped from there into both the desktop and mobile
+   package files and into the native projects. Cosmetic — no store
+   enforces it. Deliberately NOT quoted here as a number: a comment
+   naming the current value is the line the eye lands on while the
+   constant is the line that executes, and this file's whole job is that
+   there is one place the value lives.
 
    BUILD NUMBER is what the stores enforce. Android `versionCode` and iOS
    `CFBundleVersion` must STRICTLY INCREASE on every upload, and a store
@@ -127,13 +132,24 @@ export function stamp({ now = Date.now() } = {}) {
   const version = pkg.version;
   const build = buildNumber(now);
 
-  /* ---- desktop ---- */
-  const desktopPkgPath = path.join(rootDir, "desktop/package.json");
-  editFile(desktopPkgPath, "desktop/package.json version", (s) => {
-    const d = JSON.parse(s);
-    d.version = version;
-    return `${JSON.stringify(d, null, 2)}\n`;
-  });
+  /* ---- the two package.json copies of the marketing version ----
+
+     BOTH ARE STAMPED, and mobile's was not. It sat at the root's value
+     because somebody typed the same number twice, which is the same
+     thing the icon master and desktop/build/icon.png were doing until a
+     master swap moved one of them: a file that MATCHES its source and a
+     file that DERIVES from it are indistinguishable right up until the
+     source changes, which is the day nobody is looking at the copy that
+     did not follow. Bumping to 1.1.0 is exactly that day, so it is
+     derived now rather than left to be noticed. */
+  const stampPkgVersion = (rel) =>
+    editFile(path.join(rootDir, rel), `${rel} version`, (s) => {
+      const d = JSON.parse(s);
+      d.version = version;
+      return `${JSON.stringify(d, null, 2)}\n`;
+    });
+  stampPkgVersion("desktop/package.json");
+  stampPkgVersion("mobile/package.json");
 
   /* ---- iOS ---- */
   const pbxproj = path.join(rootDir, "mobile/ios/App/App.xcodeproj/project.pbxproj");

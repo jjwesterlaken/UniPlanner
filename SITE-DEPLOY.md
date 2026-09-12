@@ -180,6 +180,15 @@ lower version and do nothing, silently, for exactly the users who
 already installed. **Set the desktop version deliberately before cutting
 the release.** The filenames no longer care; auto-update does.
 
+**RESOLVED BY THE 1.1.0 BUMP**, and it is worth saying which half fixed
+it. The root `package.json` is now 1.1.0 and `stamp-native.mjs` writes
+that into `desktop/package.json`, so the next release advertises 1.1.0
+— above the published 1.0.1, and auto-update moves. What made it
+possible to state as fixed rather than hoped is that the two are no
+longer two numbers: a test derives the stamped files from the stamper
+itself and asserts each equals the root, so a desktop version reverted
+by a later commit goes red instead of going unnoticed for a release.
+
 ### macOS: a build exists, and that is not the problem
 
 A signed one does not. `University.Planner-1.0.1-universal.dmg` is

@@ -283,7 +283,7 @@ ever flags a mismatch between them, that is the seam to look at.
 |---|---|---|
 | **Cut from a tree with the classification gate** | PASS — **the build itself enforces it, unconditionally** | `scripts/prepare-native.mjs` throws on any dist-web entry not declared in `NATIVE_SHIPPED` or `NATIVE_EXCLUDED`, naming the file — so a local Mac `npm run build` cannot copy an unclassified asset, and `ls mobile/www` is confirmation rather than the gate. Build **3494152 contains `site/` and `measure-audio.html`** — this build supersedes it |
 | iPhone-only | PASS | `TARGETED_DEVICE_FAMILY = "1"`, `stamp-native.mjs:89`, re-applied every `cap add`, asserted by `test-ai-notes.mjs:914` block |
-| `CFBundleVersion` strictly increases | PASS by construction | derived (minutes since 2020) in `stamp-native.mjs`; marketing version stays 1.0.0 from the root `package.json` |
+| `CFBundleVersion` strictly increases | PASS by construction | derived (minutes since 2020) in `stamp-native.mjs`; the marketing version is independent of it and comes from the root `package.json` — 1.1.0 since the billing release |
 | Privacy policy + deletion URLs live | PASS | `src/legalLinks.js` exports both; `test-legal.mjs` pins documents ↔ code; served network-only so never stale from cache |
 | Diagnostic mime override ships | PASS, safe | `uni-planner-force-mime`: unset by default, written by no UI (tested), validated against the candidate list — it cannot select a format the recorder doesn't already offer |
 

@@ -359,12 +359,71 @@ async function run() {
   });
 
   await test("the marketing version is stamped from one place", async () => {
-    const { stamp } = await import(pathToUrl(path.join(rootDir, "scripts/stamp-native.mjs")));
     const root = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
-    const desktop = JSON.parse(fs.readFileSync(path.join(rootDir, "desktop/package.json"), "utf8"));
-    assert.equal(desktop.version, root.version, "desktop drifted from the root version — run `npm run stamp`");
+    const src = fs.readFileSync(path.join(rootDir, "scripts/stamp-native.mjs"), "utf8");
+
+    /* WHICH FILES, DERIVED FROM THE STAMPER rather than listed here.
+       It stamped desktop only for a long time while mobile/package.json
+       sat at the root's value because somebody had typed the same
+       number twice — a copy that MATCHES its source and one that
+       DERIVES from it are indistinguishable until the source moves, and
+       1.0.0 -> 1.1.0 is exactly that day. A hand-written pair here
+       would have gone on passing over the one that did not follow. */
+    const stamped = [...src.matchAll(/stampPkgVersion\("([^"]+)"\)/g)].map((m) => m[1]);
+    assert.ok(stamped.length >= 2, `the stamper names ${stamped.length} package.json files — this guard reads nothing`);
+    for (const rel of stamped) {
+      const d = JSON.parse(fs.readFileSync(path.join(rootDir, rel), "utf8"));
+      assert.equal(d.version, root.version, `${rel} drifted from the root version — run \`npm run stamp\``);
+    }
     // And the stamper is what keeps them together, rather than luck.
-    assert.match(fs.readFileSync(path.join(rootDir, "scripts/stamp-native.mjs"), "utf8"), /d\.version = version/);
+    assert.match(src, /d\.version = version/);
+  });
+
+  await test("THE iOS MARKETING VERSION FOLLOWS — the real stamper, over a real pbxproj", async () => {
+    /* THE ONE HALF NO BUILD MACHINE CAN SEE. `mobile/ios` is created by
+       `cap add` and git-ignored, so the file the App Store actually
+       reads a version out of does not exist here — the same blind spot
+       that let the rejected icons live in the generated project.
+
+       What IS available is the real function over a real fixture, the
+       tier the plist patch already uses: scaffold a pbxproj carrying
+       the OLD version, run the stamper that ships, and read the file
+       back. A regex asserted against itself would pass on a pattern
+       that matches nothing. */
+    const projDir = path.join(rootDir, "mobile/ios/App/App.xcodeproj");
+    if (fs.existsSync(path.join(rootDir, "mobile/ios"))) {
+      /* A REAL PROJECT IS PRESENT — on a Mac after `cap add`. Writing a
+         fixture over it would destroy somebody's Xcode project, so this
+         one names its hole rather than taking the risk. `npm run
+         settings` stamps the real thing there anyway. */
+      console.log("      (mobile/ios exists — skipped rather than overwrite a real project)");
+      return;
+    }
+    const root = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    try {
+      fs.mkdirSync(projDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(projDir, "project.pbxproj"),
+        "// !$*UTF8*$!\n{ buildSettings = {\n  MARKETING_VERSION = 0.0.1;\n  CURRENT_PROJECT_VERSION = 1;\n  IPHONEOS_DEPLOYMENT_TARGET = 14.0;\n  TARGETED_DEVICE_FAMILY = \"1,2\";\n}; }\n"
+      );
+      const { stamp } = await import(pathToUrl(path.join(rootDir, "scripts/stamp-native.mjs")) + `?v=${Date.now()}`);
+      stamp();
+      const after = fs.readFileSync(path.join(projDir, "project.pbxproj"), "utf8");
+      assert.match(
+        after,
+        new RegExp(`MARKETING_VERSION = ${root.version.replace(/\./g, "\\.")};`),
+        `the stamper left the iOS marketing version at something other than ${root.version}:\n        ${after}`
+      );
+      assert.doesNotMatch(after, /MARKETING_VERSION = 0\.0\.1;/, "the fixture's old version survived the stamp");
+      /* AND THE BUILD NUMBER IS NOT THE MARKETING VERSION, which is the
+         property the stores enforce and the one a naive "stamp the
+         version everywhere" change would break. */
+      const build = /CURRENT_PROJECT_VERSION = (\d+);/.exec(after);
+      assert.ok(build, "the build number is not a plain integer after stamping");
+      assert.ok(Number(build[1]) > 1, "the build number did not move off the fixture's value");
+    } finally {
+      fs.rmSync(path.join(rootDir, "mobile/ios"), { recursive: true, force: true });
+    }
   });
 
   await test("npm test still runs the service worker tests", () => {
