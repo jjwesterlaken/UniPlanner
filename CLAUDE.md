@@ -2352,6 +2352,36 @@ COULD MEASURE.** That is the artifact rule at the level of "which
 build", and it is the same shape as the doubled safe-area inset: the
 artifact that ships to Apple was the one artifact nothing here reads.
 
+**AND THERE WAS A FOURTH, WHICH ONLY THE FIRST MASTER SWAP COULD
+EXPOSE.** `desktop/build/icon.png` was byte-identical to the master —
+the parenthetical above says so, and says it as a reassurance — and was
+produced by nothing. **A file that MATCHES its source and a file that
+DERIVES from it are indistinguishable for as long as the source does
+not move**, so no check and no eye could tell that slot from one the
+pipeline covered. Grace's replacement moved it, on 12 September 2026:
+the web and the phones took the new mark, the desktop build kept the
+mortarboard, and nothing compared the two — the rejected state
+reappearing one platform over, inside the commit that fixed it.
+
+Same class as the light ground being byte-identical to the `#f5f5f4`
+hardcoded in the shells, which hid an unthemed root element
+completely, and the remedy is the one that worked there: **pin the
+coincidence.** The desktop PNG is a declared slot now — the master
+VERBATIM, for the iOS reason, since `encodePng` always writes RGBA and
+re-encoding an opaque master adds a channel Apple refuses — and the
+`.ico`, the one container nothing here could produce, derives through
+`encodeIco` in `lib/png.mjs`.
+
+**THE QUESTION TO ASK OF ANY TWO FILES THAT AGREE: is one DERIVED FROM
+the other, or do they merely MATCH?** Equality is evidence about today
+and a derivation is evidence about every tomorrow, and the difference
+only ever surfaces on the day somebody changes the source — which is
+the day nobody is looking at the file that did not follow. It is worth
+asking wherever a value appears twice and only one copy has a
+generator behind it: the restatement ledger is what happens when the
+answer is "merely match" and somebody writes a comment instead of an
+assertion.
+
 `scripts/make-icons.mjs` derives every slot from the master, and
 `--check` RE-DERIVES and compares BYTES — which is only possible because
 `scripts/lib/png.mjs` is deterministic by construction: box-filter
