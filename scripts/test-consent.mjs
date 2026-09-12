@@ -57,6 +57,7 @@ import { AI_PROVIDERS, providerFingerprint } from "../src/aiProviders.js";
 import { AI_CONSENT_VERSION, CONSENT_TEXT, buildConsentPatch } from "../src/aiNotesLogic.js";
 import { recordConsentState, consentRefusal } from "../src/aiConsentState.js";
 import { callAiText } from "../src/aiTextClient.js";
+import { READING_COPY } from "../src/aiTextCopy.js";
 import { callAiNotes, callResummarise, uploadAudio } from "../src/aiNotesClient.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -476,6 +477,27 @@ async function run() {
     await notes.close();
     assert.deepEqual(notes.errors, [], `the notes tab threw:\n${notes.errors.join("\n")}`);
     assert.match(notesHtml, /data-consent-needed/, "an open note offers the AI summariser with no consent notice");
+  });
+
+  await test("the reading row's summariser is gated too — the fifth feature, and the one that moved", async () => {
+    /* This one always had a gate; what changed is its SHAPE. It used to
+       render the full-screen overlay inline in a reading row, which is
+       the wrong thing on a row and is why the compact notice exists.
+       Covered separately from the four because it is reached by opening
+       a row rather than by arriving on a tab — a cold-mount check would
+       find the collapsed control and stop there. */
+    const m = await mount(browser, { tab: "planner", consented: false });
+    const open = m.page.locator("main button", { hasText: READING_COPY.rowAction }).first();
+    assert.ok(await open.count(), "the seeded reading offers no summarise control, so nothing below is about it");
+    await open.click();
+    await m.page.waitForTimeout(500);
+    const html = await m.html();
+    const calls = [...m.aiCalls];
+    await m.close();
+    assert.deepEqual(m.errors, [], `the reading row threw:\n${m.errors.join("\n")}`);
+    assert.match(html, /data-consent-needed/, "the reading summariser opened with no consent notice");
+    assert.doesNotMatch(html, /data-consent-gate/, "the row still throws the full-screen overlay over the planner");
+    assert.deepEqual(calls, [], "opening the reading summariser sent something before any consent");
   });
 
   await test("NOTHING IS SENT WHEN IT IS DECLINED, with every control on the page pressed", async () => {
