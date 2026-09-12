@@ -380,7 +380,12 @@ async function run() {
     { identifier: "studyaimax_annual", product: { identifier: "uniplanner.studyaimax.annual", priceString: "A$169.99", title: "Study AI Max" } },
   ];
 
-  const bridgeScript = ({ native, packages, customerInfo = { managementURL: null } }) => `
+  /* `rejectSdk` IS THE SIMULATOR. StoreKit is absent there, so every
+     bridge call rejects — `configure` first, then `getOfferings`. The
+     rejection is thrown at CAPACITOR's boundary rather than at ours, so
+     the real plugin and the real src/purchases.js both run and only the
+     last hop is faked. */
+  const bridgeScript = ({ native, packages, customerInfo = { managementURL: null }, rejectSdk = false }) => `
     if (${native}) window.androidBridge = { postMessage() {} };
     window.__RC_CALLS__ = [];
     window.Capacitor = {
@@ -391,6 +396,7 @@ async function run() {
       }],
       nativePromise: (plugin, method) => {
         window.__RC_CALLS__.push(plugin + "." + method);
+        if (${rejectSdk}) return Promise.reject(new Error("There is an issue with your configuration. StoreKit is unavailable."));
         if (method === "getOfferings") return Promise.resolve({ current: { identifier: "default", availablePackages: ${JSON.stringify(packages)} } });
         if (method === "restorePurchases") return Promise.resolve({ customerInfo: ${JSON.stringify(customerInfo)} });
         if (method === "getCustomerInfo") return Promise.resolve({ customerInfo: ${JSON.stringify(customerInfo)} });
@@ -441,16 +447,23 @@ async function run() {
      between them. Same bundle, same spy, one difference: the platform.
      (`dist-web` having no key is a separate, real property, and the
      per-tab account assertion above is what covers it.) */
-  async function mountAccount({ native, profile = PROFILE_ROW, customerInfo = { managementURL: null } }) {
+  async function mountAccount({
+    native,
+    profile = PROFILE_ROW,
+    customerInfo = { managementURL: null },
+    rejectSdk = false,
+    signedOut = false,
+    usageStatus = 200,
+  }) {
     const dir = await keyedBuild();
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     const errors = [];
     page.on("pageerror", (err) => errors.push(String(err)));
     await page.addInitScript(
-      ({ ref, userId, tabKey, consent }) => {
+      ({ ref, userId, tabKey, consent, signedOut: out }) => {
         const hour = Math.floor(Date.now() / 1000) + 3600;
-        localStorage.setItem(
+        if (!out) localStorage.setItem(
           `sb-${ref}-auth-token`,
           JSON.stringify({
             access_token: "test-token",
@@ -468,15 +481,21 @@ async function run() {
           JSON.stringify({ semester: "Semester 1", semesters: {}, meta: consent })
         );
       },
-      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consent: CONSENTED_META }
+      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consent: CONSENTED_META, signedOut }
     );
-    await page.addInitScript(bridgeScript({ native, packages: PACKAGES, customerInfo }));
+    await page.addInitScript(bridgeScript({ native, packages: PACKAGES, customerInfo, rejectSdk }));
     await page.route(`${SUPABASE_HOST}/**`, async (route) => {
       const url = route.request().url();
       if (url.includes("/auth/v1/user")) return route.fulfill(json({ id: USER_ID, email: "plans-probe@example.test" }));
       if (url.includes("/auth/v1/")) return route.fulfill(json({ access_token: "test-token", user: { id: USER_ID } }));
       if (url.includes("/rest/v1/profiles")) return route.fulfill(json(profile));
-      if (url.includes("/rest/v1/ai_usage")) return route.fulfill(json({ user_id: USER_ID, credits_used: 12 }));
+      if (url.includes("/rest/v1/ai_usage")) {
+        /* The SPEND, which is a SECOND read and can fail on its own —
+           the tier came back from `profiles` one query earlier. */
+        return usageStatus === 200
+          ? route.fulfill(json({ user_id: USER_ID, credits_used: 12 }))
+          : route.fulfill({ ...json({ message: "boom" }), status: usageStatus });
+      }
       return route.fulfill(json([]));
     });
     await page.goto("file://" + path.join(dir, "index.html"));
@@ -511,6 +530,81 @@ async function run() {
        assertion below a comparison rather than a coincidence. */
     assert.ok(calls.includes("Purchases.configure"), `configure never reached the bridge: ${calls.join(", ") || "(no calls at all)"}`);
     assert.ok(calls.includes("Purchases.getOfferings"), "the offering was never fetched");
+  });
+
+  /* ------------------------------------------------------------------ */
+  /*  The tier does not come from the store, so the store cannot take it */
+  /* ------------------------------------------------------------------ */
+
+  /* REPORTED FROM THE iOS SIMULATOR: an account with profiles.tier =
+     'ai' saw "We couldn't check your plan just now", no tier, no buy
+     buttons. The hypothesis was that the SDK throws where StoreKit is
+     absent and the panel reported that as a plan-fetch failure.
+
+     THE FIRST OF THESE TWO IS THE CONTROL THAT DISPROVED IT, and it is
+     kept for that reason as much as for what it guards: the SDK really
+     does reject every call here, and the tier line was ALREADY correct
+     before the fix, because `purchases.js` catches and the tier has
+     never come from the SDK. What blanks the tier is a `fetchUsage`
+     failure — which is the second test. Two tests because the report
+     described one screen and the causes were independent. */
+
+  await test("AN SDK THAT REJECTS EVERY CALL CANNOT TAKE THE TIER OFF THE SCREEN", async () => {
+    const { html, calls, errors, close } = await mountAccount({ native: true, rejectSdk: true });
+    await close();
+    assert.deepEqual(errors, [], `the Account tab threw when the SDK rejected:\n        ${errors.join("\n        ")}`);
+
+    /* NON-VACUITY: the SDK was really spoken to and really refused.
+       Without this the assertions below pass on a page that never
+       reached the plugin at all — which is the WEB state, one test
+       down, and would make this one a duplicate of it. */
+    assert.ok(calls.includes("Purchases.getOfferings"), `the offering was never even requested: ${calls.join(", ") || "(no calls at all)"}`);
+
+    const line = /data-plan-line[^>]*>([\s\S]*?)<\/[a-z]+>/i.exec(html);
+    assert.ok(line, "the plan line is not on the page at all");
+    assert.match(line[1], /Study AI/, `the tier vanished with the SDK: ${line[1].trim()}`);
+    assert.doesNotMatch(line[1], /couldn't check/i, "an SDK failure is being reported as a failure to read the plan");
+
+    /* AND IT DEGRADES VISIBLY rather than silently. A purchase screen
+       with no buttons and no sentence reads as "this app sells
+       nothing", which is what the simulator showed. */
+    assert.match(html, /data-store-status/, "an unreachable store produced no explanation at all");
+    assert.doesNotMatch(html, /data-package=/, "packages rendered although the offering call rejected");
+    assert.match(html, /data-restore/, "Restore disappeared when the SDK failed — it is the one control that might recover it");
+  });
+
+  await test("a failed ALLOWANCE read does not discard a tier that was read successfully", async () => {
+    /* THE REAL CAUSE, and the shape is the `fetchNote` rule: `profiles`
+       and `ai_usage` are two queries, and the panel gated the tier on a
+       flag that means "the SPEND is unknown". So a 500 on the second
+       one told a paying student we could not check their plan. */
+    const { html, errors, close } = await mountAccount({ native: true, usageStatus: 500 });
+    await close();
+    assert.deepEqual(errors.filter((e) => !/Failed to load resource/.test(e)), [], `the Account tab threw:\n        ${errors.join("\n        ")}`);
+    const line = /data-plan-line[^>]*>([\s\S]*?)<\/[a-z]+>/i.exec(html);
+    assert.ok(line, "the plan line is not on the page at all");
+    assert.match(line[1], /Study AI/, `a failed ai_usage read blanked the tier: ${line[1].trim()}`);
+  });
+
+  await test("SIGNED OUT the panel says to make an account, and offers no control that needs one", async () => {
+    /* "We couldn't check your plan" describes a failure that never
+       happened, on the screen somebody sees before they have ever had a
+       plan. And Restore without a session can only attach a real store
+       receipt to an ANONYMOUS RevenueCat id — the delivery the webhook
+       answers `no_account` to. */
+    const { html, errors, close } = await mountAccount({ native: true, signedOut: true });
+    await close();
+    assert.deepEqual(errors, [], `the Account tab threw signed out:\n        ${errors.join("\n        ")}`);
+    const line = /data-plan-line[^>]*>([\s\S]*?)<\/[a-z]+>/i.exec(html);
+    assert.ok(line, "the plan line is not on the page at all");
+    assert.doesNotMatch(line[1], /couldn't check/i, `a signed-out student is told a read failed: ${line[1].trim()}`);
+    assert.match(line[1], /account/i, `the signed-out line does not say what to do: ${line[1].trim()}`);
+    assert.doesNotMatch(html, /data-restore/, "Restore is offered with no account to restore onto");
+    assert.doesNotMatch(html, /data-package=/, "purchase buttons are offered with no account to buy for");
+    /* The legal links stay, because they are about the app rather than
+       about a subscription and a reviewer may never sign in. */
+    assert.match(html, /data-terms/, "the Terms link is gone when signed out");
+    assert.match(html, /data-privacy/, "the Privacy link is gone when signed out");
   });
 
   await test("ON WEB the same page speaks to the SDK not once", async () => {

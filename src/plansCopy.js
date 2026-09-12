@@ -52,11 +52,21 @@ export const PANEL_TITLE = "Your plan";
  * What the student is on now, from `profiles.tier` — the server's
  * answer, never the store SDK's.
  *
- * THE UNKNOWN CASE IS NOT "FREE". A failed read means we could not ask,
- * and showing somebody the free plan because their train went into a
- * tunnel is the same mistake as showing them a paywall. It says so.
+ * THREE ANSWERS, NOT TWO, and the third is the one that was missing.
+ * A failed read means we could not ask, and showing somebody the free
+ * plan because their train went into a tunnel is the same mistake as
+ * showing them a paywall. But SIGNED OUT is not that: there is no
+ * account, so there is nothing that could have been checked, and
+ * "we couldn't check your plan" describes a failure that never
+ * happened — on the screen a student sees before they have ever had a
+ * plan. The `fetchNote` rule, in a sentence: "no" and "nothing" must
+ * not read the same.
  */
-export function currentPlanLine(tier) {
+export const SIGNED_OUT_PLAN_LINE =
+  "Make an account to buy a plan and use the AI features. Your planner works without one, and stays on this device.";
+
+export function currentPlanLine(tier, { signedOut = false } = {}) {
+  if (signedOut) return SIGNED_OUT_PLAN_LINE;
   if (!tier) return "We couldn't check your plan just now. Nothing has changed — try again when you're back online.";
   const { credits, perMonth } = allowanceForTier(tier);
   const name = TIER_NAMES[tier] || TIER_NAMES.free;
@@ -251,6 +261,36 @@ export function webFailureMessage(code, store) {
  * environment variable, and a screen that cannot tell them apart sends
  * whoever is debugging to the wrong place.
  */
+/**
+ * The store SDK answered, or did not, and they are DIFFERENT SENTENCES.
+ *
+ * `loadPackages` is written with three outcomes for the `fetchNote`
+ * reason its own comment gives — packages, a definitively empty
+ * offering, and a failed read — and the panel collapsed the last two
+ * into "no buttons". On the iOS simulator, where StoreKit is absent,
+ * that renders a purchase screen with nothing to buy and no
+ * explanation, which reads as "this app has no plans" rather than
+ * "this device cannot reach the store".
+ *
+ * NEITHER SENTENCE MENTIONS THE PLAN, because the plan is not in doubt:
+ * it comes from `profiles` and is rendered above these, whatever the
+ * SDK is doing. Both say so, because the question a student asks when
+ * buying stops working is whether they have lost what they paid for.
+ */
+export const STORE_COPY = {
+  unreachable:
+    "Purchases aren't available on this device right now, so plans can't be bought or changed here. Your plan is unchanged, and works on any device you sign in on.",
+  empty:
+    "There are no plans to buy on this device at the moment. Your plan is unchanged, and works on any device you sign in on.",
+};
+
+/** Which of the two, from `loadPackages`' outcome. Null while it is still being asked. */
+export function storeStatusLine(outcome) {
+  if (outcome === "failed") return STORE_COPY.unreachable;
+  if (outcome === "empty") return STORE_COPY.empty;
+  return null;
+}
+
 export function unavailableLine(reason) {
   if (reason === "web") return "Plans are bought in the UniPlanner app on iPhone or Android. Your plan is the same everywhere you sign in.";
   if (reason === "no-key") return "In-app purchases aren't set up in this build.";

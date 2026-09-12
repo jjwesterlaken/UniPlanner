@@ -552,11 +552,27 @@ async function run() {
 
   /* ---------- demo/no-account mode doesn't crash ---------- */
 
-  await test("fetchUsage never crashes with no session or no Supabase client", async () => {
-    const nothing = { creditsUsed: 0, tier: null, unavailable: true };
-    assert.deepEqual(await fetchUsage(null), nothing);
-    assert.deepEqual(await fetchUsage({ user: { id: "u1" } }, { supabaseClient: null, isDemo: false }), nothing);
-    assert.deepEqual(await fetchUsage({ user: { id: "u1" } }, { supabaseClient: {}, isDemo: true }), nothing);
+  await test("fetchUsage says NO ACCOUNT rather than merely unavailable, with no session or no client", async () => {
+    /* Both answers used to be the same object, and a reader that could
+       only see `unavailable` had to guess which it was holding — which
+       is how the Plans panel came to tell a signed-out student "we
+       couldn't check your plan", a report of a failure that never
+       happened. "No" and "nothing" must be different answers.
+
+       Asserted as the CLAIM rather than by deepEqual on the whole
+       object: pinning the shape is what made this test go red when the
+       third outcome was added, which is the restatement pattern in a
+       test, and the shape is not what anybody depends on. */
+    for (const [what, result] of [
+      ["no session", await fetchUsage(null)],
+      ["no supabase client", await fetchUsage({ user: { id: "u1" } }, { supabaseClient: null, isDemo: false })],
+      ["demo mode", await fetchUsage({ user: { id: "u1" } }, { supabaseClient: {}, isDemo: true })],
+    ]) {
+      assert.equal(result.noAccount, true, `${what} is not reported as "there is no account to ask about"`);
+      assert.equal(result.unavailable, true, `${what} must still read as unavailable to every existing caller`);
+      assert.equal(result.tier, null, `${what} produced a tier out of nowhere`);
+      assert.equal(result.creditsUsed, 0, `${what} produced a spend out of nowhere`);
+    }
   });
 
   /* ---------- the guard that decides whether we pay money ---------- */
