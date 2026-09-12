@@ -2389,29 +2389,93 @@ Guidelines 5.1.1(i) and 5.1.2(i). Two separate defects behind one
 rejection:
 
 **The screen described ROLES, not COMPANIES** — "a transcription
-service", "a summarising service". `src/aiProviders.js` is now the one
-place that answers who and what, and the consent text, the privacy
-policy and three test suites all read it rather than restating it.
+service", "a summarising service". `supabase/functions/_shared/aiProviders.js`
+is now the one place that answers who, and the consent text, the privacy
+policy, the iOS microphone dialog, the Edge Function's own refusal and
+four test suites all read it rather than restating it.
 
-**Deepgram is named though it is not in use, and that is the design
-decision to understand before trimming the list.** The transcription
-provider is selectable AT RUNTIME — `ai-notes/config.ts` says so in its
-own comment, "without a redeploy via the
-`AI_NOTES_TRANSCRIPTION_PROVIDER` secret". A screen naming only Groq
-would become false the moment somebody set that secret, with no code
-change, no deploy and nothing to notice: **Apple would have approved a
-screen that later lied.**
+**DEEPGRAM WAS NAMED AND IS NOT ANY MORE, AND THE REVERSAL IS THE
+LESSON.** The transcription provider is selectable AT RUNTIME —
+`ai-notes/config.ts` says so in its own comment, "without a redeploy via
+the `AI_NOTES_TRANSCRIPTION_PROVIDER` secret". So a screen naming only
+Groq would become false the moment somebody set that secret, with no
+code change, no deploy and nothing to notice. The first fix named
+Deepgram on the consent screen and in the privacy policy, although
+nothing sends it anything, on the reasoning that Apple would otherwise
+have approved a screen that later lied.
 
-**THE CLOSURE IS TWO HALVES AND NEITHER IS A RUNTIME CHECK, which is
-worth stating because the first draft of `aiProviders.js` claimed one.**
-An Edge Function is deployed from `supabase/functions/` alone, so it
-cannot import a `src/` module, and restating the list over there would
-be the ledger pattern. What actually holds: `selectTranscriber` FALLS
-BACK to the configured default for an unrecognised value, so the secret
-can only choose among adapters that exist; and a test asserts the
-adapter keys parsed out of `TRANSCRIBERS` are a SUBSET of the ids in
-`aiProviders.js`. Reaching an unnamed third party therefore takes a new
-adapter, which is a code change, which goes red.
+That reasoning was sound and the remedy was the wrong way round. **It
+disclosed an extra company to every student in place of a check** —
+three named recipients where two receive anything, a row in the policy
+describing data flows that do not happen, and a consent fingerprint
+carrying a company nobody chose. Jared's ruling, 12 September 2026: name
+who actually receives things, and make the switch fail closed instead.
+
+**WHAT MADE THE CHECK POSSIBLE WAS MOVING THE LIST, and the old file said
+it could not be done.** `src/aiProviders.js` recorded that an Edge
+Function is deployed from `supabase/functions/` alone, so it cannot
+import a `src/` module, and concluded that no runtime check was
+available. The conclusion does not follow: `supabase/functions/_shared/`
+IS deployed, and a plain JS module there with no Deno and no browser
+APIs can be imported by the FUNCTION and re-exported into the WEB
+BUNDLE — which is exactly the arrangement `ai-notes/guards.js` already
+uses for the Node tests. `_shared/aiProviders.js` holds the facts (id,
+name, country, role); `src/aiProviders.js` re-exports them and holds the
+wording, so a copy change never means editing a file under `supabase/`.
+**Verified on the artifact rather than assumed — the web build was run
+and it resolves.** The general form: *"the two halves cannot share a
+module" deserves one check before it becomes a reason to ship a
+disclosure.*
+
+**THE SWITCH NOW FAILS CLOSED, IN TWO PLACES, and they cover different
+people.**
+
+- **At the env check**, where the override is first read: a resolved
+  provider the shared list does not name refuses the request — before the
+  body is parsed, before the allowance, long before anything is billed.
+  The deepgram ADAPTER still exists and its key is still configured, so
+  the refusal is about consent rather than about a missing secret, which
+  is what the test asserts. Mutation-checked, and the mutation is the
+  interesting part: with the branch removed the fake reaches its
+  `transcribe` stage, so the lecture really would have gone.
+- **Against the accepted fingerprint**, which is the half the env check
+  cannot reach: a student on an OLDER BUILD whose own screen named a
+  different set never re-prompts, because their own list has not moved.
+  Their planner records what they accepted, the client sends it, and the
+  server refuses a set that is not the one in force. **Both endpoints
+  make this check, and that is deliberate rather than tidy.** `ai-text`
+  has no provider switch, so the dashboard-flip hole is absent there —
+  but the stale-set hole is the same student sending a pasted reading or
+  a photographed page, so it gets the same refusal. An asymmetry here
+  would be a claim that holds on one endpoint and not the other, which is
+  the kind of thing somebody later reads as intentional.
+
+**ABSENCE IS NOT CONSENT, and the trick that makes it cost nothing is
+worth knowing.** A build predating the `consentProviders` field sends
+nothing, and reading that as "fine" reopens the whole hole on the next
+list change. Requiring the field would NARROW what a client may do — so
+by the ordering rule it would have to follow the client's promote, with
+an outage window between the function deploy and it. Instead absence is
+read as `LEGACY_CONSENT_FINGERPRINT`, **a literal recording what those
+builds really named**: it equals the live set today (so nothing breaks
+and no ordering is needed) and stops matching the day the list changes
+(so pre-field builds are refused exactly when they should be). It is a
+restatement of a FACT ABOUT THE PAST, which is the one kind that cannot
+drift — and nothing asserts it equals the live fingerprint, because such
+a test would go red precisely when the change is intended and the fix
+under pressure would be to edit the line that must never move.
+
+**THE SUBSET TEST WAS INVERTED, WHICH IS HOW A DISCLOSURE CAME TO STAND
+IN FOR A GUARD.** It required the adapter keys in `TRANSCRIBERS` to be a
+SUBSET of the names on the consent screen — so the cheapest way to keep
+it green was to name Deepgram, and the test was satisfied. Adapters and
+the consent list may now differ; what is asserted instead is that the
+function imports the shared list, that the DEFAULT provider IS named (a
+default the screen omitted would refuse every recording for everybody),
+and that the unnamed adapter still exists, so the refusal guards a real
+reachable branch rather than a hypothetical one. **A guard whose
+cheapest satisfaction is a user-visible disclosure is pointing the wrong
+way.**
 
 **"Re-shown if the third parties change" is true BY CONSTRUCTION.**
 `providerFingerprint()` (ids and names, sorted) is recorded with the
@@ -2463,6 +2527,37 @@ fails closed**: an unset mirror refuses, because a refusal costs a
 consented student an error message and a leak costs them a disclosure
 they cannot take back.
 
+**THE WORDING IS GRACE'S** (12 September 2026) and is kept verbatim —
+which is what turned up the remaining phrase pins, below. Three things
+in it are interpolated rather than typed, and each renders her exact
+sentence: the retention periods, the country phrase ("companies in the
+United States"), and the transcription company's name ("neither we nor
+Groq keep it"). The last two are the same rule as the first — both are
+TRUE of the current provider list and FALSE the moment it changes, so
+they follow the list instead of contradicting it later.
+
+**THE VERSION DID NOT MOVE** for her pass or for Deepgram's removal. v7
+has never shipped, so there is nobody holding an acceptance of the
+earlier draft to re-ask; and the provider change is carried by the
+fingerprint regardless, which is the mechanism that exists so a wording
+version never has to be remembered for it.
+
+**AND THE iOS MICROPHONE DIALOG WAS A RESTATEMENT THAT SAID SO IN A
+COMMENT.** `MIC_USAGE_DESCRIPTION` promised the recording is deleted
+once transcribed, in its own words, under a comment reading *"that exact
+phrase is what a test greps for in both files, so if one changes, change
+the other."* Grace's pass is exactly the change it was waiting for: it
+broke the grep rather than the agreement. There is one string now
+(`AUDIO_DELETION_PROMISE`), interpolated into both, so "they make the
+same promise" is true by construction — and because that makes the
+obvious assertion a tautology, what the test asserts instead is that
+NEITHER FILE SPELLS IT OUT (comments stripped; the explanation quotes
+the old phrasing and would otherwise trip it). The dialog also used to
+say "a transcription service" — the exact unnamed wording 5.1.1(i)
+refused in the app. An OS prompt is not what Apple complained about, but
+saying it unnamed there and named on the next screen is a difference
+with no reason behind it, so it names Groq now, derived.
+
 ### Three guards that were green over the thing they were written for
 
 All three found by doing this work, and each is a costume the ledger
@@ -2503,6 +2598,25 @@ whole structure, with a completeness assertion); one of them pinned a
 sentence down to an "and" that became a comma; and `test-app-smoke.mjs`
 seeded `{ version: 99 }`, which the fingerprint correctly stopped
 treating as consent.
+
+**AND GRACE'S PASS BROKE FIVE MORE, all the same shape and none of them
+wrong about anything.** "outside Australia" became "companies in the
+United States"; "not stored" became "aren't stored"; "deleted as soon as
+it has been transcribed" became "deleted the moment it's transcribed".
+Every one was a correct rewording failing a test that existed to keep
+the claim true — the ledger's first entry, for the fourth time. What
+they are now: the leaving-the-country claim is **derived from the
+countries in the facts list** (every one appears, and at least one is
+not Australia), which cannot be reworded out of existence and goes red
+on the thing it is actually about — a recipient somewhere the screen
+does not mention. The not-stored promise is matched by claim rather than
+tense, with the PRECISE half (no copy in the planner, no server-side
+copy at any point, in contrast to a transcript's seven days) asserted of
+the POLICY instead: a screen and a legal document are not obliged to
+carry the same sentence, only not to disagree. The audio promise reads
+the shared constant. **The rule that keeps being relearned: if a guard
+breaks every time somebody improves the writing, it was pinned to the
+writing and not to the claim.**
 
 ### The declined-sends-nothing test, and why its first version proved nothing
 

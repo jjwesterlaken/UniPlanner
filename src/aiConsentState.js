@@ -63,6 +63,19 @@ export function recordConsentState(meta) {
 export const consentMirror = () => mirrored;
 
 /**
+ * The provider set this account accepted, for the request body.
+ *
+ * The SERVER re-checks it (`ai-notes` refuses a mismatch), which is what
+ * makes the claim hold for a student on an old build whose own screen
+ * named a different set of companies and which therefore never
+ * re-prompts. Sent from the mirror rather than recomputed, because the
+ * question is what the STUDENT agreed to and not what this build would
+ * ask them today — recomputing it would make every request claim to
+ * match and the server check vacuous.
+ */
+export const acceptedProviders = () => (mirrored && mirrored.providers) || null;
+
+/**
  * The refusal, or null.
  *
  * Returns an Error shaped like every other client refusal in this

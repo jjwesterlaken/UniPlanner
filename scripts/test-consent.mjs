@@ -53,8 +53,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { AI_PROVIDERS, providerFingerprint } from "../src/aiProviders.js";
-import { AI_CONSENT_VERSION, CONSENT_TEXT, buildConsentPatch } from "../src/aiNotesLogic.js";
+import { AI_PROVIDERS, PROVIDER_COPY, providerFingerprint } from "../src/aiProviders.js";
+import { AI_CONSENT_VERSION, AUDIO_DELETION_PROMISE, CONSENT_TEXT, buildConsentPatch } from "../src/aiNotesLogic.js";
 import { recordConsentState, consentRefusal } from "../src/aiConsentState.js";
 import { callAiText } from "../src/aiTextClient.js";
 import { READING_COPY } from "../src/aiTextCopy.js";
@@ -384,6 +384,34 @@ async function run() {
     assert.ok(consentRefusal(), "an account with no acceptance inherited the last one's consent");
   });
 
+  await test("EVERY PROVIDER HAS WORDING AND NO WORDING IS ORPHANED", () => {
+    /* The facts moved to supabase/functions/_shared/aiProviders.js so the
+       Edge Function can enforce them; the sentences stayed in src/ so a
+       wording pass does not mean editing a file under supabase/. That
+       split is only safe with this check: a provider added to the facts
+       without a sentence would render a fallback nobody wrote, and a
+       sentence left behind for a removed provider would sit there looking
+       current. */
+    const ids = AI_PROVIDERS.map((p) => p.id).sort();
+    const written = Object.keys(PROVIDER_COPY).sort();
+    assert.ok(ids.length > 0, "no providers at all — this check would pass over nothing");
+    assert.deepEqual(written, ids, "the facts and the wording cover different sets of providers");
+
+    /* AND EACH SENTENCE NAMES ITS OWN COMPANY. The sentence repeats the
+       name that the facts table also holds — an unavoidable restatement,
+       because Grace writes prose and not fields — so the equality is the
+       guard: a renamed company whose sentence still says the old name
+       goes red here. */
+    for (const provider of AI_PROVIDERS) {
+      const sentence = PROVIDER_COPY[provider.id].sentence;
+      assert.ok(sentence, `${provider.id} has an entry with no sentence`);
+      assert.ok(
+        sentence.includes(provider.name),
+        `${provider.id}'s sentence does not name ${provider.name} — the facts and the copy disagree about who this is`
+      );
+    }
+  });
+
   /* ================================================================
      PART 2 — the screens, in a real browser.
      ================================================================ */
@@ -419,6 +447,7 @@ async function run() {
     const m = await mount(browser, { tab: "ai-notes", consented: false });
     const html = await m.html();
     const gateText = await m.page.locator("[data-consent-gate]").textContent();
+    const listText = await m.page.locator("[data-consent-providers]").textContent();
     const accepts = await m.page.locator("[data-consent-accept]").count();
     const declines = await m.page.locator("[data-consent-decline]").count();
     await m.close();
@@ -427,12 +456,34 @@ async function run() {
 
     assert.ok(AI_PROVIDERS.length > 0, "aiProviders.js names nobody — this check would pass over nothing");
     for (const provider of AI_PROVIDERS) {
-      assert.ok(gateText.includes(provider.name), `the screen in the browser never names ${provider.name}`);
-      assert.ok(gateText.includes(provider.country), `the screen does not say ${provider.name} is in ${provider.country}`);
+      /* THE NAME off the provider list itself, not the whole screen:
+         that element is the disclosure the rejection was about, and a
+         gate that stopped rendering it while a name survived in some
+         other sentence would be the rejected screen passing. THE COUNTRY
+         off the whole gate, because Grace's pass states it once in the
+         intro rather than beside each name — still asserted per provider,
+         so a recipient somewhere the intro does not mention goes red. */
+      assert.ok(listText.includes(provider.name), `the rendered provider list never names ${provider.name}`);
+      assert.ok(gateText.includes(provider.country), `the screen does not say a recipient is in ${provider.country}`);
+    }
+    /* EXACTLY THESE COMPANIES AND NO OTHERS. Deepgram was named here
+       while nothing used it, as a stand-in for the server check that now
+       exists; a name reappearing on this screen without reaching this
+       list is what that looked like, so the count is pinned as well as
+       the membership. */
+    assert.equal(
+      AI_PROVIDERS.length,
+      2,
+      `the screen names ${AI_PROVIDERS.length} companies — if that is intended, say which and why here`
+    );
+    for (const gone of ["Deepgram", "AssemblyAI", "Whisper"]) {
+      assert.ok(!listText.includes(gone), `the screen names ${gone}, which nothing sends anything to`);
     }
     /* And the two facts Apple's notice asks for by name, on the screen
-       rather than only in the policy. */
-    assert.match(gateText, /deleted as soon as it has been transcribed/, "the screen does not say the recording is deleted");
+       rather than only in the policy. The audio promise is read from the
+       shared constant rather than typed, which is what stopped it
+       breaking on a rewording for a fourth time. */
+    assert.ok(gateText.includes(AUDIO_DELETION_PROMISE), "the screen does not say the recording is deleted");
     assert.ok(gateText.includes(CONSENT_TEXT.declineNote), "the screen does not say that declining leaves the planner working");
     assert.ok(accepts, "there is no way to accept");
     assert.ok(declines, "there is no way to decline");

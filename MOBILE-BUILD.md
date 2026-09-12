@@ -912,11 +912,16 @@ repository; both have a half no build machine can see.
     read. On the phone, signed in, with a fresh account:
 
     - Open the AI tab. The screen appears, **before** anything else, and
-      names **Groq**, **Deepgram** and **OpenAI** with the United States
-      beside each. Scroll it: the whole thing must be reachable on the
-      smallest device you have, keyboard down — it is a
+      names exactly **Groq** and **OpenAI**, with the United States in the
+      opening sentence. **Deepgram must NOT appear** — it was named there
+      while nothing used it, and the server refuses it now instead.
+      Scroll the panel: the whole thing must be reachable on the smallest
+      device you have, keyboard down — it is a
       `max-h-[90vh] overflow-y-auto` panel and a reviewer who cannot
       reach the buttons will say the app is broken.
+    - Tap through to the microphone permission prompt and read it. It
+      must name Groq and say the recording is deleted once transcribed —
+      the same promise as the screen, because it is the same string.
     - Press **Not now**. The tab says the AI features are off and offers
       to show the screen again. Nothing is sent — there is no control
       left that could.

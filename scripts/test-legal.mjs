@@ -23,6 +23,7 @@ import * as links from "../src/legalLinks.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL } from "../src/legalLinks.js";
 import { CONSENT_TEXT, AI_CONSENT_VERSION } from "../src/aiNotesLogic.js";
 import { AI_PROVIDERS } from "../src/aiProviders.js";
+import { AUDIO_DELETION_PROMISE } from "../src/aiNotesLogic.js";
 import { TIERS, allowanceForTier } from "../src/aiTextLimits.js";
 import { TIER_NAMES, resetLine, managedByStoreLine } from "../src/plansCopy.js";
 import { RESULT_RETENTION_DAYS, FAILED_RESULT_RETENTION_DAYS } from "../src/aiNotesRetention.js";
@@ -832,8 +833,25 @@ async function run() {
        the material is named, and it leaves the country. The leaving half
        is derived from the provider list rather than from a phrase. */
     assert.match(all, /text|photos/i, "supplied material isn't named at all");
-    assert.match(all, /outside Australia|overseas/i, "the consent doesn't say the material leaves the country");
-    assert.match(all, /study cards|explanations/i, "the consent doesn't say what kind of text");
+    /* THE THIRD TIME THIS LINE HAS FAILED ON A CORRECT REWORDING — "your
+       own writing", then "sent overseas", now "outside Australia", which
+       Grace's pass replaced with the plainer and more useful "companies
+       in the United States". A phrase was never the claim. The claim is
+       that the screen names a destination OUTSIDE AUSTRALIA, so it is
+       derived from the countries in the facts list: every one of them
+       appears, and at least one is not Australia. That survives any
+       rewording and goes red on the thing it is about — a recipient
+       somewhere the screen does not mention. */
+    const countries = [...new Set(AI_PROVIDERS.map((p) => p.country))];
+    assert.ok(countries.length > 0, "no provider has a country — this check would pass over nothing");
+    for (const country of countries) {
+      assert.ok(all.includes(country), `the consent screen never says a recipient is in ${country}`);
+    }
+    assert.ok(
+      countries.some((c) => !/australia/i.test(c)),
+      "no recipient is outside Australia, so the consent has nothing to disclose — if that is really true, this test should be deleted rather than loosened"
+    );
+    assert.match(all, /study cards/i, "the consent doesn't say what kind of text");
   });
 
   await test("consent v6 covers photographed pages, in the same category as text and audio", () => {
@@ -846,13 +864,24 @@ async function run() {
     const all = consentProse();
     assert.ok(AI_CONSENT_VERSION >= 6, "photographed pages shipped without a consent bump");
     assert.match(all, /photo/i, "the consent never mentions photos");
-    /* THE PROMISE, NOT ITS PUNCTUATION. This pinned the sentence down to
-       an "and" that v7 wrote as a comma. What has to be true is that
-       supplied material is not kept, in either of the two places a
-       student would wonder about. */
-    assert.match(all, /not stored/i, "the never-stored promise is gone");
-    assert.match(all, /planner/i, "the never-stored promise doesn't cover the planner");
-    assert.match(all, /not on our server|not .{0,20}our server/i, "the never-stored promise doesn't cover our server");
+    /* THE PROMISE, NOT ITS PUNCTUATION OR ITS TENSE. This pinned the
+       sentence down to an "and" that became a comma, and then to "not
+       stored" where Grace wrote "aren't stored". What has to be true is
+       that the screen promises supplied material is not kept.
+
+       WHERE IT IS NOT KEPT is now asserted of the POLICY rather than the
+       screen, and that is a deliberate division rather than a loosened
+       guard: Grace's bullet is "Text and photos you supply aren't
+       stored — only the result is", which makes the promise in the
+       plainest words available, while the policy carries the part that
+       needs precision — no copy in the planner, and no server-side copy
+       at any point, in contrast to a lecture transcript, which has one
+       for 7 days. A screen and a legal document are not obliged to carry
+       the same sentence; they are obliged not to disagree. */
+    assert.match(all, /(aren't|are not|isn't|is not|never|not) stored|not kept|no server-side copy/i, "the never-stored promise is gone from the screen");
+    const policyText = prose("privacy.html");
+    assert.match(policyText, /no server-side copy at any point/i, "the policy dropped the precise half of the never-stored promise");
+    assert.match(policyText, /transcript/i, "the policy no longer draws the contrast with a lecture transcript");
 
     const policy = prose("privacy.html");
     assert.match(policy, /photo/i, "the policy never mentions photos while the app sends them overseas");
@@ -893,7 +922,7 @@ async function run() {
     /* The new promise, in both places. This is the one that changed
        what happens to the content, which is why consent was bumped. */
     assert.match(text, /(is )?not stored|never stored|no server-side copy/i, "the policy doesn't say supplied text isn't kept");
-    assert.match(consent, /not stored/i, "the consent text doesn't say supplied text isn't kept");
+    assert.match(consent, /(aren't|are not|isn't|is not|never|not) stored/i, "the consent text doesn't say supplied text isn't kept");
 
     /* And the distinction that makes it meaningful: a lecture DOES have
        a server-side copy for a window. If both read the same, the
@@ -925,8 +954,19 @@ async function run() {
     assert.equal(CONSENT_TEXT.privacyUrl, PRIVACY_URL);
     const all = consentProse();
     assert.match(all, /Sydney/, "the consent text doesn't say where the server is");
-    assert.match(all, /deleted as soon as it has been transcribed/, "the audio promise changed");
-    assert.match(all, /outside Australia|overseas/, "the consent text doesn't say the work leaves the country");
+    /* THE SHARED CONSTANT, not a phrase typed here. The promise is one
+       string (AUDIO_DELETION_PROMISE) interpolated into the consent
+       screen and into iOS's microphone dialog, so this reads it rather
+       than restating it — which is what stopped it breaking on a
+       rewording for a fourth time. */
+    assert.ok(all.includes(AUDIO_DELETION_PROMISE), "the consent screen no longer makes the audio-deletion promise");
+    /* The same claim as the country sweep above, and derived the same
+       way rather than pinned to a phrase. Kept here because this test is
+       about the screen's three ORIENTING facts together — the policy
+       link, where our server is, and where the work goes. */
+    for (const country of new Set(AI_PROVIDERS.map((p) => p.country))) {
+      assert.ok(all.includes(country), `the consent text doesn't say a recipient is in ${country}`);
+    }
   });
 
   /* ---------- the named third parties (Apple 5.1.1(i) / 5.1.2(i)) ---------- */

@@ -25,6 +25,7 @@
 import { corsHeaders, jsonResponse } from "../ai-notes/_shared/cors.ts";
 import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { readAllowance, billAllowance } from "../_shared/allowance.ts";
+import { consentSetMatches, providerFingerprint } from "../_shared/aiProviders.js";
 import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
 import { validateRequest, checkTextAllowance, allowanceFraction } from "./guards.js";
 import { buildMessages, parseTaskResult } from "./prompts.js";
@@ -145,6 +146,28 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       return errorResponse(stage, valid.code, valid.error, valid.code === "too_long" ? 413 : 400);
     }
     const task = valid.task;
+
+    /* THE SAME CONSENT CHECK ai-notes MAKES, and the symmetry is the
+       reason rather than tidiness. This endpoint has no provider switch —
+       changing who summarises is a code change — so the dashboard-flip
+       hole the transcription check closes does not exist here. The OTHER
+       hole does: a student on an older build, whose consent screen named
+       a different set of companies and which therefore never re-prompts,
+       sends pasted readings and photographed pages to whoever this
+       function now calls. Same student, same claim, so the same refusal.
+
+       Before the allowance read and before the provider call, so nothing
+       is spent. `consent_required` is a code the client already has
+       wording for, from its own boundary refusal. */
+    if (!consentSetMatches((body as { consentProviders?: unknown }).consentProviders)) {
+      logStage(stage, { rejected: "consent_required", inForce: providerFingerprint() });
+      return errorResponse(
+        stage,
+        "consent_required",
+        "The companies that process AI study help have changed. Please reload the app and read what is sent before trying again.",
+        403
+      );
+    }
 
     /* ---- allowance: the read that must precede the spend ---- */
     stage = "allowance";

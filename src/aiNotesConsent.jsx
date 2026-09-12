@@ -51,9 +51,14 @@ export function ConsentGate({ onAccept, onDecline }) {
             reason the build was rejected: the previous screen described
             the recipients by role only. Rendered from
             src/aiProviders.js so it cannot name a service the code does
-            not use, or omit one it can. */}
-        <h3 className="mt-4 text-sm font-semibold text-stone-800">{CONSENT_TEXT.providersHeading}</h3>
-        <ul className="mt-2 space-y-2 text-sm text-stone-600" data-consent-providers>
+            not use, or omit one it can.
+
+            NO HEADING OVER IT, per Grace's pass: the sentences follow
+            "here's exactly what goes where" directly, which reads as the
+            answer to it rather than as a new section. `data-consent-providers`
+            is what the browser test reads the names off, so the landmark
+            is the list and never the heading. */}
+        <ul className="mt-4 space-y-2 text-sm text-stone-600" data-consent-providers>
           {CONSENT_TEXT.providers.map((b, i) => (
             <li key={i} className="flex gap-2">
               <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full u-accent-bg" />

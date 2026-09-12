@@ -13,7 +13,7 @@ import { deviceStanding } from "./deviceIdentity.js";
 import { getDeviceId } from "./sync.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
-import { consentRefusal } from "./aiConsentState.js";
+import { consentRefusal, acceptedProviders } from "./aiConsentState.js";
 
 const BUCKET = "lecture-audio";
 
@@ -233,7 +233,11 @@ export async function callAiNotes(
       Authorization: `Bearer ${token}`,
       apikey: SUPABASE_ANON_KEY,
     },
-    body: JSON.stringify({ course, translateTo, idempotencyKey, estimatedDurationSeconds }),
+    /* `consentProviders` is what this account ACCEPTED, and the server
+       refuses a set that is no longer in force — see ai-notes' consent
+       check. It is the one field here the server uses to protect the
+       student from this client rather than the other way round. */
+    body: JSON.stringify({ course, translateTo, idempotencyKey, estimatedDurationSeconds, consentProviders: acceptedProviders() }),
   });
   let json = null;
   try {
@@ -277,7 +281,7 @@ export async function callResummarise({ token, idempotencyKey, translateTo }, fe
       Authorization: `Bearer ${token}`,
       apikey: SUPABASE_ANON_KEY,
     },
-    body: JSON.stringify({ mode: "resummarise", idempotencyKey, translateTo }),
+    body: JSON.stringify({ mode: "resummarise", idempotencyKey, translateTo, consentProviders: acceptedProviders() }),
   });
   let json = null;
   try {

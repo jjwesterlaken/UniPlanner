@@ -17,7 +17,7 @@
 import { supabase, backend } from "./sync.js";
 import { SUPABASE_URL } from "./config.js";
 import { allowanceState } from "./aiTextLimits.js";
-import { consentRefusal } from "./aiConsentState.js";
+import { consentRefusal, acceptedProviders } from "./aiConsentState.js";
 
 const currentMonthKey = (d = new Date()) =>
   `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
@@ -81,7 +81,11 @@ export async function callAiText({ token, task, payload = {}, fetchImpl = fetch 
   const res = await fetchImpl(`${SUPABASE_URL}/functions/v1/ai-text`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ task, ...payload }),
+    /* `consentProviders` is what this account ACCEPTED; the server
+       refuses a set that is no longer in force. Spread LAST would let a
+       payload field overwrite it, so it goes after — the one field here
+       the server uses to protect the student from this client. */
+    body: JSON.stringify({ task, ...payload, consentProviders: acceptedProviders() }),
   });
 
   let json = null;

@@ -23,6 +23,7 @@ import {
   needsConsent,
   buildConsentPatch,
   AI_CONSENT_VERSION,
+  AUDIO_DELETION_PROMISE,
   CONSENT_TEXT,
   describeRecorderError,
   parseAiNotesError,
@@ -52,7 +53,12 @@ import {
 import { MONTHLY_CREDITS_LIMIT as CLIENT_MONTHLY_CREDITS_LIMIT } from "../src/aiTextLimits.js";
 import { AI_NOTES_COPY } from "../src/aiNotesCopy.js";
 import { fetchUsage, callAiNotes } from "../src/aiNotesClient.js";
-import { AI_PROVIDERS, providerFingerprint, TRANSCRIPTION_PROVIDER_IDS } from "../src/aiProviders.js";
+import {
+  AI_PROVIDERS,
+  providerFingerprint,
+  transcriptionProviderNames,
+  TRANSCRIPTION_PROVIDER_IDS,
+} from "../src/aiProviders.js";
 import { recordConsentState } from "../src/aiConsentState.js";
 import { mergeData, COLLECTIONS, purgeOldTombstones } from "../src/sync.js";
 import {
@@ -192,25 +198,51 @@ async function run() {
      rather than worked around per test. */
   recordConsentState(buildConsentPatch());
 
-  await test("THE TRANSCRIPTION ADAPTERS ARE A SUBSET OF THE PROVIDERS CONSENT NAMES", () => {
-    /* The closure described in src/aiProviders.js, from both sides. The
-       Edge Function cannot import that module — it is deployed from
-       supabase/functions/ alone — so this is where the two lists meet.
-       An adapter added without a consent entry sends a student's lecture
-       to a company the screen they agreed to never mentioned. */
+  await test("THE ADAPTERS AND THE CONSENT LIST MAY DIFFER — the REFUSAL is what closes the gap", () => {
+    /* THIS TEST REPLACES ITS OWN OPPOSITE, and the inversion is the
+       finding. It used to require the adapter keys in `TRANSCRIBERS` to
+       be a SUBSET of the ids the consent screen names — which forced
+       Deepgram onto the screen of every student although nothing uses
+       it, because the adapter exists and
+       `AI_NOTES_TRANSCRIPTION_PROVIDER` can select it from a dashboard
+       field with no deploy.
+
+       Naming a company nobody's data reaches, to keep a subset check
+       green, is a disclosure standing in for a guard. The guard now
+       exists: `ai-notes` refuses at its env check when the resolved
+       provider is not named, so an adapter may exist unnamed and
+       selecting it costs a refused request rather than an undisclosed
+       recipient. The behavioural claim is in test-ai-notes-function.mjs
+       ("A PROVIDER THE CONSENT SCREEN DOES NOT NAME CANNOT BE USED").
+
+       What is asserted HERE is the pairing that makes that refusal
+       meaningful: the function imports the shared list, and the DEFAULT
+       provider is named — because a default the consent omitted would
+       refuse every recording for everybody. */
     const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/index.ts"), "utf8");
-    const m = /const TRANSCRIBERS[^=]*=\s*\{([^}]*)\}/.exec(src);
-    assert.ok(m, "the TRANSCRIBERS table is gone from ai-notes/index.ts — this guard is reading nothing");
-    const keys = [...m[1].matchAll(/([A-Za-z0-9_]+)\s*:/g)].map((k) => k[1]);
-    assert.ok(keys.length > 0, "no adapter keys parsed out of TRANSCRIBERS");
+    assert.match(
+      src,
+      /import \{[^}]*TRANSCRIPTION_PROVIDER_IDS[^}]*\}\s*from\s*"\.\.\/_shared\/aiProviders\.js"/,
+      "ai-notes no longer reads the consent list, so its refusal cannot be about consent"
+    );
+    const cfg = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/config.ts"), "utf8");
+    const m = /export const TRANSCRIPTION_PROVIDER = "([a-z0-9]+)"/.exec(cfg);
+    assert.ok(m, "TRANSCRIPTION_PROVIDER is gone from config.ts — this guard is reading nothing");
     assert.ok(TRANSCRIPTION_PROVIDER_IDS.length > 0, "aiProviders.js names no transcription provider");
-    for (const key of keys) {
-      assert.ok(
-        TRANSCRIPTION_PROVIDER_IDS.includes(key),
-        `ai-notes can select the "${key}" transcriber and src/aiProviders.js does not name it — ` +
-          "the consent screen would not say who receives the recording"
-      );
-    }
+    assert.ok(
+      TRANSCRIPTION_PROVIDER_IDS.includes(m[1]),
+      `the DEFAULT transcription provider "${m[1]}" is not named on the consent screen — ` +
+        "every recording would be refused, for everybody"
+    );
+
+    /* AND THE ADAPTER WHOSE REMOVAL FROM THE SCREEN THIS IS ABOUT IS
+       STILL THERE, so the test is about a real reachable branch rather
+       than a hypothetical one. */
+    assert.ok(
+      fs.existsSync(path.join(rootDir, "supabase/functions/ai-notes/deepgram.js")),
+      "the deepgram adapter is gone, so nothing unnamed is selectable and the refusal guards nothing — " +
+        "either restore it or delete the refusal and its tests together"
+    );
   });
 
   await test("needsConsent: no prior consent -> true", () => {
@@ -291,10 +323,19 @@ async function run() {
     const list = dom.window.document.querySelector("[data-consent-providers]");
     assert.ok(list, "the gate renders no provider list at all — this is the screen Apple rejected");
     const text = list.textContent;
+    const whole = dom.window.document.body.textContent;
     assert.ok(AI_PROVIDERS.length > 0, "aiProviders.js names nobody");
     for (const provider of AI_PROVIDERS) {
+      /* THE NAME off the provider list, because that is the claim about
+         the list — a gate that stopped rendering it would be the rejected
+         screen again. THE COUNTRY off the whole screen, because Grace's
+         pass states it once in the intro ("companies in the United
+         States") rather than beside each name, which reads better and is
+         equally true of both. Still per provider, not once: a recipient
+         somewhere else would go red here even though the intro's single
+         country is present. */
       assert.ok(text.includes(provider.name), `the rendered gate never names ${provider.name}`);
-      assert.ok(text.includes(provider.country), `the rendered gate does not say ${provider.name} is in ${provider.country}`);
+      assert.ok(whole.includes(provider.country), `the rendered gate does not say a recipient is in ${provider.country}`);
     }
   });
 
@@ -1661,18 +1702,59 @@ async function run() {
     );
   });
 
-  await test("the OS permission prompt makes the same promise the in-app consent does", () => {
-    // Two places tell the user what happens to their audio: the consent
-    // gate and iOS's own microphone dialog. If they ever disagree, one of
-    // them is misleading — this is the nag that stops that drifting.
-    const PROMISE = /deleted as soon as it has been transcribed/i;
-    const consentPromise = CONSENT_TEXT.bullets.find((b) => PROMISE.test(b));
-    assert.ok(consentPromise, "consent wording changed its audio promise — update MIC_USAGE_DESCRIPTION to match");
-    assert.match(MIC_USAGE_DESCRIPTION, PROMISE);
+  await test("the OS permission prompt makes the same promise the in-app consent does, BY CONSTRUCTION", () => {
+    /* Two places tell a student what happens to their audio: the consent
+       screen and iOS's own microphone dialog. They must not disagree.
+
+       THIS USED TO BE A GREP FOR ONE PHRASE IN BOTH FILES, under a
+       comment in native-permissions.mjs reading "that exact phrase is
+       what a test greps for in both files, so if one changes, change the
+       other" — the restatement pattern admitting itself, and Grace's
+       wording pass is exactly the change it was waiting for: it broke the
+       grep rather than the agreement.
+
+       There is one string now, so "both make the same promise" is true by
+       construction and asserting it would be the tautology this file has
+       already been caught by once. What is asserted instead is what is
+       NOT structural: that neither file spells the promise out, and the
+       three things the dialog must and must not say. */
+    assert.ok(AUDIO_DELETION_PROMISE.length > 10, "the shared promise is empty or trivial");
+    assert.ok(
+      CONSENT_TEXT.bullets.some((b) => b.includes(AUDIO_DELETION_PROMISE)),
+      "no consent bullet carries the audio promise, so the shared constant reaches only the OS dialog"
+    );
+    assert.ok(MIC_USAGE_DESCRIPTION.includes(AUDIO_DELETION_PROMISE), "the OS dialog no longer carries the shared promise");
+
+    /* NEITHER FILE TYPES IT OUT. Comments stripped first, the way every
+       source grep here does it — the explanation above quotes the old
+       phrasing and would otherwise trip this. */
+    for (const rel of ["src/aiNotesLogic.js", "mobile/scripts/native-permissions.mjs"]) {
+      const bare = fs
+        .readFileSync(path.join(rootDir, rel), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/^\s*\/\/.*$/gm, " ");
+      const occurrences = bare.split(AUDIO_DELETION_PROMISE).length - 1;
+      const declaration = rel.endsWith("aiNotesLogic.js") ? 1 : 0;
+      assert.equal(
+        occurrences,
+        declaration,
+        `${rel} spells the audio promise out ${occurrences} time(s) instead of interpolating AUDIO_DELETION_PROMISE — ` +
+          "two copies and a grep is what this replaced"
+      );
+    }
+
     // The dialog is about audio only. The transcript is kept for 7 days
     // (30 on failure), and implying otherwise here would be inaccurate.
     assert.doesNotMatch(MIC_USAGE_DESCRIPTION, /transcript is (deleted|not kept)/i);
     assert.match(MIC_USAGE_DESCRIPTION, /record lectures/i, "Apple rejects a usage string that doesn't say what the mic is for");
+    /* AND IT NAMES THE COMPANY, derived. It used to say "a transcription
+       service" — the exact unnamed wording 5.1.1(i) refused in the app.
+       An OS prompt is not what Apple complained about, but saying it
+       unnamed here and named on the next screen is a difference with no
+       reason behind it. */
+    for (const name of transcriptionProviderNames()) {
+      assert.ok(MIC_USAGE_DESCRIPTION.includes(name), `the OS dialog does not name ${name}`);
+    }
   });
 
   /* ---------- spaced repetition: the scheduler ---------- */

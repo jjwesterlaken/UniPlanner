@@ -20,7 +20,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -194,6 +194,38 @@ const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-text/index
 
 async function main() {
   /* ---------- validation ---------- */
+
+  await test("A STALE ACCEPTED PROVIDER SET IS REFUSED, before the allowance and before the provider", async () => {
+    /* The same claim ai-notes makes, for the same student. This endpoint
+       has no provider switch, so the dashboard-flip hole does not exist
+       here — but a student on an older build, whose consent screen named
+       a different set of companies and which therefore never re-prompts,
+       would send a pasted reading or a photographed page to whoever this
+       function now calls. */
+    const summarizer = okSummarizer(EXPLAIN_OK);
+    const admin = makeAdmin();
+    const res = await run(
+      { task: "explain", topic: "Osmosis", text: "x", consentProviders: "groq:Groq:the United States" },
+      { supabaseAdmin: admin, summarizer }
+    );
+    assert.equal(res.status, 403, `expected a refusal, got ${res.status}`);
+    assert.equal((await res.json()).code, "consent_required");
+    assert.equal(summarizer.calls, 0, "work was sent to a company the student had not agreed to");
+  });
+
+  await test("and the set in force is NOT refused, so the check above is about the set", async () => {
+    /* The control. Without it, "a stale set is refused" is satisfied by a
+       function that refuses everything. Built from the real fingerprint
+       rather than typed, so it follows the list. */
+    const shared = await import(pathToFileURL(path.join(rootDir, "supabase/functions/_shared/aiProviders.js")).href);
+    const summarizer = okSummarizer(EXPLAIN_OK);
+    const res = await run(
+      { task: "explain", topic: "Osmosis", text: "x", consentProviders: shared.providerFingerprint() },
+      { supabaseAdmin: makeAdmin(), summarizer }
+    );
+    assert.equal(res.status, 200, `the current set was refused: ${await res.text()}`);
+    assert.equal(summarizer.calls, 1);
+  });
 
   await test("an unknown task is refused before anything is spent", async () => {
     const summarizer = okSummarizer(EXPLAIN_OK);

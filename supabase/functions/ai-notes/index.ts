@@ -15,6 +15,7 @@ import { corsHeaders, jsonResponse } from "./_shared/cors.ts";
 import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { readAllowance, billAllowance } from "../_shared/allowance.ts";
 import { allowanceForTier, TIERS } from "../_shared/credits.ts";
+import { TRANSCRIPTION_PROVIDER_IDS, consentSetMatches, providerFingerprint } from "../_shared/aiProviders.js";
 import { requiredEnvNames, missingEnv, envPresence, failureLine, stageLine } from "./diagnostics.js";
 import {
   checkRequestGuards,
@@ -161,6 +162,34 @@ Deno.serve(async (req: Request) => {
       return errorResponse("env_check", "server_error", "Something went wrong. Please try again.", 500);
     }
 
+    /* THE TRANSCRIPTION SWITCH FAILS CLOSED AGAINST THE CONSENT LIST.
+       `AI_NOTES_TRANSCRIPTION_PROVIDER` changes which company receives a
+       student's lecture, from a dashboard field, with no deploy and
+       nothing to notice. The first answer to that was to NAME every
+       selectable provider on the consent screen — so Deepgram was
+       disclosed to every student although nothing used it, because
+       otherwise the screen would have become false the moment somebody
+       flipped the secret.
+
+       This is the other answer, and it is the right way round: the
+       screen names who really receives things, and a provider
+       `_shared/aiProviders.js` does not name cannot be used. Checked
+       HERE, at the env check, because this is where the override is
+       first read — before the body is parsed, before the allowance, and
+       long before anything is billed. A flipped secret is then a
+       refused request and a loud log, not an undisclosed disclosure.
+
+       It is a 500 rather than a 4xx: nothing about the request is wrong,
+       and the remedy is ours — either name the provider on the screen or
+       put the secret back. */
+    if (!TRANSCRIPTION_PROVIDER_IDS.includes(provider)) {
+      logFailure("env_check", new Error(`transcription provider "${provider}" is not named on the consent screen`), {
+        provider,
+        consented: TRANSCRIPTION_PROVIDER_IDS,
+      });
+      return errorResponse("env_check", "server_error", "Something went wrong. Please try again.", 500);
+    }
+
     // 0b. Build the service-role client explicitly, so a failure here is
     // reported as client_init rather than surfacing later as whichever
     // query happened to touch it first.
@@ -290,7 +319,43 @@ Deno.serve(async (req: Request) => {
        someone later to start trusting it — which is exactly how `path`
        became a vulnerability. If `week` is wanted, it comes back
        validated. */
-    const { course: rawCourse, translateTo: rawTranslateTo, estimatedDurationSeconds, idempotencyKey } = body || {};
+    const { course: rawCourse, translateTo: rawTranslateTo, estimatedDurationSeconds, idempotencyKey, consentProviders } = body || {};
+
+    /* AND THE OTHER HALF OF FAILING CLOSED: the set of companies the
+       STUDENT agreed to must be the set in force.
+
+       The check above stops us using a provider the current screen does
+       not name. It cannot stop a student on an OLDER BUILD — whose own
+       screen named a different set, and which therefore never re-prompts
+       — from having a lecture sent to a company they were never told
+       about. Their planner records what they accepted; the client sends
+       it; a mismatch is refused here.
+
+       ABSENCE IS NOT CONSENT. A build predating this field sends nothing,
+       and `consentSetMatches` reads that as the set those builds really
+       named (LEGACY_CONSENT_FINGERPRINT, a historical literal that must
+       never be updated). So the day the list changes, every pre-field
+       build starts being refused rather than quietly outrunning its own
+       disclosure — which is the whole point, and is why this needed no
+       deploy ordering: nothing breaks today because the legacy set IS
+       the current set.
+
+       Before the allowance and before the upload is touched: nothing is
+       spent, and `consent_required` is a code the client already has
+       wording for, from its own boundary refusal. */
+    if (!consentSetMatches(consentProviders)) {
+      logFailure("consent_check", new Error("the accepted provider set is not the one in force"), {
+        accepted: typeof consentProviders === "string" ? consentProviders.slice(0, 200) : null,
+        inForce: providerFingerprint(),
+      });
+      return errorResponse(
+        "consent_check",
+        "consent_required",
+        "The companies that process AI notes have changed. Please reload the app and read what is sent before recording again.",
+        403
+      );
+    }
+
     if (!idempotencyKey) {
       logFailure("idempotency_insert", new Error("request body missing idempotencyKey"));
       return errorResponse("idempotency_insert", "bad_request", "Missing recording details.", 400);
