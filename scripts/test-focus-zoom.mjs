@@ -44,6 +44,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildConsentPatch } from "../src/aiNotesLogic.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = path.join(rootDir, "dist-web");
@@ -123,12 +124,14 @@ const SUPABASE_HOST = (() => {
   return m[1];
 })();
 
-const AI_CONSENT_VERSION = (() => {
-  const src = fs.readFileSync(path.join(rootDir, "src/aiNotesLogic.js"), "utf8");
-  const m = /export const AI_CONSENT_VERSION = (\d+)/.exec(src);
-  assert.ok(m, "AI_CONSENT_VERSION is gone from aiNotesLogic.js");
-  return Number(m[1]);
-})();
+/* AN ACCEPTED CONSENT, BUILT BY THE APP'S OWN HELPER rather than
+   assembled here. This seeded `{ version, acceptedAt }` and lifted the
+   version number out of the source — which stopped being an acceptance
+   the day `needsConsent` started reading the PROVIDER FINGERPRINT too,
+   so the AI tab silently showed the consent gate and the walk stopped
+   reaching the fields it names. A helper cannot drift from the function
+   that reads it. */
+const CONSENTED_META = buildConsentPatch();
 
 const USER_ID = "00000000-0000-4000-8000-000000000001";
 const PROFILE_ROW = { user_id: USER_ID, tier: "ai", trial_credits_used: 0, active_device_id: null, active_device_at: null };
@@ -217,7 +220,7 @@ async function run() {
     const errors = [];
     page.on("pageerror", (err) => errors.push(String(err)));
     await page.addInitScript(
-      ({ ref, userId, tabKey, tab, consentVersion, signedIn }) => {
+      ({ ref, userId, tabKey, tab, consent, signedIn }) => {
         if (signedIn) {
           const hour = Math.floor(Date.now() / 1000) + 3600;
           localStorage.setItem(
@@ -239,11 +242,11 @@ async function run() {
           JSON.stringify({
             semester: "Semester 1",
             semesters: {},
-            meta: { aiConsent: { version: consentVersion, acceptedAt: new Date().toISOString() } },
+            meta: consent,
           })
         );
       },
-      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, tab, consentVersion: AI_CONSENT_VERSION, signedIn }
+      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, tab, consent: CONSENTED_META, signedIn }
     );
     await page.route(`${SUPABASE_HOST}/**`, async (route) => {
       const url = route.request().url();

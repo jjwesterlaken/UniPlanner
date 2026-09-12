@@ -1485,6 +1485,11 @@ function Recorder({ session, courses, recording }) {
    the same tool; it stops being the only door, because two builders in
    a row failed to find it there. */
 export function AiNotesPanel({ session, backend, courses, data, setData, recording, textAllowance, onSummariseReading, onOpenSummary }) {
+  /* Declared above the early returns on purpose: a hook called
+     conditionally is the temporal-dead-zone class of bug this codebase
+     has a smoke test for. */
+  const [consentDeclined, setConsentDeclined] = useState(false);
+
   if (!session || backend.isDemo) {
     /* Gated, but DISCOVERABLE: the tools are named, so a signed-out
        student learns they exist. A bare needs-account line is the
@@ -1498,11 +1503,25 @@ export function AiNotesPanel({ session, backend, courses, data, setData, recordi
   }
 
   if (needsConsent(data.meta)) {
+    /* THE WHOLE TAB IS THE GATE HERE, and it stays the full-screen form:
+       a student who opened the AI tab is asking for the AI features, so
+       the disclosure is the screen rather than a notice beside a control
+       they did not reach for. (The four text features elsewhere get the
+       compact notice — see AiActionFrame — because they sit on tabs
+       opened for other reasons.)
+
+       DECLINING CLOSES THE TAB'S GATE rather than recording a refusal.
+       Nothing is stored: a refusal is not a preference to be remembered
+       and then need a control to undo, and the tab is reachable again
+       from the nav the moment the student changes their mind. What
+       replaces it says what is off and offers the screen back. */
+    if (consentDeclined) return <ConsentDeclinedCard onReconsider={() => setConsentDeclined(false)} />;
     return (
       <ConsentGate
         onAccept={() =>
           setData((d) => ({ ...d, meta: { ...d.meta, ...buildConsentPatch(AI_CONSENT_VERSION, nowISO) } }))
         }
+        onDecline={() => setConsentDeclined(true)}
       />
     );
   }
@@ -1518,6 +1537,28 @@ export function AiNotesPanel({ session, backend, courses, data, setData, recordi
         onOpenSummary={onOpenSummary}
       />
     </>
+  );
+}
+
+/* What the AI tab shows to a student who declined. Names what is off and
+   hands the screen back — a dead end here would read as the app being
+   broken, and the decline button exists so that refusing is a choice
+   rather than an exit from a trap. */
+function ConsentDeclinedCard({ onReconsider }) {
+  return (
+    <Card>
+      {/* The hook is on a real element rather than on `Card`, which takes
+          `children` and `className` and drops everything else — a
+          data attribute passed to it reaches no DOM and the guard looking
+          for it finds nothing. */}
+      <div data-consent-declined>
+        <p className="text-sm font-medium text-stone-700">{AI_NOTES_COPY.declined.title}</p>
+        <p className="mt-1 text-sm text-stone-500">{AI_NOTES_COPY.declined.detail}</p>
+        <button className={`${btnGhost} mt-3`} onClick={onReconsider}>
+          {AI_NOTES_COPY.declined.action}
+        </button>
+      </div>
+    </Card>
   );
 }
 

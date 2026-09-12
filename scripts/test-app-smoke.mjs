@@ -660,6 +660,8 @@ for (const [tabName, phrases] of [
       'import { useState } from "react";\n' +
       'import { AiNotesPanel, useRecordingSession, RecordingIndicator } from "../src/aiNotes.jsx";\n' +
       'import { describeCapabilities } from "../src/audioSources.js";\n' +
+      'import { buildConsentPatch } from "../src/aiNotesLogic.js";\n' +
+      "const CONSENTED_META = buildConsentPatch();\n" +
       "window.__probe = (env, source) => {\n" +
       '  const host = document.createElement("div");\n' +
       "  document.body.appendChild(host);\n" +
@@ -699,7 +701,13 @@ for (const [tabName, phrases] of [
       '      {tab === "ai-notes" && (\n' +
       '        <AiNotesPanel session={{ token: "t", user: { id: "u" } }} backend={{ isDemo: false }}\n' +
       "          courses={[{ id: 'c1', name: 'PHYS1001' }]} setData={() => {}} recording={recording}\n" +
-      "          data={{ meta: consented ? { aiConsent: { version: 99 } } : {} }} />\n" +
+      /* THE FINGERPRINT AS WELL AS THE VERSION. `needsConsent` re-prompts
+         on either, so a version alone stopped being "consented" the day
+         the provider set became part of the record -- and the probe would
+         have silently started measuring the consent screen instead of
+         the recorder. Built with the app's own helper rather than a
+         literal, so a change of shape follows rather than pins. */
+      "          data={{ meta: consented ? CONSENTED_META : {} }} />\n" +
       "      )}\n" +
       '      {tab === "notes" && <p>Another tab entirely</p>}\n' +
       '      <RecordingIndicator recording={recording} onOpen={() => setTab("ai-notes")} />\n' +

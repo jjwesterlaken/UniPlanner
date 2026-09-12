@@ -32,7 +32,7 @@
   </head>
   <body>
     <h1>Privacy Policy</h1>
-    <p class="updated">University Planner · Last updated 12 August 2026</p>
+    <p class="updated">University Planner · Last updated 12 September 2026</p>
 
     <p>
       University Planner is a study planner for university students. This policy describes what the
@@ -222,20 +222,28 @@
         photos you supply have no server-side copy at any point.
       </p>
       <p>
-        Both services are operated by companies based in the United States. Every AI request reaches
-        them from our own server: they never hear from your phone or your browser at all, and none
-        of it happens unless you use an AI feature. (Buying a subscription is the one other thing
-        that leaves the country, and it works the other way round: see
-        <a href="#payments">Payments</a>.)
+        The companies are named, here and on the screen the app shows you before your first AI
+        action: <strong>Groq</strong> transcribes a recording (or <strong>Deepgram</strong>, the
+        configured alternative), and <strong>OpenAI</strong> does the summarising, the translation,
+        the study cards and the practice questions. All three are in the United States. There is
+        more about each of them, and about how long they have anything, under
+        <a href="#others">Who else sees your data</a> and
+        <a href="#overseas">Sending things overseas</a>.
+      </p>
+      <p>
+        Every AI request reaches them from our own server: they never hear from your phone or your
+        browser at all, and none of it happens unless you have agreed to it and then used an AI
+        feature. (Buying a subscription is the one other thing that leaves the country, and it works
+        the other way round: see <a href="#payments">Payments</a>.)
       </p>
     </div>
 
     <h2 id="payments">Payments</h2>
     <p>
-      Subscriptions are sold only in the UniPlanner app on iPhone and Android, and the payment is
-      taken by <strong>Apple</strong> or <strong>Google</strong>. We never see your card, and no
-      part of this app ever handles a payment. On the web and on the desktop app you can see which
-      plan you are on, and nothing can be bought.
+      Subscriptions are bought in the UniPlanner app on iPhone and Android, where the payment is
+      taken by <strong>Apple</strong> or <strong>Google</strong>, and on the web, where it is taken
+      by <strong>Stripe</strong>. We never see your card, and no part of this app ever handles a
+      payment. On the desktop app you can see which plan you are on, and nothing can be bought.
     </p>
     <p>
       Unlike the AI features, a purchase is made <strong>from your device</strong> &mdash; that is
@@ -297,37 +305,91 @@
       browser's data for this site removes both.
     </p>
 
-    <h2>Who else sees your data</h2>
+    <h2 id="others">Who else sees your data</h2>
     <div class="wrap">
       <table>
-        <tr><th>Company</th><th>What reaches them</th><th>Why</th></tr>
+        <tr><th>Company</th><th>What reaches them</th><th>Why</th><th>How long they have it</th></tr>
         <tr>
           <td><strong>Supabase</strong> (Sydney, Australia)</td>
           <td>Your email address, your planner, your saved AI lecture notes, our temporary copy of
               AI notes</td>
           <td>They run our database, accounts and file storage.</td>
+          <td>For as long as your account exists. Deleting your account removes all of it; the
+              temporary copies go on the schedule above.</td>
         </tr>
         <tr>
           <td><strong>Groq</strong> (United States)</td>
-          <td>The audio of a lecture you record</td>
+          <td>The audio of a lecture you record, and the course name you filed it under as a
+              spelling hint</td>
           <td>They transcribe it. This is the transcription service currently in use.</td>
+          <td>For the length of the request. We send the audio, they return the text, and we ask
+              them to keep nothing; we store nothing with them. Any short-term logging they do for
+              their own abuse monitoring is governed by their API terms, which is why they are
+              named here.</td>
+        </tr>
+        <tr>
+          <td><strong>Deepgram</strong> (United States)</td>
+          <td>Exactly what Groq receives, and only if we switch transcription provider</td>
+          <td>They are the configured alternative transcription service. They are named here
+              rather than mentioned after the fact, because switching is a setting on our side and
+              you are entitled to know in advance who could receive a recording.</td>
+          <td>The same as Groq: for the length of the request.</td>
         </tr>
         <tr>
           <td><strong>OpenAI</strong> (United States)</td>
-          <td>The text of a lecture transcript, or text of your own that you asked an AI feature to work on</td>
-          <td>They turn it into structured notes, translate it if you ask, summarise your own notes, generate practice questions, or comment on an explanation you wrote.</td>
+          <td>The text of a lecture transcript; text of your own that you asked an AI feature to
+              work on; photographs of pages you are studying</td>
+          <td>They turn it into structured notes, translate it if you ask, summarise your own notes
+              or a reading, generate practice questions and study cards, or comment on an
+              explanation you wrote.</td>
+          <td>For the length of the request, on the same basis as above. The copy kept for the
+              windows described earlier on this page is ours, in Sydney, not theirs.</td>
         </tr>
         <tr>
           <td><strong>Cloudflare</strong></td>
           <td>Ordinary web request information, such as your IP address, when you load the site</td>
           <td>They serve the website itself.</td>
+          <td>Their own standard, short-lived request logs. No planner content passes through them.</td>
         </tr>
       </table>
     </div>
+
+    <h2 id="overseas">Sending things overseas, and why we think it is safe enough</h2>
     <p>
-      We may change transcription provider — <strong>Deepgram</strong> (United States) is the
-      configured alternative and would receive exactly the same audio for the same purpose. This
-      policy will be updated if the provider in use changes.
+      Three of the companies above are in the United States, so Australian privacy law asks us to
+      take reasonable steps to see that your information is handled there to a standard comparable
+      to the one it would get here. We are not relying on anybody else having decided that for us.
+      What we actually rely on is this, and you can judge it:
+    </p>
+    <ul>
+      <li>
+        <strong>They get as little as possible.</strong> An AI request carries the thing you asked
+        us to work on and nothing else &mdash; not your name, not your email address, not your
+        account id, not your planner. There is nothing in what they receive that identifies you to
+        them.
+      </li>
+      <li>
+        <strong>They are used as paid API services, under terms that do not allow your content to
+        be used to train their models.</strong> That is a contractual position rather than a
+        promise we can enforce ourselves, which is why we name each company: you can read their
+        own terms, and you can decide not to use the AI features.
+      </li>
+      <li>
+        <strong>We hold nothing with them.</strong> There is no account of yours at any of them, no
+        file of yours stored there, and nothing for them to keep once they have answered. Every
+        copy that outlives a request is ours, in Sydney, and on the schedule described earlier.
+      </li>
+      <li>
+        <strong>Nothing goes at all unless you agree first.</strong> The app asks before the first
+        AI action, names these companies on that screen, and declining leaves every other part of
+        the planner working exactly as it did.
+      </li>
+    </ul>
+    <p>
+      We cannot promise that United States law gives your information the same protection
+      Australian law does &mdash; nobody honestly can, and a policy that says otherwise is telling
+      you something it does not know. What we can tell you is precisely what leaves, to whom, for
+      how long, and how to stop it, which is the whole of what is above.
     </p>
     <p>
       Account emails, such as confirming your address or resetting your password, are sent through

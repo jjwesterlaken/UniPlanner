@@ -17,6 +17,7 @@
 import { supabase, backend } from "./sync.js";
 import { SUPABASE_URL } from "./config.js";
 import { allowanceState } from "./aiTextLimits.js";
+import { consentRefusal } from "./aiConsentState.js";
 
 const currentMonthKey = (d = new Date()) =>
   `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
@@ -69,6 +70,14 @@ export async function callAiText({ token, task, payload = {}, fetchImpl = fetch 
     err.stage = "client";
     throw err;
   }
+  /* AND THE CONSENT GATE, for exactly the same reason one line up.
+     Apple's 5.1.1(i) is the claim that nothing is sent to a named third
+     party without agreement, and a reviewer tests it by declining — so
+     the refusal has to be a property of this function rather than of
+     the four screens that call it. See aiConsentState.js. */
+  const refusal = consentRefusal();
+  if (refusal) throw refusal;
+
   const res = await fetchImpl(`${SUPABASE_URL}/functions/v1/ai-text`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },

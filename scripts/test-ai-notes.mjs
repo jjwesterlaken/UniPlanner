@@ -52,6 +52,8 @@ import {
 import { MONTHLY_CREDITS_LIMIT as CLIENT_MONTHLY_CREDITS_LIMIT } from "../src/aiTextLimits.js";
 import { AI_NOTES_COPY } from "../src/aiNotesCopy.js";
 import { fetchUsage, callAiNotes } from "../src/aiNotesClient.js";
+import { AI_PROVIDERS, providerFingerprint, TRANSCRIPTION_PROVIDER_IDS } from "../src/aiProviders.js";
+import { recordConsentState } from "../src/aiConsentState.js";
 import { mergeData, COLLECTIONS, purgeOldTombstones } from "../src/sync.js";
 import {
   schedule,
@@ -183,25 +185,84 @@ async function bundleConsentGate() {
 }
 
 async function run() {
+  /* THE BOUNDARY CONSENT REFUSAL IS REAL, so this suite has to agree to
+     it before exercising anything that calls a client. The refusal
+     itself is claimed and mutation-checked in test-consent.mjs; here it
+     would only ever be an obstacle, so it is satisfied once, out loud,
+     rather than worked around per test. */
+  recordConsentState(buildConsentPatch());
+
+  await test("THE TRANSCRIPTION ADAPTERS ARE A SUBSET OF THE PROVIDERS CONSENT NAMES", () => {
+    /* The closure described in src/aiProviders.js, from both sides. The
+       Edge Function cannot import that module — it is deployed from
+       supabase/functions/ alone — so this is where the two lists meet.
+       An adapter added without a consent entry sends a student's lecture
+       to a company the screen they agreed to never mentioned. */
+    const src = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-notes/index.ts"), "utf8");
+    const m = /const TRANSCRIBERS[^=]*=\s*\{([^}]*)\}/.exec(src);
+    assert.ok(m, "the TRANSCRIBERS table is gone from ai-notes/index.ts — this guard is reading nothing");
+    const keys = [...m[1].matchAll(/([A-Za-z0-9_]+)\s*:/g)].map((k) => k[1]);
+    assert.ok(keys.length > 0, "no adapter keys parsed out of TRANSCRIBERS");
+    assert.ok(TRANSCRIPTION_PROVIDER_IDS.length > 0, "aiProviders.js names no transcription provider");
+    for (const key of keys) {
+      assert.ok(
+        TRANSCRIPTION_PROVIDER_IDS.includes(key),
+        `ai-notes can select the "${key}" transcriber and src/aiProviders.js does not name it — ` +
+          "the consent screen would not say who receives the recording"
+      );
+    }
+  });
+
   await test("needsConsent: no prior consent -> true", () => {
     assert.equal(needsConsent(null, AI_CONSENT_VERSION), true);
     assert.equal(needsConsent({}, AI_CONSENT_VERSION), true);
   });
 
-  await test("needsConsent: accepted current version -> false", () => {
-    assert.equal(needsConsent({ aiConsent: { version: AI_CONSENT_VERSION } }, AI_CONSENT_VERSION), false);
+  await test("needsConsent: accepted current version AND provider set -> false", () => {
+    /* BOTH halves, because either alone re-prompts. A version match with
+       a stale provider fingerprint is a student who agreed to a
+       different set of companies, which is the thing the bump exists to
+       catch -- see the consent suite for that claim on its own. */
+    assert.equal(
+      needsConsent({ aiConsent: { version: AI_CONSENT_VERSION, providers: providerFingerprint() } }, AI_CONSENT_VERSION),
+      false
+    );
   });
 
   await test("needsConsent: version bump re-prompts", () => {
-    assert.equal(needsConsent({ aiConsent: { version: 1 } }, 2), true);
+    assert.equal(needsConsent({ aiConsent: { version: 1, providers: providerFingerprint() } }, 2), true);
   });
 
-  await test("buildConsentPatch shape", () => {
+  await test("two devices at the same version with DIFFERENT provider sets re-prompt, never silently agree", () => {
+    /* A consequence of coupling the fingerprint to `needsConsent`, worth
+       pinning because nobody would go looking for it. A provider change
+       needs no version bump — that is the whole point of the fingerprint
+       — so two builds can both be at the current version and disagree
+       about who the recipients are.
+
+       `mergeConsent` keeps the EARLIEST acceptedAt at equal versions,
+       which is the safe direction here: whichever record survives, a
+       build whose own provider set does not match it asks again. What
+       must never happen is the merge manufacturing agreement. The cost
+       is an old build that re-asks until it is updated, which is
+       preferable to a new recipient nobody was told about. */
+    const oldSet = { semesters: {}, meta: { updatedAt: "2024-02-01T00:00:00.000Z", aiConsent: { version: AI_CONSENT_VERSION, acceptedAt: "2024-01-01T00:00:00.000Z", providers: "groq:Groq" } } };
+    const newSet = { semesters: {}, meta: { updatedAt: "2024-03-01T00:00:00.000Z", aiConsent: { version: AI_CONSENT_VERSION, acceptedAt: "2024-02-01T00:00:00.000Z", providers: providerFingerprint() } } };
+    for (const [a, b] of [[oldSet, newSet], [newSet, oldSet]]) {
+      const merged = mergeData(a, b);
+      assert.equal(merged.meta.aiConsent.providers, "groq:Groq", "the merge preferred the later acceptance at equal versions");
+      assert.equal(needsConsent(merged.meta), true, "the merge manufactured agreement to a provider set nobody accepted");
+    }
+  });
+
+  await test("buildConsentPatch records the version AND the provider set", () => {
     const patch = buildConsentPatch(1, () => "2024-01-01T00:00:00.000Z");
-    assert.deepEqual(patch, { aiConsent: { version: 1, acceptedAt: "2024-01-01T00:00:00.000Z" } });
+    assert.deepEqual(patch, {
+      aiConsent: { version: 1, acceptedAt: "2024-01-01T00:00:00.000Z", providers: providerFingerprint() },
+    });
   });
 
-  await test("ConsentGate renders every required phrase and exactly one button", async () => {
+  await test("ConsentGate renders every required phrase, and no dismiss control", async () => {
     const { ConsentGate } = await bundleConsentGate();
     const html = renderToStaticMarkup(React.createElement(ConsentGate, { onAccept: () => {} }));
     const dom = new JSDOM(html);
@@ -211,8 +272,50 @@ async function run() {
     }
     assert.ok(text.includes(CONSENT_TEXT.title));
     const buttons = dom.window.document.body.querySelectorAll("button");
+    /* One button with no `onDecline`, two with it. The gate must still
+       offer no CLOSE, no dismiss and no click-outside — declining is a
+       deliberate answer, not an escape hatch. */
     assert.equal(buttons.length, 1, "ConsentGate must expose no dismiss control besides the single accept button");
     assert.ok(buttons[0].textContent.includes(CONSENT_TEXT.acceptLabel));
+  });
+
+  await test("THE RENDERED GATE NAMES EVERY PROVIDER, AND THE COUNTRY IT IS IN", async () => {
+    /* The half that cannot be made in test-legal.mjs. There, comparing
+       CONSENT_TEXT against AI_PROVIDERS is comparing a derivation with
+       its own source and passes over anything; here the claim is about
+       the COMPONENT — that the derived list reaches the DOM at all. A
+       gate that stopped rendering `providers` would be the rejected
+       screen again, and every text-level check would stay green. */
+    const { ConsentGate } = await bundleConsentGate();
+    const dom = new JSDOM(renderToStaticMarkup(React.createElement(ConsentGate, { onAccept: () => {} })));
+    const list = dom.window.document.querySelector("[data-consent-providers]");
+    assert.ok(list, "the gate renders no provider list at all — this is the screen Apple rejected");
+    const text = list.textContent;
+    assert.ok(AI_PROVIDERS.length > 0, "aiProviders.js names nobody");
+    for (const provider of AI_PROVIDERS) {
+      assert.ok(text.includes(provider.name), `the rendered gate never names ${provider.name}`);
+      assert.ok(text.includes(provider.country), `the rendered gate does not say ${provider.name} is in ${provider.country}`);
+    }
+  });
+
+  await test("the decline button appears only when there is somewhere for it to go", async () => {
+    /* Two buttons with a handler, one without. The gate is used in two
+       places with different answers to "what does declining do here", and
+       a decline control that did nothing would be worse than none. */
+    const { ConsentGate } = await bundleConsentGate();
+    const withDecline = new JSDOM(
+      renderToStaticMarkup(React.createElement(ConsentGate, { onAccept: () => {}, onDecline: () => {} }))
+    );
+    const buttons = withDecline.window.document.querySelectorAll("button");
+    assert.equal(buttons.length, 2, "the decline control is missing when a handler is given");
+    assert.ok(
+      withDecline.window.document.querySelector("[data-consent-decline]"),
+      "the decline button has no hook for the browser test to press"
+    );
+    assert.ok(
+      withDecline.window.document.body.textContent.includes(CONSENT_TEXT.declineNote),
+      "the gate never says what declining costs, which is the sentence that makes refusing a real option"
+    );
   });
 
   /* ---------- 2. denied mic permission handled gracefully ---------- */

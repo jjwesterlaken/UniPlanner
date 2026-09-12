@@ -122,6 +122,17 @@ export const AI_NOTES_COPY = {
     detail: "AI study help needs an account. Sign in (or create one) from the Account tab first.",
   },
 
+  /* After declining the consent screen. NOT a dead end and NOT a
+     persuasion: it says what is off, repeats that the rest of the
+     planner is unaffected — which is the sentence the consent screen
+     makes and which has to stay true here — and offers the screen back. */
+  declined: {
+    title: "The AI features are off.",
+    detail:
+      "Nothing has been sent anywhere. Your timetable, assessments, grades, notes, readings and study cards all work exactly as before.",
+    action: "Read what is sent again",
+  },
+
   recordingNeedsPlan: {
     title: "Lecture recording is part of the AI plan.",
     detail:

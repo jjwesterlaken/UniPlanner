@@ -13,6 +13,7 @@ import { deviceStanding } from "./deviceIdentity.js";
 import { getDeviceId } from "./sync.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
+import { consentRefusal } from "./aiConsentState.js";
 
 const BUCKET = "lecture-audio";
 
@@ -173,6 +174,11 @@ export async function uploadAudio({ session, audioBlob, mimeType, extension, ide
      exactly the arrangement the signed-out AI gates use, and for the
      same reason: a UI-only check is one refactor away from leaking,
      and the refactor need not touch this file. */
+  /* AND CONSENT, at the boundary for the same reason. This is the
+     largest single disclosure the app makes — a whole lecture — and it
+     is the one Apple's reviewer will decline. See aiConsentState.js. */
+  const consent = consentRefusal();
+  if (consent) throw consent;
   const refusal = uploadRefusal(audioBlob && audioBlob.size);
   if (refusal) {
     const err = new Error(AI_NOTES_COPY.tooLarge(refusal).title);
@@ -218,6 +224,8 @@ export async function callAiNotes(
     err.code = "unauthenticated";
     throw err;
   }
+  const refusal = consentRefusal();
+  if (refusal) throw refusal;
   const res = await fetchImpl(`${SUPABASE_URL}/functions/v1/ai-notes`, {
     method: "POST",
     headers: {
@@ -260,6 +268,8 @@ export async function callResummarise({ token, idempotencyKey, translateTo }, fe
     err.code = "unauthenticated";
     throw err;
   }
+  const refusal = consentRefusal();
+  if (refusal) throw refusal;
   const res = await fetchImpl(`${SUPABASE_URL}/functions/v1/ai-notes`, {
     method: "POST",
     headers: {

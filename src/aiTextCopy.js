@@ -88,6 +88,17 @@ export const AI_TEXT_FAILURES = {
     detail: "Sign in again and try that once more. Nothing was charged.",
   },
 
+  /* The boundary refusal from aiConsentState.js. It cannot be reached
+     from a screen — every AI control is replaced by the consent notice
+     while this is true — so a student who sees it has an app whose
+     consent record and whose screens disagree, and a reload is what
+     actually fixes that. No period word: consent has nothing to do with
+     an allowance. */
+  consent_required: {
+    title: "You haven't agreed to the AI features yet.",
+    detail: "Nothing was sent and nothing was charged. Open the AI tab to read what is sent and to who, then agree there.",
+  },
+
   bad_request: {
     title: "That didn't look right.",
     detail: "Please try again.",

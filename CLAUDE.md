@@ -2200,6 +2200,19 @@ can only arrive from a hand-made grant, and the remedy is to set
 because **a rule with no route through it is a rule that gets
 deleted under pressure.**
 
+**AND THE PRODUCTION ROW THE READER CHANGE EXISTS FOR TURNED OUT TO BE
+EXEMPT — checked, 12 September 2026.** The §2a repair query returned no
+rows. The open-ended row was the CANCELLED test subscription writing
+`{ tier: "free", expiresAt: null }`, which is the one shape the refusal
+deliberately does not cover, so no repair event ever needed to run. The
+reader change is still right and still not redundant: it is what stops a
+PAID open-ended row holding a tier open for ever, and a build deployed
+either side of the writer refusal can still produce one. What this
+retires is the belief that such a row was already live — worth knowing,
+because "there is a bad row in production" was the argument for not
+adding the database CHECK below, and that argument is now weaker than
+the other two.
+
 **A DATABASE CHECK WAS CONSIDERED AND NOT TAKEN.** `(tier = 'free'
 or expires_at is not null)` on `entitlements` is the strongest form
 of this, and it NARROWS — so it goes after the deploy, and it would
@@ -2310,6 +2323,217 @@ guess when the store is unrecognised. A test checks the panel and
 section 6 of the Terms name the SAME processor per platform, and that
 the three answers really differ, since a helper ignoring its
 arguments would satisfy the first half alone.
+
+## The App Store rejection of 1.0.0, and what each half cost
+
+Build 3514249, rejected on two counts. They look like one "polish the
+submission" task and they are not: one was a missing PIPELINE, the other
+a missing DISCLOSURE, and only the second had a gap in the code.
+
+### Icons: the set had no single source, and the rejected slots are the
+### ones this repository cannot see
+
+Guideline 2.3.8, placeholder icons. The structural cause, which is the
+part worth keeping: **there were three independent renderings of the
+same glyph and nothing compared any two of them.**
+
+- `mobile/assets/icon.png`, the 1024 master (byte-identical to
+  `desktop/build/icon.png`): a flat `#0f766e` square with a white
+  mortarboard, RGB with **no alpha**, which is what Apple requires.
+- `public/icon-192.png`, `icon-512.png`, `apple-touch-icon.png`: a
+  SEPARATE rendering — RGBA, rounded corners baked in, different glyph
+  proportions. Not downscales of anything.
+- whatever `capacitor-assets` last wrote into `mobile/ios` and
+  `mobile/android`, **which are generated per machine and git-ignored**,
+  so no check in this repository has ever been able to look at them.
+
+**THE REJECTED ICONS LIVED IN THE THIRD PLACE, WHICH IS THE ONE NOTHING
+COULD MEASURE.** That is the artifact rule at the level of "which
+build", and it is the same shape as the doubled safe-area inset: the
+artifact that ships to Apple was the one artifact nothing here reads.
+
+`scripts/make-icons.mjs` derives every slot from the master, and
+`--check` RE-DERIVES and compares BYTES — which is only possible because
+`scripts/lib/png.mjs` is deterministic by construction: box-filter
+downscale, filter-0 scanlines, `zlib` at a pinned level, no `sharp`.
+**A byte-comparison guard on top of a resizer whose output can shift
+with a transitive upgrade is a guard that goes red for the wrong
+reason**, and a recorded-hash list would be the restatement pattern in
+the one place where the restated value is an image nobody reads by eye.
+
+Two derivations are worth knowing before the artwork changes. The brand
+ground is read from the master's CORNER PIXEL rather than typed, so the
+feature graphic and the adaptive background cannot drift from the icon
+in front of them. And `adaptiveForeground` ASSUMES A FULL-BLEED MASTER:
+scaling one into Android's 66dp safe zone puts the master's own ground
+inside the mask, which is right for a solid-ground icon and wrong for a
+glyph that expects to float.
+
+**The iOS slot is the master passed through VERBATIM**, not re-encoded,
+and that is load-bearing rather than an optimisation: `encodePng` always
+writes RGBA, so re-encoding an opaque master would ADD an alpha channel
+and earn a second rejection under the same guideline. `test-icons.mjs`
+checks the colour type at the IHDR byte, because a fully-opaque RGBA
+file still HAS the channel and is still refused.
+
+**What the guard says it cannot see** is the two generated projects and
+whether the artwork is any good. It asserts the tracked slots are right
+and that the generator KNOWS about every native slot — a generator that
+covered iOS and forgot Android's round icon would pass everything else
+in the file. Confirming what Apple received is a step on
+MOBILE-BUILD.md, on the Mac.
+
+### Consent: the screen named no one, and four features had no screen
+
+Guidelines 5.1.1(i) and 5.1.2(i). Two separate defects behind one
+rejection:
+
+**The screen described ROLES, not COMPANIES** — "a transcription
+service", "a summarising service". `src/aiProviders.js` is now the one
+place that answers who and what, and the consent text, the privacy
+policy and three test suites all read it rather than restating it.
+
+**Deepgram is named though it is not in use, and that is the design
+decision to understand before trimming the list.** The transcription
+provider is selectable AT RUNTIME — `ai-notes/config.ts` says so in its
+own comment, "without a redeploy via the
+`AI_NOTES_TRANSCRIPTION_PROVIDER` secret". A screen naming only Groq
+would become false the moment somebody set that secret, with no code
+change, no deploy and nothing to notice: **Apple would have approved a
+screen that later lied.**
+
+**THE CLOSURE IS TWO HALVES AND NEITHER IS A RUNTIME CHECK, which is
+worth stating because the first draft of `aiProviders.js` claimed one.**
+An Edge Function is deployed from `supabase/functions/` alone, so it
+cannot import a `src/` module, and restating the list over there would
+be the ledger pattern. What actually holds: `selectTranscriber` FALLS
+BACK to the configured default for an unrecognised value, so the secret
+can only choose among adapters that exist; and a test asserts the
+adapter keys parsed out of `TRANSCRIBERS` are a SUBSET of the ids in
+`aiProviders.js`. Reaching an unnamed third party therefore takes a new
+adapter, which is a code change, which goes red.
+
+**"Re-shown if the third parties change" is true BY CONSTRUCTION.**
+`providerFingerprint()` (ids and names, sorted) is recorded with the
+acceptance and `needsConsent` re-prompts when it differs — so adding,
+removing or renaming a recipient re-asks every student whether or not
+anybody bumped a number. Deliberately NOT over `receives`: a typo fix in
+a bullet must not re-prompt everybody and train them to click through.
+
+**The four ungated features were a known gap, written down and left.**
+A comment in `SummariseReading` said so in as many words — "NOTE the
+other four text features are NOT gated. That gap predates this and
+closing it changes four existing screens, so it is reported rather than
+widened." It was reported for weeks and then rejected. **A gap recorded
+in a comment is a gap, and the comment is not a mitigation** — the same
+lesson as the cross-provider tier bug being described as accepted in the
+file that had it.
+
+They are gated in **`AiActionFrame`**, which all five text features
+render their controls through, so a sixth inherits it; there is no route
+to a provider in that file that does not pass the branch. Consent RIDES
+ON the allowance object every one of them already takes, which **deleted
+the two-prop relay** `SummariseReading`'s consent travelled through — the
+shape that produced the `folders` ReferenceError.
+
+**TWO FORMS OF ONE SCREEN, never two screens.** The AI tab keeps the
+full-screen gate: a student who opened it is asking for the feature.
+The four others sit on tabs opened for other reasons, so they get
+`ConsentNeededNotice` — one sentence and a control that opens THE SAME
+gate. Three stacked copies of the full disclosure on the Study tab
+would be worse than the gate it replaces, and two wordings of one
+disclosure would be two things to keep true. The notice owns the
+overlay itself, so a caller cannot wire the notice and forget the
+screen.
+
+**AND THE GATE NOW HAS A WAY OUT.** It had one button, so a student who
+did not want to agree met a full-screen overlay with no exit. A choice
+with one control is not consent. Declining is NOT stored — a refusal is
+not a preference that then needs a control to undo — and what replaces
+the tab says what is off and hands the screen back.
+
+**THE REFUSAL IS AT THE BOUNDARY TOO** (`src/aiConsentState.js`), for
+the reason already written down for the signed-out case: a UI-only gate
+is one refactor from leaking and the refactor need not touch the client.
+`callAiText`, `callAiNotes`, `callResummarise` and `uploadAudio` each
+refuse `consent_required` on their own. The mirror is written from ONE
+place and the question is asked of `needsConsent` — the same function
+the screens ask — so the two cannot disagree about one acceptance. **It
+fails closed**: an unset mirror refuses, because a refusal costs a
+consented student an error message and a leak costs them a disclosure
+they cannot take back.
+
+### Three guards that were green over the thing they were written for
+
+All three found by doing this work, and each is a costume the ledger
+already owns.
+
+**`/record a lecture/i` MATCHED THE CONSENT SCREEN.** The assertion in
+`test-rendered-tabs.mjs` proving the AI tab got PAST its gate was
+`/AI credits used|record a lecture/i` — and the gate's own bullet reads
+"If you record a lecture, you are responsible for having permission."
+So the guard written to prove the gate was absent was satisfied by the
+gate. Same shape as a grep tripping on the comment explaining it: **the
+forbidden state names the thing being looked for.** It asserts the
+absence of `data-consent-gate` now, which is not a phrase anybody can
+reword.
+
+**THE SAME FILE WAS SEEDING A CONSENT THAT NO LONGER COUNTED.** It
+lifted `AI_CONSENT_VERSION` from source and seeded a version with no
+fingerprint, so every probe was behind the gate — the exact blind spot
+its own header is about. It seeds `providerFingerprint()` now, imported
+rather than re-derived.
+
+**AND THE OBVIOUS CONSENT TEST CANNOT FAIL.** "Every name in
+`AI_PROVIDERS` appears in `CONSENT_TEXT`" is a comparison between a
+derivation and its own source: `CONSENT_TEXT.providers` IS
+`providerBullets()`. It passed with a fourth invented provider. What is
+checkable in `test-legal.mjs` is the DERIVATION — `aiNotesLogic.js` must
+not spell a provider's name out — and the other half, that the screen
+really renders the list, is a claim about a component and is made
+against a real mount. **A derived guard and a tautological one look
+identical from the outside; the difference is whether the two sides have
+independent origins.**
+
+Three more, for the ledger rather than for their own sections: three
+legal-suite claims searched `CONSENT_TEXT.bullets` alone and went red
+when v7 moved the who-receives-what material into `intro` and
+`providers` (the claim is about the SCREEN, so the sweep is now the
+whole structure, with a completeness assertion); one of them pinned a
+sentence down to an "and" that became a comma; and `test-app-smoke.mjs`
+seeded `{ version: 99 }`, which the fingerprint correctly stopped
+treating as consent.
+
+### The declined-sends-nothing test, and why its first version proved nothing
+
+`scripts/test-consent.mjs`. The browser half declines in real Chromium
+and then presses every control on the tabs that carry an AI feature,
+with both Edge Function paths spied on — because **a guard for a bug
+that needs a user action has to perform the action**, and an idle page
+sends nothing whatever the code does.
+
+**ITS FIRST RUN REPORTED A REAL-LOOKING FAILURE THAT WAS THE TEST'S
+OWN.** The walk pressed "See what's sent", then pressed "I agree", then
+pressed the practice button, and reported that the app had sent work
+after being declined. It had; the walk had accepted two clicks earlier.
+The accept control is now the one thing the walk may not touch, and the
+walk asserts it is STILL looking at a gated app at the end — otherwise
+an empty spy means nothing.
+
+Two other things it needed, both the same lesson: the walk is scoped to
+`main`, because unscoped it pressed the nav first and left the tab under
+test; and the notes-tab probe needs TWO clicks (expand, then Edit)
+because `SummariseNote` only exists on a draft — a one-click probe found
+no notice and no control and would have passed over an ungated feature
+by never reaching it.
+
+**The control matters as much as the claim.** "No requests after
+declining" is satisfied by an app that can never make one — a missing
+button, an exhausted allowance, an unreadable profile — so the same
+mount with the same spy ACCEPTS and requires a request. Both layers are
+mutation-checked separately: ungating `AiActionFrame` reddens three
+browser tests, and removing the boundary refusal reddens three boundary
+tests while the browser half stays green.
 
 ## The marketing site: data first, design last
 
