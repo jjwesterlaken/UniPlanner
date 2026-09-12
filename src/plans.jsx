@@ -57,6 +57,9 @@ import {
   PANEL_TITLE,
   WEB,
   buyLabel,
+  buyLines,
+  tierAllowanceLine,
+  TIER_NAMES,
   termsLink,
   managedByStoreLine,
   currentPlanLine,
@@ -257,11 +260,25 @@ export function PlansPanel({ session }) {
         <h3 className="text-sm font-semibold text-stone-800">{PANEL_TITLE}</h3>
       </div>
 
-      <p className="mt-2 text-sm text-stone-700" data-plan-line>
-        {currentPlanLine(tier, { signedOut: noAccount })}
-      </p>
-      {tier && <p className="mt-1 text-xs text-stone-500">{resetLine(tier)}</p>}
-      {activating && <p className="mt-1 text-xs text-stone-500">{ACTIVATING_NOTICE}</p>}
+      {/* WHAT YOU ARE ON, IN ITS OWN BOX (Jared, layout). It was three
+          paragraphs in the same column as the disclosures below, so the
+          one line a student opens this panel to read sat in a stack of
+          five that all looked alike. A border and the recessed ground
+          separate the fact from the small print about it — the same
+          treatment an edit box gets everywhere else in the app, rather
+          than a new surface to learn.
+
+          THE RESET LINE AND THE ACTIVATING NOTICE COME WITH IT, because
+          both are about the plan named on the line above them and
+          nothing else. The outcome message does NOT: it is about the
+          button somebody just pressed. */}
+      <div className="mt-3 rounded-xl border border-stone-300 bg-stone-50 p-3" data-plan-box>
+        <p className="text-sm font-medium text-stone-800" data-plan-line>
+          {currentPlanLine(tier, { signedOut: noAccount })}
+        </p>
+        {tier && <p className="mt-1 text-xs text-stone-500">{resetLine(tier)}</p>}
+        {activating && <p className="mt-1 text-xs text-stone-500">{ACTIVATING_NOTICE}</p>}
+      </div>
       {message && <p className="mt-2 rounded-lg bg-stone-50 px-3 py-2 text-sm text-stone-700">{message}</p>}
 
       {/* THE PURCHASE HALF, native only. On web and desktop there is one
@@ -328,20 +345,46 @@ export function PlansPanel({ session }) {
               {storeStatus}
             </p>
           )}
+          {/* ONE CARD PER TIER, THREE DURATIONS ACROSS (Jared, layout).
+              Six stacked full-width buttons put the two plans' prices
+              past the fold on a phone, so the comparison the screen
+              exists for needed scrolling in both directions. Three
+              across means both plans and all six prices are on screen
+              at once.
+
+              A GRID RATHER THAN A FLEX ROW, deliberately: equal columns
+              mean 6 months and 12 months are the same width, so the
+              prices line up and the eye can run down them. `min-w-0` is
+              what lets the columns actually shrink at 320px instead of
+              pushing the card past the viewport. */}
           {grouped.tiers.map((group) => (
-            <div key={group.tier} className="space-y-1.5">
-              {group.packages.map(({ pkg, tier: t, duration }) => (
-                <button
-                  key={pkg.identifier}
-                  type="button"
-                  className={`${btnPrimary} w-full`}
-                  disabled={!!busy}
-                  onClick={() => buy(pkg)}
-                  data-package={pkg.identifier}
-                >
-                  {buyLabel(t, duration, pkg.product && pkg.product.priceString)}
-                </button>
-              ))}
+            <div key={group.tier} className="rounded-xl border border-stone-200 p-3" data-tier-card={group.tier}>
+              <p className="text-sm font-semibold text-stone-800">{TIER_NAMES[group.tier] || group.tier}</p>
+              <p className="mt-0.5 text-xs text-stone-500">{tierAllowanceLine(group.tier)}</p>
+              <div className="mt-2 grid grid-cols-3 gap-1.5">
+                {group.packages.map(({ pkg, tier: t, duration }) => {
+                  const price = pkg.product && pkg.product.priceString;
+                  const lines = buyLines(duration, price);
+                  return (
+                    <button
+                      key={pkg.identifier}
+                      type="button"
+                      className={`${btnPrimary} w-full min-w-0 flex-col gap-0 px-1 py-1.5 text-xs`}
+                      disabled={!!busy}
+                      onClick={() => buy(pkg)}
+                      data-package={pkg.identifier}
+                      /* The visible button no longer says which plan it
+                         buys — the card title does, and a screen reader
+                         does not read the card title with the button.
+                         `buyLabel` is the full sentence, reused. */
+                      aria-label={buyLabel(t, duration, price)}
+                    >
+                      <span className="leading-tight">{lines.period}</span>
+                      {lines.price && <span className="text-[11px] font-normal leading-tight opacity-90">{lines.price}</span>}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           ))}
           {/* A package our table does not recognise is SHOWN, with
