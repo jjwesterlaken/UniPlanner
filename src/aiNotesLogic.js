@@ -146,7 +146,7 @@ export const CONSENT_TEXT = {
   bullets: [
     `Your recording is ${AUDIO_DELETION_PROMISE}. Neither we nor ${transcriptionProviderNames().join(" nor ")} keep it.`,
     `Transcripts and notes stay on our server in Sydney for ${RESULT_RETENTION_DAYS} days so you can recover them if something goes wrong — ${FAILED_RESULT_RETENTION_DAYS} days if the job didn't finish, so nothing you paid for is lost. Anything you save into your planner is yours until you delete it.`,
-    "Text and photos you supply aren't stored — only the result is, and only if you save it.",
+    "Text and photos you supply aren't stored — not in your planner, not on our server. Only the result is, and only if you save it.",
     "AI output can be wrong. It's there to help you revise, not to replace your own work.",
     "Recording a lecture is your responsibility. Many universities require the lecturer's consent, and recording without permission can be unlawful in some states.",
   ],

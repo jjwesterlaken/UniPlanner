@@ -2542,6 +2542,26 @@ earlier draft to re-ask; and the provider change is carried by the
 fingerprint regardless, which is the mechanism that exists so a wording
 version never has to be remembered for it.
 
+**ONE THING IN HER PASS WAS A CHANGE OF SUBSTANCE AND WAS FLAGGED
+RATHER THAN EDITED, and Jared reversed it the same day.** Her draft
+read "Text and photos you supply aren't stored — only the result is",
+dropping the "not in your planner, not on our server" the earlier
+wording carried. That is the plainest available form of the promise and
+it stops saying WHERE — directly after a bullet that DOES say
+transcripts sit on our server for 7 days. This file already names that
+exact failure: *if both read the same, the stronger promise isn't being
+made, it is being blurred.* So the screen says where again.
+
+The interim arrangement is worth recording because it was the wrong
+shape and looked reasonable: the precise half was asserted of the
+POLICY instead, on the argument that a screen and a legal document need
+not carry the same sentence. True in general, and not a substitute
+here — the blurring happens on the screen, so that is where the
+assertion belongs. **Moving a guard to the document that still passes
+it is how a claim quietly stops being checked where it matters.** Both
+halves are asserted on the screen now, and dropping the location
+reddens it.
+
 **AND THE iOS MICROPHONE DIALOG WAS A RESTATEMENT THAT SAID SO IN A
 COMMENT.** `MIC_USAGE_DESCRIPTION` promised the recording is deleted
 once transcribed, in its own words, under a comment reading *"that exact

@@ -867,18 +867,25 @@ async function run() {
     /* THE PROMISE, NOT ITS PUNCTUATION OR ITS TENSE. This pinned the
        sentence down to an "and" that became a comma, and then to "not
        stored" where Grace wrote "aren't stored". What has to be true is
-       that the screen promises supplied material is not kept.
+       that the screen promises supplied material is not kept, and says
+       WHERE.
 
-       WHERE IT IS NOT KEPT is now asserted of the POLICY rather than the
-       screen, and that is a deliberate division rather than a loosened
-       guard: Grace's bullet is "Text and photos you supply aren't
-       stored — only the result is", which makes the promise in the
-       plainest words available, while the policy carries the part that
-       needs precision — no copy in the planner, and no server-side copy
-       at any point, in contrast to a lecture transcript, which has one
-       for 7 days. A screen and a legal document are not obliged to carry
-       the same sentence; they are obliged not to disagree. */
+       THE LOCATION WAS BRIEFLY DROPPED AND IS BACK, which is why both
+       halves are asserted here rather than split across two documents.
+       Grace's first pass read "aren't stored — only the result is",
+       which makes the promise in the plainest words available and stops
+       saying where — directly after a bullet that DOES say transcripts
+       sit on our server for 7 days. That is the distinction this
+       codebase calls blurred rather than made: if supplied text and a
+       lecture transcript read the same, the stronger promise is not
+       being stated. Jared restored the location, 12 September 2026.
+
+       The policy keeps the precise form as well, and the contrast with
+       a transcript, because that is the document where precision is the
+       point — but the screen no longer relies on it. */
     assert.match(all, /(aren't|are not|isn't|is not|never|not) stored|not kept|no server-side copy/i, "the never-stored promise is gone from the screen");
+    assert.match(all, /not in your planner/i, "the screen stopped saying supplied material is not kept in the planner");
+    assert.match(all, /not on our server/i, "the screen stopped saying supplied material is not kept on our server");
     const policyText = prose("privacy.html");
     assert.match(policyText, /no server-side copy at any point/i, "the policy dropped the precise half of the never-stored promise");
     assert.match(policyText, /transcript/i, "the policy no longer draws the contrast with a lecture transcript");
