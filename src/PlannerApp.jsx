@@ -149,6 +149,7 @@ import {
 } from "./semesterArchive.js";
 import { ARCHIVE_COPY } from "./archiveCopy.js";
 import { ConsentGate } from "./aiNotesConsent.jsx";
+import { recordConsentState } from "./aiConsentState.js";
 import {
   isAiNote,
   isRemote,
@@ -780,7 +781,7 @@ function ReadTick({ state, onCycle, label }) {
   );
 }
 
-function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused, pages = [], session, textAllowance, onSummariseReading, onOpenSummary, consentNeeded, onAcceptConsent }) {
+function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused, pages = [], session, textAllowance, onSummariseReading, onOpenSummary }) {
   /* Which readings already have a summary. Built once per render rather
      than scanned per row: sourceReadingId lives on the stub's aiMeta,
      so this is a pass over pages, not a pass per reading over pages. */
@@ -931,8 +932,6 @@ function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused, 
                             allowanceApi={textAllowance}
                             onSummarised={onSummariseReading}
                             onOpenSummary={onOpenSummary}
-                            consentNeeded={consentNeeded}
-                            onAcceptConsent={onAcceptConsent}
                           />
                         )}
                       </div>
@@ -5431,10 +5430,32 @@ export default function PlannerApp() {
     });
   };
 
-  /* One allowance read per app mount, shared by all four text features.
+  /* CONSENT, COMPUTED ONCE AND CARRIED BY THE ALLOWANCE OBJECT.
+     `data.meta.aiConsent` is the single record of what this account
+     agreed to; it is read here, where `setData` is, and handed to every
+     text feature through the one object they all already take. Four
+     screens used to have no consent check at all, and the reading
+     summariser's arrived as two props relayed through two components —
+     see useTextAllowance for why that shape is the one to avoid. */
+  const aiConsent = {
+    needed: needsConsent(data.meta),
+    accept: () => setData((d) => ({ ...d, meta: { ...d.meta, ...buildConsentPatch(AI_CONSENT_VERSION, nowISO) } })),
+  };
+
+  /* AND THE MIRROR THE CLIENTS READ. The screens are not the only thing
+     between a student's work and a third party: callAiText, callAiNotes
+     and uploadAudio each refuse on their own, which is what makes "no
+     request fires when declined" a property of the code rather than of
+     this file's markup. The effect runs on mount, long before anything
+     can be clicked, and on every change to the record. */
+  useEffect(() => {
+    recordConsentState(data.meta);
+  }, [data.meta && data.meta.aiConsent && data.meta.aiConsent.version, data.meta && data.meta.aiConsent && data.meta.aiConsent.providers]);
+
+  /* One allowance read per app mount, shared by all five text features.
      A hook per feature would be four RLS reads on a screen that shows
      two of them. */
-  const textAllowance = useTextAllowance(session);
+  const textAllowance = useTextAllowance(session, aiConsent);
 
   /* Store the ATTEMPT, never the questions -- see practice.js. Pruned on
      the way in, because this collection grows with use and
@@ -6042,10 +6063,6 @@ export default function PlannerApp() {
                 textAllowance={textAllowance}
                 onSummariseReading={summariseReading}
                 onOpenSummary={openSummaryNote}
-                consentNeeded={needsConsent(data.meta)}
-                onAcceptConsent={() =>
-                  setData((d) => ({ ...d, meta: { ...d.meta, ...buildConsentPatch(AI_CONSENT_VERSION, nowISO) } }))
-                }
               />
             </Section>
             <Section icon={FileText} title="Assignments" subtitle="Editable, with due dates in DD/MM/YYYY">

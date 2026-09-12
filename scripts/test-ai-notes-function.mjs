@@ -27,7 +27,7 @@ import {
   USD_PER_TRANSCRIBED_MINUTE,
 } from "../supabase/functions/ai-notes/config.ts";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -230,7 +230,7 @@ function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used:
 
 /* ---------- invoke the handler ---------- */
 
-async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath, tier = "ai", trialCreditsUsed = 0, estimatedDurationSeconds, mode, summariserOk = false, usage } = {}) {
+async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath, tier = "ai", trialCreditsUsed = 0, estimatedDurationSeconds, mode, summariserOk = false, usage, env = {}, consentProviders } = {}) {
   if (usage) rows = [...rows, { _t: "ai_usage", user_id: callerId, month: usage.month, credits_used: usage.creditsUsed || 0 }];
   /* One object, shared between the profiles fake and the RPC fake, so
      a trial bill is VISIBLE to a later read in the same run — which is
@@ -257,12 +257,20 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
       handler = h;
     },
     env: {
+      /* `env` overrides, so a test can flip the provider secret the way a
+         dashboard would — which is the whole mechanism the consent
+         closure has to survive. DEEPGRAM_API_KEY is present so a flipped
+         secret fails the CONSENT check rather than the env check: without
+         it the refusal would be "a secret is missing" and the test would
+         prove nothing about consent. */
       get: (n) =>
         ({
           SUPABASE_URL: "https://p.supabase.co",
           SUPABASE_SERVICE_ROLE_KEY: "svc",
           GROQ_API_KEY: "gsk_test",
+          DEEPGRAM_API_KEY: "dg_test",
           OPENAI_API_KEY: "sk-test",
+          ...env,
         })[n],
     },
   };
@@ -316,6 +324,7 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
               mimeType: "audio/webm",
               idempotencyKey: key,
               ...(estimatedDurationSeconds === undefined ? {} : { estimatedDurationSeconds }),
+              ...(consentProviders === undefined ? {} : { consentProviders }),
             }
       ),
     })
@@ -349,6 +358,76 @@ const staleRow = (userId, status) => ({
 });
 
 async function run() {
+  /* ---------- the consent closure, at the boundary that spends money ---
+
+     Deepgram used to be NAMED ON THE CONSENT SCREEN although nothing used
+     it, because `AI_NOTES_TRANSCRIPTION_PROVIDER` selects a provider from
+     a dashboard field with no deploy — so a screen naming only Groq would
+     have become false with nothing to notice. That is disclosing an extra
+     company to every student in place of a check. These two tests are the
+     check, which is what let the disclosure be removed. */
+
+  await test("A PROVIDER THE CONSENT SCREEN DOES NOT NAME CANNOT BE USED, whatever the secret says", async () => {
+    /* The dashboard flip, performed. The deepgram ADAPTER still exists and
+       its key is present, so nothing else can be the reason this refuses. */
+    const r = await invoke({ env: { AI_NOTES_TRANSCRIPTION_PROVIDER: "deepgram" } });
+    assert.equal(r.status, 500, `expected a refusal, got ${r.status}: ${r.bodyText}`);
+    assert.deepEqual(r.providerCalls, [], "a provider was called despite not being named on the consent screen");
+    assert.deepEqual(r.rpcCalls, [], "the allowance was billed for a request that was refused");
+    /* The log names the provider and the consented set, because this is a
+       configuration mistake somebody has to find. The student's message
+       deliberately says nothing about providers — it is not their problem
+       and not their remedy. */
+    const log = r.logs.join("\n");
+    assert.match(log, /deepgram/, "the refusal does not say which provider was refused");
+    assert.match(log, /not named on the consent screen/, "the refusal does not say why");
+  });
+
+  await test("and the DEFAULT provider is not refused, so the check above is about the secret", async () => {
+    /* The control. Without it, "deepgram is refused" is satisfied by a
+       function that refuses everything — and every other test in this file
+       would still pass, because they all assert on later stages. */
+    const r = await invoke();
+    assert.ok(r.providerCalls.some((u) => u.includes("groq")), "the default provider was not called either");
+  });
+
+  await test("A STALE ACCEPTED SET IS REFUSED — the student agreed to a different list of companies", async () => {
+    /* The half the env check cannot cover: a student on an OLDER BUILD,
+       whose own screen named a different set and which therefore never
+       re-prompts. Their planner records what they accepted and the client
+       sends it; this is the server declining to act on it. */
+    const r = await invoke({ consentProviders: "groq:Groq:the United States" });
+    assert.equal(r.status, 403, `expected a refusal, got ${r.status}: ${r.bodyText}`);
+    assert.equal(r.body.code, "consent_required");
+    assert.deepEqual(r.providerCalls, [], "a lecture was sent to a company the student had not agreed to");
+    assert.deepEqual(r.rpcCalls, [], "the allowance was billed for a refused request");
+  });
+
+  await test("ABSENCE IS READ AS WHAT PRE-FIELD BUILDS NAMED, not as consent", async () => {
+    /* A build predating `consentProviders` sends nothing. Reading that as
+       "fine" is the one hole this arrangement exists to close: the next
+       time the list changes, such a build would go on sending lectures to
+       a company its own screen never named. It is read as
+       LEGACY_CONSENT_FINGERPRINT instead — which IS the current set today,
+       so nothing breaks now and no deploy ordering was needed. */
+    const r = await invoke({ consentProviders: undefined });
+    assert.ok(r.providerCalls.some((u) => u.includes("groq")), "an old client was refused although the list has not changed");
+
+    /* And the same function, with the list changed under it: the legacy
+       constant no longer matches, so absence stops being accepted. Driven
+       through `consentSetMatches` directly because the handler reads one
+       live list — this is the claim about the NEXT change, which is the
+       only time the constant matters. */
+    const shared = await import(pathToFileURL(path.join(rootDir, "supabase/functions/_shared/aiProviders.js")).href);
+    assert.equal(shared.consentSetMatches(undefined), true, "absence does not match today's list, so nothing works");
+    const moved = [...shared.AI_PROVIDERS, { id: "x", name: "Someone New", role: "transcription", country: "Ireland" }];
+    assert.equal(
+      shared.consentSetMatches(undefined, moved),
+      false,
+      "a pre-field build would be accepted after the provider list changed — the legacy constant has been updated, and it must never be"
+    );
+  });
+
   await test("a completed row belonging to another user is never returned", async () => {
     // The disclosure. Before scoping, this returned `result` verbatim.
     const r = await invoke({ rows: [doneRow(OTHER)] });

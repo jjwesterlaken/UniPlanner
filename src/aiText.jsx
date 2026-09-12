@@ -33,7 +33,7 @@ import {
 } from "./aiTextLimits.js";
 import { estimateReading, estimatePhotos, photoNumberFor, combineParts, MAX_READING_PHOTOS } from "./readingChunks.js";
 import { bodyOf } from "./noteBlocks.js";
-import { ConsentGate } from "./aiNotesConsent.jsx";
+import { ConsentNeededNotice } from "./aiNotesConsent.jsx";
 import { fetchTextAllowance, callAiText } from "./aiTextClient.js";
 import { btnPrimary, btnGhost, iconBtn, inputCls, labelCls, Card } from "./PlannerApp.jsx";
 
@@ -41,8 +41,22 @@ import { btnPrimary, btnGhost, iconBtn, inputCls, labelCls, Card } from "./Plann
 /*  The shared frame                                                  */
 /* ------------------------------------------------------------------ */
 
-/** Reads the allowance once per mount. Cheap: two RLS-scoped selects, no endpoint. */
-export function useTextAllowance(session) {
+/**
+ * Reads the allowance once per mount. Cheap: two RLS-scoped selects, no endpoint.
+ *
+ * IT ALSO CARRIES CONSENT, and that is deliberate rather than tidy.
+ * Every text feature already takes this one object, so consent reaches
+ * all five of them with nothing to relay and nothing to forget — which
+ * is the failure this codebase has already paid for once, when `folders`
+ * travelled through a component that only passed it on and the whole AI
+ * panel threw `ReferenceError` on a real phone. A screen that can ask
+ * what the allowance is cannot fail to know whether it may act.
+ *
+ * `consent` is `{ needed, accept, decline }` and comes from the blob —
+ * see aiConsentState.js for why the same question is also asked at the
+ * boundary.
+ */
+export function useTextAllowance(session, consent = { needed: false, accept: () => {} }) {
   const [state, setState] = useState(null);
   const [nonce, setNonce] = useState(0);
   /* The same shared signal the AI badge uses, so a purchase made on the
@@ -67,7 +81,7 @@ export function useTextAllowance(session) {
   const applyFraction = (fraction) =>
     setState((prev) => (prev && !prev.unavailable ? { ...prev, fraction, used: Math.round(fraction * prev.limit), remaining: Math.max(0, prev.limit - Math.round(fraction * prev.limit)) } : prev));
 
-  return { allowance: state, refresh: () => setNonce((n) => n + 1), applyFraction };
+  return { allowance: state, refresh: () => setNonce((n) => n + 1), applyFraction, consent };
 }
 
 /**
@@ -77,7 +91,8 @@ export function useTextAllowance(session) {
  * then the controls. A student should never reach an input they cannot
  * afford to use.
  */
-export function AiActionFrame({ title, task, allowance, error, busy, children, footer }) {
+export function AiActionFrame({ title, task, api, error, busy, children, footer }) {
+  const { allowance, consent } = api;
   /* An unavailable allowance means we could not read it -- offline, demo
      mode, no account. It must NOT read as "none left": showing a paywall
      because someone went into a tunnel is the failure worth avoiding
@@ -93,19 +108,38 @@ export function AiActionFrame({ title, task, allowance, error, busy, children, f
         <h3 className="text-sm font-semibold text-stone-700">{title}</h3>
       </div>
 
-      {!unknown && <p className="text-xs text-stone-500">{allowanceLine(allowance)}</p>}
+      {/* CONSENT COMES FIRST, BEFORE THE ALLOWANCE LINE, because the
+          allowance is a fact about an account and consent is the
+          question of whether anything may be sent at all. Answering the
+          second with a figure about the first reads as an offer.
 
-      {exhausted ? (
-        <ExhaustedNotice allowance={allowance} />
+          THE FOUR OTHER TEXT FEATURES USED TO SHIP UNGATED — a comment
+          in SummariseReading recorded the gap and called closing it a
+          change to four screens, which it was, until the App Store
+          rejected 1.0.0 for precisely that. Gating it HERE rather than
+          in each screen is what makes a sixth feature inherit it: every
+          text action in this file renders its controls as this frame's
+          children, so there is no route to a provider that does not pass
+          through this branch. */}
+      {consent && consent.needed ? (
+        <ConsentNeededNotice onAccept={consent.accept} onDecline={consent.decline} />
       ) : (
         <>
-          {last && (
-            <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              <TriangleAlert size={13} className="mt-0.5 shrink-0" />
-              {lastActionWarning(allowance)}
-            </p>
+          {!unknown && <p className="text-xs text-stone-500">{allowanceLine(allowance)}</p>}
+
+          {exhausted ? (
+            <ExhaustedNotice allowance={allowance} />
+          ) : (
+            <>
+              {last && (
+                <p className="flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  <TriangleAlert size={13} className="mt-0.5 shrink-0" />
+                  {lastActionWarning(allowance)}
+                </p>
+              )}
+              {children}
+            </>
           )}
-          {children}
         </>
       )}
 
@@ -236,7 +270,7 @@ export function PracticePanel({ session, cards = [], onRecordAttempt, allowanceA
 
   return (
     <Card className="mt-3">
-      <AiActionFrame title="Practice questions" task="practice" allowance={allowance} error={error} busy={busy}>
+      <AiActionFrame title="Practice questions" task="practice" api={allowanceApi} error={error} busy={busy}>
         {pool.length === 0 ? (
           <p className="text-sm text-stone-500">Make some study cards first — practice questions are written from them.</p>
         ) : !questions ? (
@@ -245,7 +279,11 @@ export function PracticePanel({ session, cards = [], onRecordAttempt, allowanceA
               Questions written from your {Math.min(10, pool.length)} most recent study {pool.length === 1 ? "card" : "cards"}, asking
               you to use them rather than recite them.
             </p>
-            <button className={btnPrimary} onClick={start} disabled={busy}>
+            {/* `data-ai-run` is a test hook, and it is here rather than
+                on a label a guard greps for: the claim being made about
+                this button is "pressing it sends work to a provider",
+                which must survive Grace rewording it. */}
+            <button className={btnPrimary} onClick={start} disabled={busy} data-ai-run="practice">
               <Sparkles size={15} /> Write me some questions
             </button>
           </div>
@@ -304,7 +342,7 @@ export function WeakSpotsExplain({ session, topics = [], allowanceApi }) {
 
   return (
     <div className="mt-3 border-t border-stone-100 pt-3">
-      <AiActionFrame title="Why these keep slipping" task="weakspots" allowance={allowance} error={error} busy={busy}>
+      <AiActionFrame title="Why these keep slipping" task="weakspots" api={allowanceApi} error={error} busy={busy}>
         {result ? (
           <div className="space-y-2">
             {result.overall && <p className="text-sm text-stone-600">{result.overall}</p>}
@@ -363,7 +401,7 @@ export function ExplainItBack({ session, card, allowanceApi }) {
 
   return (
     <div className="mt-2 rounded-lg border border-stone-200 p-2.5">
-      <AiActionFrame title="Explain it back" task="explain" allowance={allowance} error={error} busy={busy}>
+      <AiActionFrame title="Explain it back" task="explain" api={allowanceApi} error={error} busy={busy}>
         {result ? (
           <div className="space-y-2 text-sm">
             <p className="font-medium text-stone-700">{result.verdict}</p>
@@ -448,7 +486,7 @@ export function SummariseNote({ session, page, allowanceApi, onSummarised }) {
 
   return (
     <div className="mt-3 border-t border-stone-100 pt-3">
-      <AiActionFrame title="Summarise this note" task="summarise" allowance={allowance} error={error} busy={busy}>
+      <AiActionFrame title="Summarise this note" task="summarise" api={allowanceApi} error={error} busy={busy}>
         <p className="text-sm text-stone-600">
           Turns what you've written into the same structured notes a recorded lecture produces — overview, key points,
           and study cards you choose from. Your original note is kept exactly as it is.
@@ -509,8 +547,6 @@ export function SummariseReading({
   allowanceApi,
   onSummarised,
   onOpenSummary,
-  consentNeeded = false,
-  onAcceptConsent,
   /* Standalone: the same tool mounted as a first-class home (the AI
      Notes tab) rather than as a one-line shortcut on a reading row.
      Two builders in a row failed to find the row control, and a
@@ -521,7 +557,13 @@ export function SummariseReading({
      decorative. */
   standalone = false,
 }) {
-  const { allowance, applyFraction } = allowanceApi;
+  /* CONSENT RIDES WITH THE ALLOWANCE (see useTextAllowance). It used to
+     arrive as two props of its own, relayed through Textbook and through
+     ReadingHub — and a relayed prop that a middle component only passes
+     on is the one nobody notices is missing. There is nothing left to
+     relay now. */
+  const { allowance, applyFraction, consent } = allowanceApi;
+  const consentNeeded = !!(consent && consent.needed);
   const { run, busy, error, errorDetailRef } = useTask(session, applyFraction);
 
   const [open, setOpen] = useState(false);
@@ -700,11 +742,13 @@ export function SummariseReading({
           feature nobody can see is not consent, it is absence, and the
           student never learns it exists.
 
-          NOTE the other four text features are NOT gated. That gap
-          predates this and closing it changes four existing screens, so
-          it is reported rather than widened. */}
+          EVERY OTHER TEXT FEATURE IS NOW GATED TOO — in AiActionFrame,
+          which they all render through. This one keeps its own branch
+          because it does not use that frame: the row panel has its own
+          layout, and a shared frame would have made it look like the
+          Study tab's cards rather than like the row it belongs to. */}
       {consentNeeded ? (
-        <ConsentGate onAccept={onAcceptConsent} />
+        <ConsentNeededNotice onAccept={consent.accept} onDecline={consent.decline} />
       ) : (
         <>
       {!unknown && <p className="text-xs text-stone-500">{allowanceLine(allowance)}</p>}

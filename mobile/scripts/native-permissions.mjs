@@ -31,19 +31,36 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+/* Derived, not restated — see MIC_USAGE_DESCRIPTION below. */
+import { AUDIO_DELETION_PROMISE } from "../../src/aiNotesLogic.js";
+import { transcriptionProviderNames } from "../../src/aiProviders.js";
 
 /* Apple shows this verbatim in the permission dialog, so it has to say
    what the mic is for AND where the audio goes. Kept consistent with the
    in-app consent wording (CONSENT_TEXT in src/aiNotesLogic.js): both
-   promise the recording is deleted as soon as it has been transcribed.
-   That exact phrase is what a test greps for in both files, so if one
-   changes, change the other. Note it is a promise about the AUDIO only
-   — the transcript has its own, longer retention, and conflating them
-   here would make this dialog inaccurate. */
+   promise the same thing about the recording.
+
+   IT IS NOW THE SAME STRING RATHER THAN THE SAME SENTENCE. This used to
+   spell the promise out, under a comment reading "that exact phrase is
+   what a test greps for in both files, so if one changes, change the
+   other" — a restatement admitting itself, and Grace's wording pass is
+   precisely the change it was waiting for: rewording the consent screen
+   broke the grep rather than the agreement. Both now interpolate
+   AUDIO_DELETION_PROMISE, and a test asserts neither file types it out.
+
+   AND IT NAMES THE COMPANY, from the same list the consent screen reads.
+   This dialog used to say "a transcription service", which is the exact
+   wording guideline 5.1.1(i) refused in the app — an OS prompt is not
+   what Apple was complaining about, but saying it unnamed HERE while
+   naming it on the next screen is a difference with no reason behind it.
+
+   Note it is a promise about the AUDIO only — the transcript has its own,
+   longer retention, and conflating them here would make this dialog
+   inaccurate. */
 export const MIC_USAGE_DESCRIPTION =
   "University Planner uses your microphone to record lectures so it can " +
-  "generate an AI summary and study cards. Your recording is sent to a " +
-  "transcription service and is deleted as soon as it has been transcribed.";
+  `generate an AI summary and study cards. Your recording is sent to ${transcriptionProviderNames().join(" or ")} ` +
+  `for transcription and is ${AUDIO_DELETION_PROMISE}.`;
 
 export const IOS_PLIST_KEY = "NSMicrophoneUsageDescription";
 

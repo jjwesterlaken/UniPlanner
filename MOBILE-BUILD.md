@@ -865,6 +865,78 @@ titled empty text note ("Empty note" in the list).
 
 ---
 
+### The App Store rejection of 1.0.0 — the two items only a device closes
+
+Build 3514249 was rejected under 2.3.8 (placeholder icons) and
+5.1.1(i) / 5.1.2(i) (third-party AI disclosure). Both are fixed in the
+repository; both have a half no build machine can see.
+
+20. **THE ICON SET, IN THE GENERATED PROJECT.** `mobile/ios` and
+    `mobile/android` are created by `cap add` and git-ignored, so the
+    slots Apple actually received are invisible to every check in the
+    repository — which is exactly where the placeholders were. On the
+    Mac, after `cap sync`:
+
+    ```
+    node scripts/make-icons.mjs          # writes every slot from the master
+    node scripts/make-icons.mjs --check  # must print "icons OK"
+    ```
+
+    It is already in `npm run settings`, so a normal sync does it. What
+    to confirm by eye, because "is this a placeholder" is a human
+    judgement:
+
+    - `mobile/ios/App/App/Assets.xcassets/AppIcon.appiconset` holds
+      `AppIcon-1024.png` and a `Contents.json` naming it, and **nothing
+      else** — since Xcode 14 an iOS app icon is one 1024 image and the
+      system derives the rest. A leftover multi-slot catalogue is what
+      produced the half-filled set.
+    - Xcode's asset catalogue shows the icon, not a dashed placeholder
+      square, and **Product → Archive** completes without an
+      "app icon is missing" validation warning.
+    - The icon on the home screen is the mortarboard, at every size,
+      with no transparent corners and no white box behind it.
+    - On Android, `mipmap-*/ic_launcher.png`, `ic_launcher_round.png`
+      and `ic_launcher_foreground.png` all exist at five densities, and
+      the launcher shows the round one correctly masked.
+
+    If Grace replaces the master, the only thing to do is drop the new
+    1024×1024 **RGB (no alpha)** PNG at `mobile/assets/icon.png` and
+    re-run the script. `npm test` fails on an alpha channel, because
+    Apple refuses an app icon that has one.
+
+21. **THE CONSENT SCREEN, ON THE DEVICE.** The browser suite
+    (`scripts/test-consent.mjs`) proves the screen comes first, names
+    every company, and that declining sends nothing — in Chromium.
+    WKWebView is not Chromium, and this is the screen a reviewer will
+    read. On the phone, signed in, with a fresh account:
+
+    - Open the AI tab. The screen appears, **before** anything else, and
+      names exactly **Groq** and **OpenAI**, with the United States in the
+      opening sentence. **Deepgram must NOT appear** — it was named there
+      while nothing used it, and the server refuses it now instead.
+      Scroll the panel: the whole thing must be reachable on the smallest
+      device you have, keyboard down — it is a
+      `max-h-[90vh] overflow-y-auto` panel and a reviewer who cannot
+      reach the buttons will say the app is broken.
+    - Tap through to the microphone permission prompt and read it. It
+      must name Groq and say the recording is deleted once transcribed —
+      the same promise as the screen, because it is the same string.
+    - Press **Not now**. The tab says the AI features are off and offers
+      to show the screen again. Nothing is sent — there is no control
+      left that could.
+    - Go to Study → Practice questions. The compact notice is there
+      instead of the button. Same on Weak spots, on an open note's
+      summariser, and on a reading row.
+    - Press **See what's sent** from one of those, then **I agree**. All
+      of them come back, on every tab, without a reload.
+    - Force-quit and reopen: it does not ask again.
+
+    **And the one that is easy to miss:** sign out, sign in as a
+    DIFFERENT account, and check it asks again. Consent is per account
+    and is recorded in the synced planner, so a second student on the
+    same phone must be asked.
+
 ## Hardening, not yet done
 
 **A dead WebView renderer white-screens forever.** When the Chromium

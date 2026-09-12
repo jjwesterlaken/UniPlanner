@@ -206,6 +206,20 @@ jobs:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-focus-zoom.mjs
 
+      - name: Consent is shown before the first AI action, and declining sends nothing
+        # App Store guidelines 5.1.1(i) and 5.1.2(i), which rejected build
+        # 3514249: the screen must name the third parties that receive a
+        # student's work, before the fact, and declining must mean nothing
+        # is sent. The second claim needs an ACTION performed — an idle
+        # page sends nothing whatever the code does — so this declines in
+        # a real browser and then presses every control on the tabs that
+        # carry an AI feature, with both Edge Function paths spied on.
+        # Its boundary half runs in the npm-test job too; only the browser
+        # half needs this one.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-consent.mjs
+
       - name: Run the three journeys
         # Against the live Supabase project with a dedicated test account
         # (see e2e/helpers.mjs for why its data cannot accumulate).

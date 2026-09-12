@@ -34,6 +34,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { buildConsentPatch } from "../src/aiNotesLogic.js";
+
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = path.join(rootDir, "dist-web");
 
@@ -107,17 +109,20 @@ const SUPABASE_HOST = (() => {
 
 const USER_ID = "00000000-0000-4000-8000-000000000001";
 
-/* THE CONSENT VERSION, lifted from source. Without accepted consent the
-   AI tab renders the gate instead of the panel, and the badge — the
-   component that actually threw — never mounts at all. That is how the
-   first version of THIS FILE passed over the very bug it was written
-   for: it rendered the tab, saw markup, and called it a pass. */
-const AI_CONSENT_VERSION = (() => {
-  const src = fs.readFileSync(path.join(rootDir, "src/aiNotesLogic.js"), "utf8");
-  const m = /export const AI_CONSENT_VERSION = (\d+)/.exec(src);
-  assert.ok(m, "AI_CONSENT_VERSION is gone from aiNotesLogic.js");
-  return Number(m[1]);
-})();
+/* AN ACCEPTED CONSENT. Without one the AI tab renders the gate instead
+   of the panel, and the badge — the component that actually threw —
+   never mounts at all. That is how the first version of THIS FILE
+   passed over the very bug it was written for: it rendered the tab, saw
+   markup, and called it a pass.
+
+   BUILT BY THE APP'S OWN HELPER rather than assembled here. It used to
+   lift the version number out of the source and seed `{ version,
+   acceptedAt }`, which stopped being an acceptance the day
+   `needsConsent` started reading the provider fingerprint too — so every
+   probe below went quietly back behind the gate. A helper cannot drift
+   from the function that reads it; a shape typed in three test files
+   can, and did. */
+const CONSENTED_META = buildConsentPatch();
 
 /* A profile that is DEFINITELY readable — a monthly tier with credits
    spent, so the allowance badge gets past `!usage || usage.unavailable`
@@ -255,7 +260,7 @@ async function run() {
       page.on("pageerror", (err) => errors.push(String(err)));
 
       await page.addInitScript(
-        ({ ref, userId, tabKey, tab, consentVersion }) => {
+        ({ ref, userId, tabKey, tab, consent }) => {
           const hour = Math.floor(Date.now() / 1000) + 3600;
           localStorage.setItem(
             `sb-${ref}-auth-token`,
@@ -277,11 +282,11 @@ async function run() {
             JSON.stringify({
               semester: "Semester 1",
               semesters: {},
-              meta: { aiConsent: { version: consentVersion, acceptedAt: new Date().toISOString() } },
+              meta: consent,
             })
           );
         },
-        { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, tab: id, consentVersion: AI_CONSENT_VERSION }
+        { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, tab: id, consent: CONSENTED_META }
       );
 
       await page.route(`${SUPABASE_HOST}/**`, async (route) => {
@@ -310,11 +315,22 @@ async function run() {
          mounted. A tab with a known gate must show something that only
          exists on the far side of it. */
       if (id === "ai-notes") {
+        /* THE GATE'S ABSENCE, ASSERTED DIRECTLY, because the positive
+           match was satisfied BY THE GATE. `/record a lecture/i` matched
+           a consent bullet — "If you record a lecture, you are
+           responsible for having permission" — so this guard, written to
+           prove the tab got PAST its gate, was green while showing it.
+           Same shape as a grep tripping on the comment that explains it:
+           the forbidden state names the thing being looked for.
+
+           The hooks are what the gate and the compact notice render, so
+           their absence is not a phrase anybody can reword. */
+        assert.doesNotMatch(html, /data-consent-gate/, "the AI tab is showing the consent gate, so the panel never mounted");
+        assert.doesNotMatch(html, /data-consent-needed/, "the AI tab is showing the consent notice, so the panel never mounted");
         assert.match(
           html,
-          /AI credits used|record a lecture|Record a lecture/i,
-          "the AI tab rendered, but not the panel — it is still showing the consent gate or the signed-out notice, " +
-            "so the allowance badge never mounted and this check proves nothing"
+          /Summarise a reading/,
+          "the AI tab rendered with no consent gate and no panel either — the signed-out notice, or nothing"
         );
       }
       /* THE PLANS PANEL, on the surface that cannot sell anything. The
@@ -432,7 +448,7 @@ async function run() {
     const errors = [];
     page.on("pageerror", (err) => errors.push(String(err)));
     await page.addInitScript(
-      ({ ref, userId, tabKey, consentVersion }) => {
+      ({ ref, userId, tabKey, consent }) => {
         const hour = Math.floor(Date.now() / 1000) + 3600;
         localStorage.setItem(
           `sb-${ref}-auth-token`,
@@ -449,10 +465,10 @@ async function run() {
         localStorage.setItem(tabKey, "account");
         localStorage.setItem(
           "uni-planner-v1",
-          JSON.stringify({ semester: "Semester 1", semesters: {}, meta: { aiConsent: { version: consentVersion, acceptedAt: new Date().toISOString() } } })
+          JSON.stringify({ semester: "Semester 1", semesters: {}, meta: consent })
         );
       },
-      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consentVersion: AI_CONSENT_VERSION }
+      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consent: CONSENTED_META }
     );
     await page.addInitScript(bridgeScript({ native, packages: PACKAGES, customerInfo }));
     await page.route(`${SUPABASE_HOST}/**`, async (route) => {

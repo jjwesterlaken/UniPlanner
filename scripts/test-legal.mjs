@@ -22,6 +22,8 @@ import {
 import * as links from "../src/legalLinks.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL } from "../src/legalLinks.js";
 import { CONSENT_TEXT, AI_CONSENT_VERSION } from "../src/aiNotesLogic.js";
+import { AI_PROVIDERS } from "../src/aiProviders.js";
+import { AUDIO_DELETION_PROMISE } from "../src/aiNotesLogic.js";
 import { TIERS, allowanceForTier } from "../src/aiTextLimits.js";
 import { TIER_NAMES, resetLine, managedByStoreLine } from "../src/plansCopy.js";
 import { RESULT_RETENTION_DAYS, FAILED_RESULT_RETENTION_DAYS } from "../src/aiNotesRetention.js";
@@ -56,6 +58,28 @@ const prose = (f) =>
     .replace(/&rarr;/g, "->")
     .replace(/\s+/g, " ")
     .trim();
+
+/* EVERY WORD OF THE CONSENT SCREEN, not one field of it.
+   Three claim tests in this file searched `CONSENT_TEXT.bullets` alone.
+   They were green and the claims were true — and then v7 moved the
+   "who receives what, and where they are" material into `intro` and
+   `providers`, which is exactly where a named-recipient disclosure
+   belongs, and all three went red over wording that had moved rather
+   than gone. That is the file-scoped-guard failure one level down: the
+   claim is about the SCREEN, so the sweep has to be about the screen.
+
+   Flattened from every string CONSENT_TEXT holds, recursively, with a
+   completeness assertion below — so a field added for v8 is swept
+   without anybody remembering to add it here. */
+const flattenStrings = (value) =>
+  typeof value === "string"
+    ? [value]
+    : Array.isArray(value)
+      ? value.flatMap(flattenStrings)
+      : value && typeof value === "object"
+        ? Object.values(value).flatMap(flattenStrings)
+        : [];
+const consentProse = () => flattenStrings(CONSENT_TEXT).join(" ");
 
 let passed = 0;
 let failed = 0;
@@ -104,6 +128,25 @@ function fakeClient({ listResult, removeError, rpcError, removeDenied } = {}) {
 const SESSION = { user: { id: "user-1", email: "a@b.com" } };
 
 async function run() {
+  /* ---------- the consent sweep's own non-vacuity ---------- */
+
+  await test("the consent sweep really reads every field of the screen", () => {
+    /* The completeness half the comment above promises. Without it,
+       `consentProse` could quietly stop covering a field — a value that
+       is not a string or an array of them contributes nothing and
+       nothing says so, which is how every claim below would start
+       passing over a disclosure that had moved house. */
+    const keys = Object.keys(CONSENT_TEXT);
+    assert.ok(keys.length > 0, "CONSENT_TEXT is empty — every claim below would pass over nothing");
+    for (const key of keys) {
+      assert.ok(
+        flattenStrings(CONSENT_TEXT[key]).length > 0,
+        `CONSENT_TEXT.${key} contributes no text to the sweep — the claims below cannot see it`
+      );
+    }
+    assert.ok(consentProse().length > 500, "the flattened consent screen is implausibly short");
+  });
+
   /* ---------- the deletion flow ---------- */
 
   await test("the audio is removed BEFORE the account, because the RPC invalidates the session", () => {
@@ -781,15 +824,34 @@ async function run() {
        summariser. That is a different promise from "we send your
        recording", and v3 would have become quietly untrue the moment any
        of those features shipped. */
-    const all = CONSENT_TEXT.bullets.join(" ");
+    const all = consentProse();
     assert.ok(AI_CONSENT_VERSION >= 4, "the consent version wasn't bumped for the text features");
-    /* Asserts the CATEGORY, not a phrase -- this line used to pin "text
-       is sent overseas" and correcting the wording for v6 failed the
-       test that existed to keep it true, the same trap as the "your own
-       writing" literal before it. What must be true: supplied material
-       is named, and it goes overseas un-stored. */
-    assert.match(all, /(text|photos|what you supplied).{0,80}sent overseas/i, "supplied material going overseas isn't covered");
-    assert.match(all, /study cards|explanation you type/i, "the consent doesn't say what kind of text");
+    /* Asserts the CATEGORY, not a phrase -- this line has now failed
+       TWICE on correct rewordings (the "your own writing" literal, then
+       "sent overseas" when v7 said "outside Australia" instead), so it
+       is split into the two independent facts it was trying to express:
+       the material is named, and it leaves the country. The leaving half
+       is derived from the provider list rather than from a phrase. */
+    assert.match(all, /text|photos/i, "supplied material isn't named at all");
+    /* THE THIRD TIME THIS LINE HAS FAILED ON A CORRECT REWORDING — "your
+       own writing", then "sent overseas", now "outside Australia", which
+       Grace's pass replaced with the plainer and more useful "companies
+       in the United States". A phrase was never the claim. The claim is
+       that the screen names a destination OUTSIDE AUSTRALIA, so it is
+       derived from the countries in the facts list: every one of them
+       appears, and at least one is not Australia. That survives any
+       rewording and goes red on the thing it is about — a recipient
+       somewhere the screen does not mention. */
+    const countries = [...new Set(AI_PROVIDERS.map((p) => p.country))];
+    assert.ok(countries.length > 0, "no provider has a country — this check would pass over nothing");
+    for (const country of countries) {
+      assert.ok(all.includes(country), `the consent screen never says a recipient is in ${country}`);
+    }
+    assert.ok(
+      countries.some((c) => !/australia/i.test(c)),
+      "no recipient is outside Australia, so the consent has nothing to disclose — if that is really true, this test should be deleted rather than loosened"
+    );
+    assert.match(all, /study cards/i, "the consent doesn't say what kind of text");
   });
 
   await test("consent v6 covers photographed pages, in the same category as text and audio", () => {
@@ -799,10 +861,34 @@ async function run() {
        name photos, promise they are not stored, and the POLICY must
        agree, because a promise made in one document and absent from the
        other is the drift this file exists to catch. */
-    const all = CONSENT_TEXT.bullets.join(" ");
+    const all = consentProse();
     assert.ok(AI_CONSENT_VERSION >= 6, "photographed pages shipped without a consent bump");
-    assert.match(all, /photos/i, "the consent never mentions photos");
-    assert.match(all, /not stored: not in your planner and not on our server/i, "the never-stored promise is gone");
+    assert.match(all, /photo/i, "the consent never mentions photos");
+    /* THE PROMISE, NOT ITS PUNCTUATION OR ITS TENSE. This pinned the
+       sentence down to an "and" that became a comma, and then to "not
+       stored" where Grace wrote "aren't stored". What has to be true is
+       that the screen promises supplied material is not kept, and says
+       WHERE.
+
+       THE LOCATION WAS BRIEFLY DROPPED AND IS BACK, which is why both
+       halves are asserted here rather than split across two documents.
+       Grace's first pass read "aren't stored — only the result is",
+       which makes the promise in the plainest words available and stops
+       saying where — directly after a bullet that DOES say transcripts
+       sit on our server for 7 days. That is the distinction this
+       codebase calls blurred rather than made: if supplied text and a
+       lecture transcript read the same, the stronger promise is not
+       being stated. Jared restored the location, 12 September 2026.
+
+       The policy keeps the precise form as well, and the contrast with
+       a transcript, because that is the document where precision is the
+       point — but the screen no longer relies on it. */
+    assert.match(all, /(aren't|are not|isn't|is not|never|not) stored|not kept|no server-side copy/i, "the never-stored promise is gone from the screen");
+    assert.match(all, /not in your planner/i, "the screen stopped saying supplied material is not kept in the planner");
+    assert.match(all, /not on our server/i, "the screen stopped saying supplied material is not kept on our server");
+    const policyText = prose("privacy.html");
+    assert.match(policyText, /no server-side copy at any point/i, "the policy dropped the precise half of the never-stored promise");
+    assert.match(policyText, /transcript/i, "the policy no longer draws the contrast with a lecture transcript");
 
     const policy = prose("privacy.html");
     assert.match(policy, /photo/i, "the policy never mentions photos while the app sends them overseas");
@@ -831,7 +917,7 @@ async function run() {
      phrase typed in here. */
   await test("supplied text is described by what it is, not by who wrote it", () => {
     const text = prose("privacy.html");
-    const consent = CONSENT_TEXT.bullets.join(" ");
+    const consent = consentProse();
 
     /* The narrow framing is now FALSE and must not come back. It was
        false before readings existed, too: a lecture recording captures
@@ -843,7 +929,7 @@ async function run() {
     /* The new promise, in both places. This is the one that changed
        what happens to the content, which is why consent was bumped. */
     assert.match(text, /(is )?not stored|never stored|no server-side copy/i, "the policy doesn't say supplied text isn't kept");
-    assert.match(consent, /not stored/i, "the consent text doesn't say supplied text isn't kept");
+    assert.match(consent, /(aren't|are not|isn't|is not|never|not) stored/i, "the consent text doesn't say supplied text isn't kept");
 
     /* And the distinction that makes it meaningful: a lecture DOES have
        a server-side copy for a window. If both read the same, the
@@ -865,7 +951,7 @@ async function run() {
        applied to the document a store reviewer reads. What makes this
        defensible is that it is a private-study tool pointed at material
        the student already has. */
-    const consent = CONSENT_TEXT.bullets.join(" ");
+    const consent = consentProse();
     assert.match(consent, /right to use|responsib/i, "consent doesn't put the rights question to the student");
     assert.doesNotMatch(consent, /(don't|do not) (have to|need to) read|instead of reading|skip the reading/i);
   });
@@ -873,14 +959,98 @@ async function run() {
   await test("consent links the published policy and names where the server is", () => {
     assert.ok(AI_CONSENT_VERSION >= 3);
     assert.equal(CONSENT_TEXT.privacyUrl, PRIVACY_URL);
-    const all = CONSENT_TEXT.bullets.join(" ");
+    const all = consentProse();
     assert.match(all, /Sydney/, "the consent text doesn't say where the server is");
-    assert.match(all, /deleted as soon as it has been transcribed/, "the audio promise changed");
-    assert.match(all, /overseas/, "the consent text doesn't mention overseas processing");
+    /* THE SHARED CONSTANT, not a phrase typed here. The promise is one
+       string (AUDIO_DELETION_PROMISE) interpolated into the consent
+       screen and into iOS's microphone dialog, so this reads it rather
+       than restating it — which is what stopped it breaking on a
+       rewording for a fourth time. */
+    assert.ok(all.includes(AUDIO_DELETION_PROMISE), "the consent screen no longer makes the audio-deletion promise");
+    /* The same claim as the country sweep above, and derived the same
+       way rather than pinned to a phrase. Kept here because this test is
+       about the screen's three ORIENTING facts together — the policy
+       link, where our server is, and where the work goes. */
+    for (const country of new Set(AI_PROVIDERS.map((p) => p.country))) {
+      assert.ok(all.includes(country), `the consent text doesn't say a recipient is in ${country}`);
+    }
+  });
+
+  /* ---------- the named third parties (Apple 5.1.1(i) / 5.1.2(i)) ---------- */
+
+  await test("THE CONSENT TEXT NAMES NO PROVIDER AS A LITERAL — it is derived or it is nothing", () => {
+    /* THE TAUTOLOGY THIS REPLACES IS WORTH RECORDING. The obvious test
+       here is "every name in AI_PROVIDERS appears in CONSENT_TEXT" — and
+       it CANNOT FAIL, because `CONSENT_TEXT.providers` is
+       `providerBullets()`, built from that same array. It passed with a
+       fourth invented provider, which is exactly the empty-set shape the
+       vacuous-guards rule is about: a comparison between a thing and
+       itself discriminates nothing and reports success.
+
+       So the claim that is actually checkable in this file is the
+       derivation: aiNotesLogic.js must not spell a provider's name out,
+       because a second copy is a copy that can go stale while this file
+       stays green. The other half — that the SCREEN really renders the
+       derived list — is a claim about a component, and it is made in
+       test-ai-notes.mjs against a real mount. */
+    assert.ok(AI_PROVIDERS.length > 0, "aiProviders.js names nobody — every sweep below would pass over nothing");
+    const src = fs
+      .readFileSync(path.join(rootDir, "src/aiNotesLogic.js"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/^\s*\/\/.*$/gm, " ");
+    for (const provider of AI_PROVIDERS) {
+      assert.ok(
+        !src.includes(provider.name),
+        `aiNotesLogic.js spells out "${provider.name}" — the consent text must come from aiProviders.js, ` +
+          "or the screen and the code can disagree about who receives a recording"
+      );
+    }
+    /* And non-vacuity for the grep: the name really is reachable through
+       the derivation it is supposed to come through. */
+    assert.ok(
+      consentProse().includes(AI_PROVIDERS[0].name),
+      "the consent text does not name the first provider at all, so the check above is about nothing"
+    );
+  });
+
+  await test("the privacy policy names the same third parties, with what and why and for how long", () => {
+    /* Apple's rejection says the policy alone is not sufficient; it does
+       not say the policy is excused. Both documents are checked against
+       the same source, so they cannot drift apart — which is the failure
+       this file exists for. */
+    const text = prose("privacy.html");
+    for (const provider of AI_PROVIDERS) {
+      assert.ok(text.includes(provider.name), `the policy never names ${provider.name}`);
+      assert.ok(text.includes(provider.country), `the policy never says ${provider.name} is in ${provider.country}`);
+    }
+    /* RETENTION AND THE CROSS-BORDER BASIS, which are the two things a
+       named-recipient list on its own does not answer. */
+    assert.match(text, /How long they have it/i, "the recipients table has no retention column");
+    assert.match(text, /reasonable steps/i, "the policy never states the basis for sending data overseas");
+    assert.match(
+      text,
+      /not allow your content to be used to train|not use your content to train/i,
+      "the policy doesn't say training is excluded"
+    );
+  });
+
+  await test("the policy does not claim an equivalence it cannot know", () => {
+    /* The honest half, and the one a regulator would read hardest. APP 8
+       asks for reasonable steps, not for a guarantee — and a policy that
+       asserts United States law protects you identically is telling a
+       student something nobody can know. The claim must be about what we
+       do, not about another country's law. */
+    const text = prose("privacy.html");
+    assert.doesNotMatch(
+      text,
+      /(same|equivalent|identical) (legal )?protections? (as|under) Australian law(?! does)/i,
+      "the policy claims an equivalence with Australian law"
+    );
+    assert.match(text, /cannot promise that United States law/i, "the policy dropped the sentence that says what it cannot know");
   });
 
   await test("the consent retention numbers are read from the code, not typed", () => {
-    const all = CONSENT_TEXT.bullets.join(" ");
+    const all = consentProse();
     assert.ok(all.includes(`${RESULT_RETENTION_DAYS} days`));
     assert.ok(all.includes(`${FAILED_RESULT_RETENTION_DAYS} days`));
     const src = fs.readFileSync(path.join(rootDir, "src/aiNotesLogic.js"), "utf8");
