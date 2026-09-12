@@ -32,7 +32,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { buildConsentPatch } from "../src/aiNotesLogic.js";
 
@@ -530,6 +530,93 @@ async function run() {
        assertion below a comparison rather than a coincidence. */
     assert.ok(calls.includes("Purchases.configure"), `configure never reached the bridge: ${calls.join(", ") || "(no calls at all)"}`);
     assert.ok(calls.includes("Purchases.getOfferings"), "the offering was never fetched");
+  });
+
+  await test("THE CURRENT PLAN IS IN ITS OWN BOX, and the disclosures are not in it with it", async () => {
+    /* Jared's layout order. The plan line was one of five paragraphs in
+       the same column, so the line somebody opens this panel to read
+       looked exactly like the small print about it. Asserted as
+       CONTAINMENT in a real mount rather than as a class name, because
+       the claim is about what is inside what — a grep for a border
+       utility would pass on a box with nothing in it. */
+    const { page, errors, close } = await mountAccount({ native: true });
+    const m = await page.evaluate(() => {
+      const box = document.querySelector("[data-plan-box]");
+      if (!box) return { box: false };
+      const line = document.querySelector("[data-plan-line]");
+      const disclosures = [...document.querySelectorAll("[data-purchase-controls] ~ div p")];
+      return {
+        box: true,
+        planLineInside: !!line && box.contains(line),
+        boxText: box.textContent.trim().slice(0, 60),
+        disclosureCount: disclosures.length,
+        anyDisclosureInside: disclosures.some((p) => box.contains(p)),
+        bordered: getComputedStyle(box).borderTopWidth,
+      };
+    });
+    await close();
+    assert.deepEqual(errors, [], errors.join("\n        "));
+    assert.ok(m.box, "there is no plan box on the panel at all");
+    assert.ok(m.planLineInside, "the plan line is not inside the plan box");
+    assert.ok(m.boxText.length > 0, "the plan box is empty, so containment proves nothing");
+    /* MEASURED ON THE RUNNING PAGE, not read off a class: "visually
+       distinct" is a computed border or it is a class name that a later
+       stylesheet rule could be overriding. */
+    assert.notEqual(m.bordered, "0px", `the plan box computes no border: ${m.bordered}`);
+    assert.ok(m.disclosureCount >= 3, `only ${m.disclosureCount} disclosures found — this check reads nothing`);
+    assert.ok(!m.anyDisclosureInside, "a disclosure is inside the plan box, which is what the box exists to separate it from");
+  });
+
+  await test("THE SIX PACKAGES ARE TWO TIER CARDS OF THREE, not six stacked buttons", async () => {
+    const { page, errors, close } = await mountAccount({ native: true });
+    const m = await page.evaluate(() => {
+      const cards = [...document.querySelectorAll("[data-tier-card]")];
+      return {
+        tiers: cards.map((c) => c.dataset.tierCard),
+        perCard: cards.map((c) => c.querySelectorAll("[data-package]").length),
+        titles: cards.map((c) => (c.querySelector("p") || {}).textContent || ""),
+        /* Every button's ACCESSIBLE NAME, which is the half a compact
+           label gives up: the visible text no longer says which plan
+           the button buys, so the card title carries it — and a screen
+           reader does not read the card title with the button. */
+        names: [...document.querySelectorAll("[data-package]")].map((b) => b.getAttribute("aria-label") || b.textContent),
+        loose: [...document.querySelectorAll("[data-package]")].filter((b) => !b.closest("[data-tier-card]")).length,
+      };
+    });
+    await close();
+    assert.deepEqual(errors, [], errors.join("\n        "));
+    assert.deepEqual(m.tiers, ["ai", "ai_max"], `the tier cards are ${m.tiers.join(", ") || "(none)"}`);
+    assert.deepEqual(m.perCard, [3, 3], `the cards hold ${m.perCard.join(" and ")} packages, not three each`);
+    assert.equal(m.loose, 0, `${m.loose} buy buttons are outside a tier card`);
+    for (const [i, title] of m.titles.entries()) {
+      assert.ok(title.trim().length > 0, `tier card ${i} has no title, so the buttons inside it name no plan at all`);
+    }
+    assert.equal(m.names.length, 6, `${m.names.length} buy buttons, expected 6`);
+    for (const name of m.names) {
+      assert.match(name, /Study AI/, `a buy button's accessible name does not say which plan it buys: "${name}"`);
+      assert.match(name, /month/, `a buy button's accessible name does not say the period: "${name}"`);
+    }
+  });
+
+  await test("EVERY DISCLOSURE AND LINK SURVIVED THE LAYOUT CHANGE", async () => {
+    /* The explicit other half of the order — the shape moved and the
+       required content did not. Derived from the copy module rather
+       than retyped, so a reworded disclosure follows instead of
+       breaking this. */
+    const { html, errors, close } = await mountAccount({ native: true });
+    await close();
+    assert.deepEqual(errors, [], errors.join("\n        "));
+    const { DISCLOSURES } = await import(pathToFileURL(path.join(rootDir, "src/plansCopy.js")).href);
+    const keys = Object.keys(DISCLOSURES);
+    assert.ok(keys.length >= 3, `only ${keys.length} disclosures are declared — this check reads nothing`);
+    const text = html.replace(/<[^>]+>/g, " ").replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, " ");
+    for (const key of keys) {
+      const words = DISCLOSURES[key].replace(/\s+/g, " ").slice(0, 40);
+      assert.ok(text.includes(words), `the "${key}" disclosure is gone from the panel`);
+    }
+    for (const hook of ["data-restore", "data-manage", "data-terms", "data-privacy"]) {
+      assert.match(html, new RegExp(hook), `${hook} is gone from the panel`);
+    }
   });
 
   await test("CONFIGURE IS THE FIRST NATIVE CALL, and nothing reaches the plugin before it", async () => {

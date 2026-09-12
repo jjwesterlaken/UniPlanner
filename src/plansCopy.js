@@ -182,6 +182,42 @@ export const buyLabel = (tier, duration, priceString) =>
   `${TIER_NAMES[tier] || tier} · ${DURATION_LABELS[duration] || duration}${priceString ? ` · ${priceString}` : ""}`;
 
 /**
+ * The same button, split for the compact row inside a tier card.
+ *
+ * THE TIER NAME COMES OFF because the card it sits in is titled with
+ * it — repeating it on all three buttons is what made six full-width
+ * rows the only shape that fit. `buyLabel` is UNCHANGED and is still
+ * what the web buttons render and what MOBILE-BUILD quotes, because
+ * there the button stands on its own with nothing above it saying
+ * which plan it belongs to.
+ *
+ * TWO PIECES RATHER THAN ONE STRING, so the panel can put the period
+ * and the price on their own lines at 320px without this module
+ * inventing a separator that only works at one width. The button still
+ * carries the FULL label as its accessible name — a control reading
+ * "1 month, A$8.99" out of its visual context does not say which plan
+ * it buys, and that context is exactly what a screen reader loses.
+ */
+export const buyLines = (duration, priceString) => ({
+  period: DURATION_LABELS[duration] || duration,
+  price: priceString || "",
+});
+
+/**
+ * What a tier BUYS, under its name on the card.
+ *
+ * Two cards of three prices answer "how much" and not "how much of
+ * what", and the difference between the two plans is the allowance —
+ * so it is the one line that makes the comparison the cards exist for
+ * possible. DERIVED from `allowanceForTier`, like every other figure
+ * here, so it cannot drift from what the server enforces.
+ */
+export function tierAllowanceLine(tier) {
+  const { credits, perMonth } = allowanceForTier(tier);
+  return perMonth ? `${credits} AI credits a month` : `${credits} AI credits`;
+}
+
+/**
  * What to say after a purchase or restore, by outcome.
  *
  * A CANCELLATION SAYS NOTHING AT ALL. The student pressed Cancel; they
