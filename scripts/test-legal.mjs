@@ -20,7 +20,7 @@ import {
   LECTURE_AUDIO_BUCKET,
 } from "../src/accountDeletion.js";
 import * as links from "../src/legalLinks.js";
-import { PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL } from "../src/legalLinks.js";
+import { PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL, SUPPORT_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL } from "../src/legalLinks.js";
 import { CONSENT_TEXT, AI_CONSENT_VERSION } from "../src/aiNotesLogic.js";
 import { AI_PROVIDERS } from "../src/aiProviders.js";
 import { AUDIO_DELETION_PROMISE } from "../src/aiNotesLogic.js";
@@ -266,6 +266,8 @@ async function run() {
         [new URL(SITE_URL).host]: "our own pages",
         "www.oaic.gov.au": "the Australian privacy regulator, for a complaint",
         "www.apple.com": "Apple's standard licence, which really does govern an App Store purchase (Terms section 10)",
+        "support.apple.com":
+          "where an App Store refund or cancellation is actually done — the support page has to send people there because we cannot refund a purchase Apple took",
       };
       const anchors = [...html.matchAll(/<a\b[^>]*?\bhref=["'](https?:\/\/[^"']+)["']/gi)].map((m) => new URL(m[1]).host);
       assert.ok(anchors.length > 0, `${file} has no absolute links at all — this check would pass over nothing`);
@@ -280,6 +282,56 @@ async function run() {
       }
     });
   }
+
+  await test("THE SUPPORT PAGE IS AT /support, which is the string in App Store Connect", () => {
+    /* Apple rejects a Support URL that does not resolve, and a store
+       listing cannot be edited as easily as a deploy — so the PATH is
+       the load-bearing part, not merely the content. Asserted against
+       the constant and against the file that has to exist at it. */
+    assert.equal(SUPPORT_URL, `${SITE_URL}/support`, "the Support URL is not the path given to App Store Connect");
+    assert.ok(fs.existsSync(path.join(rootDir, "public/support.html")), "there is no public/support.html to serve at /support");
+  });
+
+  await test("the support page says the four things it exists to say", () => {
+    /* Claim by claim rather than phrase by phrase, so Grace can reword
+       any of it. Each one is something a student or a reviewer arrives
+       on this page needing. */
+    const text = prose("support.html");
+
+    assert.ok(text.includes(SUPPORT_EMAIL), "the support address is not on the support page");
+
+    /* WHAT TO INCLUDE IN A REPORT. The build id is the one item we
+       cannot work without — it is the first question after any caching
+       bug — so it is asserted specifically rather than as part of a
+       general "tell us what happened". */
+    assert.match(text, /build id/i, "the page does not ask for the build id, which is the first thing we need");
+    assert.match(text, /Account/, "the page does not say where the build id is");
+    assert.match(text, /screenshot|device|browser/i, "the page does not say what else to include");
+
+    /* ACCOUNT DELETION, at the path the app really uses. */
+    assert.match(
+      text,
+      /Settings\s*->\s*Account\s*->\s*Delete account/i,
+      "the page does not give the in-app route to account deletion"
+    );
+
+    /* BILLING FOR AN APP STORE PURCHASE GOES TO APPLE, and the page has
+       to say WHY as well as where — "contact Apple" with no reason
+       reads as a brush-off, and the reason is true: we cannot refund a
+       payment we never took. */
+    assert.match(text, /Apple/, "the page does not mention Apple at all");
+    assert.match(text, /refund/i, "the page does not mention refunds, which is what a billing question usually is");
+    assert.match(
+      text,
+      /(cannot|can't) refund|never charged|Apple takes the payment/i,
+      "the page sends billing questions to Apple without saying why"
+    );
+
+    /* AND IT MUST NOT CLAIM TO HANDLE WHAT IT CANNOT, nor ask for a
+       password — a support page that invites credentials is a phishing
+       template somebody will imitate. */
+    assert.match(text, /(not|never) (send|ask for) your password|never ask for it/i, "the page does not warn against sending a password");
+  });
 
   await test("the Terms quote the allowances the SERVER enforces, not figures somebody typed", () => {
     /* The reason this document exists at all is that a web purchase is
@@ -473,7 +525,19 @@ async function run() {
        this project to have been weaker than it looked — see the rule in
        CLAUDE.md about deriving a guard from its source of truth rather
        than restating it. */
-    const canonical = new Set([`${SITE_URL}/`, PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL]);
+    /* DERIVED, like LEGAL_PAGES above and for the same reason. This was
+       `[SITE_URL/, PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL]` — a
+       hand-written list of the documents, beside a derived one, in the
+       same file. A fourth document could be linked absolutely by any
+       page here and be reported as "not canonical" purely because
+       nobody added it to this line. */
+    const canonical = new Set([
+      `${SITE_URL}/`,
+      ...Object.entries(links)
+        .filter(([n, v]) => n.endsWith("_URL") && typeof v === "string" && v.startsWith(`${SITE_URL}/`))
+        .map(([, v]) => v),
+    ]);
+    assert.ok(canonical.size >= 4, `only ${canonical.size} canonical URLs — this check would pass over nothing`);
     for (const file of LEGAL_PAGES) {
       const urls = [...new Set([...page(file).matchAll(/https?:\/\/[^"'\s<>]+/g)].map((m) => m[0]))]
         .filter((u) => u.includes("uniplannerapp.com"));

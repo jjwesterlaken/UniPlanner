@@ -37,7 +37,7 @@ const CACHE = "uni-planner-__BUILD_ID__";
    and rendering the planner in place of a privacy policy would be a
    plain misrepresentation. Matched by pathname so a query string or a
    trailing slash can't slip past. */
-const NETWORK_ONLY = ["/privacy.html", "/delete-account.html", "/terms.html", "/privacy", "/delete-account", "/terms"];
+const NETWORK_ONLY = ["/privacy.html", "/delete-account.html", "/terms.html", "/support.html", "/privacy", "/delete-account", "/terms", "/support"];
 
 /* The app shell: fetched fresh when the network allows, with the cache
    as the offline fallback.
