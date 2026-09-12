@@ -27,6 +27,12 @@ export const SITE_URL = "https://www.uniplannerapp.com";
 export const PRIVACY_URL = `${SITE_URL}/privacy`;
 export const DELETE_ACCOUNT_URL = `${SITE_URL}/delete-account`;
 export const TERMS_URL = `${SITE_URL}/terms`;
+/* THE SUPPORT URL IS IN APP STORE CONNECT, which is why it is here
+   rather than typed into the site footer. A store listing cannot be
+   edited as easily as a deploy, and Apple rejects a Support URL that
+   does not resolve — so this path is load-bearing in a way the others
+   are only after somebody clicks. */
+export const SUPPORT_URL = `${SITE_URL}/support`;
 
 /* Where a password-reset email sends someone back to.
 

@@ -93,6 +93,7 @@ const NATIVE_SHIPPED = {
   "privacy.html": "the published policy — a local copy costs nothing and works offline",
   "delete-account.html": "as above, and Google Play requires the page to be reachable",
   "terms.html": "the published Terms — shipped for the same reason as the policy, and Apple's review looks for terms reachable from the subscription screen",
+  "support.html": "the Support URL in App Store Connect — a local copy costs nothing, and a student whose problem IS the network can still read how to reach us",
 };
 
 for (const entry of fs.readdirSync(SRC)) {

@@ -62,10 +62,17 @@ let html = fs.readFileSync(SRC_PAGE, "utf8");
    its modules are one level down, where the web build also puts them. */
 html = html.replace(/(src|href)="\.\/([\w.-]+\.js)"/g, `$1="./site/$2"`);
 
-/* Root-relative -> absolute, EXCEPT the icons copied above. Listed by
-   what they are rather than matched blindly, so a new root-relative
-   link is a decision instead of a silent rewrite. */
-const ABSOLUTE = ["/privacy", "/delete-account"];
+/* Root-relative -> absolute, EXCEPT the icons copied above.
+
+   DERIVED FROM legalLinks.js rather than listed. It was
+   `["/privacy", "/delete-account"]`, typed here — and `/terms` had
+   already been published without joining it, so a Terms link in this
+   footer would have stayed root-relative and 404'd on the apex domain,
+   which serves no such file. Adding `/support` by hand would have been
+   the third chance to make the same omission. Every published document
+   is rewritten now, the moment its URL constant exists. */
+const ABSOLUTE = [...links.matchAll(/export const \w+_URL = `\$\{SITE_URL\}(\/[\w-]+)`/g)].map((m) => m[1]);
+if (ABSOLUTE.length === 0) throw new Error("no document paths found in src/legalLinks.js — every footer link would stay root-relative");
 for (const p of ABSOLUTE) {
   html = html.split(`href="${p}"`).join(`href="${SITE_URL}${p}"`);
 }

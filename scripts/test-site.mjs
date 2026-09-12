@@ -20,6 +20,7 @@
 import assert from "node:assert/strict";
 import { STORE_NAME, SHORT_DESCRIPTION, FULL_DESCRIPTION, PRIVACY_POLICY_PATH, ACCOUNT_DELETION_PATH, LIMITS } from "../site/store-listing.js";
 import { SITE_URL, PRIVACY_URL, DELETE_ACCOUNT_URL } from "../src/legalLinks.js";
+import * as links from "../src/legalLinks.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -503,14 +504,40 @@ test("it releases the service worker that used to own `/`", () => {
 });
 
 test("every in-page link points at something that exists", () => {
-  /* The mockup's footer linked /terms, and there is no terms page. A
-     404 from the footer of a launch page is the cheapest possible
-     mistake to make and one of the more embarrassing to ship. */
+  /* The mockup's footer linked /terms when no terms page existed. A 404
+     from the footer of a launch page is the cheapest possible mistake to
+     make and one of the more embarrassing to ship.
+
+     THE DOCUMENT HALF IS DERIVED NOW, and the reason is that the hand
+     -written half had gone STALE IN THE FORBIDDING DIRECTION: this test
+     ended with `assert.ok(!local.includes("/terms"))` — "no terms page
+     exists" — which stopped being true when public/terms.html shipped.
+     So the footer could not link the Terms document because a guard
+     still believed it was missing, and the failure would have read as
+     "your new link is broken" rather than "this line is out of date".
+     That is the restatement pattern with the sign flipped: a list of
+     what exists drifts into refusing what does.
+
+     Every `*_URL` under SITE_URL is a document, its path is its
+     filename, and the FILE must be there — so a new document is
+     linkable the moment its constant exists, and a constant with no
+     file still fails. The assets stay hand-declared, because they are
+     files rather than documents and have no source of truth to derive
+     from. */
+  const documents = Object.fromEntries(
+    Object.entries(links)
+      .filter(([n, v]) => n.endsWith("_URL") && typeof v === "string" && v.startsWith(`${links.SITE_URL}/`))
+      .map(([, v]) => {
+        const p = new URL(v).pathname;
+        return [p, `public${p}.html`];
+      })
+  );
+  assert.ok(Object.keys(documents).length >= 4, "the published-document list came back short — this guard would refuse real links");
+
   const hrefs = [...PAGE.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
   const local = hrefs.filter((h) => h.startsWith("/") && !h.startsWith("//"));
   const exists = {
-    "/privacy": "public/privacy.html",
-    "/delete-account": "public/delete-account.html",
+    ...documents,
     "/icon-192.png": "public/icon-192.png",
     "/apple-touch-icon.png": "public/apple-touch-icon.png",
     "/fonts/inter.woff2": "public/fonts/inter.woff2",
@@ -521,7 +548,24 @@ test("every in-page link points at something that exists", () => {
     assert.ok(exists[h], `the page links ${h}, which nothing in public/ serves`);
     assert.ok(fs.existsSync(path.join(rootDir, exists[h])), `${h} is linked but ${exists[h]} is missing`);
   }
-  assert.ok(!local.includes("/terms"), "the footer still links /terms — no terms page exists");
+
+  /* AND THE BUILT APEX PAGE MUST CARRY NONE OF THEM ROOT-RELATIVE.
+     dist-site is a SECOND Pages project serving the apex domain, which
+     has no /privacy of its own — build-site.mjs rewrites these to
+     absolute for exactly that reason, and a document it failed to
+     rewrite is a 404 from the footer on the live site. */
+  const built = path.join(rootDir, "dist-site/index.html");
+  if (fs.existsSync(built)) {
+    const builtHrefs = [...fs.readFileSync(built, "utf8").matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+    const leftBehind = builtHrefs.filter((h) => h in documents);
+    assert.deepEqual(leftBehind, [], `the apex page still links ${leftBehind.join(", ")} root-relative, which 404s there`);
+    for (const p of Object.keys(documents)) {
+      assert.ok(
+        builtHrefs.includes(`${links.SITE_URL}${p}`) || !local.includes(p),
+        `${p} is in the source footer but not absolute in the built apex page`
+      );
+    }
+  }
 });
 
 test("the page's factual claims are ones the code can back", () => {
