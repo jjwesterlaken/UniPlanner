@@ -1,6 +1,6 @@
 {
   "name": "university-planner-mobile",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "University Planner - iOS and Android app shell.",
   "scripts": {
