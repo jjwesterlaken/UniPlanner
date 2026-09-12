@@ -151,8 +151,18 @@ export async function purchasePackage(pkg, { plugin = Purchases, capability = pu
  * re-attaches it to the configured app user id, which is what makes
  * RevenueCat send the webhook that writes the tier.
  */
-export async function restorePurchases({ plugin = Purchases, capability = purchaseCapability() } = {}) {
+export async function restorePurchases({ session, plugin = Purchases, capability = purchaseCapability() } = {}) {
   if (!capability.available) return refuse(capability);
+  /* NEVER ANONYMOUS, and this is the action where it would cost the
+     most. Restore re-attaches a store receipt to whatever app user id
+     the SDK currently holds, and without a session that is an anonymous
+     one — which is precisely the delivery the webhook answers
+     `no_account` to, with a real paid subscription attached to an
+     account we do not have. `configurePurchases` has always refused
+     without a session; this one did not, and the panel's own
+     signed-out state was the only thing between them. A UI-only gate is
+     one refactor from leaking. */
+  if (!(session && session.user && session.user.id)) return { ok: false, reason: "signed-out" };
   try {
     const info = await plugin.restorePurchases();
     return { ok: true, customerInfo: info && info.customerInfo };

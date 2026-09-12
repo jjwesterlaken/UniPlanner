@@ -223,7 +223,7 @@ async function run() {
       ["logOutPurchases", (o) => sdk.logOutPurchases(o)],
       ["loadPackages", (o) => sdk.loadPackages(o)],
       ["purchasePackage", (o) => sdk.purchasePackage({ identifier: "studyai_monthly" }, o)],
-      ["restorePurchases", (o) => sdk.restorePurchases(o)],
+      ["restorePurchases", (o) => sdk.restorePurchases({ session: SESSION, ...o })],
     ];
     /* NON-VACUITY FIRST: the same five calls on a NATIVE capability must
        reach the plugin. Without this, a module that had been gutted
@@ -241,6 +241,43 @@ async function run() {
       assert.equal(result.reason, "web", `${name} refused for the wrong reason: ${result.reason}`);
     }
     assert.deepEqual(globalThis.__DEFAULT_PLUGIN_CALLS__, [], "something reached the real plugin export rather than the injected one");
+  });
+
+  await test("THE PLAN LINE HAS THREE ANSWERS, and no two of them read the same", () => {
+    /* `fetchNote`'s rule as a sentence. "We couldn't check" is a report
+       of a failure, so it must not be what a signed-out student sees —
+       there is no account, nothing was checked, and nothing failed. */
+    const signedOut = copy.currentPlanLine(null, { signedOut: true });
+    const unknown = copy.currentPlanLine(null);
+    const known = copy.currentPlanLine("ai");
+    const three = new Set([signedOut, unknown, known]);
+    assert.equal(three.size, 3, `the three plan states do not produce three sentences: ${[...three].join(" / ")}`);
+    assert.doesNotMatch(signedOut, /couldn't check|could not check/i, "a signed-out student is told a read failed");
+    assert.match(signedOut, /account/i, "the signed-out line does not say what to do about it");
+    assert.match(unknown, /couldn't check|could not check/i, "the unknown case stopped saying it is unknown");
+    /* AND IT IS NOT "FREE", which is the older half of the same rule. */
+    for (const line of [signedOut, unknown]) {
+      assert.doesNotMatch(line, new RegExp(`You're on ${copy.TIER_NAMES.free}`), "an unknown plan is being rendered as the free plan");
+    }
+  });
+
+  await test("THE STORE HAS THREE OUTCOMES TOO — unreachable is not the same as empty", () => {
+    /* `loadPackages` returns three for the reason its own comment
+       gives, and the panel used to collapse the last two into an empty
+       array — so an SDK that could not be reached rendered exactly like
+       a dashboard with no products in it. */
+    const failed = copy.storeStatusLine("failed");
+    const empty = copy.storeStatusLine("empty");
+    assert.ok(failed && empty, "one of the two store sentences is missing");
+    assert.notEqual(failed, empty, "an unreachable store and an empty offering say the same thing");
+    assert.equal(copy.storeStatusLine("ok"), null, "a working store is being explained at");
+    assert.equal(copy.storeStatusLine(null), null, "a store that has not answered yet is being explained at");
+    /* NEITHER MAY CAST DOUBT ON THE PLAN, because the plan comes from
+       `profiles` and is not in question — and "is my subscription gone"
+       is the first thing somebody asks when buying stops working. */
+    for (const line of [failed, empty]) {
+      assert.match(line, /plan is unchanged/i, `a store sentence does not say the plan is unaffected: ${line}`);
+    }
   });
 
   await test("a build with no key refuses in the same way, and says so differently", async () => {
@@ -271,6 +308,30 @@ async function run() {
     }
   });
 
+  await test("RESTORE REFUSES WITHOUT A SESSION — a receipt must never land on an anonymous id", async () => {
+    /* Restore re-attaches a real store receipt to whatever app user id
+       the SDK currently holds. Without a session that is an anonymous
+       one, which is precisely the delivery the webhook answers
+       `no_account` to — a paid subscription attached to an account we
+       do not have. `configurePurchases` has always refused without a
+       session; this one did not, and the panel's own signed-out state
+       was the only thing between them. A UI-only gate is one refactor
+       from leaking, and the refactor need not touch this file. */
+    const cap = plans.capabilityFrom(NATIVE_IOS);
+    const ok = tracedPlugin();
+    const allowed = await sdk.restorePurchases({ session: SESSION, plugin: ok.plugin, capability: cap });
+    assert.equal(allowed.ok, true, "restore refused a signed-in account — this test cannot discriminate");
+    assert.deepEqual(ok.trace.map((c) => c.name), ["restorePurchases"]);
+
+    for (const session of [null, undefined, {}, { user: null }, { user: {} }]) {
+      const t = tracedPlugin();
+      const r = await sdk.restorePurchases({ session, plugin: t.plugin, capability: cap });
+      assert.equal(r.ok, false, `restore ran for session ${JSON.stringify(session)}`);
+      assert.equal(r.reason, "signed-out", `restore refused for the wrong reason: ${r.reason}`);
+      assert.deepEqual(t.trace, [], "restore reached the SDK without a signed-in account");
+    }
+  });
+
   await test("signing out logs the SDK out, so a shared handset does not inherit an identity", async () => {
     const traced = tracedPlugin();
     const r = await sdk.logOutPurchases({ plugin: traced.plugin, capability: plans.capabilityFrom(NATIVE_IOS) });
@@ -287,7 +348,7 @@ async function run() {
       ["configure", (o) => sdk.configurePurchases({ session: SESSION, ...o })],
       ["logOut", (o) => sdk.logOutPurchases(o)],
       ["getOfferings", (o) => sdk.loadPackages(o)],
-      ["restorePurchases", (o) => sdk.restorePurchases(o)],
+      ["restorePurchases", (o) => sdk.restorePurchases({ session: SESSION, ...o })],
     ]) {
       const traced = tracedPlugin({ [name]: boom });
       const r = await call({ plugin: traced.plugin, capability: cap });

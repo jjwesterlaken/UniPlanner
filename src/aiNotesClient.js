@@ -34,7 +34,18 @@ export function currentMonthKey(d = new Date()) {
  */
 export async function fetchUsage(session, { supabaseClient = supabase, isDemo = backend.isDemo } = {}) {
   if (!session || isDemo || !supabaseClient) {
-    return { creditsUsed: 0, tier: null, unavailable: true };
+    /* `noAccount` IS THE THIRD OUTCOME, and it is here because two
+       genuinely different answers were sharing one flag. "There is
+       nobody to ask about" and "we asked and could not find out" are
+       both `unavailable`, and a reader that can only see that flag has
+       to guess — which is how the Plans panel came to tell a signed-out
+       student that we could not check their plan, a sentence about a
+       failure that never happened.
+
+       Additive on purpose: every existing reader branches on
+       `unavailable` and is unaffected. Only a caller that needs to tell
+       the two apart reads this. */
+    return { creditsUsed: 0, tier: null, unavailable: true, noAccount: true };
   }
   /* THE TIER DECIDES WHICH COUNTER TO READ, so it is read first rather
      than assumed. A trial tier's spend is a column on `profiles` with
@@ -82,7 +93,14 @@ export async function fetchUsage(session, { supabaseClient = supabase, isDemo = 
     .maybeSingle();
   /* A FAILED READ IS "UNKNOWN", NEVER "NONE LEFT". Same rule as
      fetchNote and the archive list: the badge disappears rather than
-     telling a student on a train that they are out of credits. */
+     telling a student on a train that they are out of credits.
+
+     NOTE WHAT `unavailable` DOES AND DOES NOT COVER HERE: the SPEND is
+     unknown, and the TIER is not — `profiles` was read successfully a
+     few lines up. A caller that wants the plan may use `tier` whenever
+     it is non-null, which is exactly when the profile read worked;
+     `unavailable` is about the figure beside it. The Plans panel read
+     this branch as "we know nothing" and threw away a tier it had. */
   if (error) return { creditsUsed: 0, tier: profile.tier, store: profile.store || null, unavailable: true, standing };
   return { creditsUsed: (data && data.credits_used) || 0, tier: profile.tier, store: profile.store || null, unavailable: false, standing };
 }

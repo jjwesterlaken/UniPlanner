@@ -22,6 +22,26 @@
    on a short bounded ladder and the copy says "activating" in the
    meantime, because a panel that still said Free to somebody who had
    just paid would read as a purchase that failed.
+
+   THE TIER AND THE STORE ARE TWO INDEPENDENT READS, AND THIS PANEL USED
+   TO JOIN THEM. Reported from the iOS simulator: an account with
+   `profiles.tier = 'ai'` saw "We couldn't check your plan just now",
+   no tier and no buy buttons. Two separate collapses, both the
+   `fetchNote` rule:
+
+     - the tier was taken only when `fetchUsage` reported everything
+       available, so a failed `ai_usage` read — the SPEND — discarded a
+       tier that had been read successfully one query earlier;
+     - `loadPackages`' failure was dropped on the floor
+       (`if (r.ok) setPackages(...)`), so an SDK that could not be
+       reached rendered identically to a dashboard with no products in
+       it: a purchase screen with nothing on it and no explanation.
+
+   Measured rather than assumed, and the measurement disproved the
+   first hypothesis: with the SDK rejecting every call the tier line
+   was already correct, because `purchases.js` catches and the tier
+   never came from the SDK. What blanks the tier is a `fetchUsage`
+   failure, and nothing else can.
    ================================================================== */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -41,6 +61,7 @@ import {
   managedByStoreLine,
   currentPlanLine,
   outcomeMessage,
+  storeStatusLine,
   resetLine,
   unavailableLine,
   webFailureMessage,
@@ -68,23 +89,42 @@ export function PlansPanel({ session }) {
      Stripe's Customer Portal and a store's own page are different
      destinations and sending somebody to the wrong one is a dead end. */
   const [store, setStore] = useState(null);
+  /* Signed out (or demo) is a DEFINITIVE answer, not a failed read, and
+     it gets its own sentence — see `currentPlanLine`. Taken from
+     `fetchUsage` rather than from `!session` here, so the panel and the
+     module that made the decision cannot disagree about which state
+     this is. */
+  const [noAccount, setNoAccount] = useState(false);
   const [packages, setPackages] = useState([]);
+  /* null while unasked, then "ok" | "empty" | "failed" — the three
+     outcomes `loadPackages` is written to return, kept distinct all the
+     way to the screen instead of two of them arriving as an empty array. */
+  const [storeOutcome, setStoreOutcome] = useState(null);
   const [customerInfo, setCustomerInfo] = useState(null);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState(null);
   const [activating, setActivating] = useState(false);
   const cancelPoll = useRef(null);
 
-  /* Read once per mount and again on every bump. `unavailable` is kept
-     as null rather than coerced to "free": the copy has a sentence for
-     "we could not check" and it is not the same sentence as "you are on
-     the free plan". */
+  /* Read once per mount and again on every bump. An unknown tier is
+     kept as null rather than coerced to "free": the copy has a sentence
+     for "we could not check" and it is not the same sentence as "you
+     are on the free plan".
+
+     THE TIER IS TAKEN WHENEVER THERE IS ONE, not only when everything
+     else succeeded. `fetchUsage` sets `unavailable` when the SPEND is
+     unknown, and that branch still carries a real tier — `profiles` was
+     read a query earlier. Gating on the flag threw that away and told a
+     paying student we could not check their plan, which was false and
+     was on the screen that sells the plan. `tier` is non-null exactly
+     when the profile read worked, so it is its own evidence. */
   useEffect(() => {
     let cancelled = false;
     fetchUsage(session).then((u) => {
       if (cancelled) return;
-      setTier(u && !u.unavailable ? u.tier : null);
-      setStore(u && !u.unavailable ? u.store || null : null);
+      setTier((u && u.tier) || null);
+      setStore((u && u.store) || null);
+      setNoAccount(!!(u && u.noAccount));
     });
     return () => {
       cancelled = true;
@@ -96,8 +136,19 @@ export function PlansPanel({ session }) {
   useEffect(() => {
     if (!capability.available || !session) return undefined;
     let cancelled = false;
+    setStoreOutcome(null);
     loadPackages().then((r) => {
-      if (!cancelled && r.ok) setPackages(r.packages);
+      if (cancelled) return;
+      /* A FAILURE IS NOT AN EMPTY OFFERING. `loadPackages` returns three
+         outcomes precisely so this line does not have to guess, and the
+         old version dropped `!r.ok` silently — which is what left the
+         simulator showing a purchase screen with no plans and no reason. */
+      if (!r.ok) {
+        setStoreOutcome("failed");
+        return;
+      }
+      setPackages(r.packages);
+      setStoreOutcome(r.packages.length ? "ok" : "empty");
     });
     return () => {
       cancelled = true;
@@ -129,7 +180,7 @@ export function PlansPanel({ session }) {
   const restore = async () => {
     setBusy("restore");
     setMessage(null);
-    const result = await restorePurchases();
+    const result = await restorePurchases({ session });
     setBusy("");
     setMessage(outcomeMessage("restore", result.ok ? null : result.reason));
     if (result.ok) {
@@ -196,6 +247,7 @@ export function PlansPanel({ session }) {
   const grouped = groupPackages(packages);
   const manageUrl = manageSubscriptionUrl({ customerInfo, store: capability.store });
   const unavailable = unavailableLine(capability.reason);
+  const storeStatus = storeStatusLine(storeOutcome);
   const terms = termsLink(capability.reason);
 
   return (
@@ -206,7 +258,7 @@ export function PlansPanel({ session }) {
       </div>
 
       <p className="mt-2 text-sm text-stone-700" data-plan-line>
-        {currentPlanLine(tier)}
+        {currentPlanLine(tier, { signedOut: noAccount })}
       </p>
       {tier && <p className="mt-1 text-xs text-stone-500">{resetLine(tier)}</p>}
       {activating && <p className="mt-1 text-xs text-stone-500">{ACTIVATING_NOTICE}</p>}
@@ -215,7 +267,17 @@ export function PlansPanel({ session }) {
       {/* THE PURCHASE HALF, native only. On web and desktop there is one
           sentence saying where plans are bought and nothing else — not a
           "coming soon", which would promise a surface this one is never
-          going to have. */}
+          going to have.
+
+          AND NOTHING AT ALL WHEN SIGNED OUT. There is no anonymous
+          purchase here — `configurePurchases` names the Supabase user id
+          and refuses without one — so a Restore button with no account
+          behind it can only attach a real receipt to an anonymous id,
+          which is the delivery the webhook answers `no_account` to. The
+          plan line above already says to make an account, so this branch
+          adds nothing rather than offering a control that cannot work.
+          Apple's Restore requirement is about a screen that OFFERS
+          purchases, and signed out this one does not. */}
       {!capability.available && webPurchases ? (
         /* PHASE 6, BEHIND STRIPE_ENABLED. The same panel, a different
            payment provider: the web cannot reach a store, so a card
@@ -253,8 +315,19 @@ export function PlansPanel({ session }) {
         <p className="mt-3 text-xs text-stone-500" data-purchase-unavailable>
           {unavailable}
         </p>
-      ) : (
+      ) : !session ? null : (
         <div className="mt-4 space-y-4" data-purchase-controls>
+          {/* WHY THERE IS NOTHING TO BUY, when there is nothing to buy.
+              Rendered above the Restore control rather than in place of
+              the whole block: Apple requires a visible Restore on a
+              subscription screen, and an SDK that cannot be reached is
+              exactly the state in which somebody most wants to press it.
+              Silent on the ordinary path, where there are packages. */}
+          {storeStatus && (
+            <p className="rounded-lg bg-stone-50 px-3 py-2 text-sm text-stone-700" data-store-status>
+              {storeStatus}
+            </p>
+          )}
           {grouped.tiers.map((group) => (
             <div key={group.tier} className="space-y-1.5">
               {group.packages.map(({ pkg, tier: t, duration }) => (
@@ -306,23 +379,34 @@ export function PlansPanel({ session }) {
         <p>{managedByStoreLine(capability.reason, capability.store)}</p>
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+      {/* THE REQUIRED LINKS, AND THEY ARE NOT FOOTNOTES. Apple's
+          subscription rules ask for functional links to the terms and
+          the privacy policy ON this screen, and a reviewer establishes
+          that by looking — so they read as links: body size, the accent
+          colour, underlined, on their own separated row rather than
+          11px grey sharing a line with the disclosures above. The same
+          argument applies to "Manage subscription" for a reason that is
+          ours rather than Apple's: somebody trying to cancel and unable
+          to find how is a chargeback, and a muted link is how that
+          happens. Nothing else about the panel's styling changed, and
+          Grace owns whatever it looks like in the end. */}
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 border-t border-stone-200 pt-3 text-sm">
         {manageUrl && (
-          <a className="inline-flex items-center gap-1 text-stone-500 hover:u-accent-text" href={manageUrl} target="_blank" rel="noreferrer" data-manage>
+          <a className="inline-flex items-center gap-1 font-medium underline u-accent-text" href={manageUrl} target="_blank" rel="noreferrer" data-manage>
             {ACTIONS.manage}
-            <ExternalLink size={11} />
+            <ExternalLink size={13} />
           </a>
         )}
         {/* Our terms on web and desktop, Apple's licence on a native
             shell. termsLink returns the href and the label together so
             the two cannot disagree about which agreement this is. */}
-        <a className="inline-flex items-center gap-1 text-stone-500 hover:u-accent-text" href={terms.href} target="_blank" rel="noreferrer" data-terms>
+        <a className="inline-flex items-center gap-1 font-medium underline u-accent-text" href={terms.href} target="_blank" rel="noreferrer" data-terms>
           {terms.label}
-          <ExternalLink size={11} />
+          <ExternalLink size={13} />
         </a>
-        <a className="inline-flex items-center gap-1 text-stone-500 hover:u-accent-text" href={LINKS.privacy} target="_blank" rel="noreferrer" data-privacy>
+        <a className="inline-flex items-center gap-1 font-medium underline u-accent-text" href={LINKS.privacy} target="_blank" rel="noreferrer" data-privacy>
           {ACTIONS.privacy}
-          <ExternalLink size={11} />
+          <ExternalLink size={13} />
         </a>
       </div>
     </Card>
