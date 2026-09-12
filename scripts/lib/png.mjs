@@ -291,3 +291,74 @@ export function hexToRgb(hex) {
   const n = parseInt(m[1], 16);
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 }
+
+/* ==================================================================
+   ICO — a container of PNGs, for the one Windows slot
+
+   electron-builder reads `desktop/build/icon.ico` for the Windows
+   installer and executable, and nothing else in this repository can
+   produce that container — so without this the Windows icon is the one
+   slot that cannot derive from the master, which is how a second
+   rendering of the glyph gets back in.
+
+   PNG PAYLOADS AT EVERY SIZE, not BMP. Windows has read PNG-compressed
+   ICO entries at any size since Vista, the deployment floor for an
+   Electron app is far above that, and a BMP path would mean a second
+   encoder — with its own bottom-up row order and AND-mask — to keep
+   deterministic. One encoder, already proved by every other slot.
+
+   The format: a 6-byte header, then one 16-byte directory entry per
+   image, then the payloads. Width and height are single bytes with 0
+   meaning 256, which is the only reason 256 is expressible at all.
+   ================================================================== */
+
+/**
+ * Pack `{ size, png }` entries into an `.ico`.
+ *
+ * Deterministic: the directory is written in the order given and the
+ * payloads are whatever `encodePng` produced, so the same master gives
+ * the same bytes and `--check` can compare them.
+ */
+export function encodeIco(entries) {
+  if (!entries.length) throw new Error("an .ico with no images is not a file Windows will read");
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(1, 2); // type 1 = icon
+  header.writeUInt16LE(entries.length, 4);
+
+  const directory = Buffer.alloc(entries.length * 16);
+  let offset = header.length + directory.length;
+  entries.forEach((entry, i) => {
+    const { size, png } = entry;
+    if (size < 1 || size > 256) throw new Error(`an .ico image must be 1..256px, found ${size}`);
+    const d = i * 16;
+    directory[d] = size === 256 ? 0 : size; // width, 0 means 256
+    directory[d + 1] = size === 256 ? 0 : size; // height
+    directory[d + 2] = 0; // palette size — 0 for a truecolour image
+    directory[d + 3] = 0; // reserved
+    directory.writeUInt16LE(1, d + 4); // colour planes
+    directory.writeUInt16LE(32, d + 6); // bits per pixel
+    directory.writeUInt32LE(png.length, d + 8);
+    directory.writeUInt32LE(offset, d + 12);
+    offset += png.length;
+  });
+
+  return Buffer.concat([header, directory, ...entries.map((e) => e.png)]);
+}
+
+/** Read an `.ico` back as `{ size, png }`, so a guard can check one. */
+export function decodeIco(buffer) {
+  if (buffer.readUInt16LE(0) !== 0 || buffer.readUInt16LE(2) !== 1) throw new Error("not an .ico file");
+  const count = buffer.readUInt16LE(4);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const d = 6 + i * 16;
+    out.push({
+      size: buffer[d] || 256,
+      height: buffer[d + 1] || 256,
+      bits: buffer.readUInt16LE(d + 6),
+      png: buffer.subarray(buffer.readUInt32LE(d + 12), buffer.readUInt32LE(d + 12) + buffer.readUInt32LE(d + 8)),
+    });
+  }
+  return out;
+}

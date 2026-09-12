@@ -36,8 +36,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { decodePng } from "./lib/png.mjs";
-import { deriveAll, nativePresent, WEB, STORE, ANDROID_DENSITIES, MASTER, rootDir } from "./make-icons.mjs";
+import { decodePng, decodeIco } from "./lib/png.mjs";
+import { deriveAll, nativePresent, WEB, STORE, DESKTOP_ICO_SIZES, ANDROID_DENSITIES, MASTER, rootDir } from "./make-icons.mjs";
 
 let passed = 0;
 let failed = 0;
@@ -84,12 +84,21 @@ async function run() {
   await test("every tracked slot re-derives from the master, byte for byte", () => {
     const slots = deriveAll(masterBuffer, { includeNative: false });
     /* Derived from the tables rather than a number I guessed — which I
-       did, wrongly, on the first run. The `+ 1` is the feature graphic,
-       which is composed rather than listed. */
+       did, wrongly, on the first run. The three that are not in a size
+       table are named rather than counted, so an accidental extra slot
+       fails here instead of being absorbed by an arithmetic constant. */
+    const composed = [
+      "mobile/store/play-feature-graphic.png",
+      "desktop/build/icon.png",
+      "desktop/build/icon.ico",
+    ];
+    for (const p of composed) {
+      assert.ok(slots.some((s) => s.path === p), `${p} is not generated at all`);
+    }
     assert.equal(
       slots.length,
-      WEB.length + STORE.length + 1,
-      `${slots.length} tracked slots, expected ${WEB.length + STORE.length + 1} — the table and the generator disagree`
+      WEB.length + STORE.length + composed.length,
+      `${slots.length} tracked slots, expected ${WEB.length + STORE.length + composed.length} — the table and the generator disagree`
     );
     assert.ok(WEB.length >= 3, "the web icon table shrank below the three the app references");
 
@@ -138,6 +147,39 @@ async function run() {
     const g = decodePng(fs.readFileSync(path.join(rootDir, "mobile/store/play-feature-graphic.png")));
     assert.equal(g.width, 1024);
     assert.equal(g.height, 500);
+  });
+
+  await test("the desktop PNG is the master VERBATIM, so it gains no alpha channel", () => {
+    /* The same reasoning as the iOS slot. `encodePng` always writes
+       RGBA, so a slot that re-encodes an opaque master hands Windows
+       and macOS a channel neither needs — and on Apple's side that is
+       the rejection this whole file is about. Passing the bytes
+       through is what keeps colour type 2 all the way out. */
+    const onDisk = fs.readFileSync(path.join(rootDir, "desktop/build/icon.png"));
+    assert.ok(onDisk.equals(masterBuffer), "desktop/build/icon.png is not the master — run: node scripts/make-icons.mjs");
+    assert.equal(onDisk[25], 2, "the desktop icon carries an alpha channel the master does not");
+  });
+
+  await test("the Windows .ico carries every declared size, each a readable PNG", () => {
+    /* electron-builder hands this straight to Windows, so what matters
+       is that the CONTAINER is well formed rather than that our encoder
+       ran — a directory pointing at the wrong offsets produces a file
+       that exists, re-derives, and shows a blank icon. So it is decoded
+       back and every payload is decoded as a PNG at its declared size. */
+    const entries = decodeIco(fs.readFileSync(path.join(rootDir, "desktop/build/icon.ico")));
+    assert.ok(entries.length > 0, "the .ico declares no images — this check would pass over nothing");
+    assert.deepEqual(
+      entries.map((e) => e.size),
+      DESKTOP_ICO_SIZES,
+      "the .ico's sizes are not the ones the generator declares"
+    );
+    for (const entry of entries) {
+      assert.equal(entry.bits, 32, `the ${entry.size}px entry is not 32-bit`);
+      const img = decodePng(entry.png);
+      assert.equal(img.width, entry.size, `the ${entry.size}px entry holds a ${img.width}px image`);
+      assert.equal(img.height, entry.size);
+    }
+    assert.ok(DESKTOP_ICO_SIZES.includes(256), "256 is the size Windows uses for large views and it is missing");
   });
 
   await test("the native slots are ENUMERATED even where they cannot be written", () => {
