@@ -219,23 +219,38 @@ async function run() {
   await test("NO ACTION TOUCHES THE PLUGIN ON WEB — every one of them, traced", async () => {
     const web = plans.capabilityFrom({ isNative: false, platform: "web", iosKey: "appl_x", androidKey: "goog_x" });
     const calls = [
-      ["configurePurchases", (o) => sdk.configurePurchases({ session: SESSION, ...o })],
-      ["logOutPurchases", (o) => sdk.logOutPurchases(o)],
-      ["loadPackages", (o) => sdk.loadPackages(o)],
-      ["purchasePackage", (o) => sdk.purchasePackage({ identifier: "studyai_monthly" }, o)],
-      ["restorePurchases", (o) => sdk.restorePurchases({ session: SESSION, ...o })],
+      ["configurePurchases", (o) => sdk.configurePurchases({ session: SESSION, ...o }), "configure"],
+      ["logOutPurchases", (o) => sdk.logOutPurchases(o), "logOut"],
+      ["loadPackages", (o) => sdk.loadPackages({ session: SESSION, ...o }), "getOfferings"],
+      ["purchasePackage", (o) => sdk.purchasePackage({ identifier: "studyai_monthly" }, { session: SESSION, ...o }), "purchasePackage"],
+      ["restorePurchases", (o) => sdk.restorePurchases({ session: SESSION, ...o }), "restorePurchases"],
     ];
     /* NON-VACUITY FIRST: the same five calls on a NATIVE capability must
        reach the plugin. Without this, a module that had been gutted
-       would pass every assertion below. */
-    const native = tracedPlugin();
-    for (const [, call] of calls) await call({ plugin: native.plugin, capability: plans.capabilityFrom(NATIVE_IOS) });
-    assert.equal(native.trace.length, calls.length, `a native capability reached the plugin ${native.trace.length} times, expected ${calls.length} — this test cannot discriminate`);
+       would pass every assertion below.
+
+       BY METHOD RATHER THAN BY COUNT, since the configure gate landed.
+       Counting assumed one plugin call per action, and that stopped
+       being true in both directions: an action that arrives before
+       configure now makes TWO calls, and one that arrives after an
+       action that already configured makes one. The claim was never
+       about the arithmetic — it is that every action really reaches the
+       plugin — so it is asserted as that, per action, and a fresh
+       session id per case keeps the gate from remembering the last one. */
+    for (const [name, call, method] of calls) {
+      const native = tracedPlugin();
+      const fresh = { user: { id: `${name}-${SESSION.user.id}` } };
+      await call({ plugin: native.plugin, capability: plans.capabilityFrom(NATIVE_IOS), session: fresh });
+      assert.ok(
+        native.trace.some((c) => c.name === method),
+        `${name} did not reach the plugin on a NATIVE capability — this test cannot discriminate. Trace: ${native.trace.map((c) => c.name).join(", ") || "(empty)"}`
+      );
+    }
 
     globalThis.__DEFAULT_PLUGIN_CALLS__ = [];
     for (const [name, call] of calls) {
       const traced = tracedPlugin();
-      const result = await call({ plugin: traced.plugin, capability: web });
+      const result = await call({ plugin: traced.plugin, capability: web, session: SESSION });
       assert.deepEqual(traced.trace, [], `${name} called the store SDK on web: ${traced.trace.map((c) => c.name).join(", ")}`);
       assert.equal(result.ok, false, `${name} reported success on web`);
       assert.equal(result.reason, "web", `${name} refused for the wrong reason: ${result.reason}`);
@@ -308,6 +323,61 @@ async function run() {
     }
   });
 
+  await test("AN ACTION THAT ARRIVES BEFORE configure CONFIGURES FIRST, rather than failing", async () => {
+    /* THE DEVICE BUG, at the boundary. getOfferings reached the plugin
+       before configure did — not because either call site was wrong,
+       but because `loadPackages` runs from a CHILD component's effect
+       and React runs child effects first. Fixing the call sites would
+       fix this launch and not the rule.
+
+       So the ordering is a property of the module: an action that gets
+       there first performs the configure itself. */
+    const cap = plans.capabilityFrom(NATIVE_IOS);
+    const session = { user: { id: "arrives-first" } };
+    const traced = tracedPlugin();
+    const r = await sdk.loadPackages({ session, plugin: traced.plugin, capability: cap });
+    assert.equal(r.ok, true, `loadPackages failed although nothing was wrong: ${r.reason}`);
+    assert.deepEqual(
+      traced.trace.map((c) => c.name),
+      ["configure", "getOfferings"],
+      "the offering was requested before the SDK was told who this is"
+    );
+    assert.deepEqual(traced.trace[0].args[0], { apiKey: "appl_test", appUserID: session.user.id });
+  });
+
+  await test("TWO ACTIONS RACING PRODUCE ONE configure, and both wait on it", async () => {
+    /* Not tidiness: two configures for one account is two identities
+       being asserted, and which one the SDK ends on is a coin toss. */
+    const cap = plans.capabilityFrom(NATIVE_IOS);
+    const session = { user: { id: "racing" } };
+    const traced = tracedPlugin();
+    const [a, b] = await Promise.all([
+      sdk.loadPackages({ session, plugin: traced.plugin, capability: cap }),
+      sdk.restorePurchases({ session, plugin: traced.plugin, capability: cap }),
+    ]);
+    assert.equal(a.ok, true, `loadPackages failed: ${a.reason}`);
+    assert.equal(b.ok, true, `restorePurchases failed: ${b.reason}`);
+    const configures = traced.trace.filter((c) => c.name === "configure").length;
+    assert.equal(configures, 1, `two racing actions produced ${configures} configure calls`);
+    assert.equal(traced.trace[0].name, "configure", `the first call was ${traced.trace[0].name}`);
+  });
+
+  await test("A FAILED configure IS THE ANSWER, rather than a confusing provider error one call later", async () => {
+    /* Letting getOfferings run anyway is what produced "Purchases must
+       be configured before calling this function" — a true sentence
+       about our bug, shown to a student, on the screen that sells the
+       paid tier. */
+    const cap = plans.capabilityFrom(NATIVE_IOS);
+    const traced = tracedPlugin({ configure: () => { throw new Error("StoreKit is unavailable"); } });
+    const r = await sdk.loadPackages({ session: { user: { id: "cannot-configure" } }, plugin: traced.plugin, capability: cap });
+    assert.equal(r.ok, false, "loadPackages reported success although the SDK was never configured");
+    assert.equal(r.reason, "sdk-error");
+    assert.ok(
+      !traced.trace.some((c) => c.name === "getOfferings"),
+      `the offering was requested although configuring failed: ${traced.trace.map((c) => c.name).join(", ")}`
+    );
+  });
+
   await test("RESTORE REFUSES WITHOUT A SESSION — a receipt must never land on an anonymous id", async () => {
     /* Restore re-attaches a real store receipt to whatever app user id
        the SDK currently holds. Without a session that is an anonymous
@@ -319,9 +389,13 @@ async function run() {
        from leaking, and the refactor need not touch this file. */
     const cap = plans.capabilityFrom(NATIVE_IOS);
     const ok = tracedPlugin();
-    const allowed = await sdk.restorePurchases({ session: SESSION, plugin: ok.plugin, capability: cap });
+    /* Its own session id, and the trace is asserted by CONTAINMENT: the
+       configure gate is module-level, so whether this call also has to
+       configure depends on what ran before it, and that is not what
+       this test is about. */
+    const allowed = await sdk.restorePurchases({ session: { user: { id: "restore-allowed" } }, plugin: ok.plugin, capability: cap });
     assert.equal(allowed.ok, true, "restore refused a signed-in account — this test cannot discriminate");
-    assert.deepEqual(ok.trace.map((c) => c.name), ["restorePurchases"]);
+    assert.ok(ok.trace.some((c) => c.name === "restorePurchases"), `restore never reached the plugin: ${ok.trace.map((c) => c.name).join(", ")}`);
 
     for (const session of [null, undefined, {}, { user: null }, { user: {} }]) {
       const t = tracedPlugin();
@@ -345,13 +419,24 @@ async function run() {
     };
     const cap = plans.capabilityFrom(NATIVE_IOS);
     for (const [name, call] of [
-      ["configure", (o) => sdk.configurePurchases({ session: SESSION, ...o })],
-      ["logOut", (o) => sdk.logOutPurchases(o)],
+      ["configure", (o) => sdk.configurePurchases(o)],
+      ["logOut", async (o) => {
+        /* logOut has nothing to forget until something configured, so
+           the throwing case needs an SDK that was configured first —
+           which is also the only state in which a real logOut runs. */
+        await sdk.configurePurchases(o);
+        return sdk.logOutPurchases(o);
+      }],
       ["getOfferings", (o) => sdk.loadPackages(o)],
-      ["restorePurchases", (o) => sdk.restorePurchases({ session: SESSION, ...o })],
+      ["restorePurchases", (o) => sdk.restorePurchases(o)],
     ]) {
+      /* A FRESH SESSION ID PER CASE. The configure gate is module-level,
+         as the SDK's own identity is, so a case that reused the last
+         one's id would find the SDK already configured and never reach
+         the call it is about. */
+      const session = { user: { id: `throws-${name}` } };
       const traced = tracedPlugin({ [name]: boom });
-      const r = await call({ plugin: traced.plugin, capability: cap });
+      const r = await call({ session, plugin: traced.plugin, capability: cap });
       assert.equal(r.ok, false, `${name} reported success after throwing`);
       assert.equal(r.reason, "sdk-error", `${name} reported ${r.reason}`);
     }
@@ -359,6 +444,10 @@ async function run() {
 
   await test("A CANCELLATION IS NOT A FAILURE, and an empty offering is not a failed read", async () => {
     const cap = plans.capabilityFrom(NATIVE_IOS);
+    /* A FRESH SESSION ID PER CASE, for the reason the sweep above gives:
+       the configure gate is module-level and remembers the last id. */
+    const sess = (n) => ({ user: { id: `outcomes-${n}` } });
+
     const cancelled = tracedPlugin({
       purchasePackage: () => {
         const err = new Error("Purchase was cancelled.");
@@ -366,7 +455,7 @@ async function run() {
         throw err;
       },
     });
-    const r = await sdk.purchasePackage({ identifier: "studyai_monthly" }, { plugin: cancelled.plugin, capability: cap });
+    const r = await sdk.purchasePackage({ identifier: "studyai_monthly" }, { session: sess("cancel"), plugin: cancelled.plugin, capability: cap });
     assert.equal(r.reason, "cancelled", "pressing Cancel must not be reported as something going wrong");
     assert.equal(copy.outcomeMessage("purchase", "cancelled"), null, "a cancellation must say nothing at all");
 
@@ -375,18 +464,18 @@ async function run() {
        unknown. A panel that showed "no plans available" for the second
        would be a paywall caused by a tunnel. */
     const empty = tracedPlugin({ getOfferings: () => ({ current: { identifier: "default", availablePackages: [] } }) });
-    const emptyResult = await sdk.loadPackages({ plugin: empty.plugin, capability: cap });
+    const emptyResult = await sdk.loadPackages({ session: sess("empty"), plugin: empty.plugin, capability: cap });
     assert.deepEqual({ ok: emptyResult.ok, n: emptyResult.packages.length }, { ok: true, n: 0 });
 
     const failed = tracedPlugin({ getOfferings: () => { throw new Error("offline"); } });
-    const failedResult = await sdk.loadPackages({ plugin: failed.plugin, capability: cap });
+    const failedResult = await sdk.loadPackages({ session: sess("failed"), plugin: failed.plugin, capability: cap });
     assert.equal(failedResult.ok, false, "a failed offerings read must not read as an empty offering");
 
     const noOffering = tracedPlugin({ getOfferings: () => ({ current: null }) });
-    const noneResult = await sdk.loadPackages({ plugin: noOffering.plugin, capability: cap });
+    const noneResult = await sdk.loadPackages({ session: sess("none"), plugin: noOffering.plugin, capability: cap });
     assert.deepEqual({ ok: noneResult.ok, n: noneResult.packages.length }, { ok: true, n: 0 }, "a dashboard with no current offering must not read as a failure");
 
-    assert.equal((await sdk.purchasePackage(null, { plugin: tracedPlugin().plugin, capability: cap })).reason, "no-package");
+    assert.equal((await sdk.purchasePackage(null, { session: sess("nopkg"), plugin: tracedPlugin().plugin, capability: cap })).reason, "no-package");
   });
 
   /* ---------- 5. the copy ---------- */

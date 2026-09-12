@@ -137,7 +137,7 @@ export function PlansPanel({ session }) {
     if (!capability.available || !session) return undefined;
     let cancelled = false;
     setStoreOutcome(null);
-    loadPackages().then((r) => {
+    loadPackages({ session }).then((r) => {
       if (cancelled) return;
       /* A FAILURE IS NOT AN EMPTY OFFERING. `loadPackages` returns three
          outcomes precisely so this line does not have to guess, and the
@@ -168,7 +168,7 @@ export function PlansPanel({ session }) {
   const buy = async (pkg) => {
     setBusy(pkg.identifier);
     setMessage(null);
-    const result = await purchasePackage(pkg);
+    const result = await purchasePackage(pkg, { session });
     setBusy("");
     setMessage(outcomeMessage("purchase", result.ok ? null : result.reason));
     if (result.ok) {

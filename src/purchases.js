@@ -34,6 +34,37 @@
    purchase and reports what happened; it grants nothing. The one thing
    taken off `customerInfo` is `managementURL`, and that is a LINK.
 
+   AND NOTHING REACHES THE PLUGIN BEFORE `configure` DOES. Observed on
+   the device, first three native calls on a cold launch:
+
+       Purchases.logOut
+       Purchases.getOfferings   <- "Purchases must be configured before
+       Purchases.configure         calling this function"
+
+   Two separate orderings, both of them consequences of where the calls
+   sit rather than of anything in this file:
+
+     - `session` starts null and is restored asynchronously, so the
+       effect that identifies the device fires ONCE with no session and
+       logs out an SDK that was never configured. Harmless, and it is
+       the first line in the log.
+     - `configurePurchases` is called from an effect in `PlannerApp`
+       and `loadPackages` from an effect in `PlansPanel`, which is its
+       CHILD — and React runs child effects before parent effects. So
+       the offering was always going to be requested first, on every
+       launch, whatever either component intended.
+
+   MOVING THE CALLS AROUND WOULD FIX THE SYMPTOM AND NOT THE RULE. The
+   next component that asks for an offering, or a refactor that moves an
+   effect, puts it straight back — and the failure is a provider error
+   message a student never sees, on the screen that sells the paid tier.
+
+   So the ordering is enforced HERE, where the plugin is spoken to.
+   Every action that needs a configured SDK calls `ensureConfigured`
+   first, which either returns the in-flight configure, or performs one.
+   Whoever arrives first configures; everybody else awaits the same
+   promise. Order stops being something anybody has to get right.
+
    IT CANNOT BE IMPORTED BY A PLAIN-NODE TEST. The RevenueCat package
    ships extensionless relative imports (`./definitions`), which esbuild
    resolves and Node's ESM loader refuses. That is why every decidable
@@ -58,6 +89,60 @@ export const purchaseCapability = ({
    native shell" is one expression rather than five copies of it. */
 const refuse = (cap) => ({ ok: false, reason: cap.reason });
 
+/* ---------- the configure gate ----------
+
+   `configuredFor` is the app user id the SDK currently holds, or null if
+   it holds none. `configuring` is the in-flight promise, so two callers
+   racing produce ONE configure call and both wait on it rather than two
+   configures and a coin toss about which identity wins.
+
+   MODULE-LEVEL BECAUSE THE SDK IS. There is one plugin per app, it
+   carries one identity at a time, and that identity outlives every
+   component that might ask about it. Component state could not model
+   it without one component owning a fact about the whole process. */
+let configuredFor = null;
+let configuring = null;
+
+/**
+ * Make sure the SDK knows who this is, and only then hand back.
+ *
+ * IDEMPOTENT BY APP USER ID: already configured for this account and it
+ * resolves without touching the plugin, which is what makes it safe to
+ * put in front of every action rather than only the first one.
+ *
+ * A FAILED CONFIGURE IS RETURNED, NOT SWALLOWED. The caller reports it
+ * as its own failure — `loadPackages` answering `sdk-error` because the
+ * SDK could not be configured is TRUE, and it is a far better answer
+ * than calling getOfferings anyway and relaying a provider message
+ * about configuration to a student who has no idea what that means.
+ */
+export async function ensureConfigured({ session, plugin = Purchases, capability = purchaseCapability() } = {}) {
+  if (!capability.available) return refuse(capability);
+  const userId = session && session.user && session.user.id;
+  if (!userId) return { ok: false, reason: "signed-out" };
+  if (configuredFor === userId) return { ok: true, appUserId: userId, store: capability.store };
+  if (configuring) {
+    const pending = await configuring;
+    /* The in-flight one may have been for somebody else — a sign-in that
+       overtook a sign-out. Falling through re-configures for this id
+       rather than reporting somebody else's success as ours. */
+    if (pending.ok && configuredFor === userId) return pending;
+  }
+  configuring = (async () => {
+    try {
+      await plugin.configure({ apiKey: capability.apiKey, appUserID: userId });
+      configuredFor = userId;
+      return { ok: true, appUserId: userId, store: capability.store };
+    } catch (error) {
+      configuredFor = null;
+      return { ok: false, reason: "sdk-error", error };
+    } finally {
+      configuring = null;
+    }
+  })();
+  return configuring;
+}
+
 /**
  * Identify this device to RevenueCat as this account, and no other.
  *
@@ -66,17 +151,7 @@ const refuse = (cap) => ({ ok: false, reason: cap.reason });
  * planner works must not lose it because a store SDK is having a bad
  * day, and all that is lost is the ability to buy.
  */
-export async function configurePurchases({ session, plugin = Purchases, capability = purchaseCapability() } = {}) {
-  if (!capability.available) return refuse(capability);
-  const userId = session && session.user && session.user.id;
-  if (!userId) return { ok: false, reason: "signed-out" };
-  try {
-    await plugin.configure({ apiKey: capability.apiKey, appUserID: userId });
-    return { ok: true, appUserId: userId, store: capability.store };
-  } catch (error) {
-    return { ok: false, reason: "sdk-error", error };
-  }
-}
+export const configurePurchases = ensureConfigured;
 
 /**
  * Forget the account on sign-out.
@@ -88,8 +163,17 @@ export async function configurePurchases({ session, plugin = Purchases, capabili
  */
 export async function logOutPurchases({ plugin = Purchases, capability = purchaseCapability() } = {}) {
   if (!capability.available) return refuse(capability);
+  /* NOTHING WAS CONFIGURED, SO THERE IS NOTHING TO FORGET. This is the
+     first line in the device log: `session` is restored asynchronously,
+     so the effect fires once with no session and logs out an SDK that
+     has never been told anything. It rejected, which was reported as an
+     ordinary state and was — but it is also a call to the plugin on
+     every cold launch that says nothing and can only confuse the log
+     somebody reads when the ordering is wrong. */
+  if (configuredFor === null && configuring === null) return { ok: false, reason: "not-configured" };
   try {
     await plugin.logOut();
+    configuredFor = null;
     return { ok: true };
   } catch (error) {
     /* Logging out an SDK that was never configured rejects, and that is
@@ -107,8 +191,15 @@ export async function logOutPurchases({ plugin = Purchases, capability = purchas
  * available" when it means "we could not ask": that is a paywall caused
  * by a tunnel, on the screen that sells the paid tier.
  */
-export async function loadPackages({ plugin = Purchases, capability = purchaseCapability() } = {}) {
+export async function loadPackages({ session, plugin = Purchases, capability = purchaseCapability() } = {}) {
   if (!capability.available) return refuse(capability);
+  /* THIS IS THE CALL THE DEVICE LOG CAUGHT. It runs from an effect in
+     PlansPanel, which is a CHILD of the component that configures — and
+     React runs child effects first, so it was always going to arrive
+     first. Awaiting the gate rather than relying on where the two
+     effects happen to sit is what makes that stop mattering. */
+  const ready = await ensureConfigured({ session, plugin, capability });
+  if (!ready.ok) return ready;
   try {
     const offerings = await plugin.getOfferings();
     const current = offerings && offerings.current;
@@ -127,9 +218,11 @@ export async function loadPackages({ plugin = Purchases, capability = purchaseCa
  * it on the rejection rather than as a result, so it is unpicked here
  * and returned as its own outcome.
  */
-export async function purchasePackage(pkg, { plugin = Purchases, capability = purchaseCapability() } = {}) {
+export async function purchasePackage(pkg, { session, plugin = Purchases, capability = purchaseCapability() } = {}) {
   if (!capability.available) return refuse(capability);
   if (!pkg) return { ok: false, reason: "no-package" };
+  const ready = await ensureConfigured({ session, plugin, capability });
+  if (!ready.ok) return ready;
   try {
     const result = await plugin.purchasePackage({ aPackage: pkg });
     return { ok: true, customerInfo: result && result.customerInfo };
@@ -162,7 +255,8 @@ export async function restorePurchases({ session, plugin = Purchases, capability
      without a session; this one did not, and the panel's own
      signed-out state was the only thing between them. A UI-only gate is
      one refactor from leaking. */
-  if (!(session && session.user && session.user.id)) return { ok: false, reason: "signed-out" };
+  const ready = await ensureConfigured({ session, plugin, capability });
+  if (!ready.ok) return ready;
   try {
     const info = await plugin.restorePurchases();
     return { ok: true, customerInfo: info && info.customerInfo };

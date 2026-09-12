@@ -532,6 +532,60 @@ async function run() {
     assert.ok(calls.includes("Purchases.getOfferings"), "the offering was never fetched");
   });
 
+  await test("CONFIGURE IS THE FIRST NATIVE CALL, and nothing reaches the plugin before it", async () => {
+    /* THE DEVICE LOG, on a cold launch:
+
+           Purchases.logOut
+           Purchases.getOfferings   <- "Purchases must be configured
+           Purchases.configure         before calling this function"
+
+       Two orderings, neither of them decided in purchases.js. `session`
+       is restored asynchronously, so the identity effect fired once with
+       no session and logged out an SDK that had never been told
+       anything. And `loadPackages` runs from an effect in PlansPanel,
+       which is a CHILD of the component that configures — React runs
+       child effects before parent effects, so the offering was always
+       going to be asked for first, on every launch.
+
+       This asserts the ORDER on the real bundle, through Capacitor's own
+       bridge, because that is the only place the two effects really race.
+       A source-level check could not see it: both call sites are
+       individually correct. */
+    const { calls, errors, close } = await mountAccount({ native: true });
+    await close();
+    assert.deepEqual(errors, [], `the Account tab threw:\n        ${errors.join("\n        ")}`);
+
+    /* NON-VACUITY FIRST: the bridge was used at all. An empty list
+       satisfies every claim about ordering ever made. */
+    assert.ok(calls.length > 0, "the bridge recorded no calls, so this test orders nothing");
+    assert.ok(calls.includes("Purchases.configure"), `configure never reached the bridge: ${calls.join(", ")}`);
+
+    assert.equal(
+      calls[0],
+      "Purchases.configure",
+      `the first native call was ${calls[0]}, not configure — the full order was: ${calls.join(", ")}`
+    );
+
+    /* AND IT IS THE ONLY ONE BEFORE THE REST, said separately because
+       `calls[0]` alone would pass on a second configure racing a
+       getOfferings that also beat the first one. */
+    const firstOther = calls.findIndex((c) => c !== "Purchases.configure");
+    if (firstOther !== -1) {
+      assert.ok(
+        calls.slice(0, firstOther).every((c) => c === "Purchases.configure"),
+        `something reached the plugin before configure finished: ${calls.join(", ")}`
+      );
+    }
+
+    /* THE SPURIOUS logOut IS GONE. It was the first line on the device,
+       from the effect firing once with no session — an SDK that has
+       never been configured has no identity to forget. */
+    assert.ok(
+      !calls.includes("Purchases.logOut"),
+      `a signed-in launch logged the SDK out: ${calls.join(", ")}`
+    );
+  });
+
   /* ------------------------------------------------------------------ */
   /*  The tier does not come from the store, so the store cannot take it */
   /* ------------------------------------------------------------------ */
@@ -557,8 +611,17 @@ async function run() {
     /* NON-VACUITY: the SDK was really spoken to and really refused.
        Without this the assertions below pass on a page that never
        reached the plugin at all — which is the WEB state, one test
-       down, and would make this one a duplicate of it. */
-    assert.ok(calls.includes("Purchases.getOfferings"), `the offering was never even requested: ${calls.join(", ") || "(no calls at all)"}`);
+       down, and would make this one a duplicate of it.
+
+       IT ASKS FOR `configure` RATHER THAN `getOfferings`, and the
+       change is the point of the ordering fix: the offering is no
+       longer requested at all when configuring fails, because
+       `ensureConfigured` returns the failure instead of letting the
+       next call relay a provider message about configuration to a
+       student. Configure being attempted and refused is the whole of
+       "the SDK was really spoken to" now. */
+    assert.ok(calls.includes("Purchases.configure"), `the SDK was never spoken to at all: ${calls.join(", ") || "(no calls)"}`);
+    assert.ok(!calls.includes("Purchases.getOfferings"), `the offering was requested although configuring failed: ${calls.join(", ")}`);
 
     const line = /data-plan-line[^>]*>([\s\S]*?)<\/[a-z]+>/i.exec(html);
     assert.ok(line, "the plan line is not on the page at all");
