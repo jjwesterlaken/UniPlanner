@@ -2514,6 +2514,43 @@ removing or renaming a recipient re-asks every student whether or not
 anybody bumped a number. Deliberately NOT over `receives`: a typo fix in
 a bullet must not re-prompt everybody and train them to click through.
 
+**IT IS TRUE OF WHO, AND IT WAS NEVER TRUE OF WHAT.** The fingerprint
+covers the RECIPIENTS. A new kind of MATERIAL moves neither trigger:
+send a student's essay to the same two companies under the same
+promises and the provider set has not changed, so the only thing left
+is the hand-typed version — and the version only moves if somebody
+thinks to move it. That every bump so far was somebody thinking to is
+visible in `test-legal.mjs`, where v4, v5 and v6 are each recorded as a
+FLOOR (`>= 4`, `>= 5`, `>= 6`) added by hand AFTER the decision. **A
+floor records history. It cannot compel the next one.**
+
+`src/aiMaterialTypes.js` closes it at test time. It lists what leaves
+the device — read out of `groq.js`, `ai-notes` and `ai-text/prompts.js`
+rather than remembered — with a retention CATEGORY rather than a number
+of days, since the day-counts already have their own guard and
+restating them would be the ledger's pattern one file over. Three
+checks: every type is named on the screen AND in the policy (by
+pattern, because five wording pins in that file have already gone red
+on correct improvements); `materialFingerprint()` must equal
+`CONSENT_MATERIAL_LEDGER`'s entry for the current version; and **the
+ledger is APPEND ONLY, ratcheted against `origin/main`** — without
+which the guard is decorative, because the cheapest way back to green
+after adding a type would be to edit the v7 line, exactly as cheap as
+bumping and leaving no trace that a disclosure changed under students
+who had already agreed.
+
+**Nothing reads it at runtime, deliberately.** Folding the material set
+into `providerFingerprint()` would re-prompt EVERY student on deploy —
+their recorded fingerprint is providers-only and would stop matching —
+which is a change to shipped behaviour in exchange for nothing, since
+the list has not moved and nobody has anything new to agree to. The
+runtime half is the same two lines the day a type is actually added.
+The file has NO IMPORTS for the ratchet's sake: it imports
+`origin/main`'s copy standing alone, and a single import would make a
+historical copy unloadable — which the catch would read as "no
+baseline" and skip, a guard switching itself off at exactly the moment
+somebody was rewriting history.
+
 **The four ungated features were a known gap, written down and left.**
 A comment in `SummariseReading` said so in as many words — "NOTE the
 other four text features are NOT gated. That gap predates this and

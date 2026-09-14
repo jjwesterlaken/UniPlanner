@@ -9,8 +9,10 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   deleteAccount,
@@ -23,6 +25,12 @@ import * as links from "../src/legalLinks.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL, SUPPORT_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL } from "../src/legalLinks.js";
 import { CONSENT_TEXT, AI_CONSENT_VERSION } from "../src/aiNotesLogic.js";
 import { AI_PROVIDERS } from "../src/aiProviders.js";
+import {
+  AI_MATERIAL_TYPES,
+  RETENTION_CATEGORIES,
+  CONSENT_MATERIAL_LEDGER,
+  materialFingerprint,
+} from "../src/aiMaterialTypes.js";
 import { AUDIO_DELETION_PROMISE } from "../src/aiNotesLogic.js";
 import { TIERS, allowanceForTier } from "../src/aiTextLimits.js";
 import { TIER_NAMES, resetLine, managedByStoreLine } from "../src/plansCopy.js";
@@ -1037,6 +1045,147 @@ async function run() {
        link, where our server is, and where the work goes. */
     for (const country of new Set(AI_PROVIDERS.map((p) => p.country))) {
       assert.ok(all.includes(country), `the consent text doesn't say a recipient is in ${country}`);
+    }
+  });
+
+
+  /* ---------- the material types, tied to the consent version ---------- */
+
+  await test("every kind of material the AI features send is named on BOTH documents", () => {
+    /* The completeness half. `AI_MATERIAL_TYPES` is the list of what
+       leaves the device; this asserts the screen a student agrees to
+       and the policy a reviewer reads both name each one — which is
+       what makes the tie below mean something. A list that grew a type
+       nobody disclosed would satisfy the fingerprint check perfectly
+       while the screen went on describing five things out of six. */
+    assert.ok(AI_MATERIAL_TYPES.length > 0, "aiMaterialTypes.js names nothing — every check below would pass over nothing");
+    const consent = consentProse();
+    const policy = prose("privacy.html");
+    for (const type of AI_MATERIAL_TYPES) {
+      assert.ok(type.id && type.what && type.disclosedAs instanceof RegExp, `${type.id || "a material type"} is missing id, what or disclosedAs`);
+      assert.ok(
+        RETENTION_CATEGORIES.includes(type.retention),
+        `${type.id} claims retention "${type.retention}", which is not one of the three categories`
+      );
+      assert.match(consent, type.disclosedAs, `the consent screen never mentions ${type.id} (${type.what})`);
+      assert.match(policy, type.disclosedAs, `the privacy policy never mentions ${type.id} (${type.what})`);
+    }
+    const ids = AI_MATERIAL_TYPES.map((t) => t.id);
+    assert.equal(new Set(ids).size, ids.length, "two material types share an id, so one of them is invisible to the fingerprint");
+  });
+
+  await test("THE MATERIAL LIST IS TIED TO THE CONSENT VERSION: a new kind of material cannot ship without a bump", () => {
+    /* THE HOLE THIS CLOSES, because it is not obvious from the code.
+       `needsConsent` re-asks on two triggers: the hand-typed VERSION,
+       and the PROVIDER FINGERPRINT, which is derived and therefore
+       automatic. A new kind of MATERIAL moves neither. Send a
+       student's essay to the same two companies under the same
+       promises and nothing notices — the recipients have not changed,
+       and the version only moves if somebody thinks to move it.
+
+       That every bump so far was somebody thinking to is visible three
+       tests up: v4, v5 and v6 are recorded here as FLOORS, each added
+       by hand after the decision. A floor records history. It cannot
+       compel the next one.
+
+       So the fingerprint of the material list is recorded against the
+       version that was in force when it was accepted, and the two must
+       agree. Add a type and this goes red; the only way back to green
+       is a new ledger entry at a higher version AND a bump, which is
+       the decision being forced rather than remembered.
+
+       WHY A READABLE FINGERPRINT AND NOT A DIGEST: the person this
+       goes red in front of needs to know WHICH type moved, and a hex
+       hash tells them only that one did. */
+    const versions = Object.keys(CONSENT_MATERIAL_LEDGER).map(Number);
+    assert.ok(versions.length > 0, "the ledger is empty, so the equality below is about nothing");
+    assert.ok(
+      versions.every((v) => Number.isInteger(v) && v > 0),
+      "a ledger key is not a consent version"
+    );
+    /* A FUTURE ENTRY WOULD DEFEAT THE WHOLE THING — pre-register the
+       next version's fingerprint and a type could be added later with
+       the version bumped in a separate commit nobody connects to it.
+       The ledger is a record of what HAS been accepted. */
+    assert.ok(
+      Math.max(...versions) <= AI_CONSENT_VERSION,
+      `the ledger records a version (${Math.max(...versions)}) higher than AI_CONSENT_VERSION (${AI_CONSENT_VERSION}) — a fingerprint no student has accepted yet`
+    );
+
+    const recorded = CONSENT_MATERIAL_LEDGER[AI_CONSENT_VERSION];
+    assert.ok(
+      recorded,
+      `no ledger entry for consent version ${AI_CONSENT_VERSION}. If the material list changed, add an entry at this version ` +
+        "and bump AI_CONSENT_VERSION for it; if the version moved for a wording change, copy the previous entry forward."
+    );
+    assert.equal(
+      materialFingerprint(),
+      recorded,
+      `the material list has changed since consent v${AI_CONSENT_VERSION} was written. A new kind of material goes overseas, ` +
+        "which is the consent bump rule: add an entry to CONSENT_MATERIAL_LEDGER at the next version, bump AI_CONSENT_VERSION, " +
+        "and say on the screen what the new material is. Do NOT edit the entry for a version students have already accepted."
+    );
+  });
+
+  await test("the material ledger is APPEND ONLY: an accepted version's record may never be edited", async () => {
+    /* WITHOUT THIS THE GUARD ABOVE IS DECORATIVE. Adding a type turns
+       it red, and the cheapest way back to green would be to edit the
+       v7 line — exactly as cheap as bumping, one character of diff,
+       and it leaves no trace that a disclosure changed under students
+       who had already agreed. So every entry already on origin/main
+       must still be byte-identical here, the ratchet the coverage gate
+       uses, pointed at facts about the past rather than at a
+       threshold.
+
+       The historical copy is imported STANDING ALONE, which is why
+       aiMaterialTypes.js has no imports: one and a blob written to a
+       temp directory would fail to load, and the catch below would
+       read that as "no baseline" and skip — a guard turning itself off
+       at exactly the moment somebody was rewriting history.
+
+       Skips without git history; REQUIRE_BASELINE=1 in CI turns the
+       skip into a failure, the same arrangement as the coverage
+       ratchet and the differential render. The file genuinely being
+       absent from origin/main is this landing, which is not an edit. */
+    const rel = "src/aiMaterialTypes.js";
+    let blob = null;
+    try {
+      blob = execFileSync("git", ["show", `origin/main:${rel}`], { cwd: rootDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      if (process.env.REQUIRE_BASELINE === "1") {
+        try {
+          execFileSync("git", ["cat-file", "-e", `origin/main:${rel}`], { cwd: rootDir, stdio: "ignore" });
+        } catch {
+          return; // first landing: there is no history to be append-only about
+        }
+        throw new Error(`origin/main has ${rel} but it could not be read — the ratchet cannot check`);
+      }
+      return;
+    }
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "consent-ledger-"));
+    const file = path.join(dir, "baseline.mjs");
+    fs.writeFileSync(file, blob);
+    let baseline;
+    try {
+      baseline = await import(pathToFileURL(file).href);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    const was = baseline.CONSENT_MATERIAL_LEDGER || {};
+    const wasVersions = Object.keys(was);
+    assert.ok(
+      wasVersions.length > 0,
+      "origin/main's ledger is empty, so this check compares nothing — if the ledger was just introduced, that is this landing"
+    );
+    for (const version of wasVersions) {
+      assert.equal(
+        CONSENT_MATERIAL_LEDGER[version],
+        was[version],
+        `the ledger entry for consent v${version} was EDITED. That version has been accepted by students; what it covered is a ` +
+          "fact about the past and cannot be rewritten. A material list that has changed needs a NEW entry at a higher version."
+      );
     }
   });
 
