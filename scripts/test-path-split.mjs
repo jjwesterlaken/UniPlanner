@@ -20,9 +20,13 @@
       is the refused subdomain arriving through the back door because a
       link was one character shorter.
 
-   2. THE OLD ROOT URLS DO THE RIGHT THING, and `/sw.js` does the right
-      thing by being ABSENT — see below, it is the least obvious part
-      of this change.
+   2. THE OLD ROOT URLS DO THE RIGHT THING, and `/sw.js` SERVES A
+      WORKER WHOSE ONLY JOB IS TO REMOVE ITSELF. It used to be absent
+      on purpose, on the reasoning that a 404 unregisters a worker —
+      true, and production served no 404: the Pages origin fell back
+      to index.html with a 200, and the www edge served the OLD worker
+      out of the zone cache. An absence is not a mechanism you can
+      verify. See below; it is the least obvious part of this change.
 
    3. BOTH NAV CONTROLS ARE REALLY REACHABLE. Grace's download call to
       action is kept and "Open the app" sits beside it; neither may be
@@ -32,7 +36,15 @@
 
      - whether Cloudflare Pages is serving `dist-site` on both custom
        domains. That is a dashboard fact and no test here can ask.
-     - whether a real browser unregisters a worker on a 404 script.
+     - what Cloudflare actually SERVES at `/sw.js`. The stub is run
+       here against a fake worker scope, so what it does is measured;
+       whether it is what arrives is a curl at the edge, and the
+       header that stops the edge holding it is a `_headers` rule
+       this file can only read. The whole point of shipping a FILE is
+       that the fallback stops being part of the question — a request
+       reaches a fallback only when no asset matches it — but the
+       zone cache in front of it is not ours and must be purged once.
+     - whether a real browser runs install/activate as the spec says.
        That is specification, exercised by every browser, and not
        reproducible from Node.
      - the Supabase allowlist. It needs no new entry (the existing
@@ -42,6 +54,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import vm from "node:vm";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -181,24 +194,159 @@ function forwarder(name, { pathname = "/", search = "", hash = "", standalone = 
     assert.match(sw, /new URL\("\.\/", self\.location\)/, "sw.js no longer derives its shell from where it is served");
   });
 
-  await test("THE ROOT SHIPS NO WORKER, and /sw.js is DELIBERATELY not redirected", () => {
-    /* THE LEAST OBVIOUS PART OF THIS CHANGE, and the derivation got it
-       wrong before it was named.
+  await test("THE ROOT SERVES A WORKER, and its body is the stub rather than the marketing page", () => {
+    /* THE PART THIS CHANGE EXISTS FOR, and the previous version of this
+       test asserted the OPPOSITE with a confident reason.
 
-       Every browser that has opened this app holds a worker at scope
-       `/` from `/sw.js`. A service worker script request MAY NOT BE
-       REDIRECTED — the Update algorithm fails on one — so a 301 there
-       is refused and the stale worker stays, controlling what is now
-       the marketing page. A 404 UNREGISTERS the registration instead.
-       So the empty path is the active mechanism and the redirect would
-       be the inert one. */
-    assert.ok(!fs.existsSync(path.join(OUT, "sw.js")), "a worker at the root would claim scope / and fight the app's own");
-    assert.ok(fs.existsSync(path.join(OUT, "app", "sw.js")), "the app ships no worker");
+       It said an absent `/sw.js` was the active mechanism: a 404 during
+       a worker update unregisters the registration, while a 301 is
+       refused outright by the Update algorithm. The first half is true
+       and production served neither. At the Pages origin the path
+       answered 200 WITH THE MARKETING PAGE'S HTML — an unmatched path
+       falls back to index.html — and at the www edge the zone cache was
+       still handing out the OLD worker under a four-hour max-age.
+
+       AN ABSENCE IS NOT A MECHANISM YOU CAN VERIFY. A FILE IS. So what
+       is asserted now is that a request to `/sw.js` never reaches a
+       fallback at all, because an asset matches it. */
+    const stub = path.join(OUT, "sw.js");
+    assert.ok(fs.existsSync(stub), "the root serves no worker — an unmatched path falls back to HTML and the stale worker survives");
+    const body = fs.readFileSync(stub, "utf8");
+    assert.ok(!/^\s*<(!doctype|html)/i.test(body), "the root worker IS HTML — this is the production failure, reproduced in the build");
+    assert.equal(body, read("public/site/root-sw.js"), "what ships is not the source that was reviewed");
+
+    /* And it is not the app's worker wearing a different hat. */
+    const appWorker = path.join(OUT, "app", "sw.js");
+    assert.ok(fs.existsSync(appWorker), "the app ships no worker");
+    assert.notEqual(body, fs.readFileSync(appWorker, "utf8"), "the root serves the APP's worker, which would claim scope / and cache the marketing page as a shell");
+
+    /* The redirect remains forbidden, and now for a reason that
+       outlives the file existing: a worker script request may not be
+       REDIRECTED, so if somebody deletes the stub the derivation must
+       not fill the gap with the one answer that cannot work. */
     const redirects = fs.readFileSync(path.join(OUT, "_redirects"), "utf8");
-    assert.ok(!/^\/sw\.js\s/m.test(redirects), "/sw.js is redirected — the stale worker would fail its update and stay installed");
-    /* And the belt to that braces is still there. */
+    assert.ok(!/^\/sw\.js\s/m.test(redirects), "/sw.js is redirected — the Update algorithm refuses a redirect and the stale worker stays installed");
+  });
+
+  await test("RUN, THE ROOT WORKER UNREGISTERS ITSELF AND RELEASES THE OPEN PAGES", async () => {
+    /* A GREP FOR `unregister` PASSES ON A FILE THAT NEVER CALLS IT, so
+       the stub is EXECUTED in a fake ServiceWorkerGlobalScope and the
+       two lifecycle events are dispatched at it.
+
+       `caches` is a proxy that throws on ANY property access, which is
+       the sharpest assertion in this file: Cache Storage is scoped to
+       the ORIGIN and not to the worker, so the obvious tidy-up —
+       delete every cache named `uni-planner-*` — would take the LIVE
+       app's cache at /app/ along with the dead root one. They share the
+       prefix because they are the same product. A throw here surfaces
+       as this test failing by name. */
+    const seen = [];
+    const listeners = new Map();
+    const windows = [{ url: "https://www.uniplannerapp.com/", navigate(u) { seen.push(`navigate:${u}`); } }];
+    const scope = {
+      addEventListener(type, fn) { listeners.set(type, fn); },
+      skipWaiting() { seen.push("skipWaiting"); },
+      registration: { async unregister() { seen.push("unregister"); return true; } },
+      clients: { async matchAll() { seen.push("matchAll"); return windows; } },
+      caches: new Proxy({}, {
+        get(_t, prop) {
+          throw new Error(`the root worker touched caches.${String(prop)} — Cache Storage is per ORIGIN, so this deletes the LIVE app's cache at /app/ too`);
+        },
+      }),
+    };
+    scope.self = scope;
+    vm.createContext(scope);
+    vm.runInContext(read("public/site/root-sw.js"), scope, { filename: "root-sw.js" });
+
+    /* Non-vacuity first: dispatching at an empty listener map would
+       prove nothing at all, and every assertion below would pass. */
+    assert.ok(listeners.has("install"), "the stub registers no install handler — nothing below would have run");
+    assert.ok(listeners.has("activate"), "the stub registers no activate handler — nothing below would have run");
+    assert.ok(!listeners.has("fetch"), "the stub has a fetch handler — it must be transparent, not a second cache over the marketing page");
+
+    listeners.get("install")({ waitUntil: (p) => p });
+    const pending = [];
+    listeners.get("activate")({ waitUntil: (p) => pending.push(p) });
+    assert.ok(pending.length > 0, "activate did not extend its own lifetime — the browser may terminate the worker mid-unregister");
+    await Promise.all(pending);
+
+    assert.ok(seen.includes("skipWaiting"), "the stub waits behind the worker it replaces, so none of this happens until every root tab is closed");
+    assert.ok(seen.includes("unregister"), "the stub installs and then simply sits there — the registration survives");
+    assert.ok(seen.includes(`navigate:${windows[0].url}`), "an already-open page keeps being served the old app shell until somebody reloads it");
+    assert.ok(
+      seen.indexOf("unregister") < seen.indexOf("navigate:" + windows[0].url),
+      "the pages are navigated BEFORE the registration is removed, so the reload can be served by the worker being deleted"
+    );
+
+    /* AND THE SOURCE CHECK THE RUN CANNOT REPLACE. The proxy above only
+       fires if the call is reached AND the throw escapes — the stub's
+       own try/catch swallows it, so a `caches.delete` added inside one
+       reddens this test with a confusing message about navigation
+       instead. In PRODUCTION there is no proxy and the call simply
+       SUCCEEDS, taking the live app's cache at /app/ with it. So the
+       word is forbidden outright, comments stripped first because the
+       stub's header explains the trap by naming it. */
+    const code = read("public/site/root-sw.js")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    assert.ok(code.includes("skipWaiting"), "comments were stripped down to nothing — this check would pass over an empty string");
+    assert.ok(
+      !/\bcaches\b/.test(code),
+      "the root worker names `caches` — Cache Storage is per ORIGIN, so deleting `uni-planner-*` here takes the LIVE app's cache at /app/ with it"
+    );
+  });
+
+  await test("the root worker is served with no-store, so an edge cache cannot hold it", () => {
+    /* THE OTHER HALF OF THE PRODUCTION FAILURE, and a file alone does
+       not fix it: at the www edge the stale worker was being served
+       from the zone cache with `max-age=14400` and
+       `cf-cache-status: REVALIDATED`, so the browser's update check
+       never reached an origin that had anything new to say. */
+    const headers = fs.readFileSync(path.join(OUT, "_headers"), "utf8");
+    const blocks = headers
+      .split("\n")
+      .filter((l) => l.trim() && !l.trim().startsWith("#"));
+    const swAt = blocks.findIndex((l) => l.trim() === "/sw.js");
+    assert.ok(swAt >= 0, "no _headers rule matches /sw.js — the edge may hold the stub, or the worker it replaces");
+    const rule = blocks.slice(swAt + 1).filter((l) => /^\s/.test(l));
+    assert.ok(rule.length > 0, "the /sw.js rule carries no headers — this check would pass over nothing");
+    assert.ok(
+      rule.some((l) => /^\s*Cache-Control:\s*no-store\s*$/i.test(l)),
+      `the /sw.js rule sets ${rule.map((l) => l.trim()).join(", ")} rather than Cache-Control: no-store`
+    );
+    /* Two rules matching one path COMBINE, and two policies are
+       enforced as their intersection — so this rule must not carry a
+       second one. The origin has exactly one, and it is the app's. */
+    assert.equal(
+      headers.split("\n").filter((l) => /^\s*Content-Security-Policy:/i.test(l)).length,
+      1,
+      "a second Content-Security-Policy reached _headers — the browser enforces the INTERSECTION and the app's is the permissive side"
+    );
+  });
+
+  await test("the marketing page still releases the worker on its own, and really loads the script that does", () => {
+    /* TWO MECHANISMS COVERING DIFFERENT PEOPLE, which is why neither
+       replaces the other. The stub reaches a browser that never opens
+       this page — an installed shortcut going straight into a cached
+       shell, most of all. This runs on the first visit to `/` and does
+       not wait for an update check.
+
+       "It is in site.js" is not the claim: the claim is that the page
+       RUNS it, and the build rewrites the script's path. */
     assert.match(SITE_JS, /getRegistrations\(\)/, "the marketing page no longer releases the worker that owned /");
     assert.match(SITE_JS, /scope\.pathname === "\/"/, "the release no longer targets the root scope specifically");
+    assert.match(
+      SITE_JS.replace(/\/\*[\s\S]*?\*\//g, ""),
+      /^\s*releaseTheOldWorker\(\);/m,
+      "releaseTheOldWorker is defined and never called — the page would leave the old registration alone"
+    );
+
+    const page = fs.readFileSync(path.join(OUT, "index.html"), "utf8");
+    const src = page.match(/<script[^>]+type="module"[^>]+src="([^"]+)"/);
+    assert.ok(src, "the built marketing page loads no module script — nothing on it runs");
+    const onDisk = path.join(OUT, src[1].replace(/^\.\//, ""));
+    assert.ok(fs.existsSync(onDisk), `the page loads ${src[1]}, which the build did not write — every slot would be empty and the worker never released`);
+    assert.match(fs.readFileSync(onDisk, "utf8"), /releaseTheOldWorker/, `${src[1]} is not the script that releases the worker`);
   });
 
   await test("NO DOCUMENT SENDS THE BUILD-ID CHECK TO THE ROOT WORKER", () => {

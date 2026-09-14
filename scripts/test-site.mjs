@@ -828,11 +828,21 @@ test("the apex build ships a page whose every link resolves", () => {
       `the build does not serve ${p}.html — ${SITE_URL}${p} 404s, and that URL is published`
     );
   }
-  /* NO WORKER AT THE ROOT. One would claim scope `/`, which is the
-     scope the old app worker holds and which site.js exists to
-     release — recreating the collision deliberately. */
-  assert.ok(!fs.existsSync(path.join(out, "sw.js")), "a service worker reached the site root");
+  /* THE ROOT WORKER IS THE ONE THAT REMOVES ITSELF. This used to
+     assert the path was EMPTY, on the reasoning that a 404 unregisters
+     a stale worker — which is true of a 404 and production served
+     none: the Pages origin fell back to index.html with a 200 and the
+     www edge served the old worker out of its zone cache. The claim
+     here is only that the root serves SOMETHING at that path, so no
+     request reaches a fallback; what the file does is asserted
+     behaviourally in test-path-split.mjs, which runs it. */
+  assert.ok(fs.existsSync(path.join(out, "sw.js")), "the root serves no sw.js — an unmatched path falls back to HTML and the stale worker stays installed");
   assert.ok(fs.existsSync(path.join(out, "app", "sw.js")), "the app ships no worker at /app/");
+  assert.notEqual(
+    fs.readFileSync(path.join(out, "sw.js"), "utf8"),
+    fs.readFileSync(path.join(out, "app", "sw.js"), "utf8"),
+    "the root serves the APP's worker, which would claim scope / and cache the marketing page as a shell"
+  );
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

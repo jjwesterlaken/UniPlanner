@@ -57,6 +57,12 @@ const APP_PATH = APP_URL.slice(SITE_URL.length); // "/app"
 const APP_DIR = APP_PATH.replace(/^\//, "");
 if (!APP_DIR) throw new Error(`APP_URL has no path under SITE_URL — the app would overwrite the marketing site`);
 
+/* The one filename that means something at BOTH depths: `/sw.js` is
+   the registration every pre-split browser still holds, and
+   `/app/sw.js` is the live one. Named once, used by the root-worker
+   block and by the redirect derivation below. */
+const WORKER_SCRIPT = "sw.js";
+
 /* THE APP BUILD MUST ALREADY EXIST. Assembling a site with an empty
    `/app` produces a marketing page whose every button 404s and whose
    build looked fine — the same failure as the apex page that shipped
@@ -136,14 +142,53 @@ html = html.split("__APP_URL__").join(`${SITE_URL}${APP_PATH}`);
 if (html.includes("__APP_")) throw new Error("the marketing page still carries an unfilled app-link placeholder");
 fs.writeFileSync(path.join(OUT, "index.html"), html);
 
-/* No service worker at the ROOT, deliberately and importantly. The
-   marketing page is not an app shell, and a worker here would claim
-   scope `/` — which is the scope the OLD app worker holds and which
-   `site.js` exists to release. Registering a second one at the same
-   scope would recreate, on purpose, the exact collision the release
-   code is there to clean up. The app's own worker is at
-   `/app/sw.js` and scopes itself to `/app/`. */
-if (fs.existsSync(path.join(OUT, "sw.js"))) throw new Error("a service worker reached the site ROOT — it would claim scope / and fight the app's own");
+/* ---------- the worker at the root, which removes itself ----------
+
+   THIS PATH USED TO BE LEFT EMPTY ON PURPOSE, and the reasoning was
+   wrong in the way this repository keeps finding: it depended on a
+   behaviour nobody had measured. A 404 on a worker script really does
+   unregister it — but production served neither a 404 nor the script.
+   At the Pages origin `/sw.js` answered 200 WITH THE MARKETING PAGE'S
+   HTML (an unmatched path falls back to index.html), and at the www
+   edge the zone cache was still handing out the OLD worker under a
+   four-hour max-age. Both outcomes leave the stale root worker
+   installed and controlling `/`.
+
+   AN ABSENCE CANNOT BE VERIFIED FROM HERE. A FILE CAN. So the root now
+   serves a real script whose whole content is its own removal, and the
+   fallback stops being part of the answer — a request only reaches a
+   fallback when no asset matches it, and one does now.
+
+   It is NOT the app's worker and does not cache anything; see
+   public/site/root-sw.js for why it must never touch `caches`. */
+const ROOT_WORKER_SRC = path.join("public", "site", "root-sw.js");
+if (!fs.existsSync(ROOT_WORKER_SRC)) {
+  throw new Error(`${ROOT_WORKER_SRC} is missing — the root would fall back to HTML at /sw.js and the stale worker would stay installed`);
+}
+fs.copyFileSync(ROOT_WORKER_SRC, path.join(OUT, WORKER_SCRIPT));
+const rootWorker = fs.readFileSync(path.join(OUT, WORKER_SCRIPT), "utf8");
+/* COMMENTS STRIPPED BEFORE MATCHING, which is not fastidiousness: the
+   stub's header explains what it must call and what it must never
+   touch, so every check below matches its own documentation and passes
+   over a file that does none of it. Commenting the unregister OUT left
+   this green until the strip was added. */
+const rootWorkerCode = rootWorker.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+/* The two things that make it a REMOVAL rather than a worker. */
+for (const required of ["skipWaiting", "registration.unregister()"]) {
+  if (!rootWorkerCode.includes(required)) throw new Error(`the root worker does not call ${required} — it would install and then simply sit there`);
+}
+if (/addEventListener\(\s*["']fetch["']/.test(rootWorkerCode)) {
+  throw new Error("the root worker has a fetch handler — it must be transparent, not a second cache over the marketing page");
+}
+/* AND THE ONE IT MUST NEVER NAME. Cache Storage is scoped to the
+   ORIGIN, not to the worker, so deleting `uni-planner-*` from here
+   takes the LIVE app's cache at /app/ with it — they share the prefix
+   because they are the same product. A running test cannot catch this
+   on its own: the stub's own try/catch swallows the throw, and in
+   production the call would SUCCEED. */
+if (/\bcaches\b/.test(rootWorkerCode)) {
+  throw new Error("the root worker touches `caches` — Cache Storage is per ORIGIN, so this deletes the live app's cache at /app/ too");
+}
 if (!fs.existsSync(path.join(OUT, APP_DIR, "sw.js"))) throw new Error(`${APP_DIR}/sw.js is missing — the app would register nothing`);
 
 /* ---------- one policy for one origin ---------- */
@@ -185,34 +230,32 @@ fs.copyFileSync("public/_headers", path.join(OUT, "_headers"));
    verify. */
 const rootServes = new Set(fs.readdirSync(OUT, { withFileTypes: true }).map((e) => e.name));
 
-/* `sw.js` IS EXCLUDED, AND A 404 IS BETTER THAN THE REDIRECT — which
-   is the opposite of what the derivation produces, so it is named
-   here with the reason rather than quietly dropped.
+/* `sw.js` IS EXCLUDED BY NAME, twice over and for a reason that
+   survives the file now existing there.
 
-   Every browser that has opened this app holds a worker registered at
-   scope `/` from `/sw.js`. Two facts decide what that path should do:
+   The derivation already skips it, because the root serves a real
+   file at that path and `rootServes` is read from the output. The
+   explicit exclusion stays because a redirect there would be a
+   CORRECTNESS bug rather than a redundant line: A SERVICE WORKER
+   SCRIPT REQUEST MAY NOT BE REDIRECTED. The Update algorithm fails
+   outright on one, so a 301 is refused and the stale worker stays
+   installed, controlling `/`, which is now the marketing page. If
+   somebody later deletes the root stub, this line is what stops the
+   derivation quietly replacing it with the one answer that cannot
+   work.
 
-     - A service worker script request MAY NOT BE REDIRECTED. The
-       Update algorithm fails outright on a redirect, so a 301 here is
-       refused and the stale worker stays installed, controlling `/`,
-       which is now the marketing page.
-     - A 404 on the script during an update UNREGISTERS the
-       registration. The browser cleans it up itself.
-
-   So leaving this path empty is an active mechanism and the redirect
-   is an inert one. `site.js`'s `releaseTheOldWorker()` stays as the
-   belt to this braces — it runs on the first visit to `/` and does
-   not wait for an update check — but the 404 reaches browsers that
-   never load the marketing page at all. */
-const WORKER_SCRIPT = "sw.js";
-
+   `site.js`'s `releaseTheOldWorker()` is still the other half, and
+   the two cover different people: it runs on the first visit to `/`
+   and does not wait for an update check, while the stub reaches
+   browsers that never load the marketing page at all — an installed
+   shortcut opening straight into a cached shell, most of all. */
 const moved = fs
   .readdirSync(path.join(OUT, APP_DIR), { withFileTypes: true })
   .filter((e) => e.isFile() && !rootServes.has(e.name) && e.name !== WORKER_SCRIPT)
   .map((e) => e.name)
   .sort();
-if (fs.existsSync(path.join(OUT, WORKER_SCRIPT))) {
-  throw new Error("something put sw.js at the site root — the stale worker would update instead of unregistering");
+if (!fs.existsSync(path.join(OUT, WORKER_SCRIPT))) {
+  throw new Error("the root serves no sw.js — an unmatched path falls back to HTML and the stale worker stays installed");
 }
 if (moved.length === 0) throw new Error("no app asset moved path — the redirect list would be empty and this check would pass over nothing");
 fs.writeFileSync(
