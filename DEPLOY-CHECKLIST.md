@@ -560,6 +560,23 @@ The second Pages project (`uniplanner-site`, if it is still attached to
 the apex) must be **detached from the apex first**, or two projects
 claim one hostname.
 
+**AND DO NOT PROMOTE THE SITE UNTIL A SIGNED macOS RELEASE EXISTS.**
+`FLAGS.macDownload` is on, so the page shows a macOS download whose
+link resolves `latest/download/...` at CLICK time — it points at
+whatever the newest release is, and only a release cut by the
+notarisation pipeline in `build-apps.yml` is signed. Promote before
+that and the button hands somebody the previous UNSIGNED build, which
+macOS refuses to open with a dialogue saying the app is damaged. That
+reads as a corrupt download rather than an unsigned one, so the report
+that comes back is about the wrong thing.
+
+Nothing static can know which release was signed, so this is an
+ordering to read rather than a check to run. What IS checkable: the
+"Gatekeeper must accept the notarised app" step in the Mac build job
+must have passed on the tag you are shipping. It runs before the upload
+step, so a refused build produces no artifact and no release asset at
+all — a missing `.dmg` on the release is that step having done its job.
+
 **CHANGE BOTH DASHBOARD FIELDS BEFORE THE PROMOTE, and change them
 together.** The four states, each verified against the real build
 scripts rather than reasoned about:

@@ -128,6 +128,7 @@ fs.cpSync("public", OUT, { recursive: true });
             nsis: desktop.build.nsis.artifactName,
             portable: desktop.build.portable.artifactName,
             linux: desktop.build.linux.artifactName,
+            dmg: desktop.build.dmg.artifactName,
           },
           null,
           2

@@ -21,10 +21,26 @@ export const FLAGS = {
       compiled to a device, so this is further out than Play. */
   appStoreBadge: false,
 
-  /** The macOS download. ON when the build is signed and notarised —
-      NOT when a .dmg exists, because one already does. Unsigned, macOS
-      refuses to open it rather than warning. */
-  macDownload: false,
+  /** The macOS download. ON since Developer ID signing and notarisation
+      were wired into build-apps.yml — which is the condition this flag
+      always carried, and NOT "a .dmg exists", because one already did
+      and it was unshippable.
+
+      IT IS NOT A BOOLEAN ANYBODY MAY FLIP. `scripts/test-site.mjs`
+      refuses this being true unless the workflow really signs, really
+      notarises and really runs Gatekeeper's own assessment against the
+      built bundle — because the failure it guards is silent: an
+      unsigned .dmg uploads, publishes and looks normal, then refuses to
+      open on the student's Mac saying the app is damaged, which reads
+      as a corrupt download.
+
+      THE ORDERING THIS DOES NOT ENFORCE, and it is the one to know: the
+      link resolves to `latest`, so between this merging and the first
+      SIGNED release being cut it would hand somebody the previous,
+      unsigned build. Nothing static can know which release was signed.
+      So the site must not be promoted to production until that release
+      exists — DEPLOY-CHECKLIST §7a. */
+  macDownload: true,
 
   /** The Windows unsigned-install note under the download button. OFF
       when code signing is arranged, which removes the SmartScreen

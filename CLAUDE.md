@@ -2771,7 +2771,65 @@ and reverted by a later commit — so the next tagged release would
 advertise a LOWER version to auto-update and do nothing, silently. And
 a macOS `.dmg` is published already; what is missing is signing, not a
 build. Unsigned, macOS refuses to open rather than warning, which is
-why Windows gets a note and Mac gets "coming soon".
+why Windows gets a note and Mac got "coming soon".
+
+**THE MAC HALF IS NOW SIGNED AND NOTARISED, and the shape of it is
+worth more than the settings.** `desktop/build/entitlements.mac.plist`,
+`mac.hardenedRuntime` / `mac.notarize` in `desktop/package.json`, the
+five secrets in `build-apps.yml`, and a Gatekeeper assessment that
+fails the job.
+
+**`mac.identity: null` WAS IN THE CONFIG AND WOULD HAVE CANCELLED ALL
+OF IT.** It means "do not sign", and it overrides a perfectly good
+certificate silently — five correct secrets reaching a build that has
+been told not to sign produce an unsigned app and a green tick. That is
+the class this project keeps meeting: the configuration and the
+intention pointing opposite ways, with the failure visible only on a
+student's Mac. A test asserts it stays gone.
+
+**THE MICROPHONE ENTITLEMENT IS NOT PAPERWORK.** Under the hardened
+runtime `com.apple.security.device.audio-input` is the difference
+between a prompt and a HARD DENIAL — no dialogue, and nothing the app
+can use to tell "refused" from "no device". So turning the hardened
+runtime on without it would have taken a working desktop recorder and
+broken it, inside the commit that fixed the signing, on the one feature
+that is the reason to install the desktop build at all. It travels with
+`NSMicrophoneUsageDescription` in `mac.extendInfo` — the entitlement is
+permission to ask, the string is what the question says — and that
+string is a MIRROR of `MIC_USAGE_DESCRIPTION` with the equality as its
+guard, which is the allowed form: the constant is JavaScript and
+`package.json` is JSON, so it genuinely cannot be imported.
+
+**`spctl --assess` IS THE ONLY CHECK HERE THAT READS WHAT A STUDENT
+DOUBLE-CLICKS.** Everything else about signing is configuration
+asserting its own intent. It runs BEFORE the upload step, so a refused
+build never becomes an artifact and never reaches the release job, and
+three details in it are load-bearing: `spctl` writes to **stderr** (read
+without the redirect it sees an empty string and passes over
+everything); "accepted" alone is not enough, because an app can be
+accepted on the machine that built it and refused everywhere else, so
+the check requires **`source=Notarized Developer ID`**; and the ticket
+must be **stapled**, or an offline Mac — which is the machine a student
+opens it on — cannot confirm the notarisation and refuses.
+
+**THE FLAG IS GATED ON THE PIPELINE, NOT THE OTHER WAY ROUND.**
+`FLAGS.macDownload` only says the pipeline exists, so `test-site.mjs`
+asserts the pipeline — the five secrets by name, the two shared ones
+(`CSC_LINK`, `CSC_KEY_PASSWORD`) being MAC-SCOPED because
+electron-builder reads the same names on Windows as an authenticode
+certificate, the entitlement, the usage string, and both assessments.
+Flipping the boolean without the workflow goes red naming what is
+missing. **What it cannot enforce is the ORDERING**: the link resolves
+to `latest`, so between the merge and the first signed release it would
+hand somebody the previous unsigned build. Nothing static can know
+which release was signed — so the site is not promoted until that
+release exists.
+
+**And the guard had a hole that only mutation found:** a bare
+`/spctl --assess/` was satisfied by EITHER of the two assessments, so
+deleting the one on the `.app` left it green because the disk-image one
+still matched. Two occurrences and one loose pattern is a guard that
+checks whichever happens to survive.
 
 **Prices are placeholders behind a marker**, the way the UNMEASURED
 billing constant is: a test refuses to let the site ship a made-up

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the macOS desktop build.
+
+  THE HARDENED RUNTIME IS WHAT NOTARISATION REQUIRES, and it is a set of
+  DENIALS with named exceptions. Everything below is an exception, so
+  each one weakens the runtime and each is here for a reason that can be
+  stated. Nothing may be added without one.
+
+  THE MICROPHONE ONE IS THE ONE THAT WOULD HAVE BEEN MISSED, and it is
+  why this file is not merely ceremony. Under the hardened runtime
+  `com.apple.security.device.audio-input` is not advisory: without it
+  the microphone is HARD-DENIED, with no prompt for the student to
+  accept and nothing in the app able to tell the difference between
+  "denied" and "no device". So turning the hardened runtime on WITHOUT
+  this key would take a working desktop recorder and break it, in the
+  same commit that fixed the signing — and system audio is the first
+  genuine reason to install the desktop build at all.
+
+  It travels with NSMicrophoneUsageDescription in desktop/package.json's
+  `mac.extendInfo`, which is the sentence macOS shows when it asks. Both
+  are required: the entitlement is permission to ask, the string is what
+  the question says. One without the other is a denial or a crash.
+
+  WHAT IS DELIBERATELY ABSENT, named because the absence is the decision:
+
+    com.apple.security.cs.disable-library-validation — lets the process
+    load libraries signed by somebody else. Electron builds that bundle
+    native node modules usually need it; this one bundles none (the app
+    is main.js plus a web bundle), so it is left OFF. The symptom that
+    would send somebody here is the app dying at launch on a real Mac
+    with a "code signature" or "library load" error in Console.
+
+    com.apple.security.device.camera — nothing in the desktop shell
+    reaches a camera. The photographed-reading path is phone-only.
+
+  WHAT NOTHING IN THIS REPOSITORY CAN CHECK: whether these are the right
+  keys is answered by a real Mac launching a signed build, not by any
+  test here. The Gatekeeper assessment step in build-apps.yml is the closest
+  available, and it proves Gatekeeper accepts the bundle — not that the
+  microphone works inside it. That one is a hardware step.
+-->
+<plist version="1.0">
+<dict>
+  <!-- V8 compiles JavaScript at runtime; all three are what Electron
+       needs to start at all under the hardened runtime. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+
+  <!-- Recording a lecture. See the note above: without this the
+       microphone is refused rather than prompted for. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

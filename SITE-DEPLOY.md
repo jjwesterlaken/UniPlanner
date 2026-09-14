@@ -185,11 +185,28 @@ longer two numbers: a test derives the stamped files from the stamper
 itself and asserts each equals the root, so a desktop version reverted
 by a later commit goes red instead of going unnoticed for a release.
 
-### macOS: a build exists, and that is not the problem
+### macOS: a build existed, and that was never the problem
 
-A signed one does not. `University.Planner-1.0.1-universal.dmg` is
-published and 216 MB of it. Unsigned and un-notarised, macOS does not
-warn the way Windows does — it refuses, with a dialogue saying the app
-is damaged, and the workaround is a terminal command no student should
-be asked to run. **"Coming soon" is accurate**: what is missing is a
-$99/year Apple Developer account and a notarisation step, not a build.
+A signed one did not. Unsigned and un-notarised, macOS does not warn
+the way Windows does — it refuses, with a dialogue saying the app is
+damaged, and the workaround is a terminal command no student should be
+asked to run. So "Coming soon" was accurate while what was missing was
+an Apple Developer account and a notarisation step, not a build.
+
+**BOTH ARE NOW IN PLACE.** `build-apps.yml` signs with Developer ID and
+notarises, the hardened runtime is on with a microphone entitlement,
+and a Gatekeeper assessment fails the job before anything is uploaded.
+`FLAGS.macDownload` is on and `test-site.mjs` refuses to let it be on
+without that pipeline.
+
+**THE ORDERING THAT IS NOT ENFORCED BY ANYTHING, and therefore has to
+be read.** The download link resolves `latest/download/...` at CLICK
+time, so it points at whatever the newest release is — and the newest
+release is only signed once one has been cut by the new pipeline. Until
+then the link hands somebody the previous, UNSIGNED build: the exact
+dialogue "Coming soon" existed to avoid, now with a working-looking
+button in front of it.
+
+So: **cut the signed release first, confirm the Gatekeeper step passed,
+and promote the site after.** The merge does not publish anything (the
+promote does), which is the gap that makes this safe to get right.
