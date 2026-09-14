@@ -40,6 +40,7 @@
        move, and that is configuration outside this repository. */
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -198,6 +199,47 @@ function forwarder(name, { pathname = "/", search = "", hash = "", standalone = 
     /* And the belt to that braces is still there. */
     assert.match(SITE_JS, /getRegistrations\(\)/, "the marketing page no longer releases the worker that owned /");
     assert.match(SITE_JS, /scope\.pathname === "\/"/, "the release no longer targets the root scope specifically");
+  });
+
+  await test("NO DOCUMENT SENDS THE BUILD-ID CHECK TO THE ROOT WORKER", () => {
+    /* The build-id curl is the ONLY thing that tells "merged" from
+       "deployed" on this project, and the path split moved the file it
+       reads. Pointed at the root it now gets a 404 page, the grep
+       matches nothing, and an EMPTY RESULT is indistinguishable from a
+       deploy that did not happen — the failure this whole section of
+       CLAUDE.md exists to make visible, reintroduced by a stale URL in
+       the instructions for finding it.
+
+       Scoped to the CLAIM, not to a file: every tracked markdown, and
+       the forbidden thing is a build-id read of a ROOT worker, never
+       the mention of one. DEPLOY-CHECKLIST legitimately curls
+       `/sw.js` expecting a 404 — that is the absence being VERIFIED,
+       and a guard that banned the string would have had to be
+       suppressed to let it through. The marker is the grep for the
+       cache constant, lifted from the worker rather than typed. */
+    const cacheDecl = read("public/sw.js").match(/^const (\w+) = "uni-planner-/m);
+    assert.ok(cacheDecl, "public/sw.js no longer declares the cache name this guard keys on");
+    const docs = execFileSync("git", ["ls-files", "*.md"], { cwd: rootDir, encoding: "utf8" })
+      .split("\n")
+      .filter(Boolean);
+    assert.ok(docs.length > 0, "no markdown was swept — this check would pass over nothing");
+
+    const appPath = new URL(APP_URL).pathname;
+    const buildIdReads = [];
+    for (const doc of docs) {
+      for (const line of read(doc).split("\n")) {
+        const url = line.match(/https?:\/\/[^\s)]+\/sw\.js/);
+        if (!url || !line.includes(cacheDecl[1])) continue;
+        buildIdReads.push({ doc, url: url[0] });
+      }
+    }
+    assert.ok(buildIdReads.length > 0, "no document states the build-id check at all — this check proved nothing");
+    for (const { doc, url } of buildIdReads) {
+      assert.ok(
+        new URL(url).pathname === `${appPath}/sw.js`,
+        `${doc} reads the build id from ${url}, which the path split left holding no file — the grep returns empty and an empty result reads as "the deploy did not happen"`
+      );
+    }
   });
 
   await test("every redirect source is a path that holds NO FILE", () => {

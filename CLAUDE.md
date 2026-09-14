@@ -3463,11 +3463,21 @@ promote-on-release arrangement below. `main` builds previews only.
 
 | Setting | Value |
 |---|---|
-| Build command | `npm run build:web` |
-| Output directory | `dist-web` |
+| Build command | `npm run build:web && npm run build:site` |
+| Output directory | **`dist-site`** |
 | Root directory | `/` |
+| Custom domains | `www.uniplannerapp.com` **and** `uniplannerapp.com` |
 | Production branch | **`release`** |
 | Node version | `NODE_VERSION` = `22`, and `.nvmrc` |
+
+**The output directory moved with the path split, and the dashboard
+must be changed BEFORE the promote** — `dist-site` does not exist on
+`release` until the promote lands, but a build that cannot find its
+output directory FAILS, and a failed Pages deploy leaves the previous
+one serving. So changing it early costs nothing and changing it late
+serves the planner at `/` with `/app/` returning 404 — which is where
+every password-reset email and every Stripe return now points.
+DEPLOY-CHECKLIST §7 has the ordering and the curl checks.
 
 `.nvmrc` exists so the Node version is reviewable in the repo rather than
 living only in a dashboard — the same reasoning as the generated cache
@@ -3510,9 +3520,9 @@ that makes every sentence below true.
 
 ```
 # production — moves only on promote
-curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'
+curl -s https://www.uniplannerapp.com/app/sw.js | grep 'const CACHE'
 # the main preview — moves on every merge to main
-curl -s https://main.uniplanner.pages.dev/sw.js | grep 'const CACHE'
+curl -s https://main.uniplanner.pages.dev/app/sw.js | grep 'const CACHE'
 ```
 
 After a merge to `main`, the *preview* id must match the Account tab
@@ -3676,8 +3686,15 @@ Promote-on-release section): after a merge to `main`, check the main
 PREVIEW's build id; after a promote, check production:
 
 ```
-curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'
+curl -s https://www.uniplannerapp.com/app/sw.js | grep 'const CACHE'
 ```
+
+**The path split moved that URL and the root one is NOT redirected** —
+a service-worker script request may not be redirected, and a 404 at
+`/sw.js` is what unregisters the worker the old root build left behind.
+So `curl .../sw.js` now returns a 404 page and the grep matches
+nothing: an empty result is the check reading the wrong URL, not a
+failed deploy.
 
 That build id must match the one on the Account tab. If it doesn't, the
 deploy didn't happen, whatever the merge said. Remember that a docs-only

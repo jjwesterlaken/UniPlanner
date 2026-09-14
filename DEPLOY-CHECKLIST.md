@@ -560,6 +560,34 @@ The second Pages project (`uniplanner-site`, if it is still attached to
 the apex) must be **detached from the apex first**, or two projects
 claim one hostname.
 
+**CHANGE BOTH DASHBOARD FIELDS BEFORE THE PROMOTE, and change them
+together.** The four states, each verified against the real build
+scripts rather than reasoned about:
+
+| Build command | Output dir | What happens |
+|---|---|---|
+| old | old | builds, **serves the planner at `/`** and 404s `/app/` |
+| old | **`dist-site`** | **deploy FAILS** — `build:web` writes no `dist-site`, so Pages finds no output directory and the previous deployment keeps serving |
+| **both** | old | builds, **serves the planner at `/`** and 404s `/app/` |
+| **both** | **`dist-site`** | correct |
+
+Row 2 is the safe one, and it is what "change the dashboard early"
+buys: on today's `release` — which has no `build:site` — the deploy
+simply fails and production is untouched until the promote lands the
+script that fills the directory. Every other wrong combination
+DEPLOYS, and deploys the wrong site.
+
+**What a visitor sees when the order is wrong:** `/` is the planner
+instead of the marketing page, and **`/app/` returns 404** — which is
+where every password-reset link now lands (the token is single-use, so
+the reset is spent on a 404 and the student must request another) and
+where Stripe returns a student who has just paid. Signed-in students
+keep working at `/` and notice nothing, which is what makes it quiet.
+
+Changing the fields early costs one failed build in the dashboard's
+deployment list. Changing them late costs the two flows above for as
+long as it takes somebody to notice.
+
 **Check both hostnames serve the same thing, and that `/app` is the
 planner:**
 
