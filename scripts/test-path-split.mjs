@@ -210,19 +210,25 @@ function forwarder(name, { pathname = "/", search = "", hash = "", standalone = 
        CLAUDE.md exists to make visible, reintroduced by a stale URL in
        the instructions for finding it.
 
-       Scoped to the CLAIM, not to a file: every tracked markdown, and
-       the forbidden thing is a build-id read of a ROOT worker, never
-       the mention of one. DEPLOY-CHECKLIST legitimately curls
+       Scoped to the CLAIM, not to a file: EVERY TRACKED FILE, and the
+       forbidden thing is a build-id read of a ROOT worker, never the
+       mention of one. It was `*.md` for one commit and promote.mjs —
+       the script that IS the promote ritual, and therefore the most
+       likely place anybody reads the instruction — printed the stale
+       URL underneath it. That is the file-scoped-guard entry in the
+       ledger, arriving inside the guard written to close it.
+       DEPLOY-CHECKLIST legitimately curls
        `/sw.js` expecting a 404 — that is the absence being VERIFIED,
        and a guard that banned the string would have had to be
        suppressed to let it through. The marker is the grep for the
        cache constant, lifted from the worker rather than typed. */
     const cacheDecl = read("public/sw.js").match(/^const (\w+) = "uni-planner-/m);
     assert.ok(cacheDecl, "public/sw.js no longer declares the cache name this guard keys on");
-    const docs = execFileSync("git", ["ls-files", "*.md"], { cwd: rootDir, encoding: "utf8" })
+    const docs = execFileSync("git", ["ls-files"], { cwd: rootDir, encoding: "utf8" })
       .split("\n")
-      .filter(Boolean);
-    assert.ok(docs.length > 0, "no markdown was swept — this check would pass over nothing");
+      .filter(Boolean)
+      .filter((f) => !/\.(png|ico|jpg|jpeg|gif|webp|woff2?|ttf|mp3|wav|webm|zip|pdf)$/i.test(f));
+    assert.ok(docs.length > 50, `only ${docs.length} tracked files were swept — this check would pass over nothing`);
 
     const appPath = new URL(APP_URL).pathname;
     const buildIdReads = [];
