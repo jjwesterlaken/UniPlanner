@@ -37,7 +37,13 @@ try {
   process.exit(1);
 }
 
+/* THE PATH SPLIT MOVED THIS URL. The worker is at /app/sw.js now, and
+   the root is deliberately EMPTY — a service worker script request may
+   not be redirected, so a 404 there is what unregisters the worker the
+   old root build installed. Pointed at the root this grep matches
+   nothing, and an empty result is indistinguishable from a deploy that
+   did not happen, which is the one thing this line exists to tell. */
 console.log("\nPromoted. Verify (allow a minute or two for the Pages build):");
-console.log("  curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'");
+console.log("  curl -s https://www.uniplannerapp.com/app/sw.js | grep 'const CACHE'");
 console.log("The build id must match the main preview's id and the Account tab.");
 console.log("(A docs-only promote legitimately leaves the build id unchanged.)");

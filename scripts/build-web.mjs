@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { APP_URL } from "../src/legalLinks.js";
 import path from "node:path";
 
 const BUILD_ID_TOKEN = "__BUILD_ID__";
@@ -109,10 +110,11 @@ fs.cpSync("public", OUT, { recursive: true });
      and PASSWORD_RESET_REDIRECT together — a test pins them to the same
      location, because a page pointing one place while the reset email
      points another is two half-working paths. */
-  const links = fs.readFileSync("src/legalLinks.js", "utf8");
-  const siteUrl = /export const SITE_URL = "([^"]+)"/.exec(links);
-  if (!siteUrl) throw new Error("SITE_URL is gone from src/legalLinks.js — the site's app link cannot be derived");
-  const appUrl = siteUrl[1]; // + "/app" when the origin split lands
+  /* IMPORTED RATHER THAN MATCHED AS TEXT. This read the constant with
+     a quoted-string regex, which the path split broke the moment
+     APP_URL became a template literal. legalLinks.js has no browser
+     globals, so there is nothing to parse around. */
+  const appUrl = APP_URL;
 
   const facts = fs.readFileSync("site/build-facts.js", "utf8");
   const filled = facts

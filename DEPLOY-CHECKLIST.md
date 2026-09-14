@@ -452,7 +452,12 @@ npm run promote
 deploy arrived:
 
 ```bash
-curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'
+# AFTER THE PATH SPLIT the worker is at /app/sw.js. The ROOT
+# deliberately serves no worker and no redirect for it — a 404 there is
+# what makes a browser unregister the stale worker that owned `/`. So
+# the old command returns nothing, and that is correct rather than a
+# failed deploy.
+curl -s https://www.uniplannerapp.com/app/sw.js | grep 'const CACHE'
 ```
 
 Compare against the Account tab in a hard-reloaded browser. They must
@@ -522,3 +527,136 @@ reset one.
 
 Both recoveries are minutes. The reason 0013 is last is not that it is
 dangerous in itself; it is that every failure it causes is silent.
+
+---
+
+## 7. THE PATH SPLIT — the steps no test in this repository can reach
+
+The branch is code. **Everything below is configuration, and each item
+has a silent failure.**
+
+**The origin does not change.** `www.uniplannerapp.com` serves both the
+marketing site and the app; the app moves from `/` to `/app`. No
+student's `localStorage` moves, nothing is migrated, and no data is at
+risk in this deploy — which is the entire reason this shape was chosen
+over `app.uniplannerapp.com`.
+
+### 7a. Cloudflare Pages — one project, one output, two hostnames
+
+One origin can only be served one directory, so the build assembles
+**one** output containing both:
+
+| | |
+|---|---|
+| Build command | `npm run build:web && npm run build:site` |
+| Output directory | **`dist-site`** |
+| Custom domains | `www.uniplannerapp.com` **and** `uniplannerapp.com` |
+| Production branch | `release` |
+
+`dist-site/app/` is the entire web build, copied in verbatim. `dist-web`
+is untouched and is still what the desktop and phone shells package.
+
+The second Pages project (`uniplanner-site`, if it is still attached to
+the apex) must be **detached from the apex first**, or two projects
+claim one hostname.
+
+**CHANGE BOTH DASHBOARD FIELDS BEFORE THE PROMOTE, and change them
+together.** The four states, each verified against the real build
+scripts rather than reasoned about:
+
+| Build command | Output dir | What happens |
+|---|---|---|
+| old | old | builds, **serves the planner at `/`** and 404s `/app/` |
+| old | **`dist-site`** | **deploy FAILS** — `build:web` writes no `dist-site`, so Pages finds no output directory and the previous deployment keeps serving |
+| **both** | old | builds, **serves the planner at `/`** and 404s `/app/` |
+| **both** | **`dist-site`** | correct |
+
+Row 2 is the safe one, and it is what "change the dashboard early"
+buys: on today's `release` — which has no `build:site` — the deploy
+simply fails and production is untouched until the promote lands the
+script that fills the directory. Every other wrong combination
+DEPLOYS, and deploys the wrong site.
+
+**What a visitor sees when the order is wrong:** `/` is the planner
+instead of the marketing page, and **`/app/` returns 404** — which is
+where every password-reset link now lands (the token is single-use, so
+the reset is spent on a 404 and the student must request another) and
+where Stripe returns a student who has just paid. Signed-in students
+keep working at `/` and notice nothing, which is what makes it quiet.
+
+Changing the fields early costs one failed build in the dashboard's
+deployment list. Changing them late costs the two flows above for as
+long as it takes somebody to notice.
+
+**Check both hostnames serve the same thing, and that `/app` is the
+planner:**
+
+```bash
+for h in https://uniplannerapp.com https://www.uniplannerapp.com; do
+  printf '%-34s root %s  app %s\n' "$h" \
+    "$(curl -sI $h/ | head -1 | tr -d '\r')" \
+    "$(curl -sI $h/app/ | head -1 | tr -d '\r')"
+done
+# both 200. And the four documents, on both:
+for p in privacy terms support delete-account; do
+  printf '%-16s %s\n' "$p" "$(curl -sI https://www.uniplannerapp.com/$p | head -1)"
+done
+```
+
+**And check the one that is deliberately absent:**
+
+```bash
+curl -sI https://www.uniplannerapp.com/sw.js | head -1   # expect 404
+```
+
+A **301 here would be wrong** and is guarded against in the build: a
+service worker script request may not be redirected, so a 301 leaves
+every stale worker installed and controlling the marketing page, where
+a 404 makes the browser unregister it.
+
+### 7b. DNS
+
+Nothing moves. `www` already points at the Pages project; the apex
+already resolves to the site. **MX records are not touched** — they
+never were, and Google Workspace mail is on them.
+
+### 7c. Supabase → Authentication → URL Configuration
+
+**The Redirect URLs allowlist needs NO new entry.**
+`https://www.uniplannerapp.com/**` already covers `/app`. That is a
+consequence of choosing a path rather than a host, and it is worth
+checking rather than assuming — if the entry is the bare origin only,
+add the wildcard.
+
+**Set Site URL to `https://www.uniplannerapp.com/app`.** That is where
+Supabase falls back when a `redirectTo` is rejected, and a fallback
+landing on the marketing page is the same silent failure one layer
+down: the recovery token is in the fragment, it is single-use, and the
+marketing page cannot consume it.
+
+### 7d. Stripe → Settings → Public details
+
+Nothing changes. The Terms URL is still
+`https://www.uniplannerapp.com/terms` and still resolves — the
+documents did not move. **Check it anyway**: Stripe refuses to create a
+Checkout session when that field is empty.
+
+The **return URLs are in code** (`_shared/stripe.ts`) and ship with the
+function deploy in step 2.
+
+### 7e. What to check by hand afterwards
+
+- **A planner survives.** Open the app on a browser that already has
+  one, at `/app`. The planner is there because the origin did not
+  change; if it is not, stop — something moved the origin.
+- **An installed PWA.** An old shortcut opens `/`, and the marketing
+  page bounces it to `/app` on the display-mode check. A NEW install
+  from `/app` gets `start_url: /app/` for free from the relative
+  manifest.
+- **The old worker lets go.** First online visit to `/` unregisters it;
+  the 404 at `/sw.js` does the same for browsers that never visit.
+- **A reset email from an OLD store build** lands on `/` and should
+  bounce to `/app/` with the fragment intact. Worth one real test with
+  a real inbox, because no test here can read one.
+- **Sign-in is NOT disturbed.** Same origin means the session is still
+  there. If anybody is signed out by this deploy, the origin moved.

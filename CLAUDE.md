@@ -3463,11 +3463,21 @@ promote-on-release arrangement below. `main` builds previews only.
 
 | Setting | Value |
 |---|---|
-| Build command | `npm run build:web` |
-| Output directory | `dist-web` |
+| Build command | `npm run build:web && npm run build:site` |
+| Output directory | **`dist-site`** |
 | Root directory | `/` |
+| Custom domains | `www.uniplannerapp.com` **and** `uniplannerapp.com` |
 | Production branch | **`release`** |
 | Node version | `NODE_VERSION` = `22`, and `.nvmrc` |
+
+**The output directory moved with the path split, and the dashboard
+must be changed BEFORE the promote** — `dist-site` does not exist on
+`release` until the promote lands, but a build that cannot find its
+output directory FAILS, and a failed Pages deploy leaves the previous
+one serving. So changing it early costs nothing and changing it late
+serves the planner at `/` with `/app/` returning 404 — which is where
+every password-reset email and every Stripe return now points.
+DEPLOY-CHECKLIST §7 has the ordering and the curl checks.
 
 `.nvmrc` exists so the Node version is reviewable in the repo rather than
 living only in a dashboard — the same reasoning as the generated cache
@@ -3510,9 +3520,9 @@ that makes every sentence below true.
 
 ```
 # production — moves only on promote
-curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'
+curl -s https://www.uniplannerapp.com/app/sw.js | grep 'const CACHE'
 # the main preview — moves on every merge to main
-curl -s https://main.uniplanner.pages.dev/sw.js | grep 'const CACHE'
+curl -s https://main.uniplanner.pages.dev/app/sw.js | grep 'const CACHE'
 ```
 
 After a merge to `main`, the *preview* id must match the Account tab
@@ -3544,7 +3554,10 @@ since 12 August 2026. DNS stays at Squarespace: one CNAME, `www` →
 records never moved, so Google Workspace mail was never at risk — which
 is why the nameserver switch was cancelled rather than merely postponed.
 
-**The origin must not change after launch.** `localStorage` is scoped per
+**The origin must not change, and the path split did not change it** —
+`www.uniplannerapp.com` before and after, with the app one level deeper.
+That is the whole reason a path was chosen over a subdomain.
+`localStorage` is scoped per
 origin, so every user's local planner — the copy that exists before they
 make an account, and the offline copy afterwards — is keyed to the
 hostname that stored it. Serving the app from a different host later
@@ -3553,9 +3566,28 @@ migrate: it lives on devices, not on a server we can run a script
 against. Today that would affect two people; after launch it is
 everybody, silently, with the symptom being "the app lost my notes".
 
-A marketing site is planned. It takes **`/` as a path change on the same
-origin**, with the app moving to **`/app`** — not a subdomain. Same
-origin means `localStorage` survives untouched.
+The marketing site takes **`/` as a path change on the same origin**,
+with the app at **`/app`** — not a subdomain. Same origin means
+`localStorage` survives untouched. **Built 14 September 2026**; the
+deploy steps are DEPLOY-CHECKLIST §7 and the shape is SITE-DEPLOY.md.
+
+**AND THE SUBDOMAIN WAS BUILT BEFORE IT WAS REFUSED AGAIN, which is the
+part worth keeping.** `claude/origin-split` is a complete, green
+implementation of `app.uniplannerapp.com` — redirect middleware, the
+documents served on both origins, and a SAME-SITE IFRAME BRIDGE to
+carry signed-out planners across the origin boundary. That bridge is
+real and it works: `www.` and `app.` share a registrable domain, and
+storage partitioning is keyed on the SITE rather than the origin, so a
+same-site frame reaches unpartitioned storage. The ruling below was
+therefore not refuted by "it cannot be done".
+
+It was upheld on what the bridge could not reach: a browser that never
+opens the new origin, an installed PWA whose `start_url` was resolved
+at install time, any other device or profile — each of which is a
+student opening the app to an empty planner — and on the fact that the
+same-site behaviour is SPECIFICATION rather than observation here,
+since no build machine can run WebKit. **A rescue with holes is still
+the data loss the ruling names; a path split has nothing to rescue.**
 
 **`app.uniplannerapp.com` HAS BEEN PROPOSED AND RULED OUT, twice — it
 is the same mistake as changing the origin at all.** A subdomain is a
@@ -3654,8 +3686,15 @@ Promote-on-release section): after a merge to `main`, check the main
 PREVIEW's build id; after a promote, check production:
 
 ```
-curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'
+curl -s https://www.uniplannerapp.com/app/sw.js | grep 'const CACHE'
 ```
+
+**The path split moved that URL and the root one is NOT redirected** —
+a service-worker script request may not be redirected, and a 404 at
+`/sw.js` is what unregisters the worker the old root build left behind.
+So `curl .../sw.js` now returns a 404 page and the grep matches
+nothing: an empty result is the check reading the wrong URL, not a
+failed deploy.
 
 That build id must match the one on the Account tab. If it doesn't, the
 deploy didn't happen, whatever the merge said. Remember that a docs-only

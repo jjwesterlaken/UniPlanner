@@ -134,6 +134,15 @@ jobs:
         # there. test-viewport-layout measures both.
         run: npm run build
 
+      - name: Assemble the site output the path split ships
+        # test-path-split reads dist-site, which is a SEPARATE artifact
+        # from dist-web — one Pages project serves one directory, so
+        # build-site assembles the marketing root with the whole web
+        # build copied into dist-site/app. Without this step that suite
+        # fails on a missing directory rather than on anything it is
+        # about, which is how it first ran red here.
+        run: npm run build:site
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
@@ -219,6 +228,20 @@ jobs:
         env:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-consent.mjs
+
+      - name: The path split's two nav controls are really on screen
+        # "Both controls, visible without scrolling" is a claim about
+        # LAYOUT, and markup containing two links satisfies none of it —
+        # at 390px the pair needed 452px of a 390px screen and Grace's
+        # call to action ran off the right edge. Measured on the built
+        # page at a phone width and a desktop width, with an overlap
+        # check (two buttons that fit individually can still sit on top
+        # of each other) and a scroll to separate "above the fold" from
+        # "sticky". Everything else in the suite runs in the npm-test
+        # job; only this half needs a browser.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-path-split.mjs
 
       - name: Run the three journeys
         # Against the live Supabase project with a dedicated test account

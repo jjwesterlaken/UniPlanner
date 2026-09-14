@@ -1,41 +1,75 @@
-/* The marketing site, standalone, for the APEX domain.
+/* The published site: marketing at `/`, the planner at `/app`.
 
-   WHY A SECOND OUTPUT. `dist-web` is one Cloudflare Pages project
-   serving the app at `/` with the site under `/site/`. The apex
-   (`uniplannerapp.com`) is a DIFFERENT host, so it needs its own Pages
-   project with its own build — and pointing it at `dist-web` would
-   serve the app from the apex, which is the thing we are avoiding.
+   ONE OUTPUT, BECAUSE IT IS ONE ORIGIN. That is the whole shape of
+   this file and the thing to understand before changing it. The path
+   split puts the marketing page and the app on the SAME host, and a
+   Cloudflare Pages project serves exactly one directory — so there is
+   no arrangement in which two builds land on one origin except by one
+   of them containing the other. `dist-site` is that container:
 
-   THE ONE TRANSFORMATION, and it is the reason this file exists rather
-   than a `cp`: the page's off-page links are ROOT-RELATIVE
-   (`/privacy`, `/icon-192.png`). Served from `www` those resolve to the
-   right documents. Served from the apex they resolve to paths that do
-   not exist there. So they are rewritten to absolute `www` URLs, and a
-   test asserts nothing root-relative survives — a broken privacy link
-   on a launch page is the kind of thing nobody clicks until a store
-   reviewer does.
+     dist-site/            the marketing page, the four legal
+                           documents, the fonts and icons
+     dist-site/app/        the entire web build, verbatim
+     dist-site/_headers    ONE policy for the whole origin
+     dist-site/_redirects  the app's old root URLs, moved
 
-   `APP_URL` needs no rewriting: build-web.mjs already writes it
-   absolute, from SITE_URL, for exactly this reason.
+   `dist-web` IS NOT TOUCHED and is still the artifact the desktop and
+   phone shells are packaged from. It is copied in, not moved, so
+   `prepare-native.mjs` and electron-builder see exactly what they saw
+   before the split.
 
-   Run: npm run build:site  ->  dist-site/ */
+   WHY THE APP NEEDED NO CHANGES TO MOVE. Everything in it is already
+   path-relative — `manifest.webmanifest`'s `start_url` and `scope` are
+   `"."`, the icons and `app.js` are bare filenames, the worker is
+   registered as `register("sw.js")`, and `sw.js` derives its shell
+   list from `new URL("./", self.location)`. So the app at `/app/`
+   scopes its worker to `/app/`, installs a PWA whose start_url is
+   `/app/`, and caches the right files, with no edit at all. That was
+   predicted in SITE-DEPLOY.md and is now checked rather than assumed.
+
+   AND `localStorage` DOES NOT MOVE, which is the entire reason this is
+   a path and not a subdomain: storage is scoped by ORIGIN and paths do
+   not scope it. No planner is migrated because none of them moves.
+
+   Run: npm run build:web && npm run build:site  ->  dist-site/ */
 
 import fs from "node:fs";
 import path from "node:path";
 
 const OUT = "dist-site";
+const APP_BUILD = "dist-web";
 const SRC_PAGE = "public/site/index.html";
 
-const links = fs.readFileSync("src/legalLinks.js", "utf8");
-const m = /export const SITE_URL = "([^"]+)"/.exec(links);
-if (!m) throw new Error("SITE_URL is gone from src/legalLinks.js");
-const SITE_URL = m[1];
+/* IMPORTED, NOT REGEXED OUT OF THE SOURCE. This build used to match
+   the constants as text, which worked while they were quoted literals
+   and stopped the moment APP_URL became a template. legalLinks.js is
+   plain JS with no browser globals, so Node can simply load it and
+   there is nothing to parse. */
+import { SITE_URL, APP_URL, DOCUMENT_PATHS } from "../src/legalLinks.js";
+
+/* The app's PATH, from the same constant every button points at, so
+   the directory this build writes the app into and the URL it is
+   reached by cannot disagree. */
+if (!APP_URL.startsWith(`${SITE_URL}/`)) {
+  throw new Error(`APP_URL (${APP_URL}) is not a path under SITE_URL — the path split is the whole reason it must be`);
+}
+const APP_PATH = APP_URL.slice(SITE_URL.length); // "/app"
+const APP_DIR = APP_PATH.replace(/^\//, "");
+if (!APP_DIR) throw new Error(`APP_URL has no path under SITE_URL — the app would overwrite the marketing site`);
+
+/* THE APP BUILD MUST ALREADY EXIST. Assembling a site with an empty
+   `/app` produces a marketing page whose every button 404s and whose
+   build looked fine — the same failure as the apex page that shipped
+   with a dead script tag, one directory up. */
+if (!fs.existsSync(path.join(APP_BUILD, "index.html"))) {
+  throw new Error(`${APP_BUILD}/index.html is missing — run \`npm run build:web\` first, or ${OUT}/${APP_DIR} ships empty`);
+}
 
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(path.join(OUT, "site"), { recursive: true });
 
-/* The page's own modules, beside it. Same four the web build copies —
-   read from the folder rather than listed, so a new one comes along. */
+/* The page's own modules, beside it. Read from the folder rather than
+   listed, so a new one comes along. */
 const modules = fs.readdirSync("site").filter((f) => f.endsWith(".js"));
 if (modules.length === 0) throw new Error("site/ has no modules — nothing would work");
 for (const f of modules) fs.copyFileSync(path.join("site", f), path.join(OUT, "site", f));
@@ -47,59 +81,178 @@ for (const f of modules) fs.copyFileSync(path.join("site", f), path.join(OUT, "s
    release, no recovery forwarding. It looked fine. */
 fs.copyFileSync(path.join("public", "site", "site.js"), path.join(OUT, "site", "site.js"));
 
-/* Icons the page references. Copied rather than linked absolutely,
-   because an icon is cheap and a cross-origin favicon is a request
-   this site's zero-third-party promise would rather not make. */
-const ASSETS = ["icon-192.png", "icon-512.png", "apple-touch-icon.png"];
-for (const f of ASSETS) {
+/* Icons and fonts the page and the documents reference. */
+for (const f of ["icon-192.png", "icon-512.png", "apple-touch-icon.png"]) {
   const from = path.join("public", f);
   if (fs.existsSync(from)) fs.copyFileSync(from, path.join(OUT, f));
 }
-
-let html = fs.readFileSync(SRC_PAGE, "utf8");
-
-/* `./site.js` -> `./site/site.js`: the page sits at the root here and
-   its modules are one level down, where the web build also puts them. */
-html = html.replace(/(src|href)="\.\/([\w.-]+\.js)"/g, `$1="./site/$2"`);
-
-/* Root-relative -> absolute, EXCEPT the icons copied above.
-
-   DERIVED FROM legalLinks.js rather than listed. It was
-   `["/privacy", "/delete-account"]`, typed here — and `/terms` had
-   already been published without joining it, so a Terms link in this
-   footer would have stayed root-relative and 404'd on the apex domain,
-   which serves no such file. Adding `/support` by hand would have been
-   the third chance to make the same omission. Every published document
-   is rewritten now, the moment its URL constant exists. */
-const ABSOLUTE = [...links.matchAll(/export const \w+_URL = `\$\{SITE_URL\}(\/[\w-]+)`/g)].map((m) => m[1]);
-if (ABSOLUTE.length === 0) throw new Error("no document paths found in src/legalLinks.js — every footer link would stay root-relative");
-for (const p of ABSOLUTE) {
-  html = html.split(`href="${p}"`).join(`href="${SITE_URL}${p}"`);
+if (fs.existsSync("public/fonts")) {
+  fs.mkdirSync(path.join(OUT, "fonts"), { recursive: true });
+  for (const f of fs.readdirSync("public/fonts")) {
+    fs.copyFileSync(path.join("public/fonts", f), path.join(OUT, "fonts", f));
+  }
 }
 
+/* THE PUBLISHED DOCUMENTS, DERIVED FROM legalLinks.js rather than
+   listed. Every `*_URL` under SITE_URL is a document the ROOT must
+   serve — those four URLs are in two app-store listings and a Stripe
+   dashboard field, and they do not move when the app does. A fifth is
+   copied the moment its constant exists, rather than 404ing at a URL
+   somebody has already been given. */
+const DOC_PATHS = DOCUMENT_PATHS;
+if (DOC_PATHS.length === 0) throw new Error("DOCUMENT_PATHS is empty — the site would serve no legal pages");
+for (const p of DOC_PATHS) {
+  const file = `${p.replace(/^\//, "")}.html`;
+  const from = path.join("public", file);
+  if (!fs.existsSync(from)) throw new Error(`${SITE_URL}${p} has a URL constant but no public/${file} to serve`);
+  fs.copyFileSync(from, path.join(OUT, file));
+}
+
+/* ---------- the app, verbatim, one level down ---------- */
+fs.cpSync(APP_BUILD, path.join(OUT, APP_DIR), { recursive: true });
+
+/* TWO FILES THAT MEAN NOTHING WHERE THEY LAND, removed rather than
+   left. Cloudflare Pages reads `_headers` and `_redirects` from the
+   OUTPUT ROOT only, so copies under `/app/` are configuration-shaped
+   files that configure nothing — which is worse than absent, because
+   the next person to change a header will find two and edit the one
+   that does not work. The root pair below is the live one. */
+for (const inert of ["_headers", "_redirects"]) {
+  fs.rmSync(path.join(OUT, APP_DIR, inert), { force: true });
+}
+
+/* ---------- the marketing page ---------- */
+let html = fs.readFileSync(SRC_PAGE, "utf8");
+/* `./site.js` -> `./site/site.js`: the page sits at the root here and
+   its modules are one level down. */
+html = html.replace(/(src|href)="\.\/([\w.-]+\.js)"/g, `$1="./site/$2"`);
+/* The app's URL, substituted rather than typed into the markup, from
+   the same constant everything else derives from — and ABSOLUTE, for
+   the reason set out at length in public/site/site.js: this page is
+   served on two hostnames, those are two origins, and a relative app
+   link would strand an apex visitor's planner on an origin nobody else
+   ever uses. */
+html = html.split("__APP_URL__").join(`${SITE_URL}${APP_PATH}`);
+if (html.includes("__APP_")) throw new Error("the marketing page still carries an unfilled app-link placeholder");
 fs.writeFileSync(path.join(OUT, "index.html"), html);
 
-/* No service worker here, deliberately: this page is not an app shell,
-   and a worker on the apex would cache a marketing page for people who
-   later get sent somewhere else. */
-const stray = fs.readdirSync(OUT).filter((f) => f === "sw.js");
-if (stray.length) throw new Error("a service worker reached the apex build");
+/* No service worker at the ROOT, deliberately and importantly. The
+   marketing page is not an app shell, and a worker here would claim
+   scope `/` — which is the scope the OLD app worker holds and which
+   `site.js` exists to release. Registering a second one at the same
+   scope would recreate, on purpose, the exact collision the release
+   code is there to clean up. The app's own worker is at
+   `/app/sw.js` and scopes itself to `/app/`. */
+if (fs.existsSync(path.join(OUT, "sw.js"))) throw new Error("a service worker reached the site ROOT — it would claim scope / and fight the app's own");
+if (!fs.existsSync(path.join(OUT, APP_DIR, "sw.js"))) throw new Error(`${APP_DIR}/sw.js is missing — the app would register nothing`);
 
-/* EVERY LINK MUST RESOLVE, checked against the output rather than
-   assumed. The first version of this script rewrote `./site.js` to
-   `./site/site.js` and then never copied site.js, so the page shipped
-   with a dead script tag — static markup intact, every slot empty, and
-   nothing about it looked broken until you read it. A rewrite that
-   points somewhere is not the same claim as a rewrite that points at a
-   file. */
-const referenced = [...fs.readFileSync(path.join(OUT, "index.html"), "utf8").matchAll(/(?:src|href)="([^"]+)"/g)].map(
-  (r) => r[1]
+/* ---------- one policy for one origin ---------- */
+
+/* THE APP'S HEADERS ARE THE ORIGIN'S HEADERS, and this is a real
+   consequence of the path split rather than a copy for convenience.
+   One origin can have one Content-Security-Policy that means anything:
+   two `_headers` rules both matching a path produce TWO CSP headers,
+   and a browser enforces the INTERSECTION — so a second, tighter
+   policy written for the marketing pages would silently narrow the
+   app's, and the file would look correct while the planner stopped
+   reaching Supabase.
+   `public/_headers` is the app's, it is the permissive side of that
+   intersection, and it is what ships. The marketing page needs
+   nothing it does not already allow. */
+fs.copyFileSync("public/_headers", path.join(OUT, "_headers"));
+
+/* ---------- the app's old root URLs ---------- */
+
+/* DERIVED, AND NARROW ON PURPOSE. Before the split the app WAS the
+   root, so its assets sat at `/app.js`, `/sw.js` and so on. Those
+   paths now hold nothing.
+
+   WHAT DOES NOT TRANSFER FROM THE SUBDOMAIN BRANCH: a catch-all. There
+   the rule was "everything that is not the site moved to another
+   host", which needs a Pages middleware, because expressing the
+   exceptions in `_redirects` would need 200-rewrites that Cloudflare
+   Pages does not support. Here the app did not move HOST, only depth,
+   and a catch-all would be actively wrong — `/nonsense` is not an app
+   URL and sending it to `/app/nonsense` turns a 404 into a planner
+   that cannot route it.
+
+   So these are exact sources, derived from the files the app build
+   really produces at its root, MINUS every path the site root serves
+   itself. That subtraction is what makes `_redirects` safe here where
+   it was not safe there: every source below is a path with NO FILE, so
+   the question of whether static assets take precedence over redirects
+   cannot arise. Nothing depends on a precedence this container cannot
+   verify. */
+const rootServes = new Set(fs.readdirSync(OUT, { withFileTypes: true }).map((e) => e.name));
+
+/* `sw.js` IS EXCLUDED, AND A 404 IS BETTER THAN THE REDIRECT — which
+   is the opposite of what the derivation produces, so it is named
+   here with the reason rather than quietly dropped.
+
+   Every browser that has opened this app holds a worker registered at
+   scope `/` from `/sw.js`. Two facts decide what that path should do:
+
+     - A service worker script request MAY NOT BE REDIRECTED. The
+       Update algorithm fails outright on a redirect, so a 301 here is
+       refused and the stale worker stays installed, controlling `/`,
+       which is now the marketing page.
+     - A 404 on the script during an update UNREGISTERS the
+       registration. The browser cleans it up itself.
+
+   So leaving this path empty is an active mechanism and the redirect
+   is an inert one. `site.js`'s `releaseTheOldWorker()` stays as the
+   belt to this braces — it runs on the first visit to `/` and does
+   not wait for an update check — but the 404 reaches browsers that
+   never load the marketing page at all. */
+const WORKER_SCRIPT = "sw.js";
+
+const moved = fs
+  .readdirSync(path.join(OUT, APP_DIR), { withFileTypes: true })
+  .filter((e) => e.isFile() && !rootServes.has(e.name) && e.name !== WORKER_SCRIPT)
+  .map((e) => e.name)
+  .sort();
+if (fs.existsSync(path.join(OUT, WORKER_SCRIPT))) {
+  throw new Error("something put sw.js at the site root — the stale worker would update instead of unregistering");
+}
+if (moved.length === 0) throw new Error("no app asset moved path — the redirect list would be empty and this check would pass over nothing");
+fs.writeFileSync(
+  path.join(OUT, "_redirects"),
+  [
+    "# GENERATED by scripts/build-site.mjs — do not edit.",
+    "#",
+    "# The app's assets used to sit at the origin root. Each source",
+    "# below is a path that now holds NO FILE, so this list can never",
+    "# shadow something the site serves.",
+    ...moved.map((f) => `/${f}  ${APP_PATH}/${f}  301`),
+    "",
+  ].join("\n")
 );
-if (referenced.length === 0) throw new Error("the page references nothing — the markup did not survive");
-const local = referenced.filter((r) => !/^(https?:|mailto:|#|data:)/.test(r));
-const missing = local.filter((r) => !fs.existsSync(path.join(OUT, r.replace(/^\.?\//, ""))));
-if (missing.length) {
-  throw new Error(`the apex page links to files that are not in ${OUT}: ${missing.join(", ")}`);
+
+/* ---------- every link must resolve ---------- */
+
+/* Checked against the OUTPUT rather than assumed. The first version of
+   this script rewrote `./site.js` to `./site/site.js` and then never
+   copied site.js, so the page shipped with a dead script tag — static
+   markup intact, every slot empty, and nothing about it looked broken
+   until you read it. A rewrite that points somewhere is not the same
+   claim as a rewrite that points at a file. */
+const servedBy = (p) => {
+  const clean = p.split("#")[0].split("?")[0].replace(/^\//, "");
+  if (!clean) return true; // "/" is index.html
+  const full = path.join(OUT, clean);
+  /* Extensionless counts: Cloudflare Pages serves privacy.html at
+     /privacy, and THAT is the canonical URL — the one in two store
+     listings. A directory counts too, which is how `/app/` resolves. */
+  if (fs.existsSync(full)) return true;
+  return fs.existsSync(`${full}.html`);
+};
+for (const page of ["index.html", ...DOC_PATHS.map((p) => `${p.replace(/^\//, "")}.html`)]) {
+  const refs = [...fs.readFileSync(path.join(OUT, page), "utf8").matchAll(/(?:src|href)="([^"]+)"/g)].map((r) => r[1]);
+  if (refs.length === 0) throw new Error(`${page} references nothing — the markup did not survive`);
+  const missing = refs.filter((r) => !/^(https?:|mailto:|#|data:)/.test(r)).filter((r) => !servedBy(r));
+  if (missing.length) throw new Error(`${page} links to files that are not in ${OUT}: ${missing.join(", ")}`);
 }
 
-console.log(`site build OK -> ${OUT}/ (${modules.length} modules, ${ASSETS.length} icons)`);
+console.log(
+  `site build OK -> ${OUT}/ (${modules.length} modules, ${DOC_PATHS.length} documents, app at ${APP_PATH}/, ${moved.length} moved paths)`
+);
