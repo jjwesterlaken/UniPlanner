@@ -58,3 +58,25 @@
   Referrer-Policy: no-referrer
   Permissions-Policy: microphone=(self), camera=(self), geolocation=(), payment=(), usb=()
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://kuhtogvewcooigudmgwj.supabase.co; img-src 'self' data:; media-src 'self' blob:; object-src 'none'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+
+# THE ROOT WORKER MUST NOT BE HELD BY ANY CACHE, and this rule is the
+# reason the fix is not just a file. The stale root worker was being
+# served from the ZONE CACHE at the www edge — max-age 14400,
+# cf-cache-status REVALIDATED — so the browser's update check never
+# reached an origin that had anything new to say. A stub nobody can
+# fetch is an absence with extra steps.
+#
+# It ADDS one header to the `/*` block above rather than replacing it.
+# Two rules matching one path COMBINE, which is exactly why there is
+# no second Content-Security-Policy here: a tighter policy written for
+# one path is enforced as the INTERSECTION with the origin's, and the
+# app's is the permissive side. Cache-Control is the only line this
+# path needs to differ on.
+#
+# `/app/sw.js` is deliberately NOT listed. It is the live worker, its
+# filename carries no hash, and the app's own update story (a build-id
+# cache name plus a network-first shell) is built around the ordinary
+# caching it already gets.
+
+/sw.js
+  Cache-Control: no-store

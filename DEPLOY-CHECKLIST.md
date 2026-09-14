@@ -603,16 +603,35 @@ for p in privacy terms support delete-account; do
 done
 ```
 
-**And check the one that is deliberately absent:**
+**And check the one that removes the old worker — THE BODY, NOT THE
+STATUS CODE:**
 
 ```bash
-curl -sI https://www.uniplannerapp.com/sw.js | head -1   # expect 404
+curl -sD- https://www.uniplannerapp.com/sw.js | head -20
 ```
 
-A **301 here would be wrong** and is guarded against in the build: a
-service worker script request may not be redirected, so a 301 leaves
-every stale worker installed and controlling the marketing page, where
-a 404 makes the browser unregister it.
+Expect **200**, `content-type: application/javascript`,
+**`cache-control: no-store`**, and a body that begins with the stub's
+comment — `The worker served at the ORIGIN ROOT`. A 200 whose body is
+`<!doctype html>` is the failure this replaced: an unmatched path falls
+back to index.html, so the stale worker "updates" to a document and
+survives.
+
+**`curl -I` ALONE CANNOT TELL THOSE TWO APART.** Both are 200. Read the
+body.
+
+A **301 here would still be wrong** and is guarded in the build: a
+service worker script request may not be redirected, so a 301 is
+refused outright and the stale worker stays installed.
+
+**PURGE THE ZONE CACHE ONCE, after the deploy.** Cloudflare →
+`uniplannerapp.com` → Caching → Configuration → Purge Everything (or
+purge `https://www.uniplannerapp.com/sw.js` by URL). The old worker was
+being served from the edge with `max-age=14400` and
+`cf-cache-status: REVALIDATED`, so browsers' update checks never
+reached an origin that had anything new to say. `no-store` stops it
+being held again; it does not evict what is already there. Re-run the
+curl above afterwards and check `cf-cache-status` is not `HIT`.
 
 ### 7b. DNS
 

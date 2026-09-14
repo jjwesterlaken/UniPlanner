@@ -3571,6 +3571,65 @@ with the app at **`/app`** — not a subdomain. Same origin means
 `localStorage` survives untouched. **Built 14 September 2026**; the
 deploy steps are DEPLOY-CHECKLIST §7 and the shape is SITE-DEPLOY.md.
 
+### AN ABSENCE IS NOT A MECHANISM YOU CAN VERIFY
+
+The path split left `/sw.js` EMPTY on purpose, and wrote the reasoning
+down at length: a service worker script request may not be
+REDIRECTED (the Update algorithm fails on one), while a 404 during an
+update UNREGISTERS the registration — so the empty path was the active
+mechanism and a 301 the inert one. Every word of that is true about a
+404, and **production served no 404.**
+
+| where | what `/sw.js` answered | what it left |
+|---|---|---|
+| `uniplanner.pages.dev` | **200 with the marketing page's HTML** — an unmatched path falls back to `index.html` | the stale worker "updated" to a document; still installed |
+| the `www` edge | **the OLD worker**, `max-age=14400`, `cf-cache-status: REVALIDATED` | the update check never reached an origin at all |
+
+Both outcomes leave a worker scoped to `/` controlling the marketing
+page, cache-first, over an app shell that no longer belongs there.
+
+**THE FIX IS A FILE, AND THAT IS THE WHOLE POINT.** `/sw.js` now serves
+`public/site/root-sw.js`: `skipWaiting()` on install, then
+`registration.unregister()` on activate followed by navigating the
+windows it controls, so a page open right now stops being served the
+old shell rather than waiting for somebody to reload. A request reaches
+a fallback only when no asset matches it, and one does now — so what
+Cloudflare does with unmatched paths stops being part of the answer.
+
+**IT IS IDEMPOTENT AND SELF-REMOVING, WHICH IS THE SECOND REASON A STUB
+BEATS AN ABSENCE:** a cached 404 does nothing, while a cached stub
+still does the job. `Cache-Control: no-store` in `_headers` stops the
+edge holding it again — but it does not evict what is already there,
+so the zone cache is purged ONCE, by hand, after the deploy
+(DEPLOY-CHECKLIST §7a).
+
+**AND THE TRAP INSIDE THE FIX, which is worth more than the fix.**
+The obvious tidy-up is to have the stub delete every cache named
+`uni-planner-*`. **Cache Storage is scoped to the ORIGIN, not to the
+worker's scope**, so that deletes the LIVE app's cache at `/app/` along
+with the dead root one — they share the prefix because they are the
+same product. A running test cannot catch it on its own: the stub's own
+`try/catch` swallows the throw, and in production the call SUCCEEDS. So
+the word `caches` is forbidden in that file outright, at build time and
+in the suite, comments stripped first because the stub's header
+explains the trap by naming it.
+
+**BOTH HALVES OF THE OLD GUARD WERE GREEN OVER THIS.** The suite
+asserted `!exists(dist-site/sw.js)` — an assertion about the build
+being faithful to a belief about Cloudflare, not about anything a
+browser would receive — and `curl -I .../sw.js | head -1` reads a
+status line that is **200 in the broken state and 200 in the fixed
+one**. The check that tells them apart reads the BODY. That is the
+artifact rule at the level of "which layer answered": a status code is
+a claim about the response, the bytes are the response.
+
+The stub and `site.js`'s `releaseTheOldWorker()` are kept as two
+mechanisms covering different people, not as belt and braces over one:
+the release runs on the first visit to `/` and does not wait for an
+update check, while the stub reaches a browser that never loads the
+marketing page — an installed shortcut opening straight into a cached
+shell, most of all.
+
 **AND THE SUBDOMAIN WAS BUILT BEFORE IT WAS REFUSED AGAIN, which is the
 part worth keeping.** `claude/origin-split` is a complete, green
 implementation of `app.uniplannerapp.com` — redirect middleware, the
@@ -3689,12 +3748,12 @@ PREVIEW's build id; after a promote, check production:
 curl -s https://www.uniplannerapp.com/app/sw.js | grep 'const CACHE'
 ```
 
-**The path split moved that URL and the root one is NOT redirected** —
-a service-worker script request may not be redirected, and a 404 at
-`/sw.js` is what unregisters the worker the old root build left behind.
-So `curl .../sw.js` now returns a 404 page and the grep matches
-nothing: an empty result is the check reading the wrong URL, not a
-failed deploy.
+**The path split moved that URL, and the root one now serves a
+DIFFERENT worker** — a stub whose only job is to unregister the
+registration the old root build left behind. So `curl .../sw.js`
+returns 200 with a script that has no `const CACHE` in it at all, and
+the grep matches nothing: an empty result there is the check reading
+the wrong URL, not a failed deploy.
 
 That build id must match the one on the Account tab. If it doesn't, the
 deploy didn't happen, whatever the merge said. Remember that a docs-only
