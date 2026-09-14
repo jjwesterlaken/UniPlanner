@@ -20,7 +20,7 @@
 import { corsHeaders, jsonResponse } from "../ai-notes/_shared/cors.ts";
 import { getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
-import { SITE_URL, stripeRequest } from "../_shared/stripe.ts";
+import { APP_URL, stripeRequest } from "../_shared/stripe.ts";
 
 const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra, "billing-portal"));
 // deno-lint-ignore no-explicit-any
@@ -68,7 +68,7 @@ export async function handle(req: Request): Promise<Response> {
     const session = await stripeRequest("/billing_portal/sessions", {
       secretKey,
       method: "POST",
-      body: { customer: customerId, return_url: SITE_URL },
+      body: { customer: customerId, return_url: APP_URL },
     });
     if (!session.ok) {
       logFailure(stage, session.error);

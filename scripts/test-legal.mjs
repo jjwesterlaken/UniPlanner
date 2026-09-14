@@ -52,10 +52,15 @@ const page = (f) => fs.readFileSync(path.join(rootDir, "public", f), "utf8");
    have left every sweep below silently covering two of them. Derived,
    a new document is swept the moment its URL constant exists, and a
    URL constant with no file fails immediately. */
-const LEGAL_PAGES = Object.entries(links)
-  .filter(([name, value]) => name.endsWith("_URL") && typeof value === "string" && value.startsWith(`${SITE_URL}/`))
-  .map(([, value]) => `${new URL(value).pathname.replace(/^\//, "")}.html`)
-  .sort();
+/* IT READS `DOCUMENT_PATHS` NOW RATHER THAN INFERRING FROM A SHAPE,
+   and the path split is what forced that. "Every `*_URL` under
+   SITE_URL is a document" was exact while every such constant was one
+   — and `APP_URL` is `${SITE_URL}/app` since the split, so this list
+   grew the planner and every sweep below began demanding a
+   `public/app.html` to serve at it. Subtracting APP_URL here would be
+   the same restatement in a third place; legalLinks.js holds the list
+   the constants themselves are built from. */
+const LEGAL_PAGES = links.DOCUMENT_PATHS.map((p) => `${p.replace(/^\//, "")}.html`).sort();
 /* Prose assertions run against the rendered text with whitespace
    collapsed: HTML wraps lines wherever it likes, and a sentence that
    happens to break across two lines is still the same sentence. */
@@ -887,6 +892,42 @@ async function run() {
     }
     assert.match(text, /lecture audio still being processed/i, "the audio step isn't listed");
     assert.match(sql, /delete from auth\.users/, "the auth user is no longer deleted");
+  });
+
+  await test("DOCUMENT_PATHS really is every published document, and never the app", () => {
+    /* THE HALF THAT MAKES A HAND-WRITTEN LIST SAFE. The documents are
+       data in legalLinks.js and the `*_URL` constants are built from
+       it, so the two cannot disagree BY CONSTRUCTION — unless somebody
+       adds a constant the old way, under SITE_URL, without adding it
+       to the list. Then every sweep in this file silently covers one
+       document fewer, which is the exact failure the derivation
+       replaced a typed list to avoid.
+
+       So: every `*_URL` under SITE_URL is either a document path or it
+       is APP_URL, and nothing else is allowed to be either. */
+    const underSite = Object.entries(links)
+      .filter(([n, v]) => n.endsWith("_URL") && typeof v === "string" && v.startsWith(`${SITE_URL}/`))
+      .map(([n, v]) => [n, new URL(v).pathname]);
+    assert.ok(underSite.length > 0, "no URL constant sits under SITE_URL — this check would pass over nothing");
+
+    const appPath = new URL(links.APP_URL).pathname;
+    const undeclared = underSite.filter(([, p]) => p !== appPath && !links.DOCUMENT_PATHS.includes(p));
+    assert.deepEqual(
+      undeclared.map(([n]) => n),
+      [],
+      "a URL constant sits under SITE_URL but is neither the app nor in DOCUMENT_PATHS, so every document sweep in this file skips it"
+    );
+    /* And the reverse: a path in the list with no constant behind it
+       would make the sweeps demand a file nobody publishes. */
+    for (const p of links.DOCUMENT_PATHS) {
+      assert.ok(
+        underSite.some(([, seen]) => seen === p),
+        `DOCUMENT_PATHS names ${p} but no *_URL constant resolves to it`
+      );
+    }
+    /* THE APP IS NOT A DOCUMENT. Stated rather than implied, because
+       the whole restructure exists to keep it out of these lists. */
+    assert.ok(!links.DOCUMENT_PATHS.includes(appPath), "the planner is listed as a published legal document");
   });
 
   /* ---------- consent ---------- */

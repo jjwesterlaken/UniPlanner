@@ -1165,9 +1165,20 @@ async function run() {
        redirect with a signed-in session attached; leaving the API
        version unpinned means Stripe answers with whatever the account's
        dashboard is set to, which nobody in this repository can see. */
-    assert.equal(stripe.SITE_URL, links.SITE_URL, "the checkout return URL and the app's own origin have drifted");
-    assert.match(stripe.CHECKOUT_SUCCESS_URL, new RegExp(`^${links.SITE_URL}/`));
-    assert.match(stripe.CHECKOUT_CANCEL_URL, new RegExp(`^${links.SITE_URL}/`));
+    /* IT MIRRORS `APP_URL`, NOT `SITE_URL`, SINCE THE PATH SPLIT. `/`
+       is the marketing page now — no session, no Plans panel, nothing
+       to confirm a payment with — so a return URL still equal to
+       SITE_URL lands a student who has just paid on an advertisement
+       for the thing they bought. The mirror is unavoidable (a Deno
+       function cannot import a browser module) so the EQUALITY is the
+       guard, as everywhere else this pattern is allowed. */
+    assert.equal(stripe.APP_URL, links.APP_URL, "the checkout return URL and the app's own location have drifted");
+    assert.notEqual(stripe.APP_URL, links.SITE_URL, "the checkout returns to the marketing page, which cannot tell anybody their payment worked");
+    /* SAME ORIGIN, DEEPER PATH — the split's whole shape, asserted
+       where a careless "fix" would reach for a subdomain. */
+    assert.equal(new URL(stripe.APP_URL).origin, new URL(links.SITE_URL).origin, "the return URL left the app's origin");
+    assert.ok(stripe.CHECKOUT_SUCCESS_URL.startsWith(links.APP_URL), "the success URL is not under the app");
+    assert.ok(stripe.CHECKOUT_CANCEL_URL.startsWith(links.APP_URL), "the cancel URL is not under the app");
     /* A DATE, WITH STRIPE'S OPTIONAL RELEASE NAME. Versions used to be
        a bare date; they now carry a channel suffix
        ("2026-04-22.dahlia"), and the first version of this assertion

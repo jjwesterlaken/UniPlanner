@@ -24,9 +24,11 @@ import { REPOSITORY_URL, PRODUCT_NAME, ARTIFACT_NAMES, APP_URL } from "./build-f
    to be in the first version of this page rather than added later,
    because the window it covers is exactly the transition.
 
-   Before the origin split the app was served from `/` and registered a
+   Before the path split the app was served from `/` and registered a
    worker scoped to `/`. Moving the app to /app/ does not unregister
-   it: that worker keeps controlling `/`, which is now this page. It is
+   it: a registration is keyed by scope, and nothing about the app
+   appearing one level down touches a worker that already claimed the
+   root. That worker keeps controlling `/`, which is now this page. It is
    network-first for the app shell, so an ONLINE visitor sees this page
    — and then it caches this page as the app shell. OFFLINE, that
    install opens the marketing site instead of the planner.
@@ -66,6 +68,28 @@ function releaseTheOldWorker() {
    for every copy of the app that was cut before the split and for any
    bookmark or installed PWA that predates it.
 
+   IT GOES TO THE ABSOLUTE `APP_URL`, NOT TO `/app/`, AND THAT IS A
+   STORAGE DECISION RATHER THAN A STYLE ONE.
+
+   This page is served on TWO hostnames — `uniplannerapp.com` and
+   `www.uniplannerapp.com` — and those are two ORIGINS. A relative
+   `/app/` keeps the visitor on whichever one they arrived at, so a
+   student who reached the apex would land on `uniplannerapp.com/app`:
+   a different origin, a different `localStorage`, no session, and an
+   empty planner sitting beside the real one they cannot see. That is
+   precisely the failure the whole path split exists to avoid, arriving
+   through the back door because a link was one character shorter.
+
+   So THE APP HAS EXACTLY ONE ORIGIN, `SITE_URL`, which is the one it
+   has been served from since 12 August 2026 — and every route into it
+   from this page is absolute. `APP_URL` is written into
+   build-facts.js by the build from `src/legalLinks.js`, the same
+   constant `PASSWORD_RESET_REDIRECT` derives from, so the page a token
+   is forwarded TO and the page new emails are sent TO cannot drift.
+
+   A FRAGMENT SURVIVES the navigation either way: it never leaves the
+   browser.
+
    IT MUST NOT FIRE ON AN ORDINARY VISIT. Supabase puts recovery
    parameters in the FRAGMENT, so it checks for both an access token and
    the recovery type before doing anything, and it uses `replace` so the
@@ -79,7 +103,54 @@ function forwardRecoveryToTheApp() {
      fragment and belongs in the app too, where there is wording for it. */
   const isAuthError = params.get("error") || params.get("error_description");
   if (!isRecovery && !isAuthError) return;
-  location.replace("/app/" + hash);
+  location.replace(APP_URL + "/" + hash);
+}
+
+/* ---------- a checkout that was started before the split ----------
+
+   `CHECKOUT_SUCCESS_URL` and `CHECKOUT_CANCEL_URL` point at `/app`
+   now, but Stripe stores the return URLs ON THE SESSION when it is
+   created — so a checkout begun before this deploy comes back to the
+   root, which is a marketing page with no session and nothing to say
+   about a payment that just succeeded.
+
+   Narrow on purpose: only `?checkout=`, only on the root, carrying the
+   whole query so the app sees exactly what Stripe sent. It exists for
+   the sessions in flight across the deploy and for nothing else. */
+function forwardCheckoutReturnToTheApp() {
+  if (location.pathname !== "/" && location.pathname !== "/index.html") return;
+  if (!new URLSearchParams(location.search || "").get("checkout")) return;
+  location.replace(APP_URL + "/" + location.search + (location.hash || ""));
+}
+
+/* ---------- an installed PWA whose start_url is the old root ----------
+
+   A shortcut installed before the split resolved `start_url` to the
+   ORIGIN ROOT at install time, and there is no way to change that from
+   here: a manifest only describes new installs. So every existing
+   installed planner now opens the marketing page, full-screen, with no
+   browser chrome to navigate away with — which is a worse dead end
+   than a tab, because there is no address bar to fix it in.
+
+   The display-mode query is what tells an installed launch from an
+   ordinary visit, and it is the ONLY thing that does; `navigator
+   .standalone` covers iOS, which implements the property and not the
+   media feature. An ordinary browser tab matches neither, so a reader
+   of the marketing page is never bounced.
+
+   NEW INSTALLS NEED NONE OF THIS. `manifest.webmanifest` has
+   `start_url` and `scope` of `"."`, so a manifest served from
+   `/app/` describes an app scoped to `/app/` with no edit at all —
+   which is why this function is a transitional measure rather than
+   the mechanism. */
+function forwardInstalledShortcutToTheApp() {
+  if (location.pathname !== "/" && location.pathname !== "/index.html") return;
+  const standalone =
+    (window.matchMedia &&
+      ["standalone", "minimal-ui", "fullscreen"].some((m) => window.matchMedia("(display-mode: " + m + ")").matches)) ||
+    navigator.standalone === true;
+  if (!standalone) return;
+  location.replace(APP_URL + "/");
 }
 
 /* ---------- fill the slots ---------- */
@@ -234,7 +305,12 @@ function fillDownloads() {
 }
 
 releaseTheOldWorker();
+/* Order matters only in that each one `replace`s and the first to
+   match wins: a recovery link opened inside an installed shortcut
+   is a recovery link first. */
 forwardRecoveryToTheApp();
+forwardCheckoutReturnToTheApp();
+forwardInstalledShortcutToTheApp();
 fillHeroCta();
 fillStoreBadges();
 fillPricing();

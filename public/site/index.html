@@ -49,7 +49,12 @@ display:grid;place-items:center;color:#fff;font-size:14px;font-weight:600;font-f
 .navlinks a{color:var(--soft);text-decoration:none}
 .navlinks a:hover{color:var(--ink)}
 .navcta{background:var(--teal);color:#fff;text-decoration:none;font-size:14px;font-weight:500;
-padding:8px 16px;border-radius:8px}
+padding:8px 16px;border-radius:8px;white-space:nowrap;flex:none}
+/* The secondary treatment for the second nav control. Placeholder
+   styling, flagged for Grace along with which of the two should be
+   primary — it is deliberately the existing ghost-button language
+   from the hero rather than a new one. */
+.navcta.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
 
 .hero{padding:76px 0 60px}
 .herogrid{display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
@@ -164,6 +169,26 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
  .feat.rev .txt{order:0}
  .steps,.mini,.trustgrid,.prices,.dlbox{grid-template-columns:1fr}
  .navlinks{display:none}
+ /* The links collapse here; both buttons must not, so the pair takes
+    over the auto margin that used to push the links right, and they
+    tighten enough to sit beside the brand at 390px. */
+ .navin{gap:10px}
+ .navcta{margin-left:0;padding:8px 12px;font-size:13.5px}
+ .navcta.ghost{margin-left:auto}
+}
+/* TWO CONTROLS DO NOT FIT BESIDE THE WORDMARK ON A PHONE — measured,
+   not guessed: at 390px the brand is 132px, the two buttons 118 and
+   126, and the row needs 452px of a 390px screen, so "Get UniPlanner"
+   ran 34px off the right edge.
+
+   The mark stays and the WORD collapses, which buys 102px and leaves
+   the row at ~350px. Scoped to the nav, so the footer's brand is
+   untouched. FLAGGED FOR GRACE with the rest of the nav: which of the
+   two controls is primary, and whether losing the wordmark on a phone
+   is the trade she wants, are both hers. */
+@media(max-width:560px){
+ nav .brand .wordmark{display:none}
+ nav .brand{gap:0}
  .hero{padding:48px 0 40px}
  section{padding:56px 0}
 }
@@ -172,13 +197,30 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
 <body>
 
 <nav><div class="w navin">
-  <a class="brand" href="#"><span class="mark">U</span> UniPlanner</a>
+  <a class="brand" href="#"><span class="mark">U</span> <span class="wordmark">UniPlanner</span></a>
   <div class="navlinks">
     <a href="#features">Features</a>
     <a href="#how">AI notes</a>
     <a href="#pricing">Pricing</a>
     <a href="#download">Download</a>
   </div>
+  <!-- TWO CONTROLS, AND THE EXISTING ONE IS UNCHANGED. Jared's
+       instruction was to KEEP "Get UniPlanner -> #download" and add
+       "Open the app" beside it, so the download call to action is
+       byte-for-byte what Grace approved and the new control sits next
+       to it wearing a secondary treatment. BOTH ARE HERS TO STYLE —
+       which of the two is primary is a design decision and not one
+       this commit should make by picking a colour.
+
+       The app link is ABSOLUTE and substituted by
+       scripts/build-site.mjs. It cannot be `/app`: this page is served
+       on the apex AND on www, which are two ORIGINS, and a relative
+       link would send an apex visitor to a planner whose localStorage
+       nobody else shares. See public/site/site.js.
+
+       BOTH SURVIVE THE MOBILE BREAKPOINT, which the nav links do not.
+       -->
+  <a class="navcta ghost" href="__APP_URL__" data-open-app>Open the app</a>
   <a class="navcta" href="#download">Get UniPlanner</a>
 </div></nav>
 

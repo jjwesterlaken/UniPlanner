@@ -5,109 +5,105 @@ built. Two questions were asked and both have definite answers.
 
 ---
 
-## Can the site and the origin split ship independently?
+## The split, as built — one origin, two hostnames, two paths
 
-**As specified — site at `/`, app at `/app` — no. They are the same
-deploy.** The site cannot go to `/` without the app leaving it, because
-`/` is the app today.
+**Built and shipping.** The recommendation below was taken: the split
+happened in one deploy rather than being deferred to the apex.
 
-**There is exactly one way to ship them independently, and it is the
-apex domain.** `uniplannerapp.com` currently forwards to `www` at
-Squarespace. Point it at a second Cloudflare Pages project instead and
-the site is live at `https://uniplannerapp.com` with the app untouched
-at `https://www.uniplannerapp.com`.
+| URL | Serves |
+|---|---|
+| `uniplannerapp.com/` | the marketing page |
+| `www.uniplannerapp.com/` | the same bundle |
+| `www.uniplannerapp.com/app` | the planner |
+| `.../privacy`, `/terms`, `/support`, `/delete-account` | unchanged, at the URLs two store listings already name |
 
-| | Site at `/` (the split) | Site at the apex |
-|---|---|---|
-| Ships independently | **no** | **yes** |
-| Risk to the app | real, see below | none |
-| Existing PWA installs | break, need re-installing | untouched |
-| Password reset | breaks, see below | untouched |
-| Cost | one deploy, several fixes | a second Pages project |
-| Ends up where it should | yes | **no — still has to move later** |
+**ONE Cloudflare Pages project, ONE output.** An origin can only be
+served one directory, so `scripts/build-site.mjs` assembles `dist-site`
+containing the marketing root AND `dist-site/app/`, which is the entire
+web build copied in verbatim. `dist-web` is untouched and is still what
+the desktop and phone shells package.
 
-**Recommendation: do the split, and do it in one deploy.** The apex
-route is genuinely safe, but it defers the same work to a day when there
-are more than two users to break — and the split is cheap precisely
-because there are two. Doing it now costs a re-install for Jared and
-Grace; doing it in November costs it for everybody.
+**A SUBDOMAIN WAS BUILT AND REFUSED, which is worth recording because
+somebody will propose it again.** `claude/origin-split` is a complete,
+green implementation of `app.uniplannerapp.com`, including a same-site
+iframe bridge to carry signed-out planners across the origin boundary.
+Jared held it on 14 September 2026 and the 21 August ruling stands. The
+two reasons:
+
+- **the bridge had holes that read as data loss.** It could not reach a
+  browser that never opened the new origin, an installed PWA whose
+  `start_url` was resolved at install time, or any other device or
+  profile. Each of those is a student opening the app to an empty
+  planner.
+- **and it rested on unverifiable behaviour.** Same-site iframes get
+  unpartitioned storage by specification, and no build machine here can
+  run WebKit to confirm Safari agrees.
+
+A path split needs no bridge at all, because `localStorage` is scoped
+by ORIGIN and paths do not scope it. Nothing moves.
 
 ---
 
-## What breaks if the split has not landed
+## What the split touched, and what it did not
 
-### 1. Nothing about the *files* — the app is already portable
+### 1. THE APP NEEDED NO CHANGES TO MOVE — checked, not assumed
 
-Checked rather than assumed, and this is the good news:
+Everything in it was already path-relative: `manifest.webmanifest` has
+`start_url` and `scope` of `"."`, icons and `app.js` are bare
+filenames, the worker is `register("sw.js")`, and `sw.js` derives its
+shell list from `new URL("./", self.location)`. So at `/app/` the
+worker scopes to `/app/` and a new install gets `start_url: /app/`,
+with no edit. `scripts/test-path-split.mjs` asserts each of those on
+the BUILT artifact, since "it is relative" and "it resolves under
+/app/" are different sentences.
 
-| Thing | Why it survives |
-|---|---|
-| `manifest.webmanifest` | `start_url` and `scope` are both `"."` — relative, so they resolve against wherever the manifest sits |
-| `sw.js` | derives its shell list from `new URL("./", self.location)`, so a worker at `/app/sw.js` scopes to `/app/` |
-| the registration in `index.html` | `register("sw.js")` is relative; at `/app/index.html` it registers `/app/sw.js` |
-| every asset reference | relative already |
-| the legal documents | stay at `/privacy` and `/delete-account`; `NETWORK_ONLY` lists them absolutely and a `/app/`-scoped worker never sees those requests at all |
-| `localStorage` | same ORIGIN, and paths do not scope it — no planner data moves or is lost |
+### 2. THE WORKER THAT OWNED `/`, and the counter-intuitive half
 
-### 2. THE SERVICE WORKER ALREADY INSTALLED AT `/` — the real one
+A returning visitor holds a worker at scope `/` from `/sw.js`. Two
+mechanisms release it, and only one of them is obvious:
 
-A returning visitor has a worker registered with **scope `/`**, from the
-current deployment. Moving the app to `/app/` does not unregister it.
-That worker keeps controlling `/`, which is now the marketing page.
+- `site.js` unregisters anything scoped to the origin root on the first
+  visit to `/`.
+- **`/sw.js` 404s, deliberately.** A service worker script request may
+  not be REDIRECTED — the Update algorithm fails on one, so a 301 there
+  leaves the stale worker installed. A 404 unregisters the registration.
+  The empty path is the active mechanism; the redirect would have been
+  the inert one, and the derived redirect list excludes it by name.
 
-It is network-first for the app shell, so an **online** visitor gets the
-real marketing page — and the worker then caches it as the app shell.
-**Offline, that install opens the marketing page instead of the
-planner.**
+### 3. EVERY ROUTE INTO THE APP IS ABSOLUTE
 
-**The fix belongs in the marketing page and is small:** on load,
-`getRegistrations()` and unregister any whose `scope` is the origin
-root, leaving `/app/` alone. Precise, safe, and it heals itself on the
-first online visit. **It must be in the first version of the page**, not
-added later, because the window it covers is exactly the transition.
+The marketing page is served on **two hostnames**, and those are two
+ORIGINS. A relative `/app/` link would land an apex visitor on
+`uniplannerapp.com/app` — a different origin, a different
+`localStorage`, an empty planner beside the real one. That is the
+refused subdomain arriving through the back door because a link was one
+character shorter. The nav control, the hero, the download card and all
+three forwarders use the absolute `APP_URL`, and a test asserts it.
 
-### 3. PASSWORD RESET — silent, and the worst of the three
+### 4. Three forwarders, for three things in flight across the deploy
 
-`PASSWORD_RESET_REDIRECT` is `SITE_URL`, the bare origin. Supabase sends
-the recovery token in the URL fragment, so after the split a reset link
-lands on **the marketing page**, which has no `PasswordRecovery` overlay
-and no `detectSessionInUrl`. The student sees a marketing page and their
-one-time token is consumed.
-
-Two changes, and both are required:
-
-- `PASSWORD_RESET_REDIRECT` becomes `${SITE_URL}/app` — derived, not a
-  second literal.
-- **The new URL must be added to Supabase → Authentication → URL
-  Configuration → Redirect URLs.** Supabase silently ignores an
-  unlisted `redirectTo` and falls back to the Site URL, which is the
-  failure that looks like a code bug when it is configuration. This has
-  bitten this project before.
-
-Nothing in the repository can verify the second one. It goes on the
-deploy checklist or it does not happen.
-
-### 4. Installed PWAs need re-installing
-
-An installed app resolved `start_url` to `https://www.uniplannerapp.com/`
-at install time. After the split that opens the marketing page. There is
-no way to migrate an installed shortcut.
-
-Two users today. Worth saying out loud rather than discovering.
+- **Password reset.** `PASSWORD_RESET_REDIRECT` is `APP_URL` now.
+  Builds already in the stores carry the old value, so the marketing
+  page forwards a recovery fragment to `/app/`. Both halves required.
+- **Checkout.** Stripe stores return URLs on the session at creation,
+  so a checkout begun before the deploy comes back to `/`.
+- **An installed PWA.** A shortcut installed before the split opens the
+  root full-screen with no address bar to escape from. The display-mode
+  check bounces it; new installs need none of this.
 
 ### 5. Things that do NOT break, checked
 
-- **The CSP.** `public/_headers` applies origin-wide and permits
-  `'unsafe-inline'`, so an inline-styled static page satisfies it
-  unchanged. No external host is needed — see below.
-- **The e2e journeys.** They serve `dist-web` locally and navigate to
-  the built app; they follow whatever path the build produces.
-- **`test-legal.mjs`.** It compares `SITE_URL` and the documents on host
-  AND path; adding an index at `/` changes neither.
-- **The build-id check.** `curl .../sw.js` still finds the app's worker
-  as long as the marketing site does not ship one of its own — **and it
-  must not.** A second worker at `/` is the collision in (2) recreated
-  deliberately.
+- **`localStorage`, the session, and every signed-out planner.** Same
+  origin. Nobody is signed out and nothing is migrated.
+- **The Supabase allowlist.** `https://www.uniplannerapp.com/**`
+  already covers `/app`; only the Site URL fallback moves.
+- **The legal documents.** Same URLs, served from the root.
+- **The e2e journeys.** They serve `dist-web` locally and follow the
+  build.
+- **The CSP.** One origin gets ONE policy — the app's, which is the
+  permissive side. Two `_headers` rules matching a path produce two CSP
+  headers and a browser enforces the intersection, so a second, tighter
+  policy for the marketing pages would silently narrow the app's.
 
 ---
 

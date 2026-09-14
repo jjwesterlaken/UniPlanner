@@ -120,9 +120,10 @@ async function run() {
        a navigation can arrive as either. */
     const src = pub("sw.js");
     const links = await import(pathToUrl(path.join(rootDir, "src/legalLinks.js")));
-    const paths = Object.entries(links)
-      .filter(([n, v]) => n.endsWith("_URL") && typeof v === "string" && v.startsWith(`${links.SITE_URL}/`))
-      .map(([, v]) => new URL(v).pathname);
+    /* DOCUMENT_PATHS, not "every _URL under SITE_URL" — since the path
+       split APP_URL matches that shape and the planner is not a legal
+       document to be served network-only. */
+    const paths = [...links.DOCUMENT_PATHS];
     assert.ok(paths.length >= 3, `expected the published documents, found ${paths.length}`);
 
     const list = /const NETWORK_ONLY = \[([^\]]*)\]/.exec(src);
