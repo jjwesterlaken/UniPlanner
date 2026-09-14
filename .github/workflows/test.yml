@@ -134,6 +134,15 @@ jobs:
         # there. test-viewport-layout measures both.
         run: npm run build
 
+      - name: Assemble the site output the path split ships
+        # test-path-split reads dist-site, which is a SEPARATE artifact
+        # from dist-web — one Pages project serves one directory, so
+        # build-site assembles the marketing root with the whole web
+        # build copied into dist-site/app. Without this step that suite
+        # fails on a missing directory rather than on anything it is
+        # about, which is how it first ran red here.
+        run: npm run build:site
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
