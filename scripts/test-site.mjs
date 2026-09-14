@@ -595,6 +595,53 @@ test("the page renders its tiers and downloads from data, never from typed HTML"
   assert.ok(!/60 hours of lecture/.test(PAGE), "the page still claims 60 hours a month, which no tier gives");
 });
 
+test("the release notes do not promise an update mechanism the app does not ship", () => {
+  /* The workflow's release body said "It will update itself
+     automatically." The desktop app bundles `electron` and
+     `electron-builder` and NO `electron-updater`, and desktop/main.js
+     has no autoUpdater — so nothing in it has ever checked for an
+     update, and that sentence was published to anybody who downloaded
+     a release.
+
+     The same shape as the password-reset feature that had no ends: two
+     plausible middle links (electron-builder writes latest.yml, the
+     release publishes it) and no first or last one. The metadata is
+     real and correct; the thing that would read it does not exist.
+
+     DERIVED FROM THE DEPENDENCY rather than pinned to wording, so
+     wiring an updater relaxes this guard on its own — the branch is
+     the point, the way the device-count guard is written. */
+  const desktop = JSON.parse(source("desktop/package.json"));
+  const deps = { ...desktop.dependencies, ...desktop.devDependencies };
+  const hasUpdater =
+    "electron-updater" in deps ||
+    /autoUpdater/.test(source("desktop/main.js"));
+
+  const workflow = source(".github/workflows/build-apps.yml");
+  assert.ok(workflow.includes("--notes"), "the release job no longer writes notes — this guard reads nothing");
+
+  if (!hasUpdater) {
+    /* THE DENIAL IS REMOVED FIRST, then the promise must be absent from
+       what is left. Written the obvious way — a regex for "updates
+       itself" — this tripped on the CORRECTED sentence, because "the
+       desktop app does not update itself yet" contains the words it was
+       looking for. That is the guard-trips-on-its-own-explanation shape
+       from the CLAUDE.md ledger, arriving in a negation rather than in a
+       comment, and the remedy is the one test-help.mjs already uses for
+       the monthly-allowance sweep: name the sentence that DENIES the
+       claim, take it out, and require the file to go quiet. */
+    const DENIAL = /(does not|doesn't) update itself/i;
+    assert.match(workflow, DENIAL, "the release notes neither promise nor deny self-updating — say which, since no updater ships");
+    const withoutDenial = workflow.replace(new RegExp(DENIAL.source + "[^\\n]*", "gi"), " ");
+    assert.doesNotMatch(
+      withoutDenial,
+      /updates? (itself|automatically)|automatic(ally)? updates?/i,
+      "the release notes promise the app updates itself, but no updater ships in desktop/ — " +
+        "wire electron-updater or do not make the claim"
+    );
+  }
+});
+
 test("the generated build facts really are what desktop/package.json says", () => {
   /* THE DERIVATION, CHECKED. build-web.mjs writes site/build-facts.js
      from desktop/package.json; if that generation silently stopped

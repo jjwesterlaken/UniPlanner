@@ -146,8 +146,19 @@ jobs:
 
       - name: Check the update files are there
         run: |
-          # These tell already-installed apps that a new version exists.
-          # Without them, auto-update silently does nothing.
+          # These tell already-installed apps that a new version exists —
+          # once something in the app is asking. TODAY NOTHING IS: the
+          # desktop app bundles `electron` and `electron-builder` and no
+          # `electron-updater`, and desktop/main.js has no autoUpdater, so
+          # these files are published and read by nobody. They are still
+          # worth publishing and still worth checking, because the day the
+          # updater is wired the metadata has to have been there all
+          # along — an updater that finds no latest.yml for the version it
+          # is upgrading FROM has nothing to compare against.
+          #
+          # Verified on the v1.0.1 release rather than assumed: all three
+          # files are present there, so electron-builder emits them with
+          # no `publish` block and `--publish never`.
           missing=0
           for f in latest.yml latest-mac.yml latest-linux.yml; do
             if [ -f "release/$f" ]; then
@@ -175,5 +186,6 @@ jobs:
           - **Windows:** the Setup .exe (or the Portable .exe to run without installing)
           - **Linux:** the .AppImage
 
-          Already have it installed? It will update itself automatically."
+          Already have it installed? Download the new version and install it over
+          the top — the desktop app does not update itself yet."
           fi
