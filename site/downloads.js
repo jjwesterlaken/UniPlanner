@@ -29,6 +29,12 @@
    these links will 404 against it. See SITE-DEPLOY.md.
    ================================================================== */
 
+/* The only cross-module read in this file, and it is a fact about the
+   world rather than about downloads: whether the Mac build is signed
+   and notarised yet. */
+import { FLAGS } from "./flags.js";
+
+
 /**
  * Parse `owner/repo` out of a git remote URL.
  *
@@ -139,15 +145,27 @@ export function downloadsFor(platform, { slug, assets }) {
     {
       id: "mac",
       label: "macOS",
-      href: null,
+      /* THE ONE CARD THAT READS A FLAG, because it is the one whose
+         availability depends on something outside this repository.
+
+         The others are available the moment a release exists. This one
+         needed a Developer ID certificate, a notarisation submission and
+         an Apple account behind both — and until those landed a .dmg
+         existed and was unshippable: unsigned and un-notarised, macOS
+         does not warn, it REFUSES, with a dialogue saying the app is
+         damaged. That is why Windows got a note and this got "coming
+         soon"; an unsigned Windows build is a scary sentence, an
+         unsigned Mac build is a dead end.
+
+         FLAGS.macDownload is what turns it on, and its own comment
+         carries the condition. `scripts/test-site.mjs` refuses to let
+         that flag be true unless the pipeline that signs and CHECKS the
+         build is really in the workflow — so this link cannot be
+         switched on by editing a boolean. */
+      href: FLAGS.macDownload ? downloadUrl(slug, assets.macDmg) : null,
       note: null,
-      available: false,
-      /* NOT "we haven't built it". A Mac build exists and is published.
-         Unsigned and un-notarised, macOS does not warn — it refuses,
-         with a dialogue saying the app is damaged. That is unshippable
-         in a way an unsigned Windows build is not, which is why one
-         gets a note and the other gets "coming soon". */
-      soon: "Coming soon",
+      available: FLAGS.macDownload,
+      soon: FLAGS.macDownload ? null : "Coming soon",
     },
     {
       id: "linux",

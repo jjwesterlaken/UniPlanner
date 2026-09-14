@@ -160,6 +160,7 @@ const assets = {
   windowsInstaller: assetName(ARTIFACT_NAMES.nsis, { productName: PRODUCT_NAME, ext: "exe" }),
   windowsPortable: assetName(ARTIFACT_NAMES.portable, { productName: PRODUCT_NAME, ext: "exe" }),
   linuxAppImage: assetName(ARTIFACT_NAMES.linux, { productName: PRODUCT_NAME, ext: "AppImage" }),
+  macDmg: assetName(ARTIFACT_NAMES.dmg, { productName: PRODUCT_NAME, ext: "dmg" }),
 };
 
 const platform = detectPlatform({

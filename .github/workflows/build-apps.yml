@@ -88,23 +88,131 @@ jobs:
           # which fails the build. The finished files are collected by the
           # upload step below instead.
           #
-          # ---- Code signing (optional, add later) -------------------------
-          # Signing is what removes the "unidentified developer" / "Windows
-          # protected your PC" warnings. Until these secrets exist, the build
-          # still succeeds -- it just produces an unsigned app.
+          # ---- Developer ID signing and notarisation, MAC ONLY ------------
           #
-          # Mac (needs an Apple Developer account):
-          #   CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
-          #   CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
-          #   APPLE_ID: ${{ secrets.APPLE_ID }}
-          #   APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          #   APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # EVERY ONE OF THESE IS SCOPED TO THE MAC JOB, and that is a
+          # correctness requirement rather than tidiness. CSC_LINK and
+          # CSC_KEY_PASSWORD are NOT Mac-specific names: electron-builder
+          # reads the same two variables on Windows, where they mean a .pfx
+          # authenticode certificate. Setting them unconditionally hands the
+          # Windows job an Apple .p12 and asks it to sign with it.
           #
-          # Windows (needs a code signing certificate):
-          #   CSC_LINK: ${{ secrets.WIN_CERT_PFX_BASE64 }}
-          #   CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+          # The empty string is what a non-Mac job gets, which electron-builder
+          # treats as absent.
+          #
+          # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are what
+          # `mac.notarize: true` in desktop/package.json uses. An app-specific
+          # password, not the Apple account password — the account password is
+          # refused by the notary service.
+          #
+          # THE OTHER HALF OF THIS LIVES IN desktop/package.json AND USED TO
+          # CANCEL IT: `mac.identity: null` means "do not sign", and it
+          # overrides a perfectly good certificate silently. It is gone, and
+          # a test asserts it stays gone — secrets that reach a build which
+          # has been told not to sign produce an unsigned app and a green
+          # tick.
+          CSC_LINK: ${{ matrix.label == 'Mac' && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.label == 'Mac' && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.label == 'Mac' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.label == 'Mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.label == 'Mac' && secrets.APPLE_TEAM_ID || '' }}
+          #
+          # Windows signing is NOT arranged. When it is, it needs its own
+          # certificate in its own secret — do not widen the two above, for
+          # the reason at the top of this block. The site carries a note
+          # about the SmartScreen warning until then (FLAGS.windowsUnsignedNote).
           # -----------------------------------------------------------------
           ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: "true"
+
+      - name: Gatekeeper must accept the notarised app
+        if: matrix.label == 'Mac'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # THE ONLY CHECK IN THIS REPOSITORY THAT READS THE THING A STUDENT
+          # WOULD DOUBLE-CLICK. Everything else about signing is configuration
+          # asserting what it intends; this runs Gatekeeper's own assessment
+          # against the built bundle and fails the job when it refuses.
+          #
+          # It matters because the failure it catches is SILENT: a build with
+          # no certificate, a certificate that is not Developer ID, a
+          # notarisation that was never submitted or was rejected, all produce
+          # a .dmg that uploads, publishes and looks completely normal — and
+          # then refuses to open on the student's Mac with "the app is
+          # damaged", which reads as a corrupt download rather than as an
+          # unsigned one.
+
+          app="$(find desktop/dist -maxdepth 2 -name '*.app' -print -quit || true)"
+          # NON-VACUITY FIRST: assessing nothing passes every check below.
+          if [ -z "$app" ]; then
+            echo "FAIL: no .app under desktop/dist — there is nothing to assess,"
+            echo "      so a pass here would have meant nothing."
+            ls -la desktop/dist || true
+            exit 1
+          fi
+          echo "assessing: $app"
+
+          # 1. Is it signed, and is the signature internally consistent?
+          if ! codesign --verify --deep --strict --verbose=2 "$app" 2>&1; then
+            echo
+            echo "FAIL: the app is not validly signed."
+            echo "      If this says 'code object is not signed at all', the"
+            echo "      certificate never reached the build: check CSC_LINK and"
+            echo "      CSC_KEY_PASSWORD are set as repository secrets, and that"
+            echo "      desktop/package.json has not regrown mac.identity: null."
+            exit 1
+          fi
+
+          # 2. Is the notarisation ticket stapled to the bundle? Without it a
+          #    Mac that is offline, or behind a captive portal, cannot confirm
+          #    the notarisation and refuses the app — which is exactly the
+          #    machine a student opens it on.
+          if ! xcrun stapler validate "$app" 2>&1; then
+            echo
+            echo "FAIL: no stapled notarisation ticket."
+            echo "      The signature may be fine and the notary submission not."
+            echo "      Check APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD (an"
+            echo "      app-specific password, not the account one) and"
+            echo "      APPLE_TEAM_ID, and mac.notarize in desktop/package.json."
+            exit 1
+          fi
+
+          # 3. Gatekeeper's own verdict. spctl writes to STDERR, hence the
+          #    redirect — read without it, this check sees an empty string and
+          #    passes over everything.
+          assessment="$(spctl --assess --type execute --verbose=4 "$app" 2>&1 || true)"
+          echo "$assessment"
+          if ! grep -q "accepted" <<<"$assessment"; then
+            echo
+            echo "FAIL: Gatekeeper would refuse this app."
+            exit 1
+          fi
+          # ACCEPTED IS NOT ENOUGH, and this is the part worth keeping: spctl
+          # accepts for several reasons, and only one of them survives being
+          # downloaded by somebody else. An app can be accepted locally on the
+          # machine that built it and refused on every other Mac.
+          if ! grep -q "source=Notarized Developer ID" <<<"$assessment"; then
+            echo
+            echo "FAIL: accepted, but NOT as a notarised Developer ID app."
+            echo "      That acceptance does not travel to a student's Mac."
+            exit 1
+          fi
+
+          # 4. And the artifact that is actually published is the .dmg, not
+          #    the .app inside it — a stapled app in an unstapled disk image
+          #    still fails on first open.
+          dmg="$(find desktop/dist -maxdepth 1 -name '*.dmg' -print -quit || true)"
+          if [ -z "$dmg" ]; then
+            echo "FAIL: no .dmg was produced, so the published artifact is unchecked."
+            exit 1
+          fi
+          echo "assessing: $dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg" 2>&1
+
+          echo
+          echo "Gatekeeper accepts the app and the disk image, notarised."
 
       - name: Collect the finished files
         uses: actions/upload-artifact@v4

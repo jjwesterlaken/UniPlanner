@@ -19,7 +19,8 @@ export const PRODUCT_NAME = "University Planner";
 export const ARTIFACT_NAMES = {
   "nsis": "${productName} Setup.${ext}",
   "portable": "${productName} Portable.${ext}",
-  "linux": "${productName}.${ext}"
+  "linux": "${productName}.${ext}",
+  "dmg": "${productName}.${ext}"
 };
 
 /* Where the planner lives — ABSOLUTE, and written by the build from

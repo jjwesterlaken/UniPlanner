@@ -37,7 +37,13 @@
       ],
       "category": "public.app-category.education",
       "icon": "build/icon.png",
-      "identity": null
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "notarize": true,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "University Planner uses your microphone to record lectures so it can generate an AI summary and study cards. Your recording is sent to Groq for transcription and is deleted the moment it's transcribed."
+      }
     },
     "dmg": {
       "title": "University Planner",

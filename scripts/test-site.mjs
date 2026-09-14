@@ -29,6 +29,9 @@ import { repoSlug, assetName, downloadUrl, releasesUrl, detectPlatform, download
 import { TIERS, PERIODS, CURRENCY, allowanceLine, priceLabel } from "../site/pricing.js";
 import { FLAGS } from "../site/flags.js";
 import { allowanceForTier, TRIAL_CREDITS } from "../src/aiTextLimits.js";
+/* The desktop mic prompt is compared against this rather than against a
+   typed sentence — the same constant every other shell interpolates. */
+import { MIC_USAGE_DESCRIPTION } from "../mobile/scripts/native-permissions.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -64,7 +67,17 @@ console.log("\nmarketing site");
 /* Declared before the first test that reads it. A `const` below its own
    use is the temporal-dead-zone shape that has taken this app down
    twice, and a test file is no more immune to it than a component. */
-const ASSETS = { windowsInstaller: "S.exe", windowsPortable: "P.exe", linuxAppImage: "L.AppImage" };
+/* EVERY ASSET THE CARDS READ. It was missing `macDmg` the moment the Mac
+   card started reading one, and the href came out carrying the word
+   "undefined" — a real URL, pointing nowhere, which only the "is it a
+   .dmg" assertion caught. A fixture that lags the code it stands in for
+   is the weaker-stand-in pattern in its cheapest form. */
+const ASSETS = {
+  windowsInstaller: "S.exe",
+  windowsPortable: "P.exe",
+  linuxAppImage: "L.AppImage",
+  macDmg: "University Planner.dmg",
+};
 
 /* ---------- downloads: the URLs ---------- */
 
@@ -230,15 +243,130 @@ test("the Windows note is present, and says the two things a student has to do",
   assert.ok(FLAGS.windowsUnsignedNote, "the note is flagged off while the build is still unsigned");
 });
 
-test("macOS is unavailable and offers no link at all", () => {
-  /* NOT "we haven't built it" — a signed .dmg is the missing thing, not
-     a .dmg. Unsigned, macOS refuses to open rather than warning, so
-     there is no equivalent of the Windows note to write. */
+test("THE MAC DOWNLOAD CANNOT BE SWITCHED ON BY EDITING A BOOLEAN", () => {
+  /* THE GATE, and the reason it is not simply `assert(FLAGS.macDownload)`
+     either way: the thing that makes a Mac link safe is not a flag, it
+     is a PIPELINE — a Developer ID certificate, a notarisation
+     submission, and something that checks the result. The flag is only
+     a statement that the pipeline exists.
+
+     So this asserts the pipeline, from the workflow and the packaging
+     config, and lets the flag follow. Flip the boolean without the
+     workflow and it goes red naming what is missing; take the workflow
+     away under a flag that is already true and it goes red too.
+
+     WHY IT MATTERS MORE THAN THE USUAL FLAG: an unsigned or
+     un-notarised .dmg uploads, publishes, and looks completely normal.
+     It fails on the student's Mac, with a dialogue saying the app is
+     damaged — which reads as a corrupt download rather than as an
+     unsigned one, so the report that comes back is about the wrong
+     thing entirely. */
   const mac = downloadsFor("mac", { slug: {}, assets: ASSETS }).cards.find((c) => c.id === "mac");
-  assert.equal(mac.available, false);
-  assert.equal(mac.href, null, "an unsigned Mac build must not be downloadable — it refuses to open");
-  assert.ok(mac.soon);
-  assert.equal(FLAGS.macDownload, false, "the Mac download flag is on while the build is unsigned");
+
+  if (!FLAGS.macDownload) {
+    /* The pre-signing state, kept reachable rather than deleted: this is
+       what the card must do while the pipeline is absent. */
+    assert.equal(mac.available, false);
+    assert.equal(mac.href, null, "an unsigned Mac build must not be downloadable — it refuses to open");
+    assert.ok(mac.soon, "the card offers neither a download nor an explanation");
+    return;
+  }
+
+  const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/build-apps.yml"), "utf8");
+  const macConfig = desktopPkg.build.mac;
+
+  /* 1. THE PACKAGING CONFIG MUST NOT CANCEL THE SIGNING. `identity: null`
+        means "do not sign" and it overrides a perfectly good
+        certificate, silently — secrets reaching a build that has been
+        told not to sign produce an unsigned app and a green tick. */
+  assert.ok(
+    !("identity" in macConfig) || macConfig.identity !== null,
+    "desktop/package.json has mac.identity: null, which means DO NOT SIGN — the certificate would be ignored"
+  );
+  assert.equal(macConfig.hardenedRuntime, true, "notarisation requires the hardened runtime");
+  assert.equal(macConfig.notarize, true, "the build is signed but never submitted to the notary service");
+
+  /* 2. THE ENTITLEMENTS FILE MUST EXIST AND CARRY THE MICROPHONE KEY.
+        Under the hardened runtime the mic is HARD-DENIED without it —
+        no prompt, nothing for the app to distinguish from "no device" —
+        so turning the runtime on without this key takes a working
+        desktop recorder and breaks it in the commit that fixed the
+        signing. Read from the plist rather than asserted of the config. */
+  assert.ok(macConfig.entitlements, "the hardened runtime is on with no entitlements file");
+  const plist = fs.readFileSync(path.join(rootDir, "desktop", macConfig.entitlements), "utf8");
+  assert.match(
+    plist.replace(/<!--[\s\S]*?-->/g, " "),
+    /com\.apple\.security\.device\.audio-input/,
+    "no microphone entitlement — under the hardened runtime recording is refused, not prompted for"
+  );
+
+  /* 3. AND THE MICROPHONE STRING BESIDE IT. The entitlement is
+        permission to ask; this is what the question says. macOS refuses
+        the request outright when it is missing. A MIRROR with the
+        EQUALITY as its guard, which is the one form CLAUDE.md allows:
+        the constant is JavaScript and this file is JSON, so it genuinely
+        cannot be imported. */
+  assert.equal(
+    macConfig.extendInfo && macConfig.extendInfo.NSMicrophoneUsageDescription,
+    MIC_USAGE_DESCRIPTION,
+    "the desktop mic prompt has drifted from the one MIC_USAGE_DESCRIPTION every other shell shows"
+  );
+
+  /* 4. THE WORKFLOW MUST ACTUALLY SIGN, NOTARISE, AND CHECK. The five
+        secrets by name, because a renamed secret resolves to an empty
+        string and electron-builder reads that as "no certificate" —
+        producing an unsigned app and a passing build. */
+  for (const secret of ["CSC_LINK", "CSC_KEY_PASSWORD", "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"]) {
+    assert.ok(
+      new RegExp(`${secret}:\\s*\\$\\{\\{[^}]*secrets\\.${secret}`).test(workflow),
+      `the workflow does not pass secrets.${secret} to the packaging step`
+    );
+  }
+
+  /* AND THE TWO SHARED NAMES MUST BE MAC-SCOPED. CSC_LINK and
+     CSC_KEY_PASSWORD are not Apple-specific: electron-builder reads the
+     same two on Windows, where they mean an authenticode .pfx. Passed
+     unconditionally they hand the Windows job an Apple certificate. */
+  for (const shared of ["CSC_LINK", "CSC_KEY_PASSWORD"]) {
+    const line = workflow.split("\n").find((l) => l.trim().startsWith(`${shared}:`));
+    assert.ok(line, `${shared} is not set at all`);
+    assert.match(
+      line,
+      /matrix\.label == 'Mac'/,
+      `${shared} is not scoped to the Mac job — electron-builder reads it on Windows too, as an authenticode certificate`
+    );
+  }
+
+  /* THE ASSESSMENT ITSELF, which is the only check anywhere that reads
+     the thing a student would double-click. Everything above is
+     configuration asserting its own intent. */
+  /* BOTH ASSESSMENTS, NAMED SEPARATELY. A bare /spctl --assess/ is
+     satisfied by EITHER of the two the workflow runs — demonstrated:
+     deleting the app assessment left this green, because the disk-image
+     one still matched. Two occurrences and one loose pattern is a guard
+     that checks whichever happens to survive. */
+  assert.match(
+    workflow,
+    /spctl --assess --type execute/,
+    "nothing assesses the .app, so an unsigned bundle inside a fine-looking disk image would publish"
+  );
+  assert.match(
+    workflow,
+    /spctl --assess --type open/,
+    "nothing assesses the .dmg, which is the artifact a student actually downloads"
+  );
+  assert.match(
+    workflow,
+    /source=Notarized Developer ID/,
+    "the assessment accepts any 'accepted' — which includes acceptances that do not travel to another Mac"
+  );
+  assert.match(workflow, /stapler validate/, "the notarisation ticket is never confirmed to be stapled, so an offline Mac refuses the app");
+
+  /* 5. ONLY THEN may the card offer a link. */
+  assert.equal(mac.available, true);
+  assert.ok(mac.href, "the flag is on and the card still offers no download");
+  assert.match(mac.href, /\.dmg$/, "the Mac card links to something that is not a disk image");
+  assert.equal(mac.soon, null, "the card offers a download AND says it is coming soon");
 });
 
 /* ---------- pricing ---------- */
