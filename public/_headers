@@ -38,6 +38,19 @@
 # - style-src 'unsafe-inline': React style attributes (folder colours,
 #   theme accents) are inline styles; without it every coloured chip
 #   goes unstyled.
+# - frame-src: the ORIGIN SPLIT's one CSP consequence on this side.
+#   The app frames /handover on the marketing origins once, on a first
+#   visit with an empty planner, to carry a signed-out planner across
+#   from the host the app used to live on (src/originHandover.js).
+#   Without this the frame is refused by `default-src 'self'` and the
+#   handover fails the way a network timeout fails — silently, and
+#   indistinguishably from "that browser had nothing to bring across".
+#   The two origins are SUBSTITUTED by scripts/build-web.mjs from
+#   src/legalLinks.js rather than typed, because a host written into a
+#   CSP by hand is the restatement that takes a fortnight to notice.
+#   `frame-ancestors 'none'` is UNCHANGED: the app frames something,
+#   nothing frames the app.
+#
 # - connect-src: the Supabase project URL, which is in config.js. If
 #   the project ever moves, this line is a second place that names it.
 # - media-src blob:: the recording review screen plays back the
@@ -57,4 +70,4 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Permissions-Policy: microphone=(self), camera=(self), geolocation=(), payment=(), usb=()
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://kuhtogvewcooigudmgwj.supabase.co; img-src 'self' data:; media-src 'self' blob:; object-src 'none'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://kuhtogvewcooigudmgwj.supabase.co; img-src 'self' data:; media-src 'self' blob:; object-src 'none'; worker-src 'self'; frame-src __SITE_ORIGINS__; frame-ancestors 'none'; base-uri 'self'; form-action 'self'

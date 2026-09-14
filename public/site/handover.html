@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Moving your planner</title>
+    <!-- ==================================================================
+         handover.html — the one old URL that must NOT redirect
+
+         WHAT IT IS FOR. The app moved from this origin to
+         app.uniplannerapp.com. localStorage is per-ORIGIN, so every
+         planner belonging to somebody without an account is invisible
+         from the new origin, and a 301 cannot help: the edge serves it
+         before any script runs, so once the redirect is in place there
+         is no page left here that can read this origin's storage.
+
+         This page is that page. The app frames it, it reads its own
+         localStorage, and it posts the result to the app. The redirect
+         rules exclude this path deliberately — see the generated
+         _redirects in the site build.
+
+         IT IS NOT A REQUEST/RESPONSE EXCHANGE, and that is the
+         security design rather than a simplification. It posts
+         UNPROMPTED to one fixed targetOrigin, substituted into this
+         file by scripts/build-site.mjs. postMessage with an explicit
+         targetOrigin is not DELIVERED to any other origin, so a
+         hostile page that frames this one receives nothing at all —
+         there is no message to intercept and no sender to impersonate.
+         Waiting for a "please send" message first would mean deciding
+         whether to trust the asker, which is a harder question with a
+         worse failure.
+
+         WHAT IT WILL NOT SEND: the Supabase session, the demo
+         fixtures, the device id. The list is in src/originHandover.js
+         and this page is generated against it, so the two cannot
+         disagree about what crosses.
+
+         NO STYLING AND NO CONTENT, because nothing ever looks at it.
+         It renders inside a 0x0 frame. If somebody opens it directly
+         they get one sentence, which is better than a blank page.
+         ================================================================== -->
+    <style>
+      body {
+        margin: 0;
+        padding: 1.5rem;
+        font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        color: #44403c;
+        background: #fafaf9;
+      }
+    </style>
+  </head>
+  <body>
+    <p>
+      University Planner has moved to
+      <a href="__APP_ORIGIN__">app.uniplannerapp.com</a>. This page has nothing on it — it exists so the
+      app can carry a planner saved in this browser across to the new address.
+    </p>
+    <script>
+      (function () {
+        /* Generated from src/originHandover.js by the site build. A
+           key the app does not ask for must not be read here either:
+           the narrower side of the pair is the one to keep narrow. */
+        var KEYS = __HANDOVER_KEYS__;
+        var RESULT = "__HANDOVER_RESULT__";
+        var APP_ORIGIN = "__APP_ORIGIN__";
+
+        var values = {};
+        try {
+          for (var i = 0; i < KEYS.length; i++) {
+            var v = localStorage.getItem(KEYS[i]);
+            /* A key that is absent is absent, not empty — sending ""
+               would have the app write a blank planner over nothing,
+               which is the same result and a worse record of what
+               happened. */
+            if (typeof v === "string" && v.length > 0) values[KEYS[i]] = v;
+          }
+        } catch (e) {
+          /* localStorage throws in a partitioned or blocked context
+             (private browsing, a locked-down extension). There is
+             nothing to report and nothing to retry: an empty payload
+             is the honest answer and the app treats it as "nothing to
+             bring across". */
+        }
+
+        try {
+          /* `parent` and not `top`: the app is the framer. Opened
+             directly, `parent` is this window and the targetOrigin
+             does not match, so nothing is delivered — which is
+             correct, not a bug to work around. */
+          parent.postMessage({ type: RESULT, values: values }, APP_ORIGIN);
+        } catch (e) {}
+      })();
+    </script>
+  </body>
+</html>

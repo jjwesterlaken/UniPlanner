@@ -26,9 +26,35 @@
       .callout p:first-child { margin-top: 0; } .callout p:last-child { margin-bottom: 0; }
       .email { font-size: 1.05rem; }
       footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid #e7e5e4; color: #78716c; font-size: .9rem; }
+      /* ---------- the app bar ----------
+         THE ORIGIN SPLIT PUT THESE DOCUMENTS ON A DIFFERENT HOST FROM
+         THE PLANNER. They are served from the marketing origins (and
+         from the app origin too, so both resolve), and until now they
+         had no navigation at all — so a student who opened the privacy
+         policy from a store listing had no route to the app except
+         typing a URL they have never seen.
+
+         Sticky and FIRST, so it is on screen without scrolling at
+         every width; the negative margins pull it out through the
+         body's own padding so it spans the full width rather than the
+         46rem reading column. The href is absolute and substituted by
+         scripts/build-site.mjs — the app is another origin now, so a
+         relative link cannot reach it. */
+      .appbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: .75rem;
+        margin: -2.5rem -1.25rem 2.25rem; padding: .7rem 1.25rem;
+        background: rgba(250,249,246,.92); backdrop-filter: blur(10px); border-bottom: 1px solid #e2e2dd; }
+      .appbar .home { display: flex; align-items: center; gap: .5rem; font-weight: 600; text-decoration: none; color: #16211f; }
+      .appbar .mark { width: 26px; height: 26px; border-radius: 8px; background: #0d7068; color: #fff;
+        display: grid; place-items: center; font-size: 13px; font-weight: 600; flex: none; }
+      .appbar .open { margin-left: auto; flex: none; white-space: nowrap; background: #0d7068; color: #fff;
+        text-decoration: none; font-size: .875rem; font-weight: 500; padding: .45rem 1rem; border-radius: .5rem; }
     </style>
   </head>
   <body>
+    <nav class="appbar">
+      <a class="home" href="__SITE_ORIGIN__"><span class="mark">U</span> UniPlanner</a>
+      <a class="open" href="__APP_ORIGIN__" data-open-app>Open the app</a>
+    </nav>
     <h1>Support</h1>
     <p class="updated">University Planner · Last updated 12 September 2026</p>
 

@@ -68,12 +68,27 @@ const STRIPE_API = "https://api.stripe.com/v1";
    WHERE A COMPLETED CHECKOUT RETURNS TO. Derived from nothing at
    runtime: taking it from the request's Origin header would be an open
    redirect with a signed-in session attached. It MIRRORS
-   src/legalLinks.js's SITE_URL — a browser bundle and a Deno function
-   cannot share a module — and a test asserts the two are equal. */
+   src/legalLinks.js's APP_URL — a browser bundle and a Deno function
+   cannot share a module — and a test asserts the two are equal.
+
+   IT IS `APP_URL` AND NOT `SITE_URL`, WHICH IS THE ORIGIN SPLIT'S ONE
+   BILLING CONSEQUENCE. Those two constants named the same host until
+   the split; they do not now. `SITE_URL` is the marketing site, which
+   has no session, no Plans panel and nothing to tell somebody who has
+   just paid — so a return URL left pointing there is a student
+   completing a purchase and landing on an advertisement for the
+   product they just bought, with no confirmation and no way back to
+   the tab they started from.
+
+   A SESSION ALREADY CREATED KEEPS THE URL IT WAS CREATED WITH. Stripe
+   stores the return URLs on the session, so this change reaches new
+   checkouts only; the marketing page forwards `?checkout=` on the root
+   to the app for the ones in flight across the deploy
+   (public/site/site.js). */
 export const STRIPE_API_VERSION = "2026-04-22.dahlia";
-export const SITE_URL = "https://www.uniplannerapp.com";
-export const CHECKOUT_SUCCESS_URL = `${SITE_URL}/?checkout=done`;
-export const CHECKOUT_CANCEL_URL = `${SITE_URL}/?checkout=cancelled`;
+export const APP_URL = "https://app.uniplannerapp.com";
+export const CHECKOUT_SUCCESS_URL = `${APP_URL}/?checkout=done`;
+export const CHECKOUT_CANCEL_URL = `${APP_URL}/?checkout=cancelled`;
 
 /* THE SIX PRICES, keyed by a `lookup_key` WE choose on the Stripe Price.
 

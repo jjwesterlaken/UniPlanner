@@ -16,7 +16,45 @@
    copy of a legal document can never be served from a cache.
    ================================================================== */
 
+/* ==================================================================
+   TWO ORIGINS, AND WHICH IS WHICH IS THE WHOLE POINT OF THIS BLOCK.
+
+   The origin split (see SITE-DEPLOY.md) puts the marketing site on
+   `uniplannerapp.com` AND `www.uniplannerapp.com`, and moves the app
+   to `app.uniplannerapp.com`.
+
+   `SITE_URL` DID NOT MOVE, deliberately. It is where the published
+   LEGAL DOCUMENTS live, and those URLs are in two app-store listings
+   and in a Stripe dashboard field — a store listing cannot be edited
+   as easily as a deploy, and Apple rejects a Support URL that does not
+   resolve. So the documents keep the URLs they were published under,
+   the site build serves them there, and nothing a reviewer has already
+   been given stops working.
+
+   `APP_URL` is new and is where the PLANNER lives. Anything that sends
+   a person to the app — a password-reset email, a Stripe return, the
+   marketing page's buttons — points here and not at SITE_URL.
+
+   THE CONSEQUENCE THAT IS NOT OBVIOUS: these are different ORIGINS, so
+   `localStorage`, IndexedDB and the Supabase session do not cross
+   between them. See src/originHandover.js for what is done about the
+   planner, and for what could not be.
+   ================================================================== */
 export const SITE_URL = "https://www.uniplannerapp.com";
+
+/* The apex, which serves the same marketing bundle as `www`. Named
+   because the redirect rules and the frame-ancestors allowance are
+   written over both, and a list of origins typed in three places is
+   the restatement this file exists to avoid. */
+export const SITE_APEX_URL = "https://uniplannerapp.com";
+
+/** Every origin the marketing site answers on. */
+export const SITE_ORIGINS = [SITE_APEX_URL, SITE_URL];
+
+/* WHERE THE PLANNER LIVES. A separate origin, which is the thing to
+   keep in mind before adding anything that assumes one storage area:
+   a value written on SITE_URL cannot be read here and vice versa. */
+export const APP_URL = "https://app.uniplannerapp.com";
 
 /* Extensionless, because that is what Cloudflare Pages actually serves:
    the files are public/privacy.html and public/delete-account.html, but
@@ -45,8 +83,19 @@ export const SUPPORT_URL = `${SITE_URL}/support`;
    IT MUST ALSO BE ON THE REDIRECT URLS ALLOWLIST in Supabase Auth
    settings. Supabase ignores an unlisted redirectTo and silently falls
    back to the Site URL, which is the failure that looks like the code is
-   wrong when the configuration is. */
-export const PASSWORD_RESET_REDIRECT = SITE_URL;
+   wrong when the configuration is. This has bitten this project before.
+
+   IT IS `APP_URL` NOW, NOT `SITE_URL`, and that is the origin split's
+   sharpest edge. Supabase puts the recovery token in the URL FRAGMENT.
+   Sent to SITE_URL after the split it lands on the marketing page,
+   which has no `PasswordRecovery` overlay and no `detectSessionInUrl` —
+   so the token is consumed by a page that cannot use it and the reset
+   never works, silently, once, per link.
+
+   Builds already in the stores have the OLD value baked in, so the
+   marketing page forwards a recovery fragment to the app (see
+   public/site/site.js). That forwarder is required, not a courtesy. */
+export const PASSWORD_RESET_REDIRECT = APP_URL;
 
 export const PRIVACY_EMAIL = "privacy@uniplannerapp.com";
 export const SUPPORT_EMAIL = "support@uniplannerapp.com";

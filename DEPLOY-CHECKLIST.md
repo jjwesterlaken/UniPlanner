@@ -452,7 +452,11 @@ npm run promote
 deploy arrived:
 
 ```bash
-curl -s https://www.uniplannerapp.com/sw.js | grep 'const CACHE'
+# AFTER THE ORIGIN SPLIT this is the APP origin, not www. The marketing
+# site serves www now and ships no service worker at all, deliberately —
+# so the old command returns nothing and reads exactly like a failed
+# deploy.
+curl -s https://app.uniplannerapp.com/sw.js | grep 'const CACHE'
 ```
 
 Compare against the Account tab in a hard-reloaded browser. They must
@@ -522,3 +526,119 @@ reset one.
 
 Both recoveries are minutes. The reason 0013 is last is not that it is
 dangerous in itself; it is that every failure it causes is silent.
+
+---
+
+## 7. THE ORIGIN SPLIT — the steps no test in this repository can reach
+
+Everything in the branch is code. **Every item below is configuration,
+in a dashboard, and each one has a silent failure.** They are listed in
+the order they must happen, and the order matters: three of them make
+the app unreachable if done early and one makes it unreachable if done
+late.
+
+### 7a. Cloudflare Pages — two projects, three custom domains
+
+| Project | Build output | Custom domains | Production branch |
+|---|---|---|---|
+| `uniplanner-site` | `dist-site` | `uniplannerapp.com`, `www.uniplannerapp.com` | `release` |
+| `uniplanner` | `dist-web` | `app.uniplannerapp.com` | `release` |
+
+The site project needs its build command set to `npm run build:site`
+and its output directory to `dist-site`.
+
+**Functions must be enabled on the site project.** The redirects are a
+Pages middleware (`dist-site/functions/_middleware.js`), not a
+`_redirects` file — see `site/redirects.js` for why. If Functions are
+off, every old app URL serves the marketing page or 404s instead of
+redirecting, and **nothing errors**. Confirm by requesting a path the
+site does not own and reading the status:
+
+```bash
+curl -sI https://www.uniplannerapp.com/app.js | head -3
+# expect: HTTP/2 301  +  location: https://app.uniplannerapp.com/app.js
+```
+
+And confirm the other half, which is the one that would cost a store
+review:
+
+```bash
+for p in privacy terms support delete-account handover; do
+  printf '%-16s %s\n' "$p" "$(curl -sI https://www.uniplannerapp.com/$p | head -1)"
+done
+# every one must be 200. A 301 here sends a reviewer to an origin that
+# does not serve the document.
+```
+
+### 7b. DNS
+
+`app.uniplannerapp.com` — a CNAME to the `uniplanner` Pages project.
+`www` moves from the app project to the site project. The apex keeps
+whatever already points it at the site.
+
+**MX records are not touched.** They never were, and Google Workspace
+mail is on them.
+
+### 7c. Supabase → Authentication → URL Configuration → Redirect URLs
+
+Add:
+
+```
+https://app.uniplannerapp.com/**
+https://app.uniplannerapp.com
+```
+
+**Keep the two `www` entries.** Builds already in the stores have the
+old `PASSWORD_RESET_REDIRECT` baked in and send reset emails pointing
+at `www`; the marketing page forwards those to the app, and Supabase
+will not honour a `redirectTo` that is not on this list — it falls back
+to the Site URL silently, which is the failure that looks like a code
+bug when it is configuration. **This has bitten this project before.**
+
+Set **Site URL** to `https://app.uniplannerapp.com`.
+
+Still nothing for `capacitor://localhost` or `http://localhost`:
+`sync.js` gates `detectSessionInUrl` on `^https?:$`, so a token
+delivered to a phone shell can never be consumed, and allowlisting a
+destination the app cannot read turns a working reset into a dead end.
+
+### 7d. Stripe → Settings → Public details
+
+Nothing changes here — the Terms URL is still
+`https://www.uniplannerapp.com/terms`, and it still resolves, because
+the documents did not move. **Check it anyway**: Stripe refuses to
+create a Checkout session when that field is empty, so a wrong value
+here is a checkout that cannot start.
+
+The **return URLs are in code** (`_shared/stripe.ts`) and ship with the
+function deploy in step 2. Nothing to set.
+
+### 7e. The order, and what breaks if it is wrong
+
+1. **7a and 7b first**, so `app.uniplannerapp.com` answers before
+   anything points at it. A reset email sent to a host that does not
+   resolve burns a single-use token.
+2. **7c before the promote**, for the same reason.
+3. **The promote last.** The moment `www` starts serving the marketing
+   build, every old app URL redirects — including, deliberately, the
+   one every existing browser has cached a service worker for.
+
+### 7f. What to check by hand afterwards, because nothing here can
+
+- **A signed-out planner crosses.** In a browser with a planner on
+  `www` and nothing on `app`, open `https://app.uniplannerapp.com`. The
+  planner should appear after a brief reload. **This is the one that
+  cannot be verified from a build machine** — it depends on a real
+  browser handing a same-site iframe its unpartitioned storage, which
+  is true by the specification and unverified by us on Safari in
+  particular. If it does not work, the consequence is in the report:
+  that browser's signed-out planner is unreachable.
+- **Everybody signs in again.** The Supabase session is in
+  `localStorage`, which is per-origin, and it is deliberately NOT
+  carried across. Expect it; it is not a bug.
+- **Installed PWAs open the marketing site.** A shortcut resolved its
+  `start_url` at install time and cannot be migrated. Re-install from
+  the new origin.
+- **A reset email from an OLD store build** still lands on `www` and
+  should bounce to the app with the fragment intact. Worth one real
+  test with a real inbox, because no test here can read one.

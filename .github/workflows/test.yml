@@ -220,6 +220,20 @@ jobs:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-consent.mjs
 
+      - name: The origin split's "Open the app" control is really on screen
+        # "Persistent, prominent, visible without scrolling" is a claim
+        # about LAYOUT, and the markup containing a link satisfies none
+        # of it — a control inside a nav that collapses at 900px, or
+        # below the fold, or zero-sized, is a link nobody can press.
+        # Measured on the built marketing page and all four legal
+        # documents, at a phone width and a desktop width, with a
+        # scroll to separate "above the fold" from "persistent".
+        # Everything else in the suite runs in the npm-test job; only
+        # this half needs a browser.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-origin-split.mjs
+
       - name: Run the three journeys
         # Against the live Supabase project with a dedicated test account
         # (see e2e/helpers.mjs for why its data cannot accumulate).

@@ -22,7 +22,7 @@ import {
   LECTURE_AUDIO_BUCKET,
 } from "../src/accountDeletion.js";
 import * as links from "../src/legalLinks.js";
-import { PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL, SUPPORT_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL } from "../src/legalLinks.js";
+import { PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL, SUPPORT_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL, APP_URL } from "../src/legalLinks.js";
 import { CONSENT_TEXT, AI_CONSENT_VERSION } from "../src/aiNotesLogic.js";
 import { AI_PROVIDERS } from "../src/aiProviders.js";
 import {
@@ -272,6 +272,12 @@ async function run() {
          canonical domain cannot quietly widen it. */
       const LINKABLE = {
         [new URL(SITE_URL).host]: "our own pages",
+        /* THE ORIGIN SPLIT. These documents are served from the
+           marketing origins AND from the app origin, and each carries
+           an "Open the app" control — which has to be absolute,
+           because the app is a different origin now and no relative
+           href can reach it. */
+        [new URL(APP_URL).host]: "the app itself, which is a different origin since the split",
         "www.oaic.gov.au": "the Australian privacy regulator, for a complaint",
         "www.apple.com": "Apple's standard licence, which really does govern an App Store purchase (Terms section 10)",
         "support.apple.com":
@@ -283,10 +289,38 @@ async function run() {
       assert.deepEqual(undeclared, [], `${file} links to ${undeclared.join(", ")}, which no reason here covers`);
     });
 
-    await test(`${file} carries no unfilled placeholder`, () => {
-      const html = page(file);
-      for (const token of ["TODO", "TBD", "PLACEHOLDER", "__", "example.com", "netlify"]) {
-        assert.ok(!html.toLowerCase().includes(token.toLowerCase()), `${file} still contains "${token}"`);
+    await test(`${file} carries no unfilled placeholder, in EVERY build that publishes it`, () => {
+      /* THE ARTIFACT, NOT THE SOURCE, and the origin split is what
+         forced the distinction here. These documents now carry an
+         "Open the app" control whose href is `__APP_ORIGIN__` in the
+         source, substituted by whichever build copies them — and BOTH
+         builds copy them, because they are served from the marketing
+         origins and from the app origin so either URL resolves.
+
+         Reading the source would now fail on a placeholder that is
+         SUPPOSED to be there; reading one build would pass over the
+         other shipping a literal `__APP_ORIGIN__` as an href, which
+         renders as a dead link on a published legal document. So it
+         reads every output that publishes the file, and says so when
+         one has not been built. */
+      const outputs = ["dist-web", "dist-site"].map((dir) => [dir, path.join(rootDir, dir, file)]);
+      const present = outputs.filter(([, f]) => fs.existsSync(f));
+      assert.ok(
+        present.length === outputs.length,
+        `${file} is missing from ${outputs.filter(([, f]) => !fs.existsSync(f)).map(([d]) => d).join(", ")} — run the builds, or this document is unverified where it ships`
+      );
+      for (const [dir, f] of present) {
+        const html = fs.readFileSync(f, "utf8");
+        for (const token of ["TODO", "TBD", "PLACEHOLDER", "__", "example.com", "netlify"]) {
+          assert.ok(!html.toLowerCase().includes(token.toLowerCase()), `${dir}/${file} still contains "${token}"`);
+        }
+        /* And the control really is there and really is absolute —
+           without this the check above is satisfied by a build that
+           dropped the link entirely. */
+        assert.ok(
+          html.includes(`href="${APP_URL}"`),
+          `${dir}/${file} has no absolute link to the app, so a reader who arrives from a store listing has no route to it`
+        );
       }
     });
   }
@@ -807,6 +841,10 @@ async function run() {
     "uni-planner-tab": {
       noUserContent:
         "which of six tabs this device was last on, so reopening lands where you left off. One short id, device-local and deliberately unsynced; it holds none of the student's work and reveals nothing about it beyond which screen was open",
+    },
+    "uni-planner-handover": {
+      noUserContent:
+        "one ISO timestamp recording that this browser has ALREADY asked the old origin whether it had a planner to carry across the split (src/originHandover.js). It holds no planner and no fragment of one — the planner it may cause to arrive is `uni-planner-v1`, which the documents already describe, and this key is only the mark that says do not ask again. It is written BEFORE the attempt rather than after, so a hang or a closed tab cannot turn one attempt into one per load",
     },
     "uni-planner-archive-pending": {
       noUserContent:

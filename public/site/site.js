@@ -24,9 +24,11 @@ import { REPOSITORY_URL, PRODUCT_NAME, ARTIFACT_NAMES, APP_URL } from "./build-f
    to be in the first version of this page rather than added later,
    because the window it covers is exactly the transition.
 
-   Before the origin split the app was served from `/` and registered a
-   worker scoped to `/`. Moving the app to /app/ does not unregister
-   it: that worker keeps controlling `/`, which is now this page. It is
+   Before the origin split the app was served from `/` on this host and
+   registered a worker scoped to `/`. Moving the app to ANOTHER ORIGIN
+   does not unregister it — a registration belongs to the origin it was
+   made on, and nothing about the app appearing elsewhere touches it.
+   That worker keeps controlling `/`, which is now this page. It is
    network-first for the app shell, so an ONLINE visitor sees this page
    — and then it caches this page as the app shell. OFFLINE, that
    install opens the marketing site instead of the planner.
@@ -62,9 +64,20 @@ function releaseTheOldWorker() {
    burns it. The reset does not fail loudly, it just never works.
 
    So the marketing page forwards it, hash intact, to the app. New
-   builds point at /app directly and never touch this path; this exists
-   for every copy of the app that was cut before the split and for any
-   bookmark or installed PWA that predates it.
+   builds point at APP_URL directly and never touch this path; this
+   exists for every copy of the app that was cut before the split and
+   for any bookmark or installed PWA that predates it.
+
+   IT GOES TO ANOTHER ORIGIN NOW, not to `/app/`. The split moved the
+   app to `app.uniplannerapp.com`, and `APP_URL` is written into
+   build-facts.js by the build from `src/legalLinks.js` — the same
+   constant `PASSWORD_RESET_REDIRECT` is derived from, so the page a
+   token is forwarded TO and the page new emails are sent TO cannot
+   drift apart.
+
+   A FRAGMENT SURVIVES A CROSS-ORIGIN NAVIGATION exactly as it survives
+   a same-origin one: it never leaves the browser. That is what makes
+   this work at all, and it is the same property the 301s rely on.
 
    IT MUST NOT FIRE ON AN ORDINARY VISIT. Supabase puts recovery
    parameters in the FRAGMENT, so it checks for both an access token and
@@ -79,7 +92,29 @@ function forwardRecoveryToTheApp() {
      fragment and belongs in the app too, where there is wording for it. */
   const isAuthError = params.get("error") || params.get("error_description");
   if (!isRecovery && !isAuthError) return;
-  location.replace("/app/" + hash);
+  location.replace(APP_URL + "/" + hash);
+}
+
+/* ---------- a checkout that was started before the split ----------
+
+   `CHECKOUT_SUCCESS_URL` and `CHECKOUT_CANCEL_URL` now point at the app
+   origin, but a Stripe Checkout session created BEFORE this deploy
+   carries the old return URL inside it — Stripe stores it when the
+   session is made, so it cannot be changed afterwards and it does not
+   follow a later configuration change.
+
+   `/` is the marketing page and the middleware deliberately does not
+   redirect it, so a student returning from a payment would land on a
+   marketing page with no sign that anything succeeded. This is the
+   same shape as the recovery forwarder and exists for the same window:
+   sessions in flight across the deploy. It is narrow on purpose — only
+   `?checkout=`, only on the root, and it carries the whole query so
+   the app sees exactly what Stripe sent. */
+function forwardCheckoutReturnToTheApp() {
+  if (location.pathname !== "/" && location.pathname !== "/index.html") return;
+  const params = new URLSearchParams(location.search || "");
+  if (!params.get("checkout")) return;
+  location.replace(APP_URL + "/" + location.search + (location.hash || ""));
 }
 
 /* ---------- fill the slots ---------- */
@@ -235,6 +270,7 @@ function fillDownloads() {
 
 releaseTheOldWorker();
 forwardRecoveryToTheApp();
+forwardCheckoutReturnToTheApp();
 fillHeroCta();
 fillStoreBadges();
 fillPricing();

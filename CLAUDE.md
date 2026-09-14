@@ -3544,7 +3544,9 @@ since 12 August 2026. DNS stays at Squarespace: one CNAME, `www` →
 records never moved, so Google Workspace mail was never at risk — which
 is why the nameserver switch was cancelled rather than merely postponed.
 
-**The origin must not change after launch.** `localStorage` is scoped per
+**The origin must not change after launch — and it changed before
+launch, deliberately, which is the only window in which this was
+affordable.** `localStorage` is scoped per
 origin, so every user's local planner — the copy that exists before they
 make an account, and the offline copy afterwards — is keyed to the
 hostname that stored it. Serving the app from a different host later
@@ -3553,9 +3555,40 @@ migrate: it lives on devices, not on a server we can run a script
 against. Today that would affect two people; after launch it is
 everybody, silently, with the symptom being "the app lost my notes".
 
-A marketing site is planned. It takes **`/` as a path change on the same
-origin**, with the app moving to **`/app`** — not a subdomain. Same
-origin means `localStorage` survives untouched.
+A marketing site was planned to take **`/` as a path change on the same
+origin**, with the app moving to **`/app`**. **That is superseded** —
+see the override immediately below — but the sentence is kept because
+the paragraph after it is written against it.
+
+**`app.uniplannerapp.com` IS NOW THE APP'S ORIGIN — Jared's order, 14
+September 2026, OVERRIDING the ruling below.** The ruling is kept
+verbatim underneath because its reasoning is still correct about the
+cost, and the cost was accepted rather than disproved: a subdomain IS a
+different origin and `localStorage` IS scoped to one. What changed is
+that the cost is now paid for deliberately, with a mechanism, instead
+of being avoided.
+
+What makes it payable at all is a fact the ruling did not have:
+`www.uniplannerapp.com` and `app.uniplannerapp.com` are different
+ORIGINS but the same SITE, and browser storage partitioning is keyed on
+the registrable domain rather than the origin — so a same-site iframe
+still reaches unpartitioned storage. `/handover` on the marketing
+origins is excluded from the redirects for exactly that reason, the app
+frames it once into an empty planner, and `src/originHandover.js` has
+the design. **A genuinely cross-site move would have had no such
+route**, which is why the ruling below reads as absolute and is not.
+
+**WHAT IS STILL LOST, because the handover is a rescue and not a
+migration:** a browser that never opens the new origin, an installed
+PWA (its `start_url` was resolved at install time and a shortcut cannot
+be migrated), any other browser or device, and the Supabase session —
+which is in `localStorage` too and is deliberately NOT carried, so
+**everybody signs in again**. And the same-site iframe behaviour is
+specification rather than observation here: no WebKit is reachable from
+a build machine, so Safari is a hardware check on DEPLOY-CHECKLIST §7f
+and not a green test.
+
+The original ruling, unedited:
 
 **`app.uniplannerapp.com` HAS BEEN PROPOSED AND RULED OUT, twice — it
 is the same mistake as changing the origin at all.** A subdomain is a

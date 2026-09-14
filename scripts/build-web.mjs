@@ -82,6 +82,59 @@ execFileSync(
 //    Copied recursively so subfolders like public/fonts come across too.
 fs.cpSync("public", OUT, { recursive: true });
 
+/* THE APP ORIGIN, SUBSTITUTED HERE TOO, and the reason is the trap the
+   placeholder itself creates. The four legal documents carry an "Open
+   the app" control whose href is `__APP_ORIGIN__`, filled in by
+   whichever build copies them — and BOTH builds copy them, because the
+   documents are served from the marketing origins AND from the app
+   origin so either URL resolves. A substitution in one build only
+   ships a literal placeholder as an href on the other, which renders
+   as a link to a path that does not exist and looks like a typo
+   nobody made.
+
+   The check below is the half that matters: a placeholder surviving
+   into the output is a broken link on a published legal document, so
+   it fails the build rather than the reader. */
+{
+  const links = fs.readFileSync("src/legalLinks.js", "utf8");
+  const m = /export const APP_URL = "([^"]+)"/.exec(links);
+  if (!m) throw new Error("APP_URL is gone from src/legalLinks.js — the legal pages' app link cannot be filled in");
+  /* The CSP's frame-src, from the same file. See public/_headers. */
+  const origins = /export const SITE_ORIGINS = \[([^\]]+)\]/.exec(links);
+  if (!origins) throw new Error("SITE_ORIGINS is gone from src/legalLinks.js — the CSP's frame-src cannot be derived");
+  const named = origins[1].split(",").map((n) => n.trim()).filter(Boolean);
+  const resolved = named.map((name) => {
+    const v = new RegExp(`export const ${name} = "([^"]+)"`).exec(links);
+    if (!v) throw new Error(`SITE_ORIGINS names ${name}, which is not a string constant in src/legalLinks.js`);
+    return v[1];
+  });
+  const headersPath = path.join(OUT, "_headers");
+  if (fs.existsSync(headersPath)) {
+    const before = fs.readFileSync(headersPath, "utf8");
+    const after = before.split("__SITE_ORIGINS__").join(resolved.join(" "));
+    if (after !== before) fs.writeFileSync(headersPath, after);
+    if (after.includes("__SITE_ORIGINS__")) throw new Error("_headers still carries __SITE_ORIGINS__");
+  }
+
+  for (const f of fs.readdirSync(OUT).filter((n) => n.endsWith(".html"))) {
+    const file = path.join(OUT, f);
+    const before = fs.readFileSync(file, "utf8");
+    /* AND THE MARKETING ORIGIN, for the brand link in the same bar.
+       It has to be ABSOLUTE rather than `/`, and the reason only shows
+       on this origin: these documents are served from the app origin
+       too, where `/` is the planner — so a root-relative brand link
+       would put BOTH controls in that bar on the same destination, one
+       of them silently. */
+    const site = /export const SITE_URL = "([^"]+)"/.exec(links);
+    if (!site) throw new Error("SITE_URL is gone from src/legalLinks.js — the documents' brand link cannot be filled in");
+    const after = before.split("__APP_ORIGIN__").join(m[1]).split("__SITE_ORIGIN__").join(site[1]);
+    if (after !== before) fs.writeFileSync(file, after);
+    if (/__[A-Z_]+__/.test(after.replace(/__BUILD_ID__/g, ""))) {
+      throw new Error(`${f} still carries a placeholder after the build`);
+    }
+  }
+}
+
 /* ---------- the marketing site's build facts ----------
 
    THE PAGE NEEDS FOUR THINGS THAT LIVE IN desktop/package.json: the
@@ -98,21 +151,24 @@ fs.cpSync("public", OUT, { recursive: true });
   const desktop = JSON.parse(fs.readFileSync("desktop/package.json", "utf8"));
   /* WHERE THE PLANNER LIVES, absolute and DERIVED.
 
-     It was a hand-written "/app" — wrong twice over. Wrong today,
-     because the app is still served from the root, so the hero button
-     and two download cards 404. And root-relative is wrong from the
-     APEX domain, where the marketing site is served from a different
-     host and `/app` resolves to a path that does not exist there.
+     It was a hand-written "/app" — wrong twice over. Wrong then,
+     because the app was still served from the root, so the hero button
+     and two download cards 404'd. And root-relative is wrong from the
+     marketing origins entirely, where `/app` resolves to a path that
+     does not exist.
 
-     Absolute, from SITE_URL, so the page works served from /site/, from
-     the apex, or from / after the split. The split changes this line
-     and PASSWORD_RESET_REDIRECT together — a test pins them to the same
-     location, because a page pointing one place while the reset email
-     points another is two half-working paths. */
+     IT IS `APP_URL` NOW, NOT `SITE_URL`. The origin split put the
+     marketing site on `uniplannerapp.com` and `www.uniplannerapp.com`
+     and the app on `app.uniplannerapp.com`, so the two constants no
+     longer name the same place — and everything that sends a person to
+     the planner has to follow the one that moved. This line and
+     PASSWORD_RESET_REDIRECT are derived from that same constant, and a
+     test pins them equal, because a page pointing one place while the
+     reset email points another is two half-working paths. */
   const links = fs.readFileSync("src/legalLinks.js", "utf8");
-  const siteUrl = /export const SITE_URL = "([^"]+)"/.exec(links);
-  if (!siteUrl) throw new Error("SITE_URL is gone from src/legalLinks.js — the site's app link cannot be derived");
-  const appUrl = siteUrl[1]; // + "/app" when the origin split lands
+  const appOrigin = /export const APP_URL = "([^"]+)"/.exec(links);
+  if (!appOrigin) throw new Error("APP_URL is gone from src/legalLinks.js — the site's app link cannot be derived");
+  const appUrl = appOrigin[1];
 
   const facts = fs.readFileSync("site/build-facts.js", "utf8");
   const filled = facts

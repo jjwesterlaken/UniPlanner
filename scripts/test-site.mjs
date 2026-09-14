@@ -19,7 +19,7 @@
 
 import assert from "node:assert/strict";
 import { STORE_NAME, SHORT_DESCRIPTION, FULL_DESCRIPTION, PRIVACY_POLICY_PATH, ACCOUNT_DELETION_PATH, LIMITS } from "../site/store-listing.js";
-import { SITE_URL, PRIVACY_URL, DELETE_ACCOUNT_URL } from "../src/legalLinks.js";
+import { SITE_URL, PRIVACY_URL, DELETE_ACCOUNT_URL, APP_URL as APP_ORIGIN } from "../src/legalLinks.js";
 import * as links from "../src/legalLinks.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -549,22 +549,31 @@ test("every in-page link points at something that exists", () => {
     assert.ok(fs.existsSync(path.join(rootDir, exists[h])), `${h} is linked but ${exists[h]} is missing`);
   }
 
-  /* AND THE BUILT APEX PAGE MUST CARRY NONE OF THEM ROOT-RELATIVE.
-     dist-site is a SECOND Pages project serving the apex domain, which
-     has no /privacy of its own — build-site.mjs rewrites these to
-     absolute for exactly that reason, and a document it failed to
-     rewrite is a 404 from the footer on the live site. */
+  /* AND THE BUILT MARKETING SITE MUST SERVE EVERY ONE OF THEM.
+
+     THIS ASSERTION USED TO SAY THE OPPOSITE, and the inversion is the
+     origin split rather than a loosening. Before it, `dist-site` was
+     an apex-only project that served no documents, so build-site.mjs
+     rewrote these links to absolute `www` URLs and this guard checked
+     that none survived root-relative. The split makes these origins
+     the documents' home: they are copied into the build, so
+     root-relative is not merely allowed, it is BETTER — a visitor who
+     arrived on the apex stays there instead of being thrown to `www`
+     by a footer link.
+
+     What the guard is actually about did not change: a document linked
+     from the footer must RESOLVE. It is checked against the built
+     output, which is where a missing copy would show. */
   const built = path.join(rootDir, "dist-site/index.html");
-  if (fs.existsSync(built)) {
-    const builtHrefs = [...fs.readFileSync(built, "utf8").matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
-    const leftBehind = builtHrefs.filter((h) => h in documents);
-    assert.deepEqual(leftBehind, [], `the apex page still links ${leftBehind.join(", ")} root-relative, which 404s there`);
-    for (const p of Object.keys(documents)) {
-      assert.ok(
-        builtHrefs.includes(`${links.SITE_URL}${p}`) || !local.includes(p),
-        `${p} is in the source footer but not absolute in the built apex page`
-      );
-    }
+  assert.ok(fs.existsSync(built), "dist-site is missing — run `npm run build:site`, or the marketing build is unverified");
+  const builtHrefs = [...fs.readFileSync(built, "utf8").matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+  const linkedDocs = builtHrefs.filter((h) => h in documents);
+  assert.ok(linkedDocs.length > 0, "the built page links no published document at all — this check would pass over nothing");
+  for (const p of linkedDocs) {
+    assert.ok(
+      fs.existsSync(path.join(rootDir, "dist-site", `${p.replace(/^\//, "")}.html`)),
+      `the page links ${p} but the marketing build serves no such document — it 404s on both marketing origins`
+    );
   }
 });
 
@@ -697,20 +706,32 @@ test("the marketing page forwards a recovery token to the app, hash intact", () 
   assert.ok(body.length > 100, "forwardRecoveryToTheApp is gone from the marketing page");
   assert.match(src, /^forwardRecoveryToTheApp\(\);$/m, "it is defined but never called");
 
+  /* APP_URL IS INJECTED, because it is an imported binding now rather
+     than a literal in this function — the split put the app on another
+     origin and the destination is derived from src/legalLinks.js
+     through build-facts.js. Injecting the REAL value is what keeps
+     this a test about where a token goes rather than about a string. */
   const run = (hash) => {
     let replaced = null;
     const location = { hash, replace: (u) => (replaced = u) };
-    new Function("location", "URLSearchParams", body + "; return forwardRecoveryToTheApp;")(location, URLSearchParams)();
+    new Function(
+      "location",
+      "URLSearchParams",
+      "APP_URL",
+      body + "; return forwardRecoveryToTheApp;"
+    )(location, URLSearchParams, APP_ORIGIN)();
     return replaced;
   };
 
   /* Forwarded, with the fragment carried across unchanged — the token
-     is IN the fragment, so dropping it forwards an empty form. */
+     is IN the fragment, so dropping it forwards an empty form. A
+     fragment survives a CROSS-ORIGIN navigation exactly as it survives
+     a same-origin one; it never leaves the browser. */
   const hash = "#access_token=abc&type=recovery&expires_in=3600";
-  assert.equal(run(hash), "/app/" + hash);
+  assert.equal(run(hash), `${APP_ORIGIN}/` + hash);
   /* An expired-link error rides the same fragment and belongs in the
      app too, where there is wording for it. */
-  assert.match(run("#error=access_denied&error_description=expired"), /^\/app\/#error=/);
+  assert.equal(run("#error=access_denied&error_description=expired"), `${APP_ORIGIN}/#error=access_denied&error_description=expired`);
 
   /* AND IT MUST NOT FIRE ON AN ORDINARY VISIT — a marketing page that
      bounces every reader to /app is worse than no page. */
@@ -723,21 +744,28 @@ test("the app's reset destination and the forwarder agree on where the app lives
   /* If PASSWORD_RESET_REDIRECT moves to /app for new builds, the
      forwarder must point at the same place — otherwise old builds land
      one path away from where new ones do, and only one of them works. */
-  const links = fs.readFileSync(path.join(rootDir, "src/legalLinks.js"), "utf8");
-  const m = /export const PASSWORD_RESET_REDIRECT = ([^;]+);/.exec(links);
+  /* BOTH SIDES MUST NAME THE SAME CONSTANT, which is a stronger claim
+     than "both strings match" and the only one that survives the host
+     moving again. `PASSWORD_RESET_REDIRECT` is where NEW builds send a
+     reset email; the forwarder is where OLD builds' emails get bounced
+     to. One derived from APP_URL and the other typed would be two
+     half-working paths, and only the half nobody tests would break. */
+  const src = fs.readFileSync(path.join(rootDir, "src/legalLinks.js"), "utf8");
+  const m = /export const PASSWORD_RESET_REDIRECT = ([^;]+);/.exec(src);
   assert.ok(m, "PASSWORD_RESET_REDIRECT is gone from legalLinks.js");
+  assert.equal(m[1].trim(), "APP_URL", "the reset email no longer goes to the app origin");
+  assert.equal(links.PASSWORD_RESET_REDIRECT, APP_ORIGIN, "PASSWORD_RESET_REDIRECT does not resolve to the app origin");
+
   const site = fs.readFileSync(path.join(rootDir, "public/site/site.js"), "utf8");
-  const target = /location\.replace\("([^"]+)"/.exec(site);
-  assert.ok(target, "the forwarder no longer names a destination");
-  const dest = target[1];
-  if (/\/app/.test(m[1])) {
-    assert.match(dest, /^\/app\//, "new builds go to /app but the forwarder sends old ones elsewhere");
-  } else {
-    /* Still the bare origin: fine, and the forwarder is what makes the
-       split safe for the builds already shipped. Recorded rather than
-       asserted away. */
-    assert.match(dest, /^\/app\//, "the forwarder must send recovery links to the app's path");
-  }
+  assert.match(
+    site,
+    /location\.replace\(APP_URL \+ "\/" \+ hash\)/,
+    "the forwarder no longer sends recovery links to APP_URL — a typed destination here is the drift this test exists for"
+  );
+  /* And the value it will hold at runtime is the same one. */
+  const facts = /export const APP_URL = "([^"]+)"/.exec(fs.readFileSync(path.join(rootDir, "site/build-facts.js"), "utf8"));
+  assert.ok(facts, "APP_URL is gone from build-facts.js");
+  assert.equal(facts[1], APP_ORIGIN, "the marketing page and the reset email disagree about where the app lives");
 });
 
 /* ---------- the apex build ---------- */
@@ -750,7 +778,15 @@ test("the app link is ABSOLUTE, so the page works off-origin", () => {
   const m = /export const APP_URL = "([^"]+)"/.exec(facts);
   assert.ok(m, "APP_URL is gone from build-facts.js");
   assert.match(m[1], /^https:\/\//, `APP_URL is "${m[1]}" — root-relative breaks the apex and any other host`);
-  assert.ok(m[1].startsWith(SITE_URL), "the app link points at a different origin from SITE_URL");
+  /* IT IS A DIFFERENT ORIGIN FROM SITE_URL NOW, and this assertion is
+     the inverse of what it used to make. Before the split the app and
+     the site shared a host, so an APP_URL that did not start with
+     SITE_URL meant somebody had typed the wrong thing. After it, an
+     APP_URL that DOES start with SITE_URL means the app link points at
+     the marketing site — which renders as a button labelled "Open the
+     app" that opens an advertisement. */
+  assert.equal(m[1], APP_ORIGIN, "the marketing page's app link does not point at the app origin");
+  assert.notEqual(m[1], SITE_URL, "the app link points at the marketing site, so every 'Open the app' control is a loop");
   assert.ok(!/APP_PATH/.test(fs.readFileSync(path.join(rootDir, "public/site/site.js"), "utf8")), "the page still uses the old root-relative constant");
 });
 
@@ -776,14 +812,31 @@ test("the apex build ships a page whose every link resolves", () => {
 
   const local = refs.filter((r) => !/^(https?:|mailto:|#|data:)/.test(r));
   assert.ok(local.length >= 2, "no local references at all — the rewrite took everything absolute, including the script");
-  const missing = local.filter((r) => !fs.existsSync(path.join(out, r.replace(/^\.?\//, ""))));
-  assert.deepEqual(missing, [], `the apex page links to files that are not in the build: ${missing.join(", ")}`);
+  /* EXTENSIONLESS COUNTS AS PRESENT, because that is what Cloudflare
+     Pages serves: `/privacy` is `privacy.html`, and it is the
+     CANONICAL url — the one in two app-store listings. A check that
+     only accepted the filename would have failed the split's whole
+     point, which is that these documents keep the URLs they were
+     published under. */
+  const missing = local.filter((r) => {
+    const clean = r.split("#")[0].split("?")[0].replace(/^\.?\//, "");
+    if (!clean) return false;
+    return !fs.existsSync(path.join(out, clean)) && !fs.existsSync(path.join(out, `${clean}.html`));
+  });
+  assert.deepEqual(missing, [], `the marketing page links to files that are not in the build: ${missing.join(", ")}`);
 
-  /* The legal pages are NOT in this build and must therefore be
-     absolute — they live on www and are named in two store listings. */
-  assert.match(html, new RegExp(`href="${SITE_URL}/privacy"`), "the privacy link is not absolute — it 404s on the apex");
-  assert.match(html, new RegExp(`href="${SITE_URL}/delete-account"`), "the deletion link is not absolute — Play checks this one");
-  assert.ok(!fs.existsSync(path.join(out, "sw.js")), "a service worker reached the apex build");
+  /* THE LEGAL PAGES ARE IN THIS BUILD NOW. They were not, which is why
+     the links used to have to be absolute; the split makes these
+     origins their home, and the documents' URLs are in two store
+     listings and a Stripe dashboard field, so a build that stopped
+     copying one would 404 at a URL a reviewer already has. */
+  for (const name of ["privacy", "terms", "support", "delete-account"]) {
+    assert.ok(
+      fs.existsSync(path.join(out, `${name}.html`)),
+      `the marketing build does not serve ${name}.html — ${SITE_URL}/${name} 404s, and that URL is published`
+    );
+  }
+  assert.ok(!fs.existsSync(path.join(out, "sw.js")), "a service worker reached the marketing build");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

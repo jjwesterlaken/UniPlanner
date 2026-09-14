@@ -49,7 +49,7 @@ display:grid;place-items:center;color:#fff;font-size:14px;font-weight:600;font-f
 .navlinks a{color:var(--soft);text-decoration:none}
 .navlinks a:hover{color:var(--ink)}
 .navcta{background:var(--teal);color:#fff;text-decoration:none;font-size:14px;font-weight:500;
-padding:8px 16px;border-radius:8px}
+padding:8px 16px;border-radius:8px;white-space:nowrap;flex:none}
 
 .hero{padding:76px 0 60px}
 .herogrid{display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
@@ -164,6 +164,9 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
  .feat.rev .txt{order:0}
  .steps,.mini,.trustgrid,.prices,.dlbox{grid-template-columns:1fr}
  .navlinks{display:none}
+ /* The nav links collapse here; the app button must not, so it takes
+    over the auto margin that used to push them right. */
+ .navcta{margin-left:auto}
  .hero{padding:48px 0 40px}
  section{padding:56px 0}
 }
@@ -179,7 +182,20 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
     <a href="#pricing">Pricing</a>
     <a href="#download">Download</a>
   </div>
-  <a class="navcta" href="#download">Get UniPlanner</a>
+  <!-- THE ORIGIN SPLIT'S ONE VISIBLE CONSEQUENCE ON THIS PAGE.
+       This host is the marketing site now and the planner is on
+       another origin, so "where is the app" stopped being answerable
+       by scrolling. It is the persistent control in the nav, it is
+       ABSOLUTE (the app is a different origin, so a relative href
+       cannot reach it), and the origin is substituted by
+       scripts/build-site.mjs from src/legalLinks.js rather than typed
+       — five files carry this link and a typed subdomain is five
+       chances to publish a dead one.
+
+       IT SURVIVES THE MOBILE BREAKPOINT, which the nav links do not:
+       the links collapse at 900px and this must not, because on a
+       phone it is the only route to the app above the fold. -->
+  <a class="navcta" href="__APP_ORIGIN__" data-open-app>Open the app</a>
 </div></nav>
 
 <div class="w hero">

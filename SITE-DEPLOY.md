@@ -5,109 +5,102 @@ built. Two questions were asked and both have definite answers.
 
 ---
 
-## Can the site and the origin split ship independently?
+## The split, as built — three origins, two Pages projects
 
-**As specified — site at `/`, app at `/app` — no. They are the same
-deploy.** The site cannot go to `/` without the app leaving it, because
-`/` is the app today.
+**Superseded, and the supersession is the point.** This document used
+to answer "site at `/`, app at `/app`, same origin so `localStorage`
+survives", and CLAUDE.md recorded `app.` as ruled out twice for exactly
+that reason. Jared's order of 14 September 2026 overrides it: the site
+takes `uniplannerapp.com` AND `www.uniplannerapp.com`, and the app
+moves to `app.uniplannerapp.com`.
 
-**There is exactly one way to ship them independently, and it is the
-apex domain.** `uniplannerapp.com` currently forwards to `www` at
-Squarespace. Point it at a second Cloudflare Pages project instead and
-the site is live at `https://uniplannerapp.com` with the app untouched
-at `https://www.uniplannerapp.com`.
+| Origin | Serves | Pages project | Output |
+|---|---|---|---|
+| `uniplannerapp.com` | marketing page, the four legal documents, `/handover` | `uniplanner-site` | `dist-site` |
+| `www.uniplannerapp.com` | the same bundle | `uniplanner-site` | `dist-site` |
+| `app.uniplannerapp.com` | the planner, plus its own copies of the documents | `uniplanner` | `dist-web` |
 
-| | Site at `/` (the split) | Site at the apex |
-|---|---|---|
-| Ships independently | **no** | **yes** |
-| Risk to the app | real, see below | none |
-| Existing PWA installs | break, need re-installing | untouched |
-| Password reset | breaks, see below | untouched |
-| Cost | one deploy, several fixes | a second Pages project |
-| Ends up where it should | yes | **no — still has to move later** |
+**The documents did NOT move.** `SITE_URL` is still
+`https://www.uniplannerapp.com` and `PRIVACY_URL`, `TERMS_URL`,
+`SUPPORT_URL` and `DELETE_ACCOUNT_URL` still derive from it, because
+those four strings are in two app-store listings and a Stripe dashboard
+field. The site build copies the documents in so those URLs keep
+resolving; the app build keeps its copies so they resolve on the new
+origin too.
 
-**Recommendation: do the split, and do it in one deploy.** The apex
-route is genuinely safe, but it defers the same work to a day when there
-are more than two users to break — and the split is cheap precisely
-because there are two. Doing it now costs a re-install for Jared and
-Grace; doing it in November costs it for everybody.
+**Everything else that was on `www` 301s to the app**, path and query
+preserved — a Pages middleware generated from the build output, not a
+`_redirects` file, for the reason in `site/redirects.js`. A fragment
+needs no preserving: it never reaches a server, and a browser
+re-applies it when the `Location` carries none. That is what gets a
+Supabase recovery token through a 301 intact.
 
 ---
 
-## What breaks if the split has not landed
+## What the split costs, stated plainly
 
-### 1. Nothing about the *files* — the app is already portable
+### 1. THE PER-ORIGIN STORAGE PROBLEM IS REAL, AND IT IS PARTLY SOLVED
 
-Checked rather than assumed, and this is the good news:
+`localStorage` is keyed by origin. Every planner belonging to somebody
+**without an account** exists only on the device, under the old origin,
+and is invisible from the new one. A 301 cannot help: it is served by
+the edge before any script runs.
 
-| Thing | Why it survives |
-|---|---|
-| `manifest.webmanifest` | `start_url` and `scope` are both `"."` — relative, so they resolve against wherever the manifest sits |
-| `sw.js` | derives its shell list from `new URL("./", self.location)`, so a worker at `/app/sw.js` scopes to `/app/` |
-| the registration in `index.html` | `register("sw.js")` is relative; at `/app/index.html` it registers `/app/sw.js` |
-| every asset reference | relative already |
-| the legal documents | stay at `/privacy` and `/delete-account`; `NETWORK_ONLY` lists them absolutely and a `/app/`-scoped worker never sees those requests at all |
-| `localStorage` | same ORIGIN, and paths do not scope it — no planner data moves or is lost |
+**What is built:** `/handover` on the marketing origins is excluded
+from the redirects. The app frames it once, on a first visit with an
+empty planner; the bridge reads its own `localStorage` and posts the
+planner to the app origin and nowhere else. `src/originHandover.js` has
+the whole design.
 
-### 2. THE SERVICE WORKER ALREADY INSTALLED AT `/` — the real one
+**Why it can work at all:** `www.` and `app.` are different ORIGINS but
+the same SITE. Storage partitioning is keyed on the registrable domain,
+so a same-site iframe still reaches unpartitioned storage. A
+genuinely cross-site handover would be blocked outright.
 
-A returning visitor has a worker registered with **scope `/`**, from the
-current deployment. Moving the app to `/app/` does not unregister it.
-That worker keeps controlling `/`, which is now the marketing page.
+**What it cannot reach, and none of this is fixable:**
 
-It is network-first for the app shell, so an **online** visitor gets the
-real marketing page — and the worker then caches it as the app shell.
-**Offline, that install opens the marketing page instead of the
-planner.**
+- a browser that never opens the new origin
+- an **installed PWA**, whose `start_url` was resolved at install time
+- a different browser, profile or device
+- the **Supabase session**, deliberately — **everybody signs in again**
 
-**The fix belongs in the marketing page and is small:** on load,
-`getRegistrations()` and unregister any whose `scope` is the origin
-root, leaving `/app/` alone. Precise, safe, and it heals itself on the
-first online visit. **It must be in the first version of the page**, not
-added later, because the window it covers is exactly the transition.
+**And it is unverified on Safari.** The reasoning is specification, not
+observation; this container cannot run WebKit. The check is on
+DEPLOY-CHECKLIST §7f.
 
-### 3. PASSWORD RESET — silent, and the worst of the three
+### 2. The service worker already installed at `/` on `www`
 
-`PASSWORD_RESET_REDIRECT` is `SITE_URL`, the bare origin. Supabase sends
-the recovery token in the URL fragment, so after the split a reset link
-lands on **the marketing page**, which has no `PasswordRecovery` overlay
-and no `detectSessionInUrl`. The student sees a marketing page and their
-one-time token is consumed.
+A returning visitor has a worker scoped to `/` on the OLD origin.
+Moving the app to another origin does not unregister it — a
+registration belongs to the origin it was made on. `site.js`
+unregisters anything scoped to the marketing origin's root, and it must
+stay in the first version of the page, because the window it covers is
+the transition itself.
 
-Two changes, and both are required:
+### 3. Password reset
 
-- `PASSWORD_RESET_REDIRECT` becomes `${SITE_URL}/app` — derived, not a
-  second literal.
-- **The new URL must be added to Supabase → Authentication → URL
-  Configuration → Redirect URLs.** Supabase silently ignores an
-  unlisted `redirectTo` and falls back to the Site URL, which is the
-  failure that looks like a code bug when it is configuration. This has
-  bitten this project before.
+`PASSWORD_RESET_REDIRECT` is `APP_URL` now. Builds already in the
+stores carry the old value and send links to `www`, so the marketing
+page forwards a recovery fragment to the app. **Both halves are
+required**, and the new URL must be on the Supabase allowlist or
+Supabase silently falls back to the Site URL.
 
-Nothing in the repository can verify the second one. It goes on the
-deploy checklist or it does not happen.
+### 4. A checkout in flight across the deploy
 
-### 4. Installed PWAs need re-installing
-
-An installed app resolved `start_url` to `https://www.uniplannerapp.com/`
-at install time. After the split that opens the marketing page. There is
-no way to migrate an installed shortcut.
-
-Two users today. Worth saying out loud rather than discovering.
+Stripe stores the return URLs on the session when it is created, so a
+checkout started before the deploy returns to `www/?checkout=done`. The
+marketing page forwards that to the app as well. New sessions carry the
+app origin.
 
 ### 5. Things that do NOT break, checked
 
-- **The CSP.** `public/_headers` applies origin-wide and permits
-  `'unsafe-inline'`, so an inline-styled static page satisfies it
-  unchanged. No external host is needed — see below.
-- **The e2e journeys.** They serve `dist-web` locally and navigate to
-  the built app; they follow whatever path the build produces.
-- **`test-legal.mjs`.** It compares `SITE_URL` and the documents on host
-  AND path; adding an index at `/` changes neither.
-- **The build-id check.** `curl .../sw.js` still finds the app's worker
-  as long as the marketing site does not ship one of its own — **and it
-  must not.** A second worker at `/` is the collision in (2) recreated
-  deliberately.
+- **The legal documents** resolve on both origins.
+- **The CSP** — the marketing build now ships its own `_headers`, which
+  it never had; `frame-ancestors` permits exactly one framer, the app.
+- **The e2e journeys** serve `dist-web` locally and follow the build.
+- **The build-id check** moves to the app origin. The marketing site
+  ships no service worker, deliberately, so the old command returns
+  nothing and reads exactly like a failed deploy.
 
 ---
 

@@ -561,7 +561,15 @@ async function run() {
     const src = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
     assert.match(src, /redirectTo: PASSWORD_RESET_REDIRECT/);
     const links = fs.readFileSync(path.join(rootDir, "src/legalLinks.js"), "utf8");
-    assert.match(links, /PASSWORD_RESET_REDIRECT = SITE_URL/, "it must derive from SITE_URL, not restate a host");
+    /* IT DERIVES FROM `APP_URL` SINCE THE ORIGIN SPLIT, and which
+       constant is not a detail here — it is the whole change. Supabase
+       puts the recovery token in the FRAGMENT, so a link sent to
+       SITE_URL after the split lands on the marketing page, which has
+       no PasswordRecovery overlay and no detectSessionInUrl. The token
+       is single-use: opening it burns it. The reset does not fail
+       loudly, it simply never works. */
+    assert.match(links, /PASSWORD_RESET_REDIRECT = APP_URL/, "it must derive from APP_URL, not restate a host or point at the marketing site");
+    assert.doesNotMatch(links, /PASSWORD_RESET_REDIRECT = "/, "the reset destination is a literal again");
   });
 
   await test("the reset message does not reveal whether an account exists", () => {

@@ -29,4 +29,4 @@ export const ARTIFACT_NAMES = {
    the root, so the hero button 404s today; and root-relative breaks
    entirely when this page is served from the APEX domain, which is a
    different host. */
-export const APP_URL = "https://www.uniplannerapp.com";
+export const APP_URL = "https://app.uniplannerapp.com";

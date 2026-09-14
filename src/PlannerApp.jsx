@@ -189,7 +189,13 @@ import {
   ENTRY_BODY_MAX,
   SHEET_ENTRIES_MAX,
 } from "./reference.js";
-import { PRIVACY_URL, DELETE_ACCOUNT_URL } from "./legalLinks.js";
+import { PRIVACY_URL, DELETE_ACCOUNT_URL, SITE_URL, SITE_ORIGINS } from "./legalLinks.js";
+import {
+  HANDOVER_DONE_KEY,
+  shouldAttemptHandover,
+  requestHandover,
+  handoverCarriedAPlanner,
+} from "./originHandover.js";
 import {
   htmlOf,
   bodyOf,
@@ -5037,11 +5043,93 @@ export default function PlannerApp() {
   }, []);
   const scrollNav = (dx) => navRef.current && navRef.current.scrollBy({ left: dx, behavior: "smooth" });
 
+  /* ---------- carrying a planner across the origin split ----------
+
+     Runs ONLY when this origin has no planner at all, once ever per
+     browser. `localStorage` is per-ORIGIN, the app moved host, and a
+     301 is served before any script of ours runs — so if this does not
+     happen here it cannot happen anywhere. The reasoning, and what it
+     cannot reach, is in src/originHandover.js.
+
+     IT WRITES AND RELOADS rather than calling setData. The blob has to
+     go through `normalizeData` and the whole boot path — the
+     handwriting strip, the archive marker, every migration a stored
+     planner passes on load — and a reload gets all of that for free
+     and correctly. It costs one navigation, once, on a screen that was
+     empty a moment ago.
+
+     IT IS NEVER FATAL. Every failure resolves to "nothing came
+     across", which is exactly the state of a browser that had nothing
+     to bring, so there is no error surface and nothing to retry. */
+  const attemptOriginHandover = async () => {
+    if (typeof window === "undefined" || typeof document === "undefined") return false;
+    let alreadyAttempted = true;
+    try {
+      alreadyAttempted = window.localStorage.getItem(HANDOVER_DONE_KEY) !== null;
+    } catch {
+      return false; // no localStorage means nothing to write into either
+    }
+    if (
+      !shouldAttemptHandover({
+        hasLocalPlanner: false, // the caller only gets here with an empty planner
+        alreadyAttempted,
+        isNativeShell: !!window.Capacitor || !/^https?:$/.test(window.location.protocol),
+      })
+    ) {
+      return false;
+    }
+    /* Marked BEFORE the attempt, not after. A bridge that hangs, a
+       reload that races, a student who closes the tab — any of those
+       with the mark written afterwards means trying again on every
+       single load, framing another origin every time. One attempt
+       means one attempt. */
+    try {
+      window.localStorage.setItem(HANDOVER_DONE_KEY, new Date().toISOString());
+    } catch {
+      return false;
+    }
+
+    const result = await requestHandover({
+      bridgeUrl: `${SITE_URL}/handover`,
+      allowedOrigins: SITE_ORIGINS,
+      createFrame: (url) => {
+        const frame = document.createElement("iframe");
+        frame.setAttribute("aria-hidden", "true");
+        frame.setAttribute("tabindex", "-1");
+        frame.style.cssText = "position:absolute;width:0;height:0;border:0;opacity:0;pointer-events:none";
+        frame.src = url;
+        document.body.appendChild(frame);
+        return frame;
+      },
+      addMessageListener: (fn) => window.addEventListener("message", fn),
+      removeMessageListener: (fn) => window.removeEventListener("message", fn),
+      setTimer: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimer: (id) => window.clearTimeout(id),
+    });
+
+    if (!result.ok || !handoverCarriedAPlanner(result.values)) return false;
+    try {
+      for (const [key, value] of Object.entries(result.values)) {
+        window.localStorage.setItem(key, value);
+      }
+    } catch {
+      return false; // a quota failure here leaves the planner empty, which is where it started
+    }
+    return true;
+  };
+
   // Load any saved data once on start
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const raw = await store.get(STORAGE_KEY);
+      let raw = await store.get(STORAGE_KEY);
+      if (!cancelled && !raw) {
+        const carried = await attemptOriginHandover();
+        if (carried && !cancelled) {
+          window.location.reload();
+          return;
+        }
+      }
       if (!cancelled && raw) {
         try {
           setData(normalizeData(JSON.parse(raw)));
