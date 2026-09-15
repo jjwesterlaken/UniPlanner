@@ -2765,6 +2765,88 @@ must be cut before the page is public.** `assetName` THROWS on a
 template that still has a substitution in it, because the alternative is
 a 404 on a link nothing in CI opens.
 
+### ONE FILE, THREE SPELLINGS — and the site linked the only one that worked
+
+The first release after Gatekeeper passed carried **thirty assets**: the
+four installers, three update manifests, and twenty-five files of
+`dist-web` — `app.js`, `privacy.html`, three woff2 fonts, the service
+worker. The release job asked `download-artifact` for *everything the
+run produced* and flattened it with `find`, and the web bundle is
+uploaded by the Linux job for hosting. Nothing failed; a student
+picking a download met a list in which the four files meant for them
+were a seventh of what was offered. The download step takes a
+`pattern` now, and the two categories are separated by SHAPE
+(`University-Planner-Desktop-<label>` against `University-Planner-Web`)
+rather than by a list somebody keeps in step.
+
+**AND THE NAME OF EVERY INSTALLER WAS SPELLED THREE WAYS.**
+`${productName}` is "University Planner", **with a space**, and three
+different things resolved that space differently:
+
+| who | spelling |
+|---|---|
+| electron-builder, writing the file | `University Planner.dmg` |
+| GitHub, uploading the release asset | `University.Planner.dmg` |
+| electron-builder, writing `latest*.yml` | `University-Planner.dmg` |
+
+`assetName` in `downloads.js` substituted a DOT and its comment
+attributed that to electron-builder. The substitution was right and the
+attribution was wrong — GitHub does it — and the comment being wrong is
+exactly why the third spelling went unnoticed for the life of the
+project. **All three update manifests name a file that is on no
+release**, confirmed by requesting the v1.1.5 asset `latest-mac.yml`
+names and getting a 404.
+
+**Silent in both directions, which is the reason it lasted.** No
+`electron-updater` is wired, so nothing reads a manifest; and the day
+one is, it fails by finding no file rather than by erroring. The
+templates carry no spaces now, so the three agree by construction, and
+the test asserts the AGREEMENT rather than the spelling — the
+no-whitespace rule is the mechanism, the agreement is the claim.
+
+**`mac.target` gained `zip`**, because electron-updater cannot swap a
+macOS app bundle out of a disk image: with dmg-only targets
+`latest-mac.yml` names the `.dmg`, which is unusable even once its name
+is right. The `.zip` is metadata for an updater, never a download the
+site offers. **And the blockmaps had never been collected at all** —
+`desktop/dist/*.dmg` does not match `University-Planner.dmg.blockmap`,
+so the differential download they exist for was never available.
+
+**THE macOS DOWNLOAD BUTTON WAS DEAD, AND EVERY GUARD WAS GREEN OVER
+IT.** `fillDownloads` had three hand-written branches, and the macOS
+one still carried its coming-soon shape — `href: null`, `label: c.soon`,
+both unconditional. `FLAGS.macDownload` has been true since signing
+landed, so `c.soon` is null, and the card rendered a **dead `#` button
+labelled "null"**, in production, on the one platform the whole
+Developer ID pipeline exists to serve. `downloads.js` had the right
+href the whole time and `downloads.js` is what the suite tested: the
+data layer was correct, the renderer ignored it, and each half is right
+on its own. *Read what the READER renders, not what the writer writes* —
+the note-viewer bug, one module over, and the fix is the same: mount the
+BUILT page and read the cards. A per-id branch is what let one platform
+stop following its own data, so there is no longer one to leave behind.
+
+The macOS install note sits in the card's `note` field beside the
+Windows one — a `.dmg` is a disk image, and a student who double-clicks
+the app *inside* it has installed nothing and loses it on eject.
+
+**Two guards were written and one of them was decorative, found by
+mutation.** The publishing check's non-vacuity ("a release with no
+installer in it must fail") was asserted with a grep, and deleting the
+entire branch left the suite green — the pattern matched `installers=0`
+on one line and `-eq 0` several lines away. A source grep asserts that
+some text is present; the claim was about what a shell script DOES. The
+step is lifted out of the workflow and EXECUTED against three worlds
+now — healthy, one stray web file, no installer at all — with the
+healthy one there because a check that refuses everything satisfies both
+refusals and is useless.
+
+**And the vacuity detector was blind to a `Set`.** It looked for
+`.length` alone, so a guard that really did assert its derived set was
+non-empty was counted as one that did not. A false positive on a
+ratchet is the direction that gets a check disabled, so it reads
+`.size` too.
+
 **And two things fell out of looking:** `desktop/package.json` says
 1.0.0 while the published release is v1.0.1 — bumped for that release
 and reverted by a later commit — so the next tagged release would

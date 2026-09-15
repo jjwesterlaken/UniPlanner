@@ -26,6 +26,10 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+/* buildSync and not `build`: this runner is synchronous and refuses a
+   test that returns a promise, for the reason written beside it. */
+import { buildSync } from "esbuild";
+import { JSDOM } from "jsdom";
 
 import { repoSlug, assetName, downloadUrl, releasesUrl, detectPlatform, downloadsFor } from "../site/downloads.js";
 import { TIERS, PERIODS, CURRENCY, allowanceLine, priceLabel } from "../site/pricing.js";
@@ -78,7 +82,12 @@ const ASSETS = {
   windowsInstaller: "S.exe",
   windowsPortable: "P.exe",
   linuxAppImage: "L.AppImage",
-  macDmg: "University Planner.dmg",
+  /* SPACE-FREE, like the real one. It used to read "University
+     Planner.dmg", which was accurate when the templates carried a space
+     and is the shape the agreement test above now forbids — a fixture
+     that keeps a defect alive after the code has dropped it is the
+     stand-in-weaker-than-production pattern in its cheapest form. */
+  macDmg: "University-Planner.dmg",
 };
 
 /* ---------- downloads: the URLs ---------- */
@@ -145,19 +154,227 @@ test("every download points at `latest`, so a new release needs no rebuild", () 
 
 /* ---------- downloads: the asset names ---------- */
 
-test("the site's asset names are exactly the ones electron-builder will emit", () => {
-  /* DERIVED FROM THE BUILD CONFIG, because the failure it prevents is
-     invisible until somebody clicks: a renamed artifact means a 404 on
-     the download button, on a page nothing in CI opens. */
-  const productName = desktopPkg.build.productName;
-  const names = {
-    windowsInstaller: assetName(desktopPkg.build.nsis.artifactName, { productName, ext: "exe" }),
-    windowsPortable: assetName(desktopPkg.build.portable.artifactName, { productName, ext: "exe" }),
-    linuxAppImage: assetName(desktopPkg.build.linux.artifactName, { productName, ext: "AppImage" }),
+/* EVERY TARGET THE DESKTOP BUILD IS CONFIGURED TO PRODUCE, and where
+   electron-builder reads that target's artifactName from. The table is
+   electron-builder's own convention rather than a restatement of a
+   value, and it is COMPLETE BY ASSERTION below: a target configured in
+   desktop/package.json with no row here fails, so adding one is a
+   decision somebody has to make rather than a gap that opens quietly. */
+const TARGETS = {
+  dmg: { config: () => desktopPkg.build.dmg.artifactName, ext: "dmg" },
+  zip: { config: () => desktopPkg.build.mac.artifactName, ext: "zip" },
+  nsis: { config: () => desktopPkg.build.nsis.artifactName, ext: "exe" },
+  portable: { config: () => desktopPkg.build.portable.artifactName, ext: "exe" },
+  AppImage: { config: () => desktopPkg.build.linux.artifactName, ext: "AppImage" },
+};
+
+/** Every target named in the three platform blocks. */
+function configuredTargets() {
+  return [...desktopPkg.build.mac.target, ...desktopPkg.build.win.target, ...desktopPkg.build.linux.target];
+}
+
+/** The file electron-builder writes to desktop/dist for one target. */
+function builtFilename(target) {
+  const t = TARGETS[target];
+  assert.ok(t, `desktop/package.json builds a "${target}" and this suite has no row for it — say which artifactName it uses`);
+  return String(t.config()).replaceAll("${productName}", desktopPkg.build.productName).replaceAll("${ext}", t.ext);
+}
+
+test("an installer has ONE name — the file, the release asset, the update manifest and the site all agree", () => {
+  /* THE BUG THIS EXISTS FOR, and it had been live on every release:
+     `${productName}` is "University Planner", so electron-builder wrote
+     `University Planner.dmg`; GitHub replaced the space with a DOT when
+     the asset was uploaded; and the latest*.yml electron-builder writes
+     beside the installer replaced the same space with a HYPHEN. Three
+     spellings of one file. The site linked the dot form and worked; all
+     three update manifests named the hyphen form, and every one of them
+     404s against the release they shipped on — confirmed by requesting
+     the v1.1.5 asset the manifest names.
+
+     Silent in both directions: nothing reads a manifest today (no
+     electron-updater is wired), and the day one is, it fails by finding
+     no file rather than by erroring.
+
+     So the claim is the agreement, not the spelling. It holds exactly
+     when the built filename carries no whitespace, which is the thing
+     to keep true — but asserting the AGREEMENT is what says why. */
+  const targets = configuredTargets();
+  assert.ok(targets.length >= 4, `only ${targets.length} target(s) configured — this suite would be checking almost nothing`);
+
+  for (const target of targets) {
+    const file = builtFilename(target);
+    assert.ok(!/\$\{/.test(file), `${target}: "${file}" still carries a substitution, so the name moves with the release`);
+
+    /* The three derivations, each written the way the thing that
+       performs it really behaves. */
+    const onTheRelease = file.replace(/ /g, ".");   // GitHub, at upload
+    const inTheManifest = file.replace(/ /g, "-");  // electron-builder, writing latest*.yml
+    const onTheSite = assetName(TARGETS[target].config(), { productName: desktopPkg.build.productName, ext: TARGETS[target].ext });
+
+    assert.equal(
+      onTheRelease,
+      inTheManifest,
+      `${target}: the release serves "${onTheRelease}" and latest*.yml names "${inTheManifest}" — ` +
+        "auto-update would look for a file that is not there. The artifactName must carry no spaces."
+    );
+    assert.equal(onTheSite, onTheRelease, `${target}: the download button points at "${onTheSite}", the release has "${onTheRelease}"`);
+  }
+});
+
+test("a release carries the desktop builds and nothing else", () => {
+  /* v1.1.5 PUBLISHED THE MARKETING SITE AS RELEASE ASSETS. Thirty
+     assets went up: four installers, three manifests, and twenty-five
+     files of dist-web — app.js, privacy.html, three woff2 fonts, the
+     service worker. The release job asked `download-artifact` for
+     everything the run produced and then flattened it with `find`, and
+     the web bundle is uploaded by the Linux job for hosting.
+
+     Nothing failed. A student picking a download met a list in which
+     the four files meant for them were a seventh of what was offered.
+
+     TWO HALVES, AND THEY ARE NOT REDUNDANT. The download PATTERN is the
+     mechanism, and it works by SHAPE — the desktop artifacts are
+     `University-Planner-Desktop-<label>` and the web bundle is
+     `University-Planner-Web`, which cannot match. The step in the job
+     is the CHECK, because a pattern that silently stops matching
+     produces a release that looks exactly like a tidy one. This test is
+     what ties the check's allow-list to the build config, so a new
+     target cannot be published by a step that has never heard of it. */
+  const workflow = source(".github/workflows/build-apps.yml");
+  const blocks = stepBlocks(workflow);
+
+  const download = blocks.find((b) => /uses: actions\/download-artifact/.test(b));
+  assert.ok(download, "the release job downloads nothing — this suite is reading the wrong workflow");
+  const pattern = (download.match(/^\s*pattern:\s*(\S+)\s*$/m) || [])[1];
+  assert.ok(pattern, "the download step takes every artifact the run produced, which is how the whole site shipped as a release");
+
+  /* The two upload names, read out of the workflow rather than typed,
+     and checked AGAINST THE PATTERN — the claim is that the shapes
+     separate them, so both directions are asserted. */
+  const uploadNames = [...workflow.matchAll(/uses: actions\/upload-artifact@v4\n\s*with:\n\s*name:\s*(\S+)/g)].map((m) => m[1]);
+  assert.equal(uploadNames.length, 2, `expected the desktop and web uploads, found ${uploadNames.length}: ${uploadNames.join(", ")}`);
+  const matches = (name) => new RegExp("^" + pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$").test(name);
+  const desktop = uploadNames.filter((n) => matches(n.replace("${{ matrix.label }}", "Mac")));
+  const web = uploadNames.filter((n) => !matches(n.replace("${{ matrix.label }}", "Mac")));
+  assert.equal(desktop.length, 1, `the pattern "${pattern}" matches ${desktop.length} of the two uploads, and it must match exactly the desktop one`);
+  assert.equal(web.length, 1, `nothing is excluded by "${pattern}" — the web bundle would be published again`);
+  assert.ok(/dist-web/.test(workflow), "the excluded upload is not the web bundle, so this test is excluding the wrong thing");
+
+  /* THE ALLOW-LIST, DERIVED. Every extension the configured targets
+     produce must be named in the publishing check's case list, and the
+     case list must name nothing else that looks like an installer — so
+     adding a target without widening it goes red here rather than on a
+     release, and widening it to something nothing builds goes red too. */
+  const guard = blocks.find((b) => /- name: Nothing but the desktop builds may be published/.test(b));
+  assert.ok(guard, "nothing checks what is about to be published");
+  const allowed = new Set([...guard.matchAll(/\*\.([A-Za-z]+)/g)].map((m) => m[1]));
+  assert.ok(allowed.size > 0, "the publishing check names no extensions at all");
+
+  const built = new Set(configuredTargets().map((t) => TARGETS[t].ext));
+  assert.ok(built.size >= 3, `only ${built.size} extension(s) are built — the comparison below would be checking almost nothing`);
+  for (const ext of built) {
+    assert.ok(allowed.has(ext), `the build produces .${ext} files and the publishing check would reject them`);
+  }
+  for (const ext of allowed) {
+    assert.ok(
+      built.has(ext) || ext === "blockmap",
+      `the publishing check allows .${ext} and no configured target produces one — either a target was removed or the list drifted`
+    );
+  }
+  assert.ok(allowed.has("blockmap"), "blockmaps are collected and would be refused at publish time");
+
+  /* And the blockmaps have to be collected in the first place. The
+     matrix globbed `*.dmg` and `*.exe`, which do NOT match
+     `<file>.<ext>.blockmap`, so the blockmaps electron-builder had been
+     writing all along reached no release — the differential download
+     they exist for was never available. */
+  assert.ok(
+    /desktop\/dist\/\*\.blockmap/.test(workflow),
+    "no job collects the .blockmap files, so `*.dmg` and friends leave them behind"
+  );
+
+});
+
+test("the publishing check refuses a stray asset, and refuses a release with no installer in it", () => {
+  /* THE GREP VERSION OF THIS WAS DECORATIVE, and it took a mutation to
+     find out: deleting the whole no-installer branch left the suite
+     green, because the pattern still matched `installers=0` in one line
+     and `-eq 0` in another several lines away. A source grep asserts
+     that some text is present; the claim is about what a shell script
+     DOES, and the only way to know what a shell script does is to run
+     it. So the step is lifted out of the workflow and executed against
+     real folders — the same arrangement as the Gatekeeper harness
+     above, and for the same reason.
+
+     THREE WORLDS, and the healthy one is what makes the other two mean
+     something: a check that refuses everything satisfies both refusals
+     and is useless. */
+  const workflow = source(".github/workflows/build-apps.yml");
+  const guard = stepBlocks(workflow).find((b) => /- name: Nothing but the desktop builds may be published/.test(b));
+  assert.ok(guard, "nothing checks what is about to be published");
+  const script = (guard.match(/\n        run: \|\n([\s\S]*?)(?=\n      - |\n  \w|$)/) || [])[1];
+  assert.ok(script && script.trim(), "could not lift the step's script out of the workflow");
+  const dedented = script
+    .split("\n")
+    .map((l) => l.replace(/^ {10}/, ""))
+    .join("\n");
+
+  const run = (files) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "release-guard-"));
+    fs.mkdirSync(path.join(dir, "release"));
+    for (const f of files) fs.writeFileSync(path.join(dir, "release", f), "x");
+    const sh = path.join(dir, "step.sh");
+    fs.writeFileSync(sh, "set -e\n" + dedented);
+    try {
+      const out = execFileSync("bash", [sh], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      return { ok: true, out };
+    } catch (err) {
+      return { ok: false, out: `${err.stdout || ""}${err.stderr || ""}` };
+    }
   };
-  assert.equal(names.windowsInstaller, "University.Planner.Setup.exe");
-  assert.equal(names.windowsPortable, "University.Planner.Portable.exe");
-  assert.equal(names.linuxAppImage, "University.Planner.AppImage");
+
+  /* Built from the config, so the healthy world is the one this repo
+     really produces rather than a remembered list of four names. */
+  const healthy = [
+    ...configuredTargets().map((t) => builtFilename(t).replace(/ /g, ".")),
+    "latest.yml",
+    "latest-mac.yml",
+    "latest-linux.yml",
+  ];
+  const good = run([...healthy, healthy[0] + ".blockmap"]);
+  assert.ok(good.ok, `a correct release was refused:\n${good.out}`);
+
+  const strayed = run([...healthy, "app.js", "privacy.html"]);
+  assert.equal(strayed.ok, false, "the whole marketing site would be published again and the step would report success");
+  assert.match(strayed.out, /app\.js/, "the refusal does not name the file that should not be there");
+  assert.match(strayed.out, /privacy\.html/, "the refusal names one stray file and stops, so a second pass is needed to see the rest");
+
+  const metadataOnly = run(["latest.yml", "latest-mac.yml", "latest-linux.yml"]);
+  assert.equal(metadataOnly.ok, false, "a release with no installer in it passes — 'nothing unexpected' is true of an empty folder");
+
+  assert.equal(run([]).ok, false, "an empty release folder passes, so a download pattern that matched nothing would publish nothing and say nothing");
+});
+
+test("the macOS build ships a .zip, because electron-updater cannot step off a disk image", () => {
+  /* A .dmg is what a student downloads and a .zip is what an updater
+     swaps the app bundle out of — electron-updater's mac path needs
+     one, and with dmg-only targets latest-mac.yml names the dmg, which
+     it cannot use. Nothing asks for an update today; the metadata still
+     has to have been correct on the releases somebody would be
+     upgrading FROM, which is the same reason the release job checks the
+     manifests are present at all. */
+  assert.ok(
+    desktopPkg.build.mac.target.includes("zip"),
+    "mac.target has no zip — latest-mac.yml would name the .dmg and macOS auto-update would find nothing usable"
+  );
+  assert.ok(desktopPkg.build.mac.target.includes("dmg"), "the .dmg is what the download button offers");
+  /* And the zip must be name-stable for the same reason everything else
+     is: mac.artifactName is what it reads, and electron-builder's
+     default for it carries ${version} and ${arch}. */
+  assert.ok(
+    desktopPkg.build.mac.artifactName,
+    "mac.artifactName is unset, so the zip takes electron-builder's default — which carries the version and cannot be linked to"
+  );
 });
 
 test("an artifactName carrying a version is REFUSED, not guessed at", () => {
@@ -1361,6 +1578,90 @@ test("the apex build ships a page whose every link resolves", () => {
     fs.readFileSync(path.join(out, "sw.js"), "utf8"),
     fs.readFileSync(path.join(out, "app", "sw.js"), "utf8"),
     "the root serves the APP's worker, which would claim scope / and cache the marketing page as a shell"
+  );
+});
+
+test("every download card offers what its own data says it offers", () => {
+  /* THE DEFECT THIS EXISTS FOR WAS LIVE, on production, on the one
+     platform the whole Developer ID pipeline was built to serve.
+
+     `fillDownloads` had three hand-written branches, one per platform,
+     and the macOS one still carried its coming-soon shape: `href: null`
+     and `label: c.soon`, both unconditional. `FLAGS.macDownload` has
+     been true since signing landed, so `c.soon` is null — and the card
+     rendered a DEAD "#" BUTTON LABELLED "null".
+
+     EVERY GUARD IN THIS FILE WAS GREEN OVER IT. `downloads.js` had the
+     right href all along, and `downloads.js` is what the suite tested:
+     the data layer was correct, the renderer ignored it, and the two
+     halves are each right on their own. That is exactly the shape the
+     note-viewer bug had — read what the READER renders, not what the
+     writer writes — so this mounts the BUILT page and reads the cards.
+
+     Chromium is not needed: nothing here depends on layout. */
+  const out = path.join(rootDir, "dist-site");
+  assert.ok(fs.existsSync(path.join(out, "index.html")), "dist-site is missing — run `npm run build:site` before this suite");
+
+  const bundle = path.join(os.tmpdir(), `site-cards-${process.pid}.js`);
+  buildSync({ entryPoints: [path.join(out, "site/site.js")], bundle: true, format: "iife", outfile: bundle, logLevel: "silent" });
+
+  const dom = new JSDOM(fs.readFileSync(path.join(out, "index.html"), "utf8"), {
+    url: SITE_URL + "/",
+    runScripts: "dangerously",
+    pretendToBeVisual: true,
+  });
+  const w = dom.window;
+  w.matchMedia = w.matchMedia || (() => ({ matches: false, addEventListener() {}, addListener() {} }));
+  /* A Mac visitor, so the card under repair is also the LEAD one. */
+  Object.defineProperty(w.navigator, "userAgent", { value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", configurable: true });
+  const tag = w.document.createElement("script");
+  tag.textContent = fs.readFileSync(bundle, "utf8");
+  w.document.body.appendChild(tag);
+  fs.rmSync(bundle, { force: true });
+
+  const rendered = [...w.document.querySelectorAll("[data-downloads] .d")].map((card) => ({
+    title: card.querySelector("h4")?.textContent,
+    label: card.querySelector("a.dbtn")?.textContent,
+    href: card.querySelector("a.dbtn")?.getAttribute("href"),
+    note: card.querySelector(".dnote")?.textContent || null,
+  }));
+  /* NON-VACUITY FIRST: an empty page satisfies every claim below. */
+  assert.ok(rendered.length >= 3, `only ${rendered.length} card(s) rendered — the probe is reading the wrong element`);
+
+  /* The claim, and it is about ALL of them rather than about macOS: a
+     card that is offered must be a card that works. "null" is asserted
+     by name because it is what `esc()` makes of a missing label, and it
+     is what a student actually saw. */
+  for (const c of rendered) {
+    assert.ok(c.label, `the ${c.title} card has no button`);
+    assert.notEqual(c.label, "null", `the ${c.title} card's button is labelled "null" — a missing value reached the page`);
+    assert.notEqual(c.label, "undefined", `the ${c.title} card's button is labelled "undefined"`);
+    if (c.href !== "#") assert.ok(/^https?:\/\//.test(c.href), `the ${c.title} card links to "${c.href}"`);
+  }
+
+  const byTitle = (t) => rendered.find((c) => c.title === t);
+  const mac = byTitle("macOS");
+  assert.ok(mac, `no macOS card among: ${rendered.map((c) => c.title).join(", ")}`);
+  const dmg = assetName(desktopPkg.build.dmg.artifactName, { productName: desktopPkg.build.productName, ext: "dmg" });
+  if (FLAGS.macDownload) {
+    assert.ok(mac.href.endsWith("/" + dmg), `the macOS button points at "${mac.href}", which is not the ${dmg} the build produces`);
+    /* THE INSTALL NOTE, by instruction and in the same slot the Windows
+       one uses — a .dmg is a disk image, and a student who runs the app
+       from inside it has installed nothing and loses it on eject. */
+    assert.ok(mac.note, "the macOS card offers a disk image with no word about what to do with it");
+    assert.match(mac.note, /Applications/, `the macOS note does not mention the Applications folder: "${mac.note}"`);
+  } else {
+    assert.equal(mac.href, "#", "an unsigned Mac build must not be downloadable");
+  }
+
+  /* The other two, so a renderer that special-cases macOS back into
+     existence cannot pass by fixing only the card this test is named
+     for. Both notes come off the same card field the macOS one does. */
+  assert.ok(byTitle("Linux").note, "the Linux card lost its AppImage note");
+  assert.equal(
+    Boolean(byTitle("Windows").note),
+    FLAGS.windowsUnsignedNote,
+    "the Windows note no longer follows FLAGS.windowsUnsignedNote — the flag turns off a sentence nobody sees, or leaves one nobody wants"
   );
 });
 

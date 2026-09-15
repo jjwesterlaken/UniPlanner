@@ -67,8 +67,12 @@ function unguardedSets() {
         `for\\s*\\(const\\s+\\w+\\s+of\\s+${name}\\b|${name}\\.forEach|${name}\\.every|${name}\\.some`
       ).test(ahead);
       if (!iterated) return;
+      /* `.size` as well as `.length`: the detector was blind to a Set,
+         so a guard that DID assert its derived set was non-empty was
+         reported as one that did not — a false positive on the ratchet,
+         which is the direction that gets a check disabled. */
       const guarded = new RegExp(
-        `assert\\.ok\\([^)]*${name}\\.length|assert\\.(equal|ok)\\([^;]*${name}\\.length\\s*[>=]|${name}\\.length\\s*[>=]{1,2}\\s*[1-9]`
+        `assert\\.ok\\([^)]*${name}\\.(length|size)|assert\\.(equal|ok)\\([^;]*${name}\\.(length|size)\\s*[>=]|${name}\\.(length|size)\\s*[>=]{1,2}\\s*[1-9]`
       ).test(ahead);
       if (!guarded) found.push(`${file}:${name}`);
     });
