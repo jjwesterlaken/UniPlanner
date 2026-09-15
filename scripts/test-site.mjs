@@ -551,23 +551,57 @@ test("THE MAC DOWNLOAD CANNOT BE SWITCHED ON BY EDITING A BOOLEAN", () => {
     fs.writeFileSync(path.join(harness, "work/desktop/dist/Some.dmg"), "");
     const bin = path.join(harness, "bin");
     fs.mkdirSync(bin);
+    const state = path.join(harness, "state");
+    fs.mkdirSync(state);
     const fake = (name, body) => {
       const f = path.join(bin, name);
       fs.writeFileSync(f, "#!/bin/bash\necho \"" + name + " $*\" >> \"$TRACE\"\n" + body);
       fs.chmodSync(f, 0o755);
     };
-    fake("codesign", 'echo "valid on disk"; exit 0\n');
+    /* STATEFUL FAKES, because the claims are about ORDER and about a step
+       that asks whether work is already done. A `codesign --verify` that
+       always succeeds cannot tell a signed image from an unsigned one, so
+       the sign/staple markers are written and read like the real thing. */
+    fake(
+      "codesign",
+      'mode=verify; t=""\n' +
+        'for a in "$@"; do case "$a" in --sign) mode=sign;; *.dmg|*.app) t="$a";; esac; done\n' +
+        'key="$STATE/$(basename "$t")"\n' +
+        'if [ "$mode" = sign ]; then : > "$key.signed"; exit 0; fi\n' +
+        'case "$t" in *.app) echo "valid on disk"; exit 0;; esac\n' +
+        'if [ -f "$key.signed" ]; then echo "valid on disk"; exit 0; fi\n' +
+        'echo "code object is not signed at all" >&2; exit 1\n'
+    );
     fake(
       "spctl",
       'for a in "$@"; do case "$a" in *.dmg) k=dmg;; *.app) k=app;; esac; done\n' +
+        'if [ "$k" = dmg ] && [ "${FAKE_DMG_UNSIGNED:-0}" = 1 ]; then\n' +
+        '  echo "$k: rejected" >&2; echo "source=no usable signature" >&2; exit 3\n' +
+        'fi\n' +
+        'if [ "$k" = dmg ] && [ "${FAKE_DMG_SOURCE:-}" != "" ]; then\n' +
+        '  echo "$k: accepted" >&2; echo "source=$FAKE_DMG_SOURCE" >&2; exit 0\n' +
+        'fi\n' +
         'echo "$k: accepted" >&2; echo "source=Notarized Developer ID" >&2; exit 0\n'
     );
     fake(
       "xcrun",
-      'if [ "$1" = stapler ] && [ "$2" = validate ]; then\n' +
-        '  case "$3" in *.dmg) if [ "${FAKE_DMG_STAPLE_FAILS:-0}" = 1 ]; then\n' +
-        '        echo "does not have a ticket stapled to it."; exit 65; fi;; esac\n' +
-        '  echo "The validate action worked!"\n' +
+      'if [ "$1" = notarytool ] && [ "$2" = submit ]; then\n' +
+        '  for a in "$@"; do case "$a" in *.dmg) t="$a";; esac; done\n' +
+        '  st="${FAKE_NOTARY_STATUS:-Accepted}"\n' +
+        '  printf "Submission ID received\\n  id: 2efe2717-52ef-43a5-96dc-0797e4ca1041\\n"\n' +
+        '  printf "Processing complete\\n  id: 2efe2717-52ef-43a5-96dc-0797e4ca1041\\n  status: %s\\n" "$st"\n' +
+        '  exit 0\n' +
+        'fi\n' +
+        'if [ "$1" = stapler ] && [ "$2" = staple ]; then : > "$STATE/$(basename "$3").stapled"; exit 0; fi\n' +
+        'if [ "$1" = stapler ] && [ "$2" = validate ]; then\n' +
+        '  case "$3" in *.app) echo "The validate action worked!"; exit 0;; esac\n' +
+        '  if [ "${FAKE_DMG_STAPLE_FAILS:-0}" = 1 ]; then\n' +
+        '    echo "does not have a ticket stapled to it."; exit 65\n' +
+        '  fi\n' +
+        '  if [ -f "$STATE/$(basename "$3").stapled" ] || [ "${FAKE_DMG_PRESTAPLED:-0}" = 1 ]; then\n' +
+        '    echo "The validate action worked!"; exit 0\n' +
+        '  fi\n' +
+        '  echo "does not have a ticket stapled to it."; exit 65\n' +
         'fi\nexit 0\n'
     );
 
@@ -575,13 +609,27 @@ test("THE MAC DOWNLOAD CANNOT BE SWITCHED ON BY EDITING A BOOLEAN", () => {
     fs.writeFileSync(scriptFile, assessScript);
     const trace = path.join(harness, "trace.txt");
 
-    const drive = (env) => {
+    const drive = (env, which = scriptFile) => {
       fs.writeFileSync(trace, "");
+      fs.rmSync(state, { recursive: true, force: true });
+      fs.mkdirSync(state);
       let status = 0;
       try {
-        execFileSync("bash", [scriptFile], {
+        execFileSync("bash", [which], {
           cwd: path.join(harness, "work"),
-          env: { ...process.env, PATH: bin + ":" + process.env.PATH, TRACE: trace, ...env },
+          env: {
+            ...process.env,
+            PATH: bin + ":" + process.env.PATH,
+            TRACE: trace,
+            STATE: state,
+            RUNNER_TEMP: harness,
+            SIGNING_IDENTITY: "89ABCDEF0123456789ABCDEF0123456789ABCDEF",
+            APPLE_ID: "someone@example.com",
+            APPLE_APP_SPECIFIC_PASSWORD: "abcd-efgh-ijkl-mnop",
+            APPLE_TEAM_ID: "AB12CD34EF",
+            GITHUB_ENV: path.join(harness, "github_env"),
+            ...env,
+          },
           stdio: "pipe",
         });
       } catch (err) {
@@ -590,7 +638,7 @@ test("THE MAC DOWNLOAD CANNOT BE SWITCHED ON BY EDITING A BOOLEAN", () => {
       return { status, trace: fs.readFileSync(trace, "utf8") };
     };
 
-    const healthy = drive({});
+    const healthy = drive({ FAKE_DMG_PRESTAPLED: "1" });
     /* NON-VACUITY: if the harness cannot drive the script at all, every
        claim below holds over a script that never ran. */
     assert.ok(healthy.trace.trim(), "the Gatekeeper script invoked none of the fakes — the harness is not running it");
@@ -605,6 +653,77 @@ test("THE MAC DOWNLOAD CANNOT BE SWITCHED ON BY EDITING A BOOLEAN", () => {
       1,
       "THE v1.1.3 REGRESSION: the disk image's staple check aborts the step before its Gatekeeper assessment runs, so the log cannot say what a student's Mac would do"
     );
+
+    /* THE v1.1.4 STATE, REPRODUCED: notarised, stapled, and UNSIGNED.
+       Every other probe passes; only the image's own assessment says
+       otherwise, with the exact text the runner printed. A gate on
+       "accepted" alone would have shipped it. */
+    const unsigned = drive({ FAKE_DMG_PRESTAPLED: "1", FAKE_DMG_UNSIGNED: "1" });
+    assert.notEqual(
+      unsigned.status,
+      0,
+      "an UNSIGNED disk image passes the gate — Gatekeeper answers 'source=no usable signature' and refuses it on the student's Mac"
+    );
+
+    /* AND ACCEPTED-BUT-NOT-NOTARISED, which is what the source string is
+       for. An image accepted for some other reason does not travel. */
+    const wrongSource = drive({ FAKE_DMG_PRESTAPLED: "1", FAKE_DMG_SOURCE: "Developer ID" });
+    assert.notEqual(
+      wrongSource.status,
+      0,
+      "the disk image is accepted as something other than a notarised Developer ID image and the gate lets it through"
+    );
+
+    /* ---- THE SIGN/NOTARISE STEP, DRIVEN ---------------------------------
+
+       v1.1.4 notarised and stapled the image and Gatekeeper still refused
+       it: `source=no usable signature`. electron-builder signs the app and
+       not the container, and **the notary service accepted the unsigned
+       container anyway** — it checks the contents. So "Accepted" from
+       notarytool was true and was not the claim a student needs.
+
+       THE ORDER IS THE PART A TRACE CAN PROVE. A notarisation ticket is
+       keyed to the bytes submitted, so signing AFTER submission changes
+       them and invalidates both ticket and staple — a mistake that would
+       leave every check here green while shipping a refused download,
+       because each individual command succeeded. Nothing readable in the
+       source distinguishes the two orders; the sequence of calls does. */
+    const signScript = (blocks[notariseAt].match(/\n {8}run: \|\n([\s\S]*)$/) || [])[1];
+    assert.ok(signScript, "the sign/notarise step has no run: block — this harness has nothing to execute");
+    const signFile = path.join(harness, "sign.sh");
+    fs.writeFileSync(signFile, signScript);
+
+    const signed = drive({}, signFile);
+    assert.ok(signed.trace.trim(), "the sign/notarise script invoked none of the fakes — the harness is not running it");
+    assert.equal(signed.status, 0, `the sign/notarise step fails over a healthy build:\n${signed.trace}`);
+
+    const at = (re) => signed.trace.split("\n").findIndex((l) => re.test(l));
+    const signAt = at(/^codesign .*--sign.*\.dmg|^codesign .*\.dmg.*--sign/);
+    const submitAt = at(/^xcrun notarytool submit/);
+    const stapleAt = at(/^xcrun stapler staple/);
+    assert.ok(signAt >= 0, `the disk image is never signed:\n${signed.trace}`);
+    assert.ok(submitAt >= 0, `the disk image is never submitted for notarisation:\n${signed.trace}`);
+    assert.ok(stapleAt >= 0, `the ticket is never stapled to the disk image:\n${signed.trace}`);
+    assert.ok(
+      signAt < submitAt,
+      `THE IMAGE IS SIGNED AFTER IT IS SUBMITTED. A notarisation ticket is keyed to the submitted bytes, so this invalidates it while every command still succeeds:\n${signed.trace}`
+    );
+    assert.ok(
+      submitAt < stapleAt,
+      `the ticket is stapled before the submission that produces it:\n${signed.trace}`
+    );
+
+    /* A REFUSAL MUST FAIL THE STEP AND FETCH THE REASON. `--wait` does not
+       reliably exit non-zero, so a status read that missed this would
+       staple nothing and report success. */
+    const refused = drive({ FAKE_NOTARY_STATUS: "Invalid" }, signFile);
+    assert.notEqual(refused.status, 0, "a disk image Apple REFUSED to notarise passes the step");
+    assert.match(
+      refused.trace,
+      /xcrun notarytool log/,
+      "a rejected submission does not fetch the notary log, so the next round is blind"
+    );
+    assert.doesNotMatch(refused.trace, /xcrun stapler staple/, "a rejected submission is stapled anyway");
   } finally {
     fs.rmSync(harness, { recursive: true, force: true });
   }
