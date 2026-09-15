@@ -2992,6 +2992,61 @@ nobody has seen would be guessing — while `stapler validate` on the
 image is gated, and a stapled ticket is *stronger* evidence than a
 source line, being the only thing an OFFLINE Mac can read.
 
+**AND v1.1.4 NOTARISED THE IMAGE SUCCESSFULLY AND GATEKEEPER STILL
+REFUSED IT.** Every probe passed except the last:
+
+```
+dmg: notarisation ticket stapled
+University Planner.dmg: rejected
+source=no usable signature
+```
+
+**electron-builder signs the .app and does NOT sign the disk image** — and
+**the notary service ACCEPTED the unsigned container anyway**, because it
+checks the CONTENTS rather than the wrapper. So `notarytool` returned
+Accepted, the staple attached, and every individual step reported success
+over an artifact Gatekeeper refuses the moment a student downloads it.
+*One layer reporting success is not the claim the next layer makes* —
+the readback rule, one integration over: notarisation answers "is what is
+inside this trustworthy", not "will this open".
+
+The fix is `codesign --sign … --timestamp` on the image, and **BEFORE the
+submission, which is the load-bearing half**: a ticket is keyed to the
+bytes submitted, so signing afterwards changes them and invalidates both
+ticket and staple — while every command still exits 0. Sign, submit,
+staple.
+
+**THE IDENTITY IS PASSED AS A SHA-1, NOT A NAME, AND THE REASON IS A
+HOLE THE OTHER GUARD DELIBERATELY LEAVES.** `codesign --sign` matches a
+SUBSTRING of a certificate's common name, and `Jared Westerlaken (TEAM)`
+is a substring of BOTH `Developer ID Application: …` and `Developer ID
+Installer: …` — a pair that commonly rides in one .p12, and which
+`find-identity`'s count tolerates on purpose, since it refuses only on
+two APPLICATION identities. codesign would then refuse as ambiguous: a
+failed tag for a reason nothing here would have named. The hash is
+unique by construction and is read from the same line the name is.
+
+**THE DISK IMAGE IS HELD TO THE APP'S BAR NOW, and the asymmetry
+recorded above is retired by observation rather than by argument.** That
+paragraph said the image's source string was not gated because the line
+had never executed. It has now, and it printed a source — so `accepted`
+alone was demonstrably insufficient. What is *still* unobserved is the
+ACCEPTED spelling for `--type open`; if it differs the step fails loudly
+with the real text printed directly above it, which is one more round
+with the answer in hand rather than a silent pass. A wrong guess costs a
+run; omitting the check ships a refused download.
+
+**AND THE MUTATION THAT MATTERED ALMOST PASSED FOR THE WRONG REASON.**
+Moving the signing after the submission reddened the suite — on the
+POST-SIGN VERIFY failing, not on the ordering assertion, because the
+script exits before the trace is ever compared. A guard can be correct,
+non-vacuous and green-on-mutation while the assertion you care about is
+decorative. Moving the sign AND its verify together produces a step that
+succeeds end to end, so only the ORDER can tell it apart — and that run
+is what proved the ordering assertion fires on its own, naming
+submit-before-sign in the trace. **When a mutation reddens a suite, check
+WHICH assertion caught it.**
+
 **Prices are placeholders behind a marker**, the way the UNMEASURED
 billing constant is: a test refuses to let the site ship a made-up
 figure, and a second asserts the flag and the numbers cannot disagree.

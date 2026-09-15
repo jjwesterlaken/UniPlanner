@@ -233,6 +233,22 @@ jobs:
           fi
           echo "signing identity: $name"
 
+          # AND ITS SHA-1, because `codesign --sign` is not given the name.
+          # codesign matches --sign as a SUBSTRING of a certificate's common
+          # name, and "Jared Westerlaken (TEAM)" is a substring of BOTH
+          # "Developer ID Application: ..." and "Developer ID Installer:
+          # ..." — a pair that commonly rides in one .p12 and that the count
+          # above deliberately tolerates, since it only refuses on two
+          # APPLICATION identities. codesign would then refuse as ambiguous,
+          # which is another failed tag for a reason nothing here would have
+          # named. The hash is unique by construction.
+          sha="$(sed -n 's/^ *[0-9][0-9]*) *\([0-9A-Fa-f]\{40\}\) *"Developer ID Application:.*/\1/p' <<<"$identities" | head -1)"
+          if [ -z "$sha" ]; then
+            echo "FAIL: could not read the identity's SHA-1 out of find-identity."
+            exit 1
+          fi
+          echo "signing identity sha1: $sha"
+
           # CSC_KEYCHAIN is read by electron-builder ONLY WHEN CSC_LINK IS
           # ABSENT — with both set it ignores the keychain and does its own
           # import again, which is the failure this step exists to avoid.
@@ -244,6 +260,7 @@ jobs:
           {
             echo "CSC_KEYCHAIN=$keychain"
             echo "CSC_NAME=$name"
+            echo "SIGNING_IDENTITY=$sha"
           } >> "$GITHUB_ENV"
       # -------------------------------------------------------------------
 
@@ -316,7 +333,7 @@ jobs:
       # it work OFFLINE — a Mac with no connection cannot ask Apple, and
       # a stapled ticket is the only evidence it has locally. That is the
       # machine a student opens it on.
-      - name: Notarise and staple the disk image
+      - name: Sign, notarise and staple the disk image
         if: matrix.label == 'Mac'
         shell: bash
         env:
@@ -334,13 +351,49 @@ jobs:
           fi
           echo "notarising: $dmg"
 
-          # IDEMPOTENT. A re-run over an already-stapled image should do
-          # nothing rather than spend another submission, and a step that
-          # is safe to repeat is one somebody can retry without thinking.
-          if xcrun stapler validate "$dmg" >/dev/null 2>&1; then
-            echo "already stapled — nothing to do"
+          if [ -z "${SIGNING_IDENTITY:-}" ]; then
+            echo "FAIL: SIGNING_IDENTITY is unset — the keychain step did not"
+            echo "      export it, so there is nothing to sign the image with."
+            exit 1
+          fi
+
+          # IDEMPOTENT, and it asks BOTH questions. A re-run over an image
+          # that is already signed and stapled should do nothing rather than
+          # spend another submission. Checking only the staple is what the
+          # v1.1.4 state would have slipped through: stapled and UNSIGNED.
+          if codesign --verify --strict "$dmg" >/dev/null 2>&1 \
+             && xcrun stapler validate "$dmg" >/dev/null 2>&1; then
+            echo "already signed and stapled — nothing to do"
             exit 0
           fi
+
+          # ---- SIGN THE IMAGE ITSELF, BEFORE SUBMITTING IT --------------
+          #
+          # v1.1.4 notarised and stapled this dmg successfully and
+          # Gatekeeper still refused it:
+          #
+          #   University Planner.dmg: rejected
+          #   source=no usable signature
+          #
+          # electron-builder signs the .app and does NOT sign the disk
+          # image, so the container went out unsigned. **THE NOTARY
+          # SERVICE ACCEPTED IT ANYWAY** — it checks the CONTENTS, not the
+          # wrapper — which is the part worth remembering: "Accepted" from
+          # notarytool was TRUE and did not mean the thing a student needs.
+          # One layer reporting success is not the claim the next layer
+          # makes.
+          #
+          # BEFORE, not after, and the order is load-bearing: a
+          # notarisation ticket is keyed to the bytes that were submitted,
+          # so signing afterwards changes them and invalidates both the
+          # ticket and the staple. Sign, then submit, then staple.
+          #
+          # --timestamp because notarisation requires a secure timestamp;
+          # a signature without one is refused by the notary service.
+          echo "signing: $dmg"
+          codesign --sign "$SIGNING_IDENTITY" --timestamp --force "$dmg"
+          codesign --verify --strict --verbose=2 "$dmg" 2>&1
+          # ----------------------------------------------------------------
 
           submission="$(mktemp)"
           # `--wait` blocks until Apple finishes. It does NOT reliably
@@ -482,21 +535,34 @@ jobs:
             note "the disk image has no stapled notarisation ticket, so a student with no connection cannot confirm it. The notarise step above should have attached one."
           fi
 
-          # THE DISK IMAGE'S STRONG EVIDENCE IS THE STAPLED TICKET, NOT THIS
-          # STRING, and that is a deliberate asymmetry rather than a weaker
-          # check. A stapled ticket is what an OFFLINE Mac reads, so it is
-          # strictly better evidence than a source line — and unlike the
-          # app's, this repository has never observed what `--type open`
-          # prints for a notarised disk image on this runner, because the
-          # line has never executed. It is printed and required to be
-          # `accepted`; gating a string nobody here has seen would be
-          # guessing, and the ticket above already carries the claim.
+          # THE IMAGE IS HELD TO THE SAME BAR AS THE APP NOW, and v1.1.4 is
+          # why that stopped being a guess. This line had never executed
+          # when it was written, so gating its source string would have been
+          # guessing; it has now run, and what it printed was
+          #
+          #   University Planner.dmg: rejected
+          #   source=no usable signature
+          #
+          # — an unsigned container around a perfectly notarised app. So
+          # `--type open` does report a source, and `accepted` alone would
+          # have passed a disk image Gatekeeper refuses the moment it is
+          # downloaded. Both halves are required.
+          #
+          # WHAT IS STILL UNOBSERVED IS THE ACCEPTED SPELLING. The refusal
+          # was seen; `source=Notarized Developer ID` for an accepted image
+          # is the app's string applied to the container, and if the real
+          # one differs this fails LOUDLY with the actual text printed
+          # directly above — one more round with the answer in hand, not a
+          # silent pass. That is the right side of the trade: a wrong guess
+          # here costs a run, and omitting it ships a refused download.
           dmg_assessment="$(spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg" 2>&1 || true)"
           echo "$dmg_assessment"
           if ! grep -q "accepted" <<<"$dmg_assessment"; then
-            note "Gatekeeper would refuse the disk image a student downloads."
+            note "Gatekeeper would refuse the disk image a student downloads. 'source=no usable signature' means the image itself is unsigned — electron-builder signs the app and not the container."
+          elif ! grep -q "source=Notarized Developer ID" <<<"$dmg_assessment"; then
+            note "the disk image is accepted, but NOT as a notarised Developer ID image. That acceptance does not travel to a student's Mac."
           else
-            echo "dmg: accepted"
+            echo "dmg: accepted as a notarised Developer ID image"
           fi
 
           if [ "$failures" -gt 0 ]; then
