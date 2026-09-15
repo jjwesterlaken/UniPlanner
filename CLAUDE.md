@@ -2886,6 +2886,36 @@ certificate* — by splitting the workflow into steps and requiring each
 one that sets either name to be gated, by its own `if:` or by the
 setting line's own expression.
 
+**AND THE NEXT RUN FAILED ONE STAGE FURTHER ON, WHICH IS WHAT A
+CHECK THAT MOVES EARLIER BUYS YOU.** v1.1.2 got "1 valid identities
+found", correctly parsed — and then electron-builder refused the name:
+*"Please remove prefix \"Developer ID Application:\" from the specified
+name — appropriate certificate will be chosen automatically."*
+`find-identity` prints the full common name; `CSC_NAME` wants the
+person and team id alone and electron-builder picks the certificate
+type itself. The capture starts after the colon now.
+
+**THE GUARD RUNS THE LINE RATHER THAN READING IT, and the two
+alternatives are both worse.** A pattern asserting the workflow does
+not CONTAIN "Developer ID Application:" would be false of a correct
+step — the prefix has to appear in the expression, because that is the
+text being matched — which is the grep-trips-on-its-own-subject shape
+from the other side: here the forbidden string is a necessary part of
+the fix. And a pattern pinning some particular `sed` spelling would pin
+the writing rather than the claim. **The only way to know what a `sed`
+expression extracts is to run it**, so the real line is lifted out of
+the workflow, executed against a `find-identity` fixture, and its
+OUTPUT is what is asserted — with the expected answer DERIVED from the
+fixture (both are built from one name constant) rather than typed
+beside it. Reintroducing the exact v1.1.2 bug reddens it naming both
+strings.
+
+**It refuses rather than skips when it cannot run.** The claim is about
+what a shell snippet produces, so there is no weaker-but-portable
+version worth having; a skip would be the guard switching itself off in
+exactly the situation it exists for, so a missing `bash` fails and says
+which.
+
 **And a mutation check went green because the mutation landed in a
 COMMENT.** Replacing the first occurrence of `security
 set-key-partition-list` hit the paragraph explaining why that call is

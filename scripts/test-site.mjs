@@ -22,6 +22,7 @@ import { STORE_NAME, SHORT_DESCRIPTION, FULL_DESCRIPTION, PRIVACY_POLICY_PATH, A
 import { SITE_URL, PRIVACY_URL, DELETE_ACCOUNT_URL, APP_URL } from "../src/legalLinks.js";
 import * as links from "../src/legalLinks.js";
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -438,6 +439,70 @@ test("THE MAC DOWNLOAD CANNOT BE SWITCHED ON BY EDITING A BOOLEAN", () => {
     keychain,
     /CSC_KEYCHAIN=/,
     "the keychain is never handed to electron-builder, which will look for the identity somewhere else"
+  );
+  assert.match(
+    keychain,
+    /CSC_NAME=\$name/,
+    "the verified identity is not passed on as CSC_NAME, so electron-builder picks one by auto-discovery instead of the one that was checked"
+  );
+
+  /* AND THE NAME MUST ARRIVE WITHOUT ITS PREFIX, WHICH IS RUN RATHER
+     THAN GREPED.
+
+     find-identity prints the full common name — "Developer ID
+     Application: Some Person (TEAMID)" — and electron-builder REFUSES
+     that as CSC_NAME: "Please remove prefix \"Developer ID
+     Application:\" from the specified name". It wants the person and
+     team id alone. The first version of this step passed the whole
+     string and the v1.1.2 Mac job died on it, one stage past the
+     identity check that had just reported success.
+
+     THE ONLY WAY TO KNOW WHAT A sed EXPRESSION EXTRACTS IS TO RUN IT.
+     A pattern asserting the workflow "does not contain the prefix"
+     would be false of a correct step — the prefix HAS to appear in the
+     expression, because that is the text being matched — and a pattern
+     asserting some particular sed spelling would pin the writing
+     rather than the claim, which this project has re-learned enough
+     times. So the real line is lifted out of the workflow and executed
+     against a find-identity fixture, and what is asserted is its
+     OUTPUT. */
+  const extraction = (keychain.match(/^\s*name="\$\(.*\)"\s*$/m) || [])[0];
+  assert.ok(
+    extraction,
+    "no line in the keychain step assigns the identity name — this guard has nothing to run, which would make every assertion below it vacuous"
+  );
+
+  /* The expected answer is DERIVED from the fixture rather than typed
+     beside it: the fixture is built from the name, so "the prefix is
+     gone and nothing else is" is a comparison against the input. */
+  const IDENTITY = "Jared Westerlaken (AB12CD34EF)";
+  const findIdentityOutput = [
+    `  1) 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Installer: ${IDENTITY}"`,
+    `  2) 89ABCDEF0123456789ABCDEF0123456789ABCDEF "Developer ID Application: ${IDENTITY}"`,
+    "     2 valid identities found",
+  ].join("\n");
+
+  let extracted;
+  try {
+    extracted = execFileSync(
+      "bash",
+      ["-c", `set -uo pipefail\nidentities="$1"\n${extraction}\nprintf '%s' "$name"`, "bash", findIdentityOutput],
+      { encoding: "utf8" }
+    );
+  } catch (err) {
+    /* A GUARD THAT CANNOT RUN MUST SAY SO RATHER THAN PASS. The claim
+       is about what a shell snippet produces, so there is no
+       weaker-but-portable version of it worth having — a skip here is
+       the guard switching itself off in exactly the situation it
+       exists for. */
+    assert.fail(`the identity-name extraction could not be run (${err.code === "ENOENT" ? "bash is not on PATH" : err.message}) — this check needs a shell`);
+  }
+
+  assert.ok(extracted, "the extraction produced nothing from a fixture that names one Developer ID Application identity");
+  assert.equal(
+    extracted,
+    IDENTITY,
+    'CSC_NAME carries more (or less) than the name and team id — electron-builder refuses a name prefixed "Developer ID Application:" and chooses the certificate type itself'
   );
 
   /* THE ASSESSMENT ITSELF, which is the only check anywhere that reads
