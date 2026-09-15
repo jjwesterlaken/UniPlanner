@@ -30,7 +30,7 @@
 import { encode } from "gpt-tokenizer/model/gpt-4o-mini";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tok = (s) => encode(s).length;
@@ -401,6 +401,150 @@ say(`       THE DISCRIMINATING NUMBER is the input token count. ~${Math.round(in
 say(`       ~${Math.round((4 * (4 * assumed + SYS.images + 20) + chars(6000) + SYS.merge) / 1000)}k means the 85+170 image model is right and photos are cheap.\n`);
 
 console.log(out.join(""));
+
+/* ==================================================================
+   SECTION 13 — THE MARGIN, AND WHAT A CAP BUYS
+
+   Everything above prices an ACTION. This prices an ACCOUNT: what a
+   tier's whole allowance costs us if it is spent on the one action
+   that is under-charged, against what that tier pays.
+
+   IT IS DERIVED FROM THE SHIPPED CONSTANTS, not from this file's own
+   preview arithmetic. The preview above uses `Math.ceil`; the shipped
+   `creditsFor` in _shared/credits.ts ROUNDS with a floor of 1, and a
+   margin figure computed with the wrong rounding is a margin figure
+   about a product nobody sells. So the rates, the credit's value and
+   the summarise weight are lifted out of credits.ts and
+   ai-text/config.ts, and the tier table is IMPORTED from
+   site/pricing.js — which is the file the store listings and the
+   pricing page both read.
+
+   THE THREE ASSUMPTIONS THAT ARE NOT DERIVED are named here rather
+   than buried, because two of them move on their own and the third is
+   a choice:
+
+     FX          AUD -> USD. Prices are AUD; provider bills are USD.
+     STORE_CUTS  Apple and Google take 15% under their small-business
+                 programmes and 30% otherwise. Both are printed; the
+                 recommendation is read off the 30% column, because a
+                 bound that only holds on the generous commission is
+                 not a bound.
+     GST         Australian consumer prices INCLUDE 10% GST, which is
+                 remitted and is not revenue. One eleventh off.
+
+   A figure that depends on an FX rate is a figure with a half-life,
+   which is why the break-even BATCH COUNTS matter more than the dollar
+   margins: they move much more slowly than the exchange rate does. */
+
+const FX_AUD_USD = 0.714;      // 14 September 2026
+const STORE_CUTS = [0.15, 0.3];
+const GST_FRACTION = 1 / 11;
+const MONTHS_IN = { monthly: 1, sixMonth: 6, annual: 12 };
+
+const creditsSrc = fs.readFileSync(path.join(ROOT, "supabase/functions/_shared/credits.ts"), "utf8");
+const cfgSrc = fs.readFileSync(path.join(ROOT, "supabase/functions/ai-text/config.ts"), "utf8");
+const lift = (src, name) => {
+  const m = src.match(new RegExp("export const " + name + "\\s*=\\s*([^;]+);"));
+  if (!m) throw new Error("measure-cost-model: could not lift " + name);
+  return Function('"use strict";return (' + m[1] + ")")();
+};
+const liftObj = (src, name) => {
+  const m = src.match(new RegExp("export const " + name + "[^=]*=\\s*(\\{[\\s\\S]*?\\});"));
+  if (!m) throw new Error("measure-cost-model: could not lift " + name);
+  return Function('"use strict";return (' + m[1] + ")")();
+};
+
+const SHIPPED_IN = lift(creditsSrc, "USD_PER_1M_INPUT");
+const SHIPPED_OUT = lift(creditsSrc, "USD_PER_1M_OUTPUT");
+const SHIPPED_CPT = lift(creditsSrc, "CHARS_PER_TOKEN");
+const USD_PER_CREDIT =
+  lift(creditsSrc, "USD_PER_TRANSCRIBED_MINUTE") +
+  ((lift(creditsSrc, "TYPICAL_SUMMARY_INPUT_TOKENS") / 1e6) * SHIPPED_IN +
+    (lift(creditsSrc, "TYPICAL_SUMMARY_OUTPUT_TOKENS") / 1e6) * SHIPPED_OUT) /
+    lift(creditsSrc, "TYPICAL_LECTURE_MINUTES");
+/* The SHIPPED rounding: round, floor 1. Not this file's ceil. */
+const shippedCreditsFor = (u) => Math.max(1, Math.round(u / USD_PER_CREDIT));
+
+const PHOTOS_PER_BATCH = lift(cfgSrc, "PHOTOS_PER_CHUNK");
+const SHIPPED_MAX_TOKENS = liftObj(cfgSrc, "MAX_TOKENS");
+const SHIPPED_MAX_CHARS = liftObj(cfgSrc, "MAX_INPUT_CHARS");
+const CHARGED_PER_BATCH = shippedCreditsFor(
+  (SHIPPED_MAX_CHARS.summarise / SHIPPED_CPT) * (SHIPPED_IN / 1e6) +
+    SHIPPED_MAX_TOKENS.summarise * (SHIPPED_OUT / 1e6)
+);
+
+const batchUsdToday = photoBatch(PHOTOS_PER_BATCH);
+const batchRealCredits = batchUsdToday / USD_PER_CREDIT;
+
+const { TIERS: PRICED_TIERS } = await import(pathToFileURL(path.join(ROOT, "site/pricing.js")).href);
+/* NON-VACUITY: an empty tier table satisfies every claim below. */
+if (!Array.isArray(PRICED_TIERS) || PRICED_TIERS.length === 0) {
+  throw new Error("site/pricing.js exported no tiers — every margin below would be a claim about nothing");
+}
+
+const netUsdPerMonth = (tier, period, cut) =>
+  (tier.prices[period] / MONTHS_IN[period]) * (1 - GST_FRACTION) * (1 - cut) * FX_AUD_USD;
+
+console.log("\nSECTION 13 — THE MARGIN ON AN ACCOUNT");
+console.log(`  assumptions: AUD->USD ${FX_AUD_USD}, GST 1/11 removed, store cuts ${STORE_CUTS.map((c) => c * 100 + "%").join(" and ")}`);
+console.log(`  a credit is defined as            ${usd(USD_PER_CREDIT)}`);
+console.log(`  one ${PHOTOS_PER_BATCH}-photo batch really costs  ${usd(batchUsdToday)}  = ${batchRealCredits.toFixed(1)} credits of real cost`);
+console.log(`  it is charged                     ${CHARGED_PER_BATCH} credits`);
+console.log(`  UNDER-CHARGE                      ${(batchRealCredits / CHARGED_PER_BATCH).toFixed(1)}x\n`);
+
+for (const t of PRICED_TIERS) {
+  const batches = Math.floor(t.credits / CHARGED_PER_BATCH);
+  const allPhotos = batches * batchUsdToday;
+  console.log(`  ${t.name} — ${t.credits} credits ${t.perMonth ? "a month" : "once ever"}`);
+  console.log(`     every credit on photo batches: ${batches} batches = ${usd(allPhotos)}`);
+  console.log(`     what the credit price assumed: ${usd(t.credits * USD_PER_CREDIT)}`);
+  if (!t.perMonth) {
+    console.log("     no revenue, and it cannot recur — bounded\n");
+    continue;
+  }
+  for (const period of Object.keys(MONTHS_IN)) {
+    const cells = STORE_CUTS.map((cut) => {
+      const margin = netUsdPerMonth(t, period, cut) - allPhotos;
+      return `${cut * 100}%: ${margin < 0 ? "LOSS " : "+"}${usd(Math.abs(margin))}`;
+    });
+    console.log(`     ${period.padEnd(9)} ${cells.join("   ")}`);
+  }
+  console.log("");
+}
+
+/* THE BREAK-EVEN COUNT IS THE DURABLE NUMBER. The dollar margins above
+   move with the exchange rate; how many batches a tier can absorb moves
+   only when a price or an allowance does. */
+console.log("  BREAK-EVEN BATCHES A MONTH (rest of the allowance at its nominal cost, 30% cut)");
+const breakEven = (t, period) => {
+  let n = 0;
+  const net = netUsdPerMonth(t, period, 0.3);
+  while (
+    (n + 1) * CHARGED_PER_BATCH <= t.credits &&
+    (n + 1) * batchUsdToday + (t.credits - (n + 1) * CHARGED_PER_BATCH) * USD_PER_CREDIT <= net
+  ) n++;
+  return n;
+};
+for (const t of PRICED_TIERS) {
+  if (!t.perMonth) continue;
+  for (const period of Object.keys(MONTHS_IN)) {
+    console.log(`     ${t.name.padEnd(13)} ${period.padEnd(9)} ${pad(breakEven(t, period), 4)} batches  (${pad(breakEven(t, period) * PHOTOS_PER_BATCH, 5)} pages)`);
+  }
+}
+
+/* A CAP AS A FRACTION OF THE TIER'S OWN ALLOWANCE, so it follows the
+   table rather than being a second hand-written one beside it. */
+console.log("\n  A DERIVED CAP — worst case at the annual price and the 30% cut");
+for (const frac of [0.1, 0.15, 0.2, 0.25]) {
+  const cells = PRICED_TIERS.filter((t) => t.perMonth).map((t) => {
+    const cap = Math.floor((t.credits * frac) / CHARGED_PER_BATCH);
+    const margin =
+      netUsdPerMonth(t, "annual", 0.3) - cap * batchUsdToday - (t.credits - cap * CHARGED_PER_BATCH) * USD_PER_CREDIT;
+    return `${t.name}: ${pad(cap, 3)} batches / ${pad(cap * PHOTOS_PER_BATCH, 4)} pages  ${margin < 0 ? "LOSS " : "+"}${usd(Math.abs(margin))}`;
+  });
+  console.log(`     ${pad((frac * 100).toFixed(0) + "%", 4)}  ${cells.join("    ")}`);
+}
+console.log(`\n     (a 16-page reading is ${Math.ceil(16 / PHOTOS_PER_BATCH)} batches; the free tier's whole trial is ${Math.floor(60 / CHARGED_PER_BATCH)})`);
 
 /* Per-action input token counts, so the document does not hand-type them. */
 const rows = [
