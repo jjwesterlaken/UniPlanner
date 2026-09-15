@@ -2925,6 +2925,73 @@ mutating side: *a workflow comment naming the thing is indistinguishable
 from the thing, to a string replace as much as to a grep.* Target the
 line that executes, and verify the mutation applied where you meant it.
 
+**AND v1.1.3 SIGNED, NOTARISED AND STAPLED CORRECTLY — AND FAILED ON
+THE DISK IMAGE, WHICH THE COMMENT ABOVE THE FAILING LINE HAD ALREADY
+PREDICTED.** The brief asked whether `spctl` had stopped reporting
+`source=Notarized Developer ID` on macOS 26. It has not: the log reads
+
+```
+University Planner.app: accepted
+source=Notarized Developer ID
+```
+
+— exactly the string the gate requires. **The step died on the NEXT
+command**, `xcrun stapler validate "$dmg"`, with
+
+```
+University Planner.dmg does not have a ticket stapled to it.
+##[error]Process completed with exit code 65.
+```
+
+Two defects, neither of them `spctl`, and the second is the one worth
+carrying.
+
+**1. `mac.notarize` NOTARISES THE APP, NOT THE CONTAINER.**
+electron-builder submits and staples the `.app`, and the dmg target
+then packages that stapled app into a NEW file Apple has never seen. A
+ticket is keyed to the thing that was SUBMITTED, so the disk image
+carries none — and the disk image is what a student downloads, what
+gets the quarantine flag, and what Gatekeeper assesses when they
+double-click. The comment directly above the failing line said so —
+*"a stapled app in an unstapled disk image still fails on first
+open"* — and the pipeline produced precisely that state. **A correct
+prediction written as a comment is not a mechanism**; a step now
+submits the dmg with `notarytool` and staples it. `--wait` does not
+reliably exit non-zero on a rejection, so the status is READ out of the
+output rather than inferred from the exit code, and a non-Accepted
+result prints the notary log — the readback rule, and the difference
+between one more round and one more tag.
+
+**2. A GATE THAT STOPS AT THE FIRST FAILURE HIDES THE REST, AND IT HID
+THE ONE THAT MATTERED.** `stapler validate` was unguarded under
+`set -e`, so the disk image's `spctl --assess --type open` — the single
+line that answers *what would a student's Mac do* — **never executed,
+on the one run where its answer mattered.** Every source-level guard was
+green over that, correctly: the line was present. What was wrong was
+that it was UNREACHABLE. That is a new shape beside the vacuous-pass
+ledger — not a check that asserted nothing, but a check that could not
+be reached — and the tell is the same: the log cannot show a verdict it
+never produced. Every probe now runs, each prints, and the step fails at
+the end naming all of them.
+
+**THE GUARD RUNS THE STEP, because no source-level check could have
+seen this.** The script is lifted out of the workflow and EXECUTED
+against fake `codesign`, `spctl` and `xcrun` over a fake `desktop/dist`,
+and what is asserted is behavioural: when the disk image's staple check
+fails, the step still REACHES the image's Gatekeeper assessment and
+still fails. **The old script was run through the same harness and
+reproduced production byte for byte — exit 65, zero disk-image
+assessments** — which is what makes the new result evidence rather than
+a hope, and it is the control the bitrate section demands.
+
+**One asymmetry is deliberate and is not a weakening.** The app's
+`source=Notarized Developer ID` is GATED, because v1.1.3 observed it on
+this runner. The disk image's source string is PRINTED and not gated,
+because that line has never once executed here and gating a string
+nobody has seen would be guessing — while `stapler validate` on the
+image is gated, and a stapled ticket is *stronger* evidence than a
+source line, being the only thing an OFFLINE Mac can read.
+
 **Prices are placeholders behind a marker**, the way the UNMEASURED
 billing constant is: a test refuses to let the site ship a made-up
 figure, and a second asserts the flag and the numbers cannot disagree.

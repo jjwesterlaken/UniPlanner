@@ -298,6 +298,90 @@ jobs:
           # -----------------------------------------------------------------
           ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: "true"
 
+      # ---- Notarise the DISK IMAGE, not just the app inside it ----------
+      #
+      # `mac.notarize: true` notarises and staples the .app, and then the
+      # dmg target packages that stapled app into a NEW file Apple has
+      # never seen. The disk image therefore carries no ticket of its
+      # own, which v1.1.3 proved on the artifact:
+      #
+      #   University Planner.dmg does not have a ticket stapled to it.
+      #
+      # THAT IS THE FILE A STUDENT DOWNLOADS, so it is the file that gets
+      # the quarantine flag and the file Gatekeeper assesses when they
+      # double-click it. The app being notarised does not answer for the
+      # container: a ticket is keyed to the thing that was submitted.
+      #
+      # So the dmg is submitted here and stapled. Stapling is what makes
+      # it work OFFLINE — a Mac with no connection cannot ask Apple, and
+      # a stapled ticket is the only evidence it has locally. That is the
+      # machine a student opens it on.
+      - name: Notarise and staple the disk image
+        if: matrix.label == 'Mac'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          dmg="$(find desktop/dist -maxdepth 1 -name '*.dmg' -print -quit || true)"
+          if [ -z "$dmg" ]; then
+            echo "FAIL: no .dmg was produced, so there is nothing to notarise."
+            ls -la desktop/dist || true
+            exit 1
+          fi
+          echo "notarising: $dmg"
+
+          # IDEMPOTENT. A re-run over an already-stapled image should do
+          # nothing rather than spend another submission, and a step that
+          # is safe to repeat is one somebody can retry without thinking.
+          if xcrun stapler validate "$dmg" >/dev/null 2>&1; then
+            echo "already stapled — nothing to do"
+            exit 0
+          fi
+
+          submission="$(mktemp)"
+          # `--wait` blocks until Apple finishes. It does NOT reliably
+          # exit non-zero on a rejection, so the status is read out of the
+          # output rather than inferred from the exit code — the readback
+          # rule: the command reporting success is not the same claim as
+          # the submission being accepted.
+          if ! xcrun notarytool submit "$dmg" \
+                 --apple-id "$APPLE_ID" \
+                 --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                 --team-id "$APPLE_TEAM_ID" \
+                 --wait --timeout 30m 2>&1 | tee "$submission"; then
+            echo "FAIL: the notary submission could not be completed."
+          fi
+
+          id="$(sed -n 's/^ *id: *\([0-9a-fA-F-]\{36\}\) *$/\1/p' "$submission" | head -1)"
+          status="$(sed -n 's/^ *status: *\(.*[^ ]\) *$/\1/p' "$submission" | tail -1)"
+          echo "submission id: ${id:-none} status: ${status:-unknown}"
+
+          if [ "$status" != "Accepted" ]; then
+            echo
+            echo "FAIL: Apple did not accept the disk image (status: ${status:-unknown})."
+            # THE REASON, not just the refusal. Without this the next
+            # round is blind and costs another tag.
+            if [ -n "$id" ]; then
+              echo "--- notary log ---"
+              xcrun notarytool log "$id" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" 2>&1 || true
+            else
+              echo "      No submission id was returned, so there is no log to fetch."
+            fi
+            exit 1
+          fi
+
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          echo "the disk image is notarised and stapled"
+      # -------------------------------------------------------------------
+
       - name: Gatekeeper must accept the notarised app
         if: matrix.label == 'Mac'
         shell: bash
@@ -309,13 +393,26 @@ jobs:
           # asserting what it intends; this runs Gatekeeper's own assessment
           # against the built bundle and fails the job when it refuses.
           #
-          # It matters because the failure it catches is SILENT: a build with
-          # no certificate, a certificate that is not Developer ID, a
-          # notarisation that was never submitted or was rejected, all produce
-          # a .dmg that uploads, publishes and looks completely normal — and
-          # then refuses to open on the student's Mac with "the app is
-          # damaged", which reads as a corrupt download rather than as an
-          # unsigned one.
+          # EVERY PROBE RUNS, AND THE STEP FAILS AT THE END. v1.1.3 is why:
+          # the disk image's `stapler validate` exited 65 under `set -e` and
+          # took the step with it, so the disk image's Gatekeeper assessment
+          # — the line that answers what a student's Mac would do — NEVER
+          # RAN, on the one run where its answer mattered. A gate that stops
+          # at the first failure reports the first failure and hides the rest;
+          # the log has to carry every verdict, because each round costs a
+          # tag.
+
+          failures=0
+          problems=""
+          # Plain strings and a counter rather than an array: /bin/bash on a
+          # macOS runner is 3.2, where "${arr[@]}" on an empty array is an
+          # unbound-variable error under `set -u`.
+          note() {
+            echo "FAIL: $1"
+            problems="$problems
+            - $1"
+            failures=$((failures + 1))
+          }
 
           app="$(find desktop/dist -maxdepth 2 -name '*.app' -print -quit || true)"
           # NON-VACUITY FIRST: assessing nothing passes every check below.
@@ -328,28 +425,20 @@ jobs:
           echo "assessing: $app"
 
           # 1. Is it signed, and is the signature internally consistent?
-          if ! codesign --verify --deep --strict --verbose=2 "$app" 2>&1; then
-            echo
-            echo "FAIL: the app is not validly signed."
-            echo "      If this says 'code object is not signed at all', the"
-            echo "      certificate never reached the build: check CSC_LINK and"
-            echo "      CSC_KEY_PASSWORD are set as repository secrets, and that"
-            echo "      desktop/package.json has not regrown mac.identity: null."
-            exit 1
+          if codesign --verify --deep --strict --verbose=2 "$app" 2>&1; then
+            echo "app: signature valid"
+          else
+            note "the app is not validly signed. If this says 'code object is not signed at all', the certificate never reached the build: check CSC_LINK and CSC_KEY_PASSWORD are set as repository secrets, and that desktop/package.json has not regrown mac.identity: null."
           fi
 
           # 2. Is the notarisation ticket stapled to the bundle? Without it a
           #    Mac that is offline, or behind a captive portal, cannot confirm
           #    the notarisation and refuses the app — which is exactly the
           #    machine a student opens it on.
-          if ! xcrun stapler validate "$app" 2>&1; then
-            echo
-            echo "FAIL: no stapled notarisation ticket."
-            echo "      The signature may be fine and the notary submission not."
-            echo "      Check APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD (an"
-            echo "      app-specific password, not the account one) and"
-            echo "      APPLE_TEAM_ID, and mac.notarize in desktop/package.json."
-            exit 1
+          if xcrun stapler validate "$app" 2>&1; then
+            echo "app: notarisation ticket stapled"
+          else
+            note "the app has no stapled notarisation ticket. The signature may be fine and the notary submission not. Check APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD (an app-specific password, not the account one) and APPLE_TEAM_ID, and mac.notarize in desktop/package.json."
           fi
 
           # 3. Gatekeeper's own verdict. spctl writes to STDERR, hence the
@@ -358,32 +447,63 @@ jobs:
           assessment="$(spctl --assess --type execute --verbose=4 "$app" 2>&1 || true)"
           echo "$assessment"
           if ! grep -q "accepted" <<<"$assessment"; then
-            echo
-            echo "FAIL: Gatekeeper would refuse this app."
-            exit 1
-          fi
+            note "Gatekeeper would refuse this app."
           # ACCEPTED IS NOT ENOUGH, and this is the part worth keeping: spctl
           # accepts for several reasons, and only one of them survives being
           # downloaded by somebody else. An app can be accepted locally on the
           # machine that built it and refused on every other Mac.
-          if ! grep -q "source=Notarized Developer ID" <<<"$assessment"; then
-            echo
-            echo "FAIL: accepted, but NOT as a notarised Developer ID app."
-            echo "      That acceptance does not travel to a student's Mac."
-            exit 1
+          #
+          # OBSERVED on the macOS 26 runner (v1.1.3): this app prints exactly
+          # "accepted" and "source=Notarized Developer ID", so the string is
+          # gated rather than merely reported.
+          elif ! grep -q "source=Notarized Developer ID" <<<"$assessment"; then
+            note "the app is accepted, but NOT as a notarised Developer ID app. That acceptance does not travel to a student's Mac."
+          else
+            echo "app: accepted as a notarised Developer ID app"
           fi
 
           # 4. And the artifact that is actually published is the .dmg, not
           #    the .app inside it — a stapled app in an unstapled disk image
-          #    still fails on first open.
+          #    still fails on first open. That sentence was written before
+          #    v1.1.3 and v1.1.3 produced exactly that state, because
+          #    electron-builder staples the app and then packages it into a
+          #    file Apple has never seen. The step above now notarises the
+          #    image itself.
           dmg="$(find desktop/dist -maxdepth 1 -name '*.dmg' -print -quit || true)"
           if [ -z "$dmg" ]; then
             echo "FAIL: no .dmg was produced, so the published artifact is unchecked."
             exit 1
           fi
           echo "assessing: $dmg"
-          xcrun stapler validate "$dmg"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg" 2>&1
+
+          if xcrun stapler validate "$dmg" 2>&1; then
+            echo "dmg: notarisation ticket stapled"
+          else
+            note "the disk image has no stapled notarisation ticket, so a student with no connection cannot confirm it. The notarise step above should have attached one."
+          fi
+
+          # THE DISK IMAGE'S STRONG EVIDENCE IS THE STAPLED TICKET, NOT THIS
+          # STRING, and that is a deliberate asymmetry rather than a weaker
+          # check. A stapled ticket is what an OFFLINE Mac reads, so it is
+          # strictly better evidence than a source line — and unlike the
+          # app's, this repository has never observed what `--type open`
+          # prints for a notarised disk image on this runner, because the
+          # line has never executed. It is printed and required to be
+          # `accepted`; gating a string nobody here has seen would be
+          # guessing, and the ticket above already carries the claim.
+          dmg_assessment="$(spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg" 2>&1 || true)"
+          echo "$dmg_assessment"
+          if ! grep -q "accepted" <<<"$dmg_assessment"; then
+            note "Gatekeeper would refuse the disk image a student downloads."
+          else
+            echo "dmg: accepted"
+          fi
+
+          if [ "$failures" -gt 0 ]; then
+            echo
+            echo "$failures Gatekeeper check(s) failed:$problems"
+            exit 1
+          fi
 
           echo
           echo "Gatekeeper accepts the app and the disk image, notarised."
