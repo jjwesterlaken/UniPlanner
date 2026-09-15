@@ -2815,9 +2815,10 @@ opens it on — cannot confirm the notarisation and refuses.
 **THE FLAG IS GATED ON THE PIPELINE, NOT THE OTHER WAY ROUND.**
 `FLAGS.macDownload` only says the pipeline exists, so `test-site.mjs`
 asserts the pipeline — the five secrets by name, the two shared ones
-(`CSC_LINK`, `CSC_KEY_PASSWORD`) being MAC-SCOPED because
-electron-builder reads the same names on Windows as an authenticode
-certificate, the entitlement, the usage string, and both assessments.
+(`CSC_LINK`, `CSC_KEY_PASSWORD`) appearing only inside a MAC-GATED STEP
+because electron-builder reads the same names on Windows as an
+authenticode certificate, the entitlement, the usage string, and both
+assessments.
 Flipping the boolean without the workflow goes red naming what is
 missing. **What it cannot enforce is the ORDERING**: the link resolves
 to `latest`, so between the merge and the first signed release it would
@@ -2830,6 +2831,69 @@ release exists.
 deleting the one on the `.app` left it green because the disk-image one
 still matched. Two occurrences and one loose pattern is a guard that
 checks whichever happens to survive.
+
+**AND THE SIGNING FAILED ON THE FIRST REAL RUN, IN electron-builder's
+OWN KEYCHAIN CODE.** v1.1.1's Mac job imported the certificate
+successfully and then died on
+`security set-key-partition-list … SecKeychainUnlock: The user name or
+passphrase you entered is not correct`, on the macOS 26 runner
+(os=25.6.0). Nothing about the certificate or the two secrets: the
+keychain electron-builder creates for itself is the one it cannot then
+unlock.
+
+**We create the keychain instead — and pinning `runs-on: macos-15` was
+the other option and was refused.** Pinning works today and avoids the
+runner where the bug lives rather than removing the dependency on the
+code path that has it, so the same failure comes back when macos-15 is
+retired — on GitHub's timetable, in whatever release somebody is
+shipping that week, which is the worst moment for a signing failure to
+return. It stays the one-line fallback, with its trigger written down
+in the workflow: this step failing at `security import` or
+`find-identity` on a runner where electron-builder's own version is
+known to work.
+
+**`CSC_KEYCHAIN` IS READ ONLY WHEN `CSC_LINK` IS ABSENT**, so the
+packaging step no longer receives `CSC_LINK` or `CSC_KEY_PASSWORD` at
+all — with both set, electron-builder ignores the keychain and re-imports
+the certificate itself, which is the failure. That is a silent
+regression shaped exactly like a tidy-up, so it is asserted rather than
+commented. `CSC_NAME` pins the identity to the one verified, instead of
+leaving auto-discovery to find whatever is on the machine.
+
+**The cheap half is that the check moved EARLIER.**
+`security find-identity -v -p codesigning` now runs before the twenty-
+minute package-and-notarise step, and refuses on zero Developer ID
+Application identities *and on more than one* — electron-builder would
+pick one, and which one it picked would be invisible until a student's
+Mac rejected the download. The refusal names the three real causes of
+zero: a .p12 holding the certificate without its private key, an Apple
+Development certificate where a Developer ID one was meant, and an
+expired one. It counts `Developer ID Application` and not `Developer
+ID`, because a Developer ID **Installer** certificate commonly rides in
+the same .p12 and would read as a second identity.
+
+**THE GUARD HAD TO BE RESCOPED, AND THE WAY IT BROKE IS THE POINT.**
+The old assertion read the single line beginning `CSC_LINK:` and
+required `matrix.label == 'Mac'` **on that line**. Moving the two names
+into a step gated by `if: matrix.label == 'Mac'` is the correct fix and
+**would have failed it** — while an ungated `CSC_LINK: ${{
+secrets.CSC_LINK }}` sitting in a step that merely mentions the matrix
+somewhere else would have **passed** it. A guard that has to be
+suppressed to let an intended change through, and a guard that is
+green over the state it forbids, in the same line. It is scoped to the
+claim now — *no step the Windows job runs may receive an Apple
+certificate* — by splitting the workflow into steps and requiring each
+one that sets either name to be gated, by its own `if:` or by the
+setting line's own expression.
+
+**And a mutation check went green because the mutation landed in a
+COMMENT.** Replacing the first occurrence of `security
+set-key-partition-list` hit the paragraph explaining why that call is
+there, leaving the executable line intact — so the guard looked
+decorative and was not. The strip-comments rule, seen from the
+mutating side: *a workflow comment naming the thing is indistinguishable
+from the thing, to a string replace as much as to a grep.* Target the
+line that executes, and verify the mutation applied where you meant it.
 
 **Prices are placeholders behind a marker**, the way the UNMEASURED
 billing constant is: a test refuses to let the site ship a made-up
