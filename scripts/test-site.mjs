@@ -23,6 +23,7 @@ import { SITE_URL, PRIVACY_URL, DELETE_ACCOUNT_URL, APP_URL } from "../src/legal
 import * as links from "../src/legalLinks.js";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -504,6 +505,109 @@ test("THE MAC DOWNLOAD CANNOT BE SWITCHED ON BY EDITING A BOOLEAN", () => {
     IDENTITY,
     'CSC_NAME carries more (or less) than the name and team id — electron-builder refuses a name prefixed "Developer ID Application:" and chooses the certificate type itself'
   );
+
+
+  /* THE DISK IMAGE IS NOTARISED IN ITS OWN RIGHT. `mac.notarize` staples
+     the .app and the dmg target then packages it into a file Apple has
+     never seen, so the image carries no ticket — which is what a student
+     downloads and what Gatekeeper assesses when they open it. v1.1.3
+     produced exactly that ("does not have a ticket stapled to it"). */
+  const notariseAt = blocks.findIndex((b) => /xcrun notarytool submit/.test(b));
+  assert.ok(
+    notariseAt >= 0,
+    "nothing submits the disk image to the notary service, so it ships without a ticket of its own and an offline Mac refuses it"
+  );
+  assert.match(
+    blocks[notariseAt],
+    /xcrun stapler staple/,
+    "the disk image is submitted for notarisation and the ticket is never attached to it"
+  );
+  const assessAt = blocks.findIndex((b) => /- name: Gatekeeper must accept/.test(b));
+  assert.ok(assessAt > notariseAt, "the disk image is assessed before it is notarised, so the gate can only ever fail");
+
+  /* AND NO PROBE MAY STOP A LATER ONE FROM RUNNING — run, not read.
+
+     This is the v1.1.3 defect exactly. `xcrun stapler validate "$dmg"`
+     sat unguarded under `set -e`, exited 65, and took the step with it,
+     so the disk image's Gatekeeper assessment — the one line that
+     answers what a student's Mac would do — never executed, on the one
+     run where its answer mattered. Every source-level check in this
+     file was green over that, because the line was present; what was
+     wrong was that it was unreachable.
+
+     So the real script is lifted out of the workflow and EXECUTED
+     against fake `codesign`, `spctl` and `xcrun` on PATH, over a fake
+     desktop/dist. The claim asserted is behavioural: when the disk
+     image's staple check fails, the step still reaches the disk image's
+     spctl assessment AND still fails. The old script was run through
+     this same harness and reproduced production byte for byte — exit
+     65, zero dmg assessments. */
+  const assessScript = (blocks[assessAt].match(/\n {8}run: \|\n([\s\S]*)$/) || [])[1];
+  assert.ok(assessScript, "the Gatekeeper step has no run: block — this harness has nothing to execute");
+
+  const harness = fs.mkdtempSync(path.join(os.tmpdir(), "gatekeeper-"));
+  try {
+    fs.mkdirSync(path.join(harness, "work/desktop/dist/mac-universal/Some.app"), { recursive: true });
+    fs.writeFileSync(path.join(harness, "work/desktop/dist/Some.dmg"), "");
+    const bin = path.join(harness, "bin");
+    fs.mkdirSync(bin);
+    const fake = (name, body) => {
+      const f = path.join(bin, name);
+      fs.writeFileSync(f, "#!/bin/bash\necho \"" + name + " $*\" >> \"$TRACE\"\n" + body);
+      fs.chmodSync(f, 0o755);
+    };
+    fake("codesign", 'echo "valid on disk"; exit 0\n');
+    fake(
+      "spctl",
+      'for a in "$@"; do case "$a" in *.dmg) k=dmg;; *.app) k=app;; esac; done\n' +
+        'echo "$k: accepted" >&2; echo "source=Notarized Developer ID" >&2; exit 0\n'
+    );
+    fake(
+      "xcrun",
+      'if [ "$1" = stapler ] && [ "$2" = validate ]; then\n' +
+        '  case "$3" in *.dmg) if [ "${FAKE_DMG_STAPLE_FAILS:-0}" = 1 ]; then\n' +
+        '        echo "does not have a ticket stapled to it."; exit 65; fi;; esac\n' +
+        '  echo "The validate action worked!"\n' +
+        'fi\nexit 0\n'
+    );
+
+    const scriptFile = path.join(harness, "assess.sh");
+    fs.writeFileSync(scriptFile, assessScript);
+    const trace = path.join(harness, "trace.txt");
+
+    const drive = (env) => {
+      fs.writeFileSync(trace, "");
+      let status = 0;
+      try {
+        execFileSync("bash", [scriptFile], {
+          cwd: path.join(harness, "work"),
+          env: { ...process.env, PATH: bin + ":" + process.env.PATH, TRACE: trace, ...env },
+          stdio: "pipe",
+        });
+      } catch (err) {
+        status = err.status === undefined ? 1 : err.status;
+      }
+      return { status, trace: fs.readFileSync(trace, "utf8") };
+    };
+
+    const healthy = drive({});
+    /* NON-VACUITY: if the harness cannot drive the script at all, every
+       claim below holds over a script that never ran. */
+    assert.ok(healthy.trace.trim(), "the Gatekeeper script invoked none of the fakes — the harness is not running it");
+    assert.equal(healthy.status, 0, `the Gatekeeper step fails over a wholly valid build:\n${healthy.trace}`);
+    const dmgAssessments = (t) => (t.match(/spctl .*--type open/g) || []).length;
+    assert.equal(dmgAssessments(healthy.trace), 1, "the disk image is never assessed even when everything passes");
+
+    const broken = drive({ FAKE_DMG_STAPLE_FAILS: "1" });
+    assert.notEqual(broken.status, 0, "an unstapled disk image passes the gate — that is the artifact a student downloads");
+    assert.equal(
+      dmgAssessments(broken.trace),
+      1,
+      "THE v1.1.3 REGRESSION: the disk image's staple check aborts the step before its Gatekeeper assessment runs, so the log cannot say what a student's Mac would do"
+    );
+  } finally {
+    fs.rmSync(harness, { recursive: true, force: true });
+  }
 
   /* THE ASSESSMENT ITSELF, which is the only check anywhere that reads
      the thing a student would double-click. Everything above is
