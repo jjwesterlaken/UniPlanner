@@ -243,6 +243,53 @@ test("the Windows note is present, and says the two things a student has to do",
   assert.ok(FLAGS.windowsUnsignedNote, "the note is flagged off while the build is still unsigned");
 });
 
+/* A workflow as STEP BLOCKS, with YAML comments stripped first.
+
+   THE COMMENTS HAVE TO GO, and this file's own subject is why: the
+   workflow explains at length why CSC_LINK must NOT be set on the
+   packaging step, naming it repeatedly while doing so. A sweep that
+   read those comments would find the forbidden thing in the paragraph
+   forbidding it — the sixth costume of a rule this project has already
+   learned five times, so the strip comes first.
+
+   Split textually rather than with a YAML parser because there is no
+   YAML dependency and adding one for this is worse than a split whose
+   result is asserted: stepBlocks' callers check the blocks they expect
+   are really there, so a change of indentation fails loudly instead of
+   sweeping an empty list. */
+function stepBlocks(workflow) {
+  const stripped = workflow
+    .split("\n")
+    .map((l) => (/^\s*#/.test(l) ? "" : l))
+    /* Trailing comments too — but never on a line carrying an \${{ }}
+       expression, which cannot contain one and might contain a #. */
+    .map((l) => (l.includes("\${{") ? l : l.replace(/\s#.*$/, "")))
+    .join("\n");
+  return stripped.split(/\n(?=      - )/);
+}
+
+/* Every step that sets any of `names` in its env, with whether the step
+   is confined to the Mac job — by its own `if:`, or by each setting
+   line's own expression. Both are real gates and both are used. */
+function stepsSetting(workflow, names) {
+  const pattern = new RegExp(`^\\s*(${names.join("|")}):.*$`, "gm");
+  const found = [];
+  for (const block of stepBlocks(workflow)) {
+    const lines = block.match(pattern);
+    if (!lines) continue;
+    const gate = /\n\s*if:[^\n]*matrix\.label == 'Mac'/.test("\n" + block);
+    found.push({
+      name: (block.match(/- name: [^\n]*/) || ["an unnamed step"])[0].replace("- name: ", "").trim(),
+      sets: lines.map((l) => l.trim().split(":")[0]),
+      macGated: gate || lines.every((l) => /matrix\.label == 'Mac'/.test(l)),
+    });
+  }
+  /* NON-VACUITY: no step setting them at all means nothing signs, and
+     every universal claim above would hold over the empty set. */
+  assert.ok(found.length > 0, `no step sets ${names.join(" or ")} — nothing hands the build a certificate`);
+  return found;
+}
+
 test("THE MAC DOWNLOAD CANNOT BE SWITCHED ON BY EDITING A BOOLEAN", () => {
   /* THE GATE, and the reason it is not simply `assert(FLAGS.macDownload)`
      either way: the thing that makes a Mac link safe is not a flag, it
@@ -326,16 +373,72 @@ test("THE MAC DOWNLOAD CANNOT BE SWITCHED ON BY EDITING A BOOLEAN", () => {
   /* AND THE TWO SHARED NAMES MUST BE MAC-SCOPED. CSC_LINK and
      CSC_KEY_PASSWORD are not Apple-specific: electron-builder reads the
      same two on Windows, where they mean an authenticode .pfx. Passed
-     unconditionally they hand the Windows job an Apple certificate. */
-  for (const shared of ["CSC_LINK", "CSC_KEY_PASSWORD"]) {
-    const line = workflow.split("\n").find((l) => l.trim().startsWith(`${shared}:`));
-    assert.ok(line, `${shared} is not set at all`);
-    assert.match(
-      line,
-      /matrix\.label == 'Mac'/,
-      `${shared} is not scoped to the Mac job — electron-builder reads it on Windows too, as an authenticode certificate`
+     unconditionally they hand the Windows job an Apple certificate.
+
+     SCOPED TO THE CLAIM, NOT TO A LINE. The first version of this read
+     the single line starting `CSC_LINK:` and required the Mac
+     conditional ON THAT LINE — which was true of the shape it was
+     written against and says nothing about any other shape. Moving the
+     two names into a step gated by `if: matrix.label == 'Mac'` is
+     CORRECT and would have failed it; leaving an ungated
+     `CSC_LINK: \${{ secrets.CSC_LINK }}` in a step that merely mentions
+     the matrix elsewhere would have PASSED it. The claim is about a
+     STEP: no step the Windows job runs may receive an Apple
+     certificate. So the workflow is split into steps and each one that
+     sets either name has to be gated — by its own `if:`, or by the
+     setting line's own expression. */
+  for (const step of stepsSetting(workflow, ["CSC_LINK", "CSC_KEY_PASSWORD"])) {
+    assert.ok(
+      step.macGated,
+      `${step.name} sets ${step.sets.join(" and ")} without gating the step on the Mac job — ` +
+        "electron-builder reads those two on Windows too, as an authenticode certificate"
     );
   }
+
+  /* AND NOT ON THE PACKAGING STEP, which is a different claim from the
+     one above and a newer one. The certificate now goes into a keychain
+     the workflow creates, and electron-builder reads CSC_KEYCHAIN ONLY
+     WHEN CSC_LINK IS ABSENT. Setting it there — even correctly gated to
+     the Mac job — silently sends signing back through electron-builder's
+     own temporary-keychain code, which is the thing that fails on the
+     macOS 26 runner with "SecKeychainUnlock: The user name or passphrase
+     you entered is not correct". It would look like a tidy-up. */
+  const packaging = stepBlocks(workflow).find((b) => /- name: Package the desktop app/.test(b));
+  assert.ok(packaging, "the packaging step has been renamed — this guard is reading nothing");
+  assert.doesNotMatch(
+    packaging,
+    /^\s*(CSC_LINK|CSC_KEY_PASSWORD):/m,
+    "the packaging step sets CSC_LINK/CSC_KEY_PASSWORD again — electron-builder then ignores CSC_KEYCHAIN and re-imports the certificate itself, which is the failure the keychain step exists to remove"
+  );
+
+  /* THE KEYCHAIN STEP ITSELF: the call that fails inside
+     electron-builder, done with a password we generated, and the
+     identity check that has to run BEFORE the twenty-minute package-and-
+     notarise step rather than after it. */
+  const blocks = stepBlocks(workflow);
+  const keychainAt = blocks.findIndex((b) => /security create-keychain/.test(b));
+  const packagingAt = blocks.findIndex((b) => /- name: Package the desktop app/.test(b));
+  assert.ok(keychainAt >= 0, "nothing creates a signing keychain, so electron-builder is back on the code path that fails on macOS 26");
+  assert.ok(
+    keychainAt < packagingAt,
+    "the keychain is prepared after the packaging step, so a certificate that never arrived is discovered by a signing failure rather than by the check written for it"
+  );
+  const keychain = blocks[keychainAt];
+  assert.match(
+    keychain,
+    /security set-key-partition-list/,
+    "the keychain is created but its key is never released to codesign — signing blocks on a UI prompt nothing can answer"
+  );
+  assert.match(
+    keychain,
+    /security find-identity -v -p codesigning/,
+    "nothing verifies the certificate is usable before the build, so an unusable one is found by electron-builder instead"
+  );
+  assert.match(
+    keychain,
+    /CSC_KEYCHAIN=/,
+    "the keychain is never handed to electron-builder, which will look for the identity somewhere else"
+  );
 
   /* THE ASSESSMENT ITSELF, which is the only check anywhere that reads
      the thing a student would double-click. Everything above is

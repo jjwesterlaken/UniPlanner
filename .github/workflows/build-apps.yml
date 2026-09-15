@@ -79,6 +79,160 @@ jobs:
         working-directory: desktop
         run: npm install
 
+      # ---- Developer ID signing, MAC ONLY --------------------------------
+      #
+      # WE OWN THE KEYCHAIN, and that is the whole point of this step.
+      #
+      # electron-builder will happily do this itself from CSC_LINK and
+      # CSC_KEY_PASSWORD: it creates a temporary keychain, imports the
+      # certificate, and runs `security set-key-partition-list` to let
+      # codesign use the private key without a UI prompt. On the macOS 26
+      # runner (os=25.6.0) that last call fails with
+      #
+      #   SecKeychainUnlock: The user name or passphrase you entered is
+      #   not correct.
+      #
+      # The certificate is fine — the import succeeds. What fails is
+      # electron-builder's own handling of the keychain IT created, so no
+      # secret we hold can fix it and nothing in this repository can test
+      # it. Doing the four `security` calls ourselves, with a password we
+      # generated, removes the dependency on that code path entirely.
+      #
+      # THE ALTERNATIVE WAS `runs-on: macos-15`, AND IT WAS REJECTED.
+      # Pinning would work today and it avoids the runner where the bug
+      # lives rather than removing the reliance on the broken path — so
+      # the same failure returns when macos-15 is retired, which is to say
+      # on GitHub's timetable, in whatever release someone is shipping
+      # that week. It is still the one-line fallback if this step turns
+      # out to be wrong: pin the Mac matrix entry to macos-15 and delete
+      # this step. What would send us there is this step failing at
+      # `security import` or `find-identity` on a runner where
+      # electron-builder's own version is known to work.
+      #
+      # AND IT BUYS THE CHECK BELOW. `find-identity` runs here, before the
+      # ~20-minute package-and-notarise step, so a certificate that did
+      # not arrive fails in seconds and says which of the two secrets to
+      # look at — instead of failing inside electron-builder's signing
+      # stage with a message about a keychain nobody created.
+      - name: Put the Developer ID certificate in a keychain we control
+        if: matrix.label == 'Mac'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CSC_LINK:-}" ] || [ -z "${CSC_KEY_PASSWORD:-}" ]; then
+            echo "FAIL: CSC_LINK and/or CSC_KEY_PASSWORD is empty."
+            echo "      Both are repository secrets. An empty one is not an"
+            echo "      error to electron-builder — it reads it as 'no"
+            echo "      certificate' and produces an unsigned app, which is"
+            echo "      why this refuses here instead."
+            exit 1
+          fi
+
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          cert="$RUNNER_TEMP/certificate.p12"
+          # Ours, generated here, used nowhere else, thrown away at the end
+          # of the job. The point is not that it is secret — it is that we
+          # KNOW it, which is exactly what electron-builder does not.
+          password="$(openssl rand -base64 24)"
+
+          # `-A` needs the input on one line; a secret pasted with wrapping
+          # would otherwise decode to a truncated file that then fails at
+          # import with a misleading MAC-verification error.
+          printf '%s' "$CSC_LINK" | tr -d '\n\r' | openssl base64 -d -A > "$cert"
+          if [ ! -s "$cert" ]; then
+            echo "FAIL: CSC_LINK did not decode to anything."
+            echo "      It must be the .p12 file, base64-encoded."
+            exit 1
+          fi
+
+          security create-keychain -p "$password" "$keychain"
+          # No lock timeout and no lock on sleep: the default 5-minute idle
+          # lock expires during notarisation, and a locked keychain mid-job
+          # reproduces the exact error this step exists to remove.
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+
+          # -T names the tools allowed to use the private key without a
+          # prompt. There is no interactive session to answer one, so a
+          # missing entry here is a hang, not a refusal.
+          security import "$cert" -k "$keychain" -P "$CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security -f pkcs12
+
+          # The call that fails inside electron-builder. It needs the
+          # keychain's password, which is the one thing a temporary
+          # keychain created by someone else does not hand you.
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+
+          # Put it on the search list as well. codesign is given the
+          # keychain explicitly via CSC_KEYCHAIN, but the notarisation and
+          # stapling tools are not, and a keychain off the search list is
+          # invisible to them.
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | sed -e 's/[\"]//g')
+
+          rm -f "$cert"
+
+          # THE VERIFICATION, and it is the reason this step is worth its
+          # length. Everything above can succeed while leaving codesign
+          # with nothing usable — a certificate with no private key, an
+          # Apple Development certificate where a Developer ID one was
+          # meant, an expired one. `find-identity -p codesigning` lists
+          # only identities that can actually sign, so this is the first
+          # point in the job where "the certificate arrived" stops being
+          # an assumption.
+          echo "--- codesigning identities in our keychain ---"
+          identities="$(security find-identity -v -p codesigning "$keychain" || true)"
+          echo "$identities"
+
+          developer_id="$(grep -c 'Developer ID Application' <<<"$identities" || true)"
+          if [ "$developer_id" -eq 0 ]; then
+            echo
+            echo "FAIL: no 'Developer ID Application' identity in the keychain."
+            echo "      The import reported success, so something arrived — but"
+            echo "      it cannot sign a distributable app. The usual causes:"
+            echo "        * the .p12 holds the certificate WITHOUT its private key"
+            echo "        * it is an 'Apple Development' or 'Apple Distribution'"
+            echo "          certificate, neither of which Gatekeeper accepts for"
+            echo "          a download outside the App Store"
+            echo "        * the certificate has expired"
+            exit 1
+          fi
+          if [ "$developer_id" -gt 1 ]; then
+            echo
+            echo "FAIL: $developer_id Developer ID Application identities."
+            echo "      Refusing rather than guessing: electron-builder would"
+            echo "      pick one, and which one it picked would be invisible"
+            echo "      until a student's Mac rejected the download. Name the"
+            echo "      intended one explicitly by setting CSC_NAME below."
+            exit 1
+          fi
+
+          name="$(sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' <<<"$identities" | head -1)"
+          if [ -z "$name" ]; then
+            echo "FAIL: could not read the identity name out of find-identity."
+            exit 1
+          fi
+          echo "signing identity: $name"
+
+          # CSC_KEYCHAIN is read by electron-builder ONLY WHEN CSC_LINK IS
+          # ABSENT — with both set it ignores the keychain and does its own
+          # import again, which is the failure this step exists to avoid.
+          # So the packaging step below deliberately does not receive
+          # CSC_LINK or CSC_KEY_PASSWORD at all.
+          #
+          # CSC_NAME pins the identity to the one verified above, rather
+          # than leaving auto-discovery to find whatever is on the machine.
+          {
+            echo "CSC_KEYCHAIN=$keychain"
+            echo "CSC_NAME=$name"
+          } >> "$GITHUB_ENV"
+      # -------------------------------------------------------------------
+
       - name: Package the desktop app
         working-directory: desktop
         run: npx electron-builder ${{ matrix.flags }} --publish never
@@ -90,20 +244,28 @@ jobs:
           #
           # ---- Developer ID signing and notarisation, MAC ONLY ------------
           #
-          # EVERY ONE OF THESE IS SCOPED TO THE MAC JOB, and that is a
-          # correctness requirement rather than tidiness. CSC_LINK and
-          # CSC_KEY_PASSWORD are NOT Mac-specific names: electron-builder
-          # reads the same two variables on Windows, where they mean a .pfx
-          # authenticode certificate. Setting them unconditionally hands the
-          # Windows job an Apple .p12 and asks it to sign with it.
+          # CSC_LINK AND CSC_KEY_PASSWORD ARE DELIBERATELY ABSENT HERE.
+          # The certificate is already in a keychain the step above created,
+          # and electron-builder reads CSC_KEYCHAIN (exported from that step
+          # through GITHUB_ENV, alongside CSC_NAME) ONLY WHEN CSC_LINK IS
+          # NOT SET. Setting them here would send it back through its own
+          # temporary-keychain code, which is what fails on the macOS 26
+          # runner — see the step above for the error and the reasoning.
           #
-          # The empty string is what a non-Mac job gets, which electron-builder
-          # treats as absent.
+          # There is a second reason not to reintroduce them, and it
+          # predates the keychain problem: CSC_LINK and CSC_KEY_PASSWORD
+          # are NOT Mac-specific names. electron-builder reads the same two
+          # on Windows, where they mean a .pfx authenticode certificate, so
+          # setting them on this step — which every platform runs — hands
+          # the Windows job an Apple .p12 and asks it to sign with it. They
+          # now appear only inside a step gated on the Mac job, which is
+          # what a test asserts.
           #
           # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are what
           # `mac.notarize: true` in desktop/package.json uses. An app-specific
           # password, not the Apple account password — the account password is
-          # refused by the notary service.
+          # refused by the notary service. The empty string is what a non-Mac
+          # job gets, which electron-builder treats as absent.
           #
           # THE OTHER HALF OF THIS LIVES IN desktop/package.json AND USED TO
           # CANCEL IT: `mac.identity: null` means "do not sign", and it
@@ -111,16 +273,14 @@ jobs:
           # a test asserts it stays gone — secrets that reach a build which
           # has been told not to sign produce an unsigned app and a green
           # tick.
-          CSC_LINK: ${{ matrix.label == 'Mac' && secrets.CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ matrix.label == 'Mac' && secrets.CSC_KEY_PASSWORD || '' }}
           APPLE_ID: ${{ matrix.label == 'Mac' && secrets.APPLE_ID || '' }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.label == 'Mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ matrix.label == 'Mac' && secrets.APPLE_TEAM_ID || '' }}
           #
           # Windows signing is NOT arranged. When it is, it needs its own
-          # certificate in its own secret — do not widen the two above, for
-          # the reason at the top of this block. The site carries a note
-          # about the SmartScreen warning until then (FLAGS.windowsUnsignedNote).
+          # certificate in its own secret — do not widen the two named above,
+          # for the reason in that paragraph. The site carries a note about
+          # the SmartScreen warning until then (FLAGS.windowsUnsignedNote).
           # -----------------------------------------------------------------
           ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: "true"
 
@@ -232,6 +392,18 @@ jobs:
           path: dist-web
           if-no-files-found: error
           retention-days: 30
+
+      # A hosted runner is destroyed after the job, so this is tidiness
+      # rather than a safeguard — but `always()` means it also runs when
+      # the build FAILED, which is the case where a self-hosted runner
+      # would otherwise accumulate keychains holding a signing key.
+      - name: Remove the signing keychain
+        if: always() && matrix.label == 'Mac'
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          echo "signing keychain removed"
 
   release:
     name: Publish release
