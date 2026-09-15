@@ -162,6 +162,44 @@ public. There is no way to make this work against v1.0.1 without pinning
 a version into the site, which is the thing the whole module exists to
 avoid.
 
+### THE NAMES MOVED AGAIN, AND THE SAME SENTENCE APPLIES
+
+The three names above are stale. `${productName}` is "University
+Planner" — **with a space** — and the space was being spelled three
+different ways by three different things:
+
+| who | spelling |
+|---|---|
+| electron-builder, writing the file | `University Planner.dmg` |
+| GitHub, uploading the release asset | `University.Planner.dmg` |
+| electron-builder, writing `latest*.yml` | `University-Planner.dmg` |
+
+The site linked the middle one and worked. **All three update manifests
+named the last one, which is on no release** — confirmed by requesting
+the v1.1.5 asset `latest-mac.yml` names and getting a 404. Nothing reads
+a manifest today, so it failed silently in both directions.
+
+The `artifactName` templates carry no spaces now, which makes the three
+agree by construction:
+
+```
+University-Planner-Setup.exe
+University-Planner-Portable.exe
+University-Planner.AppImage
+University-Planner.dmg
+University-Planner.zip      (new — see below)
+```
+
+**So the download buttons 404 against v1.1.5 and everything before it.**
+Cut a release before promoting the site, exactly as the paragraph above
+says. `scripts/test-site.mjs` asserts the three spellings agree; nothing
+static can know which release was published under which names.
+
+`mac.target` gained **`zip`** because electron-updater cannot update a
+macOS app out of a disk image — with dmg-only targets `latest-mac.yml`
+named the `.dmg`, which is unusable even once its name is right. The
+`.zip` is metadata for an updater, not a download the site offers.
+
 ### And one bug found on the way in
 
 **`desktop/package.json` says `1.0.0`; the published release is

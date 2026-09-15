@@ -267,32 +267,44 @@ function fillDownloads() {
     return d;
   };
 
+  /* THE DESIGN HALF, AND ONLY THE DESIGN HALF. Heading, one-line blurb
+     and the words on the button are Grace's; everything that says
+     whether there is a download and what goes under it comes off the
+     card, which is where the flags are already read.
+
+     IT USED TO BE THREE HAND-WRITTEN BRANCHES, and the macOS one was
+     left behind when the flag was turned on: it passed `href: null` and
+     `label: c.soon` unconditionally, so with `FLAGS.macDownload` true —
+     which it has been since signing landed — `c.soon` is null and the
+     card rendered a DEAD `#` BUTTON LABELLED "null", live, on the one
+     platform the whole Developer ID pipeline exists to serve. Every
+     guard was green: `downloads.js` had the right href all along and
+     the suite tested `downloads.js`. Nothing read the rendered card.
+
+     A per-id branch is what let one platform stop following its own
+     data, so there is no longer one to leave behind. */
+  const LOOK = {
+    windows: { title: "Windows", blurb: "Desktop app, auto-updating", label: "Download .exe" },
+    mac: { title: "macOS", blurb: "Desktop app", label: "Download .dmg" },
+    linux: { title: "Linux", blurb: "AppImage, no install needed", label: "Download AppImage" },
+  };
   for (const c of cards) {
-    if (c.id === "windows") {
-      box.appendChild(
-        make({
-          id: "windows",
-          title: "Windows",
-          blurb: "Desktop app, auto-updating",
-          href: c.href,
-          label: "Download .exe",
-          alt: c.alt,
-          /* By instruction, and it belongs with the button rather than
-             in the page: a student who hits SmartScreen with no warning
-             that it was coming assumes the download is malware, which is
-             the correct instinct and the wrong conclusion. */
-          note: FLAGS.windowsUnsignedNote ? c.note : null,
-        })
-      );
-    } else if (c.id === "linux") {
-      box.appendChild(
-        make({ id: "linux", title: "Linux", blurb: "AppImage, no install needed", href: c.href, label: "Download AppImage", note: c.note })
-      );
-    } else if (c.id === "mac") {
-      box.appendChild(
-        make({ id: "mac", title: "macOS", blurb: "Desktop app", href: null, label: c.soon, soon: !FLAGS.macDownload })
-      );
-    }
+    const look = LOOK[c.id];
+    if (!look) continue;
+    box.appendChild(
+      make({
+        id: c.id,
+        title: look.title,
+        blurb: look.blurb,
+        href: c.href,
+        /* `c.soon` is the sentence a card carries INSTEAD of a
+           download, so it is the label exactly when there is no href. */
+        label: c.available ? look.label : c.soon,
+        soon: !c.available,
+        alt: c.alt,
+        note: c.note,
+      })
+    );
   }
   /* The web card is not a release asset, so it is not in downloadsFor —
      it is always available and always last-but-two. */

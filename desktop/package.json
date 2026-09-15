@@ -33,8 +33,10 @@
     },
     "mac": {
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ],
+      "artifactName": "University-Planner.${ext}",
       "category": "public.app-category.education",
       "icon": "build/icon.png",
       "hardenedRuntime": true,
@@ -47,7 +49,7 @@
     },
     "dmg": {
       "title": "University Planner",
-      "artifactName": "${productName}.${ext}"
+      "artifactName": "University-Planner.${ext}"
     },
     "win": {
       "target": [
@@ -63,10 +65,10 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "University Planner",
-      "artifactName": "${productName} Setup.${ext}"
+      "artifactName": "University-Planner-Setup.${ext}"
     },
     "portable": {
-      "artifactName": "${productName} Portable.${ext}"
+      "artifactName": "University-Planner-Portable.${ext}"
     },
     "linux": {
       "target": [
@@ -74,7 +76,7 @@
       ],
       "icon": "build/icon.png",
       "category": "Education",
-      "artifactName": "${productName}.${ext}"
+      "artifactName": "University-Planner.${ext}"
     }
   }
 }

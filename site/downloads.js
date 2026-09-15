@@ -56,11 +56,17 @@ export function repoSlug(repositoryUrl) {
  * containing `${version}` after substitution is REJECTED rather than
  * guessed at, because a name with a version in it cannot be linked to
  * with `latest/download` and silently 404s.
+ *
+ * `${name}` USED TO BE RESOLVED HERE, TO `productName`, WHICH IS WRONG:
+ * electron-builder's `${name}` is the package `name` field
+ * ("university-planner"), not the product name. A template using it
+ * would have produced a link to a file that was never built. It is left
+ * unresolved on purpose, so the check below refuses it loudly instead —
+ * "no" and "nothing" have to be different answers.
  */
 export function assetName(template, { productName, ext }) {
   const filled = String(template)
     .replaceAll("${productName}", productName)
-    .replaceAll("${name}", productName)
     .replaceAll("${ext}", ext);
   if (/\$\{/.test(filled)) {
     throw new Error(
@@ -68,8 +74,22 @@ export function assetName(template, { productName, ext }) {
         "A download link cannot be built from a name that varies by release — see the header of site/downloads.js."
     );
   }
-  /* electron-builder replaces spaces with dots in the file it writes,
-     and GitHub serves the asset under the name it was uploaded with. */
+  /* A BACKSTOP, AND IT USED TO BE THE WHOLE MECHANISM. electron-builder
+     writes the file with whatever the template says — spaces included —
+     and GITHUB is what replaces a space with a dot when the asset is
+     uploaded. So `University Planner.dmg` on the runner became
+     `University.Planner.dmg` on the release and this line was what kept
+     the link working.
+
+     What it could not fix is the half nothing here reads: the
+     `latest*.yml` electron-builder writes beside the installers spell
+     the same space as a HYPHEN, so the update manifests named
+     `University-Planner.dmg` while the release carried
+     `University.Planner.dmg` — three spellings of one file, two of them
+     404. The artifactName templates carry no spaces now, which makes
+     all three agree by construction; this stays as the backstop for a
+     template that grows one again, and `scripts/test-site.mjs` asserts
+     none does. */
   return filled.replace(/ /g, ".");
 }
 
@@ -139,7 +159,9 @@ export function downloadsFor(platform, { slug, assets }) {
          see SITE-DEPLOY.md. A student who hits SmartScreen with no
          warning that it was coming assumes the download is malware,
          which is the correct instinct and the wrong conclusion. */
-      note: "Windows may show a security warning on first install — click More info, then Run anyway.",
+      note: FLAGS.windowsUnsignedNote
+        ? "Windows may show a security warning on first install — click More info, then Run anyway."
+        : null,
       available: true,
     },
     {
@@ -163,7 +185,16 @@ export function downloadsFor(platform, { slug, assets }) {
          build is really in the workflow — so this link cannot be
          switched on by editing a boolean. */
       href: FLAGS.macDownload ? downloadUrl(slug, assets.macDmg) : null,
-      note: null,
+      /* THE INSTALL NOTE, and it is here for the same reason the
+         Windows one is: it belongs with the button, and it comes off in
+         one edit. A .dmg is a disk image rather than an installer, and
+         a student who opens it, double-clicks the app INSIDE it and
+         gets a working planner has in fact installed nothing — the app
+         is running out of a mounted image that vanishes on eject, and
+         takes the shortcut they made with it. */
+      note: FLAGS.macDownload
+        ? "Open the downloaded file and drag University Planner into the Applications folder shown, then launch it from Applications."
+        : null,
       available: FLAGS.macDownload,
       soon: FLAGS.macDownload ? null : "Coming soon",
     },
