@@ -212,7 +212,21 @@ jobs:
             exit 1
           fi
 
-          name="$(sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' <<<"$identities" | head -1)"
+          # THE PREFIX MUST NOT TRAVEL WITH THE NAME, and this cost a run.
+          # find-identity prints the full common name — Developer ID
+          # Application: Some Person (TEAMID) — and electron-builder
+          # REFUSES that as CSC_NAME:
+          #
+          #   Please remove prefix "Developer ID Application:" from the
+          #   specified name — appropriate certificate will be chosen
+          #   automatically.
+          #
+          # It wants the person and team id alone and picks the
+          # certificate type itself. So the capture starts AFTER the
+          # colon. A test runs this very line against a find-identity
+          # fixture and requires the prefix to be gone, because the only
+          # way to know what a sed expression extracts is to run it.
+          name="$(sed -n 's/.*"Developer ID Application: *\([^"]*\)".*/\1/p' <<<"$identities" | head -1)"
           if [ -z "$name" ]; then
             echo "FAIL: could not read the identity name out of find-identity."
             exit 1
