@@ -73,6 +73,24 @@ export const AI_TEXT_FAILURES = {
       .join(" "),
   }),
 
+  /* THE TRIAL'S PHOTO CAP, and it is deliberately not worded as a
+     failure. Nothing went wrong and nothing was charged: the free plan
+     covers a demonstration of photographed pages and the demonstration
+     is over. So the sentence names the CHEAPER PATH THAT STILL WORKS
+     rather than only the door that closed — pasting is not capped and
+     costs a sixth as much, which is the thing the student can do in the
+     next thirty seconds.
+
+     The server's own message names how many pages are left, because it
+     is the side that knows; this is the fallback for a client that has
+     no number. */
+  free_photo_limit: {
+    title: "That's more photographed pages than the free plan covers.",
+    detail:
+      "Pasting the text works instead — it isn't capped and costs much less per page. " +
+      "A paid plan photographs as many pages as your credits cover.",
+  },
+
   no_access: {
     title: "AI study help isn't on your account.",
     detail: "These features are part of the AI plan.",
@@ -312,6 +330,19 @@ export const READING_COPY = {
     chunks > 1
       ? `${count} page${count === 1 ? "" : "s"} — ${credits} credits, done in ${chunks} parts and then combined.`
       : `${count} page${count === 1 ? "" : "s"} — ${credits} credits, done in one go.`,
+  /* THE TRIAL CAP, NAMING WHAT IS LEFT rather than only that there is
+     a limit. Three shapes, because "you have 4 left" and "you have
+     none left" are different things to do next, and a sentence that
+     said "4" when the answer is 0 would send somebody back to
+     photograph four more pages. It points at pasting every time:
+     uncapped, a sixth the price, and available right now. */
+  freePhotoCap: ({ left, cap, count }) =>
+    left > 0
+      ? `That's ${count} pages and your free plan has ${left} left of ${cap} photographed pages. ` +
+        `Send ${left} or fewer, or paste the text instead — pasting isn't capped and costs much less.`
+      : `Your free plan covers ${cap} photographed pages and you've used them. ` +
+        `Pasting the text still works, isn't capped and costs much less per page.`,
+
   photosTooMany: ({ count, max }) =>
     `That's ${count} photos and the most this can take is ${max}. Do it in two goes — each gets its own summary.`,
   unreadablePages: (pages) =>

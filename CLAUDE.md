@@ -1105,6 +1105,33 @@ convert pages into characters — "a page is about 3,000 characters"
 would put a modelled multiple on a screen, and both figures quoted are
 ceilings the server enforces.
 
+**AND THE TRIAL IS CAPPED AT 8 PHOTOGRAPHED PAGES, which the credits
+could not do.** 60 credits is three batches at 18, so a free account
+could put 54 of its 60 into photographs and never record the lecture —
+the other half of what the trial demonstrates. Two batches is a
+demonstration. `MAX_FREE_PHOTO_PAGES`, migration 0021, refused on the
+same side of the provider call as the allowance read so a refusal costs
+nothing, and counted in PAGES because three plus three plus three is
+nine and would pass a batch cap. Paid tiers are uncapped: credits meter
+them, and a cap on top of a meter is a second limit to get wrong.
+
+**THE CAP AND THE ALLOWANCE HAD TO ASK ONE QUESTION, and the first
+version asked a different one.** `isTrialTier` and `allowanceForTier`
+disagree about an UNKNOWN tier — the allowance gives it the trial
+deliberately, because a dashboard typo should cost a demonstration
+rather than 3,000 credits a month, while `isTrialTier` says "not a
+trial" and would have handed a mistyped tier UNCAPPED photographs.
+Caught by the table row named for it. Both branches read
+`allowanceForTier(tier).perMonth` now, which is the branch-lives-in-one-
+place rule arriving as a bug rather than as a principle.
+
+**The pure rule is PLAIN JS in `_shared/photoCap.js`**, the
+`aiProviders.js` arrangement, because a `.ts` module is importable by a
+plain-Node test only under type stripping — which Node enables unflagged
+from 22.18, and `.nvmrc` says 22. A colleague on 22.10 would find the
+suite unrunnable rather than failing, which is the `.bin` shim and the
+drive-letter URL one more time.
+
 **A marker a machine greps for is not vocabulary.** The deploy refuses
 while `config.ts` carries the unmeasured flag. Writing that word in a
 sentence — even to say something is *not* it — blocks the deploy. That

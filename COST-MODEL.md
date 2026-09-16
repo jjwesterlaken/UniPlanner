@@ -1448,6 +1448,44 @@ fails naming the tier, the period and the store — and it asserts at a
 rather than when the currency moves. At 0.40 the worst margin is still
 +$1.09.
 
+### The free tier is capped at 8 photographed pages, and the cap is not the allowance
+
+`MAX_FREE_PHOTO_PAGES`, migration 0021, `_shared/photoCap.js`.
+
+**Credits alone do not bound the trial in the way the trial needs.** 60
+credits is three batches at 18, so a free account can put 54 of its 60
+credits into photographs and never record the lecture — and the lecture
+is the other half of what the trial exists to demonstrate. Two batches
+is a demonstration: send four pages, read what comes back, and if you
+want a second opinion take four more.
+
+**Pages, not batches.** A partial batch is still pages; three plus three
+plus three is nine, and a cap counted in batches would pass it.
+
+**Paid tiers are uncapped**, because credits meter them and a cap on top
+of a meter is a second limit to explain and a second one to get wrong.
+
+**The cap and the allowance now ask ONE question.** The first version
+asked `isTrialTier`, which disagrees with `allowanceForTier` on an
+UNKNOWN tier: the allowance gives an unknown tier the trial
+deliberately — a dashboard typo should cost a demonstration rather than
+3,000 credits a month — while `isTrialTier` says "not a trial", which
+would have handed a mistyped tier **uncapped photographs**. Caught by
+the table row named "an unknown tier". Both branches read
+`allowanceForTier(tier).perMonth` now.
+
+**Refused before the provider call**, on the same side as the allowance
+read and for the same reason: a refusal there has cost nothing. And the
+refusal **names what is left** — four pages left is a batch a student
+can still send — and points at pasting, which is uncapped and a sixth
+the price.
+
+**0021 WIDENS, so it goes before the deploy.** `ai-text` selects
+`trial_photo_pages_used` in its tier lookup; PostgREST answers an
+unknown column with a 400, which the handler reports as `server_error`,
+so applying it late stops every text AI feature for everybody. That is
+0015's lesson with a louder failure mode.
+
 ### The student has to see which path is cheaper, before choosing
 
 **Parts hid a sixfold difference.** Eight photographed pages and eight

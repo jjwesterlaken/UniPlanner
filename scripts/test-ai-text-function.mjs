@@ -124,9 +124,10 @@ const USER = "11111111-1111-4111-8111-111111111111";
  * A fake database that records the order of everything, so the ordering
  * property can be asserted rather than read.
  */
-function makeAdmin({ tier = "ai", creditsUsed = 0, usageError = null, billError = null, trace } = {}) {
+function makeAdmin({ tier = "ai", creditsUsed = 0, photoPagesUsed = 0, usageError = null, billError = null, trace } = {}) {
   const seen = [];
   let banked = creditsUsed;
+  let pages = photoPagesUsed;
   const table = (name) => {
     const filters = [];
     const chain = {
@@ -144,7 +145,10 @@ function makeAdmin({ tier = "ai", creditsUsed = 0, usageError = null, billError 
              this tier actually uses — so the fixture reads the same at
              every call site and the SHAPE is what varies, which is the
              thing under test. */
-          return { data: tier ? { tier, trial_credits_used: banked } : null, error: null };
+          return {
+            data: tier ? { tier, trial_credits_used: banked, trial_photo_pages_used: pages } : null,
+            error: null,
+          };
         }
         if (name === "ai_usage") {
           if (usageError) return { data: null, error: usageError };
@@ -171,6 +175,13 @@ function makeAdmin({ tier = "ai", creditsUsed = 0, usageError = null, billError 
     seen.push({ op: "rpc", fn, payload: args });
     if (trace) trace.push(`db:rpc:${fn}`);
     if (billError) return { data: null, error: billError };
+    /* The page counter ADDS too, for the same reason the credit one
+       does: 0021's SQL adds, and a fake that assigned would let a
+       regression to a read-modify-write pass unnoticed. */
+    if (fn === "add_trial_photo_pages") {
+      pages += Number(args.p_pages || 0);
+      return { data: [{ new_trial_photo_pages: pages }], error: null };
+    }
     banked += Number(args.p_credits || 0);
     return {
       data: [fn === "add_trial_credits" ? { new_trial_credits: banked } : { new_credits: banked }],
@@ -837,6 +848,75 @@ async function main() {
     // Billed as ONE summarise -- the same weight as one text chunk.
     const bill = admin.seen.find((x) => x.op === "rpc");
     assert.equal(bill.payload.p_credits, 3, "a photo batch is not priced as one summarise");
+  });
+
+  await test("a trial account is refused the pages past its cap, having spent nothing", async () => {
+    /* MIGRATION 0021's HALF OF THE FEATURE, against the real handler.
+       A photo batch is 18 credits and the trial is 60, so credits alone
+       would let a free account put three batches through and never
+       record the lecture that is the other half of what the trial
+       demonstrates. */
+    /* READ OUT OF THE SERVER'S OWN CONSTANT, not the client mirror and
+       not a literal: this is a claim about what the handler enforces. */
+    const cap = Number(
+      fs
+        .readFileSync(path.join(rootDir, "supabase/functions/_shared/credits.ts"), "utf8")
+        .match(/export const MAX_FREE_PHOTO_PAGES\s*=\s*(\d+);/)[1]
+    );
+    assert.ok(cap > 0, "MAX_FREE_PHOTO_PAGES could not be read — this test would pass over nothing");
+    const summarizer = okSummarizer(SUMMARY_OK);
+    const admin = makeAdmin({ tier: "free", photoPagesUsed: cap });
+    const res = await run({ task: "summarise", images: [IMG] }, { supabaseAdmin: admin, summarizer });
+    assert.equal(res.status, 403, `expected a refusal, got ${res.status}`);
+    const body = await res.json();
+    assert.equal(body.code, "free_photo_limit");
+    /* NOTHING WAS SPENT, which is what putting the check on this side
+       of the provider call buys. */
+    assert.equal(summarizer.calls, 0, "the provider was called for a request that was refused");
+    assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 0, "a refused request was billed");
+    /* AND THE REFUSAL POINTS AT THE PATH THAT STILL WORKS. */
+    assert.match(body.error, /past(e|ing)/i, "the refusal does not name pasting");
+  });
+
+  await test("a trial account under the cap is served, and its pages are counted", async () => {
+    const summarizer = okSummarizer(SUMMARY_OK);
+    const admin = makeAdmin({ tier: "free", photoPagesUsed: 0 });
+    const res = await run({ task: "summarise", images: [IMG, IMG, IMG, IMG] }, { supabaseAdmin: admin, summarizer });
+    assert.equal(res.status, 200, "a trial account's FIRST batch was refused");
+    const counted = admin.seen.filter((x) => x.op === "rpc" && x.fn === "add_trial_photo_pages");
+    assert.equal(counted.length, 1, "the pages were not counted");
+    assert.equal(counted[0].payload.p_pages, 4, "the wrong number of pages was counted");
+    /* CREDITS FIRST, THEN PAGES. An interruption between them leaves a
+       batch billed and uncounted, which is bounded and falls the
+       student's way; counting first would spend the cap on work that
+       was never billed. */
+    const rpcs = admin.seen.filter((x) => x.op === "rpc").map((x) => x.fn);
+    assert.deepEqual(rpcs, ["add_trial_credits", "add_trial_photo_pages"], `wrong order: ${rpcs.join(" -> ")}`);
+  });
+
+  await test("a paid account's photographs are never counted against a cap", async () => {
+    /* THE CLAIM THAT KEEPS THE CAP OFF PEOPLE WHO PAID, and it is
+       asserted on WHAT HAPPENS rather than on how the branch is
+       written — an earlier version greped for the expression and went
+       red the moment the branch was corrected. */
+    for (const tier of ["ai", "ai_max"]) {
+      /* WELL PAST WHAT THE CAP WOULD ALLOW, deliberately. With
+         photoPagesUsed at 0 this test passes even against a cap that
+         has forgotten to ask about the tier — 4 pages fit under 8
+         either way — so the fixture has to be in the state only a
+         correct implementation survives. Checked by mutation. */
+      const admin = makeAdmin({ tier, photoPagesUsed: 999 });
+      const res = await run(
+        { task: "summarise", images: [IMG, IMG, IMG, IMG] },
+        { supabaseAdmin: admin, summarizer: okSummarizer(SUMMARY_OK) }
+      );
+      assert.equal(res.status, 200, `${tier} was refused a photo batch`);
+      assert.equal(
+        admin.seen.filter((x) => x.op === "rpc" && x.fn === "add_trial_photo_pages").length,
+        0,
+        `${tier} had its photographed pages counted against the trial cap`
+      );
+    }
   });
 
   await test("mixed media and oversize batches are refused before anything is spent", async () => {
