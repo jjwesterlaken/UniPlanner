@@ -1,0 +1,211 @@
+# Turning Stripe on — the order, and what proves each step
+
+Web purchases are **built and switched off**. This is the sequence that
+turns them on, in the order it is done.
+
+**Why this file exists.** BILLING-PLAN.md Phase 6 holds the seven-step
+order; DEPLOY-CHECKLIST.md §1e points at it and §2b/§7d hold one
+dashboard dependency that belongs in the middle of it. Neither is
+findable when you are actually doing this, and three things that decide
+whether it goes smoothly are in neither. This is the one page to work
+from; every figure in it is read from the code and cited, so it can be
+re-derived rather than trusted.
+
+Phase 6's list is **test-mode first**, and that is worth keeping. Do
+steps 1–8 against test mode, then repeat 5–7 with live values, then
+step 9.
+
+---
+
+## 1. Apply `0019_stripe.sql`
+
+It WIDENS, so it goes before the deploy. A successful apply ends:
+
+```
+NOTICE: 0019 applied and verified: 6 properties checked.
+```
+
+One nullable `profiles.stripe_customer_id` with a UNIQUE index. Unique
+because two accounts sharing a Stripe customer make the reverse lookup
+ambiguous exactly when a webhook is deciding whose tier to write.
+
+## 2. Create six Prices on two Products
+
+Each must carry the `lookup_key` **exactly** as
+`supabase/functions/_shared/stripe.ts` spells it. Prices are the AUD
+figures in `site/pricing.js`.
+
+| `lookup_key` | tier | AUD |
+|---|---|---|
+| `uniplanner_studyai_monthly` | Study AI | 8.99 |
+| `uniplanner_studyai_sixmonth` | Study AI | 44.99 |
+| `uniplanner_studyai_annual` | Study AI | 79.99 |
+| `uniplanner_studyaimax_monthly` | Study AI Max | 18.99 |
+| `uniplanner_studyaimax_sixmonth` | Study AI Max | 94.99 |
+| `uniplanner_studyaimax_annual` | Study AI Max | 169.99 |
+
+**A Price without its lookup key is the failure that matters.**
+`tierFromStripeSubscription` returns `recognised: false`, the webhook
+500s having written nothing, and Stripe retries until somebody fixes
+the dashboard. That is deliberate — the alternative silently demotes a
+paying subscriber to free — but it means a typo here surfaces as a
+retry storm rather than as a wrong tier.
+
+## 3. Configure the Customer Portal
+
+Once, in the Stripe dashboard. Stripe refuses to create a portal
+session until it has been set up, and that failure only appears when a
+real student taps **Manage**.
+
+## 4. Set the Terms of Service URL
+
+Stripe → Settings → Public details → **Terms of service**:
+
+```
+https://www.uniplannerapp.com/terms
+```
+
+**Not optional.** `billing-checkout` sends
+`consent_collection[terms_of_service]: "required"`, and Stripe
+**refuses to create a session** when that dashboard field is empty. So
+a forgotten field is a checkout that cannot start rather than a missing
+link — the right direction, and a five-minute diagnosis only if you
+know to look. (DEPLOY-CHECKLIST §2b and §7d.)
+
+## 5. Create the webhook endpoint
+
+```
+https://kuhtogvewcooigudmgwj.supabase.co/functions/v1/stripe-webhook
+```
+
+Subscribed to exactly these six, which are the `ACTIONABLE` set in
+`supabase/functions/stripe-webhook/index.ts` — not the
+`customer.subscription.*` shorthand Phase 6 uses:
+
+```
+checkout.session.completed
+customer.subscription.created
+customer.subscription.updated
+customer.subscription.deleted
+customer.subscription.paused
+customer.subscription.resumed
+```
+
+Anything else is recorded and answered 200 without action. A list of
+types to ACT on is safer than a list to ignore, because a type nobody
+enumerated then does nothing rather than something unintended.
+
+## 6. Set the two secrets
+
+Supabase → Edge Functions → Secrets:
+
+| secret | value | read by |
+|---|---|---|
+| `STRIPE_SECRET_KEY` | `sk_live_…` | all three functions |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_…` from the step-5 endpoint | `stripe-webhook` |
+
+**Both or neither.** The webhook refuses with `stripe_disabled` (503)
+unless both are set, deliberately: a signing secret with no API key
+would verify deliveries it could not act on and record them as handled.
+
+**THE TWO `whsec_` VALUES ARE DIFFERENT SECRETS.** `stripe listen`
+prints one for the CLI tunnel; the dashboard endpoint has its own.
+Phase 6 step 4 says to use the endpoint's and step 6 says
+`stripe listen` prints one for step 4 — both true of different
+rehearsals, and easy to cross. For live it is the endpoint's.
+
+## 7. Deploy the Edge Functions
+
+The workflow derives its list from the directory and passes
+`--no-verify-jwt` to `stripe-webhook` and `billing-webhook` only.
+Without that flag every delivery is refused by the platform before our
+code runs: nothing errors, nothing is logged, and the symptom is
+*"students pay and their plan never changes."*
+
+## 8. Watch a real delivery land BEFORE flipping anything
+
+```
+stripe trigger customer.subscription.updated
+```
+
+Then confirm a row in `billing_events`.
+
+## 9. Flip the client flag
+
+`STRIPE_ENABLED = true` in `src/billingFlags.js`, merge, promote. Only
+now is any purchase control drawn.
+
+---
+
+# Three things Phase 6 does not tell you
+
+## Step 9 breaks four tests — it is not a one-line change
+
+Measured by flipping the flag and running the suite:
+
+```
+FAIL - the "account" tab renders from the built bundle, signed in, on a cold mount
+FAIL - every tab was actually visited, so none of the above passed over nothing
+FAIL - ON WEB the same page speaks to the SDK not once
+FAIL - WITH STRIPE SWITCHED OFF the web panel offers no way to pay, and still shows the tier
+```
+
+Only the last is NAMED for the off state. The other three assert
+`data-purchase-unavailable` — the "where plans are bought" line that
+the on state replaces with real controls — and one is the cascade from
+the account tab failing.
+
+**The flip commit must carry their on-state twins or CI blocks the
+merge.** Budget an hour, not a minute.
+
+## Nothing in the code distinguishes test mode from live
+
+`grep` for `sk_live` / `livemode` across `_shared/stripe.ts` and the
+webhook returns only a fixture string in the test file. So `sk_test_…`
+with the flag on gives working-looking buttons that take test cards and
+move no money, with nothing warning anyone.
+
+That is fine as a deliberate staging step and dangerous as an accident.
+**Decide which key is in that box when you flip.**
+
+## Read `periodSource` in the first live apply's log
+
+`STRIPE_API_VERSION` is pinned to `2026-04-22.dahlia`. Which location
+that version carries `current_period_end` on — the subscription or the
+items — is not answerable from this repository, which is why
+`periodSource` is logged on EVERY apply rather than only on failure.
+
+A paid row whose period cannot be read is refused
+(`open_ended_refused`, nothing written, the provider retries), so a
+wrong pin shows up as retries rather than as a tier that never expires.
+
+---
+
+# After the flag flips — what no suite can check
+
+1. A completed checkout writes `profiles.tier`, `tier_source = 'stripe'`,
+   `store = 'stripe'` and a `stripe_customer_id`.
+2. The plan line updates on the 0/2/5/10-second ladder **without a
+   reload** — the gap where Stripe confirms before our server hears.
+3. **Manage** opens the Portal for the right customer.
+4. Cancelling drops the tier **at the period end, not before**.
+5. A failing card leaves the tier alone while `past_due`. `unpaid` —
+   retries exhausted — does not.
+6. **The price on the button is the price Stripe charges.** No test
+   here can check this: the figures are derived from `site/pricing.js`,
+   but the Price object belongs to the dashboard.
+
+Return URLs ship with the function deploy and need no dashboard entry
+(`_shared/stripe.ts`):
+
+```
+https://www.uniplannerapp.com/app/?checkout=done
+https://www.uniplannerapp.com/app/?checkout=cancelled
+```
+
+---
+
+**A store subscriber cannot buy here.** `billing-checkout` refuses with
+`store_subscription_active` (409) and the panel says which store. Apple
+and Google cannot see a Stripe subscription and will not cancel one, so
+the student would be charged twice and could stop only half of it.
