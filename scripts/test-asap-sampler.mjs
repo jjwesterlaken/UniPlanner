@@ -109,9 +109,13 @@ function fixture() {
   let id = 1;
   for (const set of [1, 2, 3, 7, 8]) {
     for (let i = 0; i < 8; i++) {
-      rows.push([id++, set, `Dear @CAPS1 my friend @PERSON${i} from @LOCATION1 said it${SMART}s good for @NUM1 reasons and I agree with that.`, i % 4].join("\t"));
+      rows.push([id++, set, `Dear @CAPS1, I think computers help people in many different ways every single day. My friend @PERSON${i} who lives in @LOCATION1 uses one for about @NUM1 hours a week. It is useful because you can learn new things, talk to family who live far away, and find information for school work without going to a library. Some people say computers are bad for you because you sit down too much and do not exercise enough, but I disagree with that view quite strongly and I will explain exactly why in this essay. It${SMART}s clear enough.`, i % 4].join("\t"));
     }
   }
+  /* A four-word row, deliberately: ASAP has near-blanks in it and the
+     floor exists to exclude them. Without one in the fixture the
+     floor test would pass over nothing. */
+  rows.push([9999, 1, "Computers are quite good.", 0].join("\t"));
   fs.writeFileSync(path.join(dir, "training_set_rel3.tsv"), Buffer.from(rows.join("\n"), "latin1"));
   for (const set of [1, 2, 7, 8]) {
     makeDocx(path.join(dir, "Essay_Set_Descriptions", `Essay Set #${set}--ReadMeFirst.docx`), `Prompt ${set}. Scoring: a clear position sustained throughout.`);
@@ -136,6 +140,36 @@ test("SOURCE-DEPENDENT SETS ARE EXCLUDED, and the excluded ones really exist in 
     const tsv = fs.readFileSync(path.join(dir, "training_set_rel3.tsv"), "latin1");
     assert.ok(tsv.split("\n").some((l) => l.split("\t")[1] === "3"), "the fixture has no set 3 to exclude");
     assert.match(out, /sampled\s+8 essays/, "2 per set across four sets is 8; a fifth set leaked in");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("THE LENGTH FLOOR EXCLUDES A STUB ESSAY, and the fixture contains one to exclude", () => {
+  /* The first real run admitted a 4-word essay. A stub that short
+     gives the model nothing to quote and nothing to be wrong about,
+     so its fields are novel by construction and it drags the
+     distribution the whole measurement is reading. */
+  const dir = fixture();
+  try {
+    const tsv = fs.readFileSync(path.join(dir, "training_set_rel3.tsv"), "latin1");
+    assert.ok(tsv.includes("Computers are quite good."), "the fixture has no stub row, so this proves nothing");
+
+    const out = runSampler(["--dir", dir, "--per-set", "2", "--dry-run"]);
+    assert.match(out, /floor 50, [1-9]\d* rows below it skipped/, "no row was skipped, so the floor did nothing");
+    const min = Number(out.match(/words\s+min (\d+)/)[1]);
+    assert.ok(min >= 50, `a ${min}-word essay was sampled under a 50-word floor`);
+
+    /* And a floor nothing can meet REFUSES rather than sampling
+       nothing quietly. */
+    let refused = "";
+    try {
+      runSampler(["--dir", dir, "--per-set", "2", "--min-words", "5000", "--dry-run"]);
+      assert.fail("sampled with an impossible floor");
+    } catch (e) {
+      refused = `${e.stdout || ""}${e.stderr || ""}`;
+    }
+    assert.match(refused, /no rows matched/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

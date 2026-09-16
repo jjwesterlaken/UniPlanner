@@ -158,6 +158,33 @@ test("a real quotation passes, and carries no violation of either kind", () => {
   assert.equal(ok, true);
 });
 
+test("EVERY WAY A MODEL MARKS A QUOTATION IS SEEN — the blind spot that misreported a real run", () => {
+  /* The detector saw double quotes only, and reported "0 quoted
+     spans" over a real ASAP run. That number reads as "the model
+     never quoted" and could equally have meant "the model quoted in a
+     form this could not see" — two findings, two remedies, told apart
+     by nothing. */
+  const phrase = "the urban population grew";
+  const forms = {
+    "straight double": `You write "${phrase}" and stop.`,
+    "curly double": `You write \u201C${phrase}\u201D and stop.`,
+    "single": `You write '${phrase}' and stop.`,
+    "curly single": `You write \u2018${phrase}\u2019 and stop.`,
+    "guillemets": `You write \u00AB${phrase}\u00BB and stop.`,
+    "backticks": `You write \`${phrase}\` and stop.`,
+    "markdown bold": `You write **${phrase}** and stop.`,
+  };
+  for (const [name, text] of Object.entries(forms)) {
+    assert.deepEqual(quotedSpans(text), [phrase], `a ${name} quotation was invisible`);
+  }
+  /* AN APOSTROPHE IS THE SAME CHARACTER AS A SINGLE QUOTE, so the
+     possessive must not open a span — otherwise ordinary prose reads
+     as full of quotations and the count means nothing. */
+  assert.deepEqual(quotedSpans("The student's point doesn't land and isn't developed."), []);
+  /* And the same span found by two patterns is reported once. */
+  assert.deepEqual(quotedSpans(`"${phrase}" and again **${phrase}**`), [phrase]);
+});
+
 test("a short quotation is not checked, because a common phrase is not a claim about authorship", () => {
   const fields = [`Your "clear thesis" is asserted rather than argued.`];
   const { violations } = checkNoWriting({ fields, essay: ESSAY, criteria: CRITERIA, matchUnit: 4, window: 12 });

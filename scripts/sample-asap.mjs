@@ -84,6 +84,13 @@ const dir = opt("--dir");
 const perSet = Number(opt("--per-set", "8"));
 const runs = opt("--runs", "3");
 const seed = Number(opt("--seed", "1"));
+/* A FLOOR ON LENGTH, because the first real run admitted a 4-word
+   essay. A stub that short gives the model nothing to quote and
+   nothing to be wrong about, so its fields are novel by construction
+   and it drags the distribution the whole measurement is reading.
+   ASAP has blanks and near-blanks in it; they are rows in a corpus,
+   not essays. */
+const minWords = Number(opt("--min-words", "50"));
 const dryRun = argv.includes("--dry-run");
 const SETS = (opt("--sets", "1,2,7,8")).split(",").map((s) => Number(s.trim()));
 
@@ -130,13 +137,19 @@ const ANON = /@[A-Z]+\d*/g;
 const stripAnon = (s) => s.replace(ANON, " ").replace(/\s{2,}/g, " ").trim();
 
 const rows = [];
+let tooShort = 0;
 for (const line of lines.slice(1)) {
   const f = line.split("\t");
   const set = Number(f[iSet]);
   if (!SETS.includes(set)) continue;
   const essay = stripAnon(f[iEssay] || "");
   if (!essay) continue;
-  rows.push({ id: f[iId], set, score: Number(f[iScore]), essay, words: essay.split(/\s+/).length });
+  const words = essay.split(/\s+/).filter(Boolean).length;
+  if (words < minWords) {
+    tooShort++;
+    continue;
+  }
+  rows.push({ id: f[iId], set, score: Number(f[iScore]), essay, words });
 }
 if (rows.length === 0) {
   console.error("no rows matched the requested sets — is this the right TSV?");
@@ -217,7 +230,13 @@ console.log("=".repeat(72));
 console.log(`corpus       ${tsvPath}`);
 console.log(`sets         ${SETS.join(", ")}  (source-dependent sets excluded)`);
 console.log(`sampled      ${chosen.length} essays, ${perSet} per set, seed ${seed}`);
-console.log(`words        min ${wordCounts[0]} | p50 ${pct(wordCounts, 50)} | max ${wordCounts[wordCounts.length - 1]}`);
+console.log(`words        min ${wordCounts[0]} | p50 ${pct(wordCounts, 50)} | max ${wordCounts[wordCounts.length - 1]}   (floor ${minWords}, ${tooShort} rows below it skipped)`);
+/* The floor is ASSERTED rather than assumed: a sample that violated it
+   would quietly reintroduce the defect the floor exists to remove. */
+if (wordCounts[0] < minWords) {
+  console.error(`\nthe floor did not hold: shortest sampled essay is ${wordCounts[0]} words`);
+  process.exit(1);
+}
 console.log(`anonymisation stripped (@CAPS/@PERSON/@LOCATION/@NUM and the rest)`);
 console.log(`rubrics      ${rubricNote.join(" | ")}`);
 console.log(`runs each    ${runs}   (${chosen.length * Number(runs)} provider calls in total)`);

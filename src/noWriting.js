@@ -132,12 +132,49 @@ export function novelRuns(candidate, source, { matchUnit } = {}) {
 export const longestNovelRun = (candidate, source, opts) =>
   novelRuns(candidate, source, opts).reduce((max, r) => Math.max(max, r.length), 0);
 
-/* A quoted span, in either quote style. The model is told to quote the
-   student; this finds what it claims to be quoting. */
+/* Every way a model marks a quotation.
+ *
+ * THE FIRST VERSION SAW DOUBLE QUOTES ONLY, and reported "0 quoted
+ * spans" over a real run -- a number that reads as "the model never
+ * quoted" and could equally have meant "the model quoted in a form
+ * this could not see". Two different findings with two different
+ * remedies, told apart by nothing. Single quotes, curly singles,
+ * markdown emphasis and backticks were all invisible.
+ *
+ * Single quotes are the awkward one: an apostrophe is the same
+ * character, so `don't` must not open a span. The pattern requires a
+ * non-letter before the opening mark and after the closing one, which
+ * is what separates 'a quoted phrase' from the possessive in "the
+ * student's point".
+ *
+ * It is deliberately GENEROUS. A false positive costs one span checked
+ * against the essay, which either matches or is reported; a false
+ * negative is the failure that already happened -- a measurement
+ * reporting that a mechanism was never exercised when it may have
+ * been.
+ */
+const QUOTE_PATTERNS = [
+  /"([^"]{2,}?)"/g,
+  /“([^”]{2,}?)”/g,
+  /«([^»]{2,}?)»/g,
+  /`{1,3}([^`]{2,}?)`{1,3}/g,
+  /\*\*([^*]{2,}?)\*\*/g,
+  /(?<![A-Za-z0-9])'([^']{2,}?)'(?![A-Za-z0-9])/g,
+  /(?<![A-Za-z0-9])‘([^’]{2,}?)’(?![A-Za-z0-9])/g,
+];
+
 export function quotedSpans(text) {
+  const s = String(text || "");
   const out = [];
-  for (const m of String(text || "").matchAll(/"([^"]{2,})"|“([^”]{2,})”/g)) {
-    out.push(m[1] || m[2]);
+  const seen = new Set();
+  for (const re of QUOTE_PATTERNS) {
+    for (const m of s.matchAll(re)) {
+      const span = m[1].trim();
+      if (span && !seen.has(span)) {
+        seen.add(span);
+        out.push(span);
+      }
+    }
   }
   return out;
 }
