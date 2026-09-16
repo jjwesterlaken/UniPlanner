@@ -3765,6 +3765,42 @@ CI, which rules out things that look fine locally:
 - **Spawn `process.execPath`, never `npx`, never `node_modules/.bin/*`.**
   On Windows the `.bin` shim is a `.cmd` and modern Node refuses to
   execute it (`EINVAL`); `npx` is unreliable on build servers.
+- **A dynamic `import()` takes a URL, never a filesystem path.** On
+  Windows `C:\...` parses with the DRIVE LETTER AS A SCHEME, and Node
+  refuses it: `ERR_UNSUPPORTED_ESM_URL_SCHEME ... Received protocol
+  'c:'`. Wrap every one in `pathToFileURL(p).href`, including the
+  cache-busting template form — `` import(`${pathToFileURL(p).href}?v=${n}`) ``
+  — which has no `path.join` in it and is the same bug. Bare package
+  specifiers and relative specifiers are fine and need nothing.
+
+  **It broke on a real machine before anyone noticed, and the reason
+  fourteen of them accumulated is that EVERY POSIX MACHINE IS HAPPY
+  WITH IT**: CI is Linux, the container is Linux, and a path beginning
+  `/` is a valid URL path. It surfaced on `measure-photo-gates.mjs` —
+  the one script whose entire job is to be run BY HAND ON SOMEBODY
+  ELSE'S LAPTOP — where it failed before reading a single photo. The
+  same shape as the `.bin` shim above: a platform the suite never runs
+  on is a platform the suite cannot speak for.
+
+  `scripts/test-vacuous-guards.mjs` shape 3 now sweeps every
+  `scripts/*.mjs` for it. **Two false positives had to be removed
+  before it was worth anything, and both are the guard-meets-its-own-
+  subject rule in new costumes.** Stripping comments was not enough,
+  because the failure MESSAGE has to quote the forbidden call to be
+  useful — so string bodies are MASKED rather than removed, keeping
+  their first three characters and their LENGTH, because deleting them
+  turned `import("playwright")` into `import("")` and read as an
+  offender. And a template literal's `${...}` is CODE: masking it
+  wholesale swallowed the `pathToFileURL` that makes the cache-busting
+  form correct, so the guard reported the fix as the bug. Only the
+  literal runs between the expressions are masked.
+
+  **The hand-rolled `` new URL(`file://${p}`) `` helpers were NOT the
+  bug**, which was worth checking before reporting two defects instead
+  of one: they normalise a drive letter to `file:///C:/...` and
+  percent-encode spaces correctly. They differ from `pathToFileURL`
+  only on `#`, `?` and `%` in a path name. They were replaced anyway,
+  so the guard has one shape to recognise — a tidy-up, not a fix.
 - Don't "tidy" the deprecation warnings these scripts emit. That has
   broken the build twice.
 

@@ -33,6 +33,65 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPTS = path.join(rootDir, "scripts");
+
+/* Comments stripped before any of the sweeps below match, because this
+   file's own guards NAME the thing they forbid — shape 3's explanation
+   contains a literal `import(path.join(...))`, which is the forbidden
+   state written out in full. Sixth costume of a rule this project has
+   met five times.
+
+   BLOCK comments go wholesale; LINE comments only when the `//` starts
+   the line. A blanket `//.*$` eats the rest of any line carrying a
+   "https://" string, which would turn a real offender into a silent
+   pass — the strip-ate-code failure the readings guard already hit with
+   `accept="image/*"`. Narrower beats cleverer. */
+const stripComments = (src) =>
+  src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((l) => (/^\s*\/\//.test(l) ? "" : l))
+    .join("\n");
+
+/* AND STRING LITERALS ARE MASKED, which is the SECOND place a guard
+   meets its own subject. Stripping comments was not enough: shape 3's
+   failure MESSAGE has to quote the forbidden call to be useful, so the
+   guard reported ITSELF as an offender.
+
+   MASKED RATHER THAN REMOVED, and that distinction is the whole trick.
+   Deleting string bodies also deleted the specifiers the check has to
+   CLASSIFY -- import("playwright") became import("") and read as an
+   offender, so the first attempt swapped one false positive for
+   another. So each body keeps its first three characters (enough for
+   "pla" and for "../") and the rest becomes filler OF THE SAME LENGTH,
+   which leaves every byte offset where it was and every specifier
+   recognisable while no prose survives to match. */
+const maskBody = (quote, body) => quote + body.slice(0, 3) + "x".repeat(Math.max(0, body.length - 3)) + quote;
+
+/* A TEMPLATE LITERAL'S ${...} IS CODE, NOT STRING, and masking it wholesale
+   flagged two CORRECT lines. `import(`${pathToFileURL(p).href}?v=...`)` is
+   exactly the right shape, and swallowing the interpolation hid the
+   pathToFileURL that makes it right -- a guard reporting the fix as the
+   bug. So only the literal runs between the expressions are masked.
+
+   Nested templates inside an interpolation are not handled and do not
+   occur here; a guard that names its hole is worth more than one that
+   looks thorough. */
+const maskTemplate = (lit) =>
+  "`" +
+  lit
+    .slice(1, -1)
+    .split(/(\$\{[^{}]*\})/)
+    .map((part) => (part.startsWith("${") ? part : part.slice(0, 3) + "x".repeat(Math.max(0, part.length - 3))))
+    .join("") +
+  "`";
+
+const stripStrings = (src) =>
+  src
+    .replace(/`(?:\\.|[^`\\])*`/g, maskTemplate)
+    .replace(/"((?:\\.|[^"\\\n])*)"/g, (_, b) => maskBody('"', b))
+    .replace(/'((?:\\.|[^'\\\n])*)'/g, (_, b) => maskBody("'", b));
+
+const readable = (file) => stripStrings(stripComments(fs.readFileSync(path.join(SCRIPTS, file), "utf8")));
 const suites = fs.readdirSync(SCRIPTS).filter((f) => /^test-.*\.mjs$/.test(f));
 
 let passed = 0;
@@ -156,6 +215,71 @@ test("no synchronous runner can report an async test green", () => {
     `${offenders.join(", ")} declare a synchronous runner that would report an async test as passing ` +
       "whatever it asserts. Make it throw on a thenable, or make the runner await."
   );
+});
+
+/* ------------------------------------------------------------------ */
+/*  Shape 3: a dynamic import handed a filesystem PATH                 */
+/* ------------------------------------------------------------------ */
+
+test("no dynamic import is handed a filesystem path instead of a URL", () => {
+  /* IT BROKE ON A REAL MACHINE, which is the only reason this is a rule
+     rather than a preference. `measure-photo-gates.mjs` did
+
+       await import(path.join(ROOT, "supabase/.../prompts.js"))
+
+     and on Windows that is `C:\...`, where the DRIVE LETTER PARSES AS A
+     SCHEME: Node refuses it with ERR_UNSUPPORTED_ESM_URL_SCHEME,
+     "Received protocol 'c:'". It failed before reading a single photo,
+     on the one script whose whole job is to be run by hand on somebody
+     else's laptop.
+
+     EVERY POSIX MACHINE IS HAPPY WITH IT, which is why fourteen of
+     these accumulated unnoticed: CI is Linux, the container is Linux,
+     and a path that happens to start with "/" is a valid URL path. The
+     build scripts already carry a Windows section in CLAUDE.md for
+     exactly this class — `.bin` shims, `npx` — and this is the same
+     lesson one layer up.
+
+     WHAT IS ALLOWED: a bare package specifier ("esbuild", "playwright"),
+     a relative specifier ("../src/x.js" — Node resolves that against
+     the importing module, no platform question), and a URL built by
+     `pathToFileURL`. What is not is a variable or a `path.join` handed
+     straight in.
+
+     NOT A GREP FOR `path.join`: the ?v= cache-busting form
+     (`await import(`${fnPath}?v=...`)`) has no path.join in it at all
+     and is the same bug, so the check is on what the import RECEIVES. */
+  const offenders = [];
+  for (const file of fs.readdirSync(SCRIPTS).filter((f) => f.endsWith(".mjs"))) {
+    const src = readable(file);
+    for (const m of src.matchAll(/\bimport\(\s*([^)]*?)\s*\)/g)) {
+      const arg = m[1].trim();
+      if (!arg) continue;
+      if (/^["'][a-zA-Z@]/.test(arg)) continue;               // bare package specifier
+      if (/^["']\.{1,2}\//.test(arg)) continue;               // relative specifier
+      if (/pathToFileURL|\btoUrl\(/.test(arg)) continue;      // already a file URL
+      if (/^["']?(https?|file|data|node):/.test(arg)) continue;
+      offenders.push(`${file}: the argument was ${arg.slice(0, 60)}`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    "a dynamic module load is being handed a filesystem path, which fails on Windows with " +
+      "ERR_UNSUPPORTED_ESM_URL_SCHEME because the drive letter parses as a scheme:\n  " +
+      offenders.join("\n  ") +
+      "\nWrap the path in pathToFileURL(p).href"
+  );
+});
+
+test("the guard above can see an import at all", () => {
+  /* NON-VACUITY, and it is the assertion the shape-3 check depends on:
+     a regex that matched nothing would report every file clean. */
+  let seen = 0;
+  for (const file of fs.readdirSync(SCRIPTS).filter((f) => f.endsWith(".mjs"))) {
+    seen += [...readable(file).matchAll(/\bimport\(\s*[^)]*?\s*\)/g)].length;
+  }
+  assert.ok(seen >= 20, `only ${seen} dynamic module load(s) found across scripts/ — the pattern has stopped matching`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

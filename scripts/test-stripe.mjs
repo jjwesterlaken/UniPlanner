@@ -30,7 +30,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -51,13 +51,13 @@ async function test(name, fn) {
 
 /* ---------- the pure half, imported directly ---------- */
 
-const stripe = await import(path.join(rootDir, "supabase/functions/_shared/stripe.ts"));
-const ent = await import(path.join(rootDir, "supabase/functions/_shared/entitlement.ts"));
-const plans = await import(path.join(rootDir, "src/purchasePlans.js"));
-const flags = await import(path.join(rootDir, "src/billingFlags.js"));
-const prices = await import(path.join(rootDir, "src/webPrices.js"));
-const copy = await import(path.join(rootDir, "src/plansCopy.js"));
-const links = await import(path.join(rootDir, "src/legalLinks.js"));
+const stripe = await import(pathToFileURL(path.join(rootDir, "supabase/functions/_shared/stripe.ts")).href);
+const ent = await import(pathToFileURL(path.join(rootDir, "supabase/functions/_shared/entitlement.ts")).href);
+const plans = await import(pathToFileURL(path.join(rootDir, "src/purchasePlans.js")).href);
+const flags = await import(pathToFileURL(path.join(rootDir, "src/billingFlags.js")).href);
+const prices = await import(pathToFileURL(path.join(rootDir, "src/webPrices.js")).href);
+const copy = await import(pathToFileURL(path.join(rootDir, "src/plansCopy.js")).href);
+const links = await import(pathToFileURL(path.join(rootDir, "src/legalLinks.js")).href);
 
 /* ---------- the handlers, bundled with the platform stubbed ---------- */
 
@@ -253,7 +253,7 @@ async function deliver(event, opts = {}) {
   const v1 = opts.v1 ?? [await sign(opts.signingSecret ?? SIGNING_SECRET, t, opts.signBody ?? raw)];
   const headers = new Headers({ "content-type": "application/json" });
   if (!opts.noSignature) headers.set("stripe-signature", opts.sigHeader ?? [`t=${t}`, ...v1.map((v) => `v1=${v}`)].join(","));
-  const mod = await import(`${WEBHOOK}?v=${Math.random()}`);
+  const mod = await import(`${pathToFileURL(WEBHOOK).href}?v=${Math.random()}`);
   const res = await mod.handle(new Request("https://fn.test/stripe-webhook", { method: "POST", headers, body: raw }));
   return { status: res.status, body: await res.json() };
 }
@@ -261,7 +261,7 @@ async function deliver(event, opts = {}) {
 async function post(bundle, { token, body = {} } = {}) {
   const headers = new Headers({ "content-type": "application/json" });
   if (token) headers.set("authorization", `Bearer ${token}`);
-  const mod = await import(`${bundle}?v=${Math.random()}`);
+  const mod = await import(`${pathToFileURL(bundle).href}?v=${Math.random()}`);
   const res = await mod.handle(new Request("https://fn.test/x", { method: "POST", headers, body: JSON.stringify(body) }));
   return { status: res.status, body: await res.json() };
 }
@@ -1079,7 +1079,7 @@ async function run() {
 
   await test("the client flag is OFF, and the client refuses before the network when it is", async () => {
     assert.equal(flags.STRIPE_ENABLED, false, "web purchases are switched on — that is a decision, not a default");
-    const client = await import(path.join(rootDir, "src/stripeClient.js"));
+    const client = await import(pathToFileURL(path.join(rootDir, "src/stripeClient.js")).href);
     let reached = false;
     for (const call of [client.startCheckout, client.openPortal]) {
       await assert.rejects(

@@ -20,10 +20,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const pathToUrl = (p) => new URL(`file://${p}`).href;
+const toUrl = (p) => pathToFileURL(p).href;
 const rootDir = path.join(__dirname, "..");
 const pub = (f) => fs.readFileSync(path.join(rootDir, "public", f), "utf8");
 const dist = (f) => fs.readFileSync(path.join(rootDir, "dist-web", f), "utf8");
@@ -119,7 +119,7 @@ async function run() {
        Both spellings are required because Pages 301s /x.html -> /x and
        a navigation can arrive as either. */
     const src = pub("sw.js");
-    const links = await import(pathToUrl(path.join(rootDir, "src/legalLinks.js")));
+    const links = await import(toUrl(path.join(rootDir, "src/legalLinks.js")));
     /* DOCUMENT_PATHS, not "every _URL under SITE_URL" — since the path
        split APP_URL matches that shape and the planner is not a legal
        document to be served network-only. */
@@ -330,7 +330,7 @@ async function run() {
 
        Derived from SITE_URL rather than typed, so the identifier and the
        domain it is named after cannot drift apart. */
-    const { SITE_URL } = await import(pathToUrl(path.join(rootDir, "src/legalLinks.js")));
+    const { SITE_URL } = await import(toUrl(path.join(rootDir, "src/legalLinks.js")));
     const domain = new URL(SITE_URL).hostname.replace(/^www\./, ""); // uniplannerapp.com
     const expected = `${domain.split(".").reverse().join(".")}.planner`; // com.uniplannerapp.planner
 
@@ -346,7 +346,7 @@ async function run() {
        CFBundleVersion must strictly increase on every upload, and a
        store rejects a build that reuses one -- which lands after a long
        upload, when you are already trying to ship a fix. */
-    const { buildNumber } = await import(pathToUrl(path.join(rootDir, "scripts/stamp-native.mjs")));
+    const { buildNumber } = await import(toUrl(path.join(rootDir, "scripts/stamp-native.mjs")));
     const t = Date.UTC(2026, 7, 13);
     assert.ok(buildNumber(t + 60_000) > buildNumber(t), "a minute later must produce a higher number");
     assert.equal(buildNumber(t), buildNumber(t), "the same instant must be stable");
@@ -407,7 +407,7 @@ async function run() {
         path.join(projDir, "project.pbxproj"),
         "// !$*UTF8*$!\n{ buildSettings = {\n  MARKETING_VERSION = 0.0.1;\n  CURRENT_PROJECT_VERSION = 1;\n  IPHONEOS_DEPLOYMENT_TARGET = 14.0;\n  TARGETED_DEVICE_FAMILY = \"1,2\";\n}; }\n"
       );
-      const { stamp } = await import(pathToUrl(path.join(rootDir, "scripts/stamp-native.mjs")) + `?v=${Date.now()}`);
+      const { stamp } = await import(toUrl(path.join(rootDir, "scripts/stamp-native.mjs")) + `?v=${Date.now()}`);
       stamp();
       const after = fs.readFileSync(path.join(projDir, "project.pbxproj"), "utf8");
       assert.match(
