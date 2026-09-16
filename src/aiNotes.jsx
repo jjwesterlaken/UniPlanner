@@ -56,6 +56,7 @@ import {
 } from "./audioSources.js";
 import { migrateNote, isRemote, fetchNote, buildContent, previewFor } from "./aiNotesStore.js";
 import { noteCache } from "./noteCache.js";
+import { maybeAskForReview } from "./appReview.js";
 import { MONTHLY_CREDITS_LIMIT, allowanceForTier } from "./aiTextLimits.js";
 import { subscribeEntitlement, entitlementVersion as readEntitlementVersion } from "./entitlementRefresh.js";
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
@@ -1101,6 +1102,21 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
       noteItems.forEach((n) => addItem("notes", n));
       if (setData) setData((d) => ({ ...d, meta: clearPendingRecovery(d.meta) }));
       dispatch({ type: "saved" });
+
+      /* THE ONE MOMENT WORTH ASKING AT: the student is looking at
+         notes they did not have to type. Asking before the payoff is
+         asking about nothing, and asking after a FAILED save is the
+         worst moment in the app for it -- which is why this sits after
+         the dispatch rather than in a finally.
+
+         NOT AWAITED, AND ITS RESULT IS IGNORED. The note is already
+         saved by this line; a plugin that is missing, an OS that
+         refuses, or a storage that is blocked must cost the review
+         request and nothing else. `maybeAskForReview` never rejects,
+         and the `void` says so to anyone reading. Same rule as the
+         folder-filing try above: a convenience may never take down
+         work somebody just paid for. */
+      void maybeAskForReview();
     } catch (err) {
       dispatch({ type: "saveFailed", message: err.message || "Couldn't save this note. Please try again." });
     }
