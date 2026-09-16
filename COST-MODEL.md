@@ -317,6 +317,31 @@ one decision: **model and weight, named at the same time.**
 
 ### Everything that decrements, and by how much
 
+**THE TABLE BELOW IS THE CURRENT ONE.** The two-counter version it replaces is
+kept underneath, because the paragraphs after it were written against that shape
+and read oddly without it. One counter now — `ai_usage.credits_used`, and
+`profiles.trial_credits_used` for the lifetime trial — and every text weight is
+DERIVED by `TASK_CREDITS` from that task's own input and output ceilings rather
+than chosen.
+
+| Action | Counter | Credits | Where the write happens |
+|---|---|---|---|
+| Recording a lecture | `credits_used` | `max(provider-reported minutes, MINIMUM_BILLED_CREDITS = 3)` | `ai-notes/index.ts` step 12 |
+| Re-summarising a FAILED one | `credits_used` | `RESUMMARISE_BILLED_CREDITS` = 2, derived | `ai-notes/index.ts`, resummarise branch |
+| Explain-it-back | `credits_used` | 1 | `ai-text/index.ts` |
+| Weak spots | `credits_used` | 1 | same |
+| Practice questions | `credits_used` | 2 | same |
+| Summarise a note / a text chunk / **a photo batch** | `credits_used` | 3 | same |
+| Merge | `credits_used` | **2** | same |
+
+`merge` moved from 1 to 2 under the derivation: it had been weighted down for its
+smaller input, which was true and stopped deciding anything once the weights came
+off the ceilings — output is four times the price of input and merge's output
+ceiling equals summarise's.
+
+<details>
+<summary>The two-counter table this replaces (pre-migration-0013)</summary>
+
 | Action | Counter | Amount | Where the write happens |
 |---|---|---|---|
 | Recording a lecture | `ai_usage.minutes_used` | `max(provider-reported duration, 3)` | `ai-notes/index.ts` step 12 |
@@ -327,10 +352,15 @@ one decision: **model and weight, named at the same time.**
 | Summarise a note / a text chunk / **a photo batch** | `ai_usage.text_units_used` | 3 | same |
 | Merge | `ai_usage.text_units_used` | 1 | same |
 
+</details>
+
 **Nothing that calls a provider decrements nothing.** The brief's suspicion that
-the four text features are unmetered is not the case — they meter against a
-*different counter*, which is a design choice with its own section in CLAUDE.md
-(minutes answer "how much lecture", units answer "how much text"), not an oversight.
+the four text features are unmetered is not the case. *(Written when they metered
+against a second counter — "minutes answer how much lecture, units answer how much
+text". That split is gone: it is what hid the photo mispricing, because "3 units"
+and "50 minutes" cannot be put beside each other by any screen or any test. One
+currency makes the comparison unavoidable rather than impossible, which is how
+section 13 exists at all.)*
 
 **Both decrements happen server-side, in the Edge Function, on the service-role
 client.** Neither is client-side and **a modified client cannot bypass either.**
@@ -341,7 +371,56 @@ back to the client's number, so a crafted request could bill itself zero.
 
 ### Three holes, in descending order of what they cost
 
-**(a) The re-summarise retry has no failure precondition.** Step 4b checks that the
+> **STATUS, RE-CHECKED AGAINST THE CODE ON 15 SEPTEMBER 2026 — read this
+> before acting on anything below it.** Two of the three are CLOSED and this
+> section still described them as open, which is how somebody comes to re-do
+> work or re-panic about a bill. The table that opens section 5 is stale in a
+> third way: it names `ai_usage.minutes_used` and `ai_usage.text_units_used`,
+> and migration **0013 dropped both columns** when the two currencies collapsed
+> into one. There is one counter now, `credits_used`, and one weight table,
+> `TASK_CREDITS`.
+>
+> | | status | where |
+> |---|---|---|
+> | **(a)** re-summarise has no failure precondition | **FIXED** | `ai-notes/index.ts`, the `resummarise` branch |
+> | **(b)** the allowance increment is not atomic | **FIXED** (the lost update; a smaller race is kept on purpose) | migration 0011, then 0012's `add_ai_credits` |
+> | **(c)** the cap can be overshot by one recording | **OPEN, deliberately** | unchanged |
+>
+> Each is written up under its own heading below, with what actually changed.
+
+**(a) The re-summarise retry has no failure precondition — FIXED.** It used to
+check that the row exists, belongs to the caller, and holds a transcript, and
+never asked whether the summary had failed, so a SUCCESSFUL lecture could be
+re-summarised for the whole retention window. That is closed:
+
+- `existing.summary_failed !== true` returns **`already_summarised`** (409) and
+  bills nothing.
+- It is checked **BEFORE** the transcript, deliberately — a successful note has
+  nothing to retry whether or not the sweep has taken its transcript, and
+  answering "expired" there is a true sentence about the wrong question.
+- The success path writes `summary_failed = false`, so it is **one retry per
+  failure** rather than an open door. That property falls out free.
+- A distinct code does not breach the identical-rejection rule: that rule is
+  about not-found versus not-yours, and this branch is only reachable once
+  ownership is proven.
+
+**Verified by mutation, not by reading.** Replacing the precondition with a
+branch that never fires reddens three tests in
+`scripts/test-ai-notes-function.mjs` by name — *"a lecture whose summary
+SUCCEEDED cannot be re-summarised"*, *"the precondition is checked BEFORE the
+transcript"*, and *"one retry per failure: a successful retry closes the door
+behind it"* — the last of which reports the real symptom, `creditsBilled: 2` on
+a successful lecture.
+
+**The fix was the precondition and not the price**, which is what the original
+entry recommended: `RESUMMARISE_BILLED_CREDITS` is derived correctly for a
+*typical short* summary, and what was wrong was that the action could be taken
+when there was nothing to retry.
+
+<details>
+<summary>The original entry, kept because its arithmetic is what justified the fix</summary>
+
+Step 4b checks that the
 row exists, belongs to the caller, and holds a transcript. It never checks
 `summary_failed` or `status`. So a *successful* lecture can be re-summarised as
 many times as the retention window allows. The cost is the app's single most
@@ -364,6 +443,33 @@ recordings. **The fix is a precondition, not a price:** require
 `summary_failed = true` (or `status = 'failed'`) in the lookup, which makes the
 action unrepeatable by construction and leaves the billing derivation alone.
 
+</details>
+
+**(b) The allowance read/write is not atomic, in either function — FIXED, with
+a smaller race kept on purpose.** `_shared/allowance.ts` calls
+`add_ai_credits` (or `add_trial_credits` for the lifetime trial), a Postgres
+function that does the `+` under the row lock `ON CONFLICT DO UPDATE` takes and
+returns the post-increment totals — so the fraction a student is shown is the
+database's rather than one computed from a stale read. Migration 0011
+introduced it; 0012 replaced it when the currencies collapsed.
+
+**What was NOT changed, and it is a decision rather than an omission:** the
+allowance READ still precedes the provider call, so a missing column and an
+exhausted allowance both fail having spent nothing. Folding the check into the
+increment — "add it and tell me if I went over" — would move the refusal to
+after the money was spent. So a bounded race survives: two requests can both
+pass the check at *N* and both be billed, exceeding the cap by one request's
+cost. That is the same class as (c). What is fixed is the strictly worse bug,
+where the second request was never billed at all.
+
+The test worth knowing by name is **"THE LOST UPDATE, demonstrated"**, which
+runs the OLD read-modify-write in two concurrent psql sessions and asserts the
+total is 3 rather than 6 — without which "two concurrent calls add up" could
+pass because the two calls never overlapped.
+
+<details>
+<summary>The original entry</summary>
+
 **(b) The allowance read/write is not atomic, in either function.** Both do
 `select … minutes_used` (or `text_units_used`), then `upsert { …: read + cost }`.
 Two requests that overlap both read *N* and both write *N + cost*, so one of them
@@ -374,6 +480,19 @@ statement: a Postgres function doing `update … set minutes_used = minutes_used
 happens in the database rather than in the function's memory. Worth doing before
 money is charged, not before the closed test.
 
+</details>
+
+**(c) The cap can be overshot by exactly one recording — OPEN, deliberately,
+and re-confirmed in the code.** `ai-notes/index.ts` still takes
+`estimatedDurationSeconds` off the request body for the pre-flight guard, and
+the BILLED figure still comes from `result.durationSeconds` as the provider
+reports it. Both halves are as described: the billing is correct and the
+ceiling is soft by one action. Left alone for the reason the entry gives, and
+it is now the same shape as the race (b) deliberately keeps.
+
+<details>
+<summary>The original entry</summary>
+
 **(c) The cap can be overshot by exactly one recording.** The pre-flight guard uses
 the *client's* `estimatedDurationSeconds`. A client reporting 0 passes the guard at
 299/300 minutes used, and then the honest post-hoc billing lands the account at 479.
@@ -381,7 +500,13 @@ The billing is correct; the ceiling is soft by one action. Bounded and acceptabl
 while `MAX_REQUEST_SECONDS` is 3 h, worth knowing when the cap becomes a paid
 entitlement.
 
+</details>
+
 ### The comparison the brief asked for: minutes charged vs real cost
+
+> **The re-summarise row below is HISTORICAL** — the action it describes cannot
+> be taken any more, per (a). The photo row is live, and section 13 prices what
+> it costs an account.
 
 | Action | Real cost | Minutes billed | USD per billed minute | Verdict |
 |---|---|---|---|---|
