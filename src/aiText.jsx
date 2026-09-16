@@ -30,6 +30,8 @@ import {
   canAffordCredits,
   sectionsAffordable,
   TASK_CREDITS,
+  freePhotoPagesLeft,
+  MAX_FREE_PHOTO_PAGES,
 } from "./aiTextLimits.js";
 import {
   estimateReading,
@@ -625,11 +627,25 @@ export function SummariseReading({
     }
   };
 
+  /* THE TRIAL'S PHOTO CAP, SAID BEFORE THE PHOTOGRAPHING RATHER THAN
+     AFTER. `null` means uncapped — a paid tier, or an allowance we
+     could not read — and is NOT zero; treating the two the same would
+     refuse every paid student and every student in a tunnel. The
+     server enforces this regardless; the client only says it earlier,
+     because by the time somebody has photographed twelve pages they
+     have done the work of photographing twelve pages. */
+  const photoPagesLeft = freePhotoPagesLeft(allowance);
+  const overPhotoCap = photoPagesLeft !== null && photos.length > photoPagesLeft;
+
   /* An unreadable allowance must not read as an exhausted one — a
      paywall caused by going into a tunnel is worse than a missing
      line. Same rule as AiActionFrame. */
   const unknown = !allowance || allowance.unavailable;
   const affordable = unknown || !estimate.ok || canAffordCredits(allowance, estimate.credits);
+  /* OVER THE CAP DISABLES THE ACTION. A warning beside a live button
+     is a warning somebody presses past, and the server would refuse
+     anyway -- so the refusal happens here, where it costs nothing. */
+  const blocked = overPhotoCap;
 
   const reset = () => {
     setResult(null);
@@ -872,6 +888,17 @@ export function SummariseReading({
         </p>
       )}
 
+      {/* THE CAP, NAMING WHAT IS LEFT. A student told "you have 4 left"
+          can send four; one told "you've hit the limit" has been told
+          to go away. It points at pasting, which is uncapped and costs
+          a sixth as much — the thing they can do in the next thirty
+          seconds. */}
+      {overPhotoCap && (
+        <p className="rounded-lg bg-stone-100 px-2.5 py-2 text-xs text-stone-600" data-free-photo-cap>
+          {READING_COPY.freePhotoCap({ left: photoPagesLeft, cap: MAX_FREE_PHOTO_PAGES, count: photos.length })}
+        </p>
+      )}
+
       {usingPhotos && estimate.code === "too_many" && (
         <p className="rounded-lg bg-stone-100 px-2.5 py-2 text-xs text-stone-600">
           {READING_COPY.photosTooMany({ count: estimate.count, max: estimate.maxPhotos })}
@@ -933,7 +960,7 @@ export function SummariseReading({
           </button>
         </div>
       ) : (
-        <button className={btnPrimary} disabled={busy || !estimate.ok || !affordable} onClick={go}>
+        <button className={btnPrimary} disabled={busy || !estimate.ok || !affordable || blocked} onClick={go}>
           <Sparkles size={15} /> {READING_COPY.runLabel}
         </button>
       )}

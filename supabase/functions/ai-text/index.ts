@@ -24,7 +24,7 @@
 
 import { corsHeaders, jsonResponse } from "../ai-notes/_shared/cors.ts";
 import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
-import { readAllowance, billAllowance } from "../_shared/allowance.ts";
+import { readAllowance, billAllowance, checkPhotoPages, billPhotoPages } from "../_shared/allowance.ts";
 import { consentSetMatches, providerFingerprint } from "../_shared/aiProviders.js";
 import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
 import { validateRequest, checkTextAllowance, allowanceFraction } from "./guards.js";
@@ -101,9 +101,15 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
     stage = "tier_lookup";
     const { data: profile, error: profileErr } = await admin
       .from("profiles")
-      // The trial counter rides along: for a trial tier it IS the
-      // allowance, so fetching it here costs nothing and saves a query.
-      .select("tier, trial_credits_used")
+      // The trial counters ride along: for a trial tier they ARE the
+      // allowance and the photo cap, so fetching them here costs
+      // nothing and saves two queries.
+      //
+      // MIGRATION 0021 MUST BE APPLIED BEFORE THIS DEPLOYS. PostgREST
+      // answers an unknown column with a 400, which lands in
+      // `profileErr` below and stops every text AI feature for
+      // everybody -- 0015's lesson with a louder failure mode.
+      .select("tier, trial_credits_used, trial_photo_pages_used")
       .eq("user_id", userId)
       .maybeSingle();
     // A broken query and an absent row are told apart, so a database
@@ -169,6 +175,40 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       );
     }
 
+    /* ---- the trial's photo cap: before the spend, like the allowance ----
+
+       SAME SIDE OF THE PROVIDER CALL as the allowance read, and for the
+       same reason: a refusal here has cost nothing. It is a SEPARATE
+       limit from the allowance rather than a tighter one, because 60
+       credits buys three batches and a trial that spends itself on
+       photographs never demonstrates the lecture recording -- see
+       MAX_FREE_PHOTO_PAGES in _shared/credits.ts.
+
+       A PAID TIER NEVER REACHES THE COMPARISON. checkPhotoPages returns
+       ok for any tier that is not a trial, so the cap cannot leak onto
+       an account that bought a monthly allowance. */
+    const photoPages = Array.isArray(body.images) ? body.images.length : 0;
+    const cap = checkPhotoPages({
+      tier: profile.tier,
+      pagesUsed: profile.trial_photo_pages_used,
+      pages: photoPages,
+    });
+    if (!cap.ok) {
+      logStage(stage, { rejected: cap.code, remaining: cap.remaining, asked: cap.asked });
+      return errorResponse(
+        stage,
+        cap.code,
+        /* NAMES WHAT IS LEFT, because that is the only thing the student
+           can act on: four pages left is a batch they can still send. */
+        cap.remaining > 0
+          ? `Your free plan covers ${cap.cap} photographed pages and you have ${cap.remaining} left. ` +
+            `Send ${cap.remaining} or fewer, or paste the text instead — pasting is much cheaper and is not capped.`
+          : `Your free plan covers ${cap.cap} photographed pages and you've used them. ` +
+            `Pasting the text still works and is much cheaper, or upgrade for uncapped photographs.`,
+        403
+      );
+    }
+
     /* ---- allowance: the read that must precede the spend ---- */
     stage = "allowance";
     const month = currentMonthKey(now());
@@ -225,6 +265,11 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       logFailure(stage, err, { task });
       const charged = await billAllowance(admin, { userId, profile, month, credits: allowance.cost });
       if (!charged.ok) logFailure("billing", charged.error, { task, cost: allowance.cost, after: "parse_failure" });
+      /* THE PAGES COUNT WHEREVER THE CREDITS DO. The provider read them
+         and we were charged; a cap that only counted successful runs
+         would let unusable output be retried against it for ever. */
+      const countedFail = await billPhotoPages(admin, { userId, profile, pages: photoPages });
+      if (!countedFail.ok) logFailure("billing", countedFail.error, { pages: photoPages, after: "parse_failure" });
       /* A legibility refusal is not unusable output -- it is the model
          doing what it was told. BILLED, same as any generated output
          (billing follows spend), but under its OWN code carrying which
@@ -254,6 +299,13 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       // shown for work that succeeded is a worse one.
       logFailure(stage, billed.error, { task, cost: allowance.cost });
     }
+    /* Credits first, then pages — two writes, because 0021 adds a
+       function rather than a parameter. An interruption between them
+       leaves a batch billed and uncounted, which is bounded at one
+       batch and falls in the student's favour; counting first would
+       spend the cap on work that was never billed. */
+    const counted = await billPhotoPages(admin, { userId, profile, pages: photoPages });
+    if (!counted.ok) logFailure(stage, counted.error, { pages: photoPages });
 
     return jsonResponse({
       ok: true,

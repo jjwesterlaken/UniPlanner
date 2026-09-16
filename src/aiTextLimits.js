@@ -91,6 +91,34 @@ export const TRIAL_TIERS = ["free"];
 export const isTrialTier = (tier) => TRIAL_TIERS.includes(tier);
 export const TRIAL_CREDITS = 60;
 
+/* MIRRORS _shared/credits.ts's MAX_FREE_PHOTO_PAGES, asserted equal by
+   test-readings.mjs. Photographed pages a trial account may ever send:
+   two batches, so the demonstration is a demonstration and ends.
+
+   THE CLIENT COPY EXISTS SO THE REFUSAL ARRIVES BEFORE THE WORK, the
+   same courtesy as canAfford — a student who has added twelve photos
+   and pressed the button has already done the work of photographing
+   twelve pages. The SERVER is what enforces it; this only says so
+   earlier. */
+export const MAX_FREE_PHOTO_PAGES = 8;
+
+/**
+ * Pages this account may still photograph, or null when uncapped.
+ *
+ * `null` MEANS UNCAPPED AND IS NOT ZERO, which is the distinction the
+ * caller has to keep: a paid tier and a trial account with nothing left
+ * are opposite states, and a helper that answered 0 for both would
+ * refuse every paid student. An UNKNOWN allowance is also null — a
+ * failed read must not read as a cap, the fetchNote rule again.
+ */
+export const freePhotoPagesLeft = (state) => {
+  /* `allowanceForTier(...).perMonth`, NOT `isTrialTier`: the two
+     disagree on an unknown tier, which the allowance deliberately
+     treats as the trial. The server decides the same way. */
+  if (!state || state.unavailable || allowanceForTier(state.tier).perMonth) return null;
+  return Math.max(0, MAX_FREE_PHOTO_PAGES - (Number(state.photoPagesUsed) || 0));
+};
+
 const MONTHLY = { ai: 900, ai_max: 3000 };
 
 /** Mirrors allowanceForTier on the server, shape included. */

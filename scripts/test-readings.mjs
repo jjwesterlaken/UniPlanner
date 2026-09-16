@@ -35,7 +35,20 @@ import {
 } from "../src/readingChunks.js";
 import { READING_COPY } from "../src/aiTextCopy.js";
 import * as failuresCopy from "../src/aiTextCopy.js";
-import { TASK_CREDITS, PHOTO_BATCH_CREDITS, sectionsAffordable, canAffordCredits } from "../src/aiTextLimits.js";
+import {
+  TASK_CREDITS,
+  PHOTO_BATCH_CREDITS,
+  TRIAL_CREDITS,
+  MAX_FREE_PHOTO_PAGES,
+  freePhotoPagesLeft,
+  allowanceForTier,
+  sectionsAffordable,
+  canAffordCredits,
+} from "../src/aiTextLimits.js";
+/* The PURE rule, as plain JS — see photoCap.js for why it is not
+   imported out of allowance.ts, which is TypeScript and would need
+   type stripping Node only enables unflagged from 22.18. */
+import { photoCapDecision } from "../supabase/functions/_shared/photoCap.js";
 import { validateRequest } from "../supabase/functions/ai-text/guards.js";
 import { buildMessages, parseTaskResult } from "../supabase/functions/ai-text/prompts.js";
 /* The plan table, for the margin sweep at the end of this file. A
@@ -789,6 +802,142 @@ test("both estimates state what the run will cost, not only how many parts", () 
   assert.match(pasteLine, new RegExp(`${pasted.credits} credits`), "the paste estimate hides its price");
   assert.notEqual(photos.credits, pasted.credits, "the two media cost the same — this test discriminates nothing");
   assert.doesNotMatch(`${photoLine} ${pasteLine}`, /\bunits?\b/i);
+});
+
+/* ==================================================================
+   THE TRIAL'S PHOTOGRAPHED-PAGE CAP (migration 0021)
+   ================================================================== */
+
+test("the client's cap mirrors the server's, and the branch is the same one", () => {
+  const creditsSrc = source("supabase/functions/_shared/credits.ts");
+  assert.equal(
+    constOf(creditsSrc, "MAX_FREE_PHOTO_PAGES"),
+    MAX_FREE_PHOTO_PAGES,
+    "the client and the server disagree about how many pages the free plan covers"
+  );
+  /* AND THE CAP IS A WHOLE NUMBER OF BATCHES. A cap of 7 would refuse
+     the second batch halfway through and read as an off-by-one to the
+     student who photographed eight pages. */
+  assert.equal(
+    MAX_FREE_PHOTO_PAGES % PHOTOS_PER_CHUNK,
+    0,
+    `a cap of ${MAX_FREE_PHOTO_PAGES} is not a whole number of ${PHOTOS_PER_CHUNK}-page batches`
+  );
+  /* THE CAP IS WHAT BINDS, NOT THE ALLOWANCE — which is the whole
+     reason it exists. If the trial's credits ran out first the cap
+     would be decoration. */
+  const batchesTheCapAllows = MAX_FREE_PHOTO_PAGES / PHOTOS_PER_CHUNK;
+  const batchesTheCreditsAllow = Math.floor(TRIAL_CREDITS / PHOTO_BATCH_CREDITS);
+  assert.ok(
+    batchesTheCapAllows < batchesTheCreditsAllow,
+    `the trial's ${TRIAL_CREDITS} credits already stop at ${batchesTheCreditsAllow} batches, ` +
+      `so a cap of ${batchesTheCapAllows} changes nothing and is decoration`
+  );
+});
+
+test("a trial account is refused the pages beyond its cap, and a paid one is never capped", () => {
+  const cap = MAX_FREE_PHOTO_PAGES;
+  /* THE TABLE IS THE TEST. Each row is a state somebody will be in. */
+  const rows = [
+    { what: "a fresh trial sending one batch", tier: "free", pagesUsed: 0, pages: 4, ok: true },
+    { what: "a trial sending exactly the cap", tier: "free", pagesUsed: 0, pages: cap, ok: true },
+    { what: "a trial one page over", tier: "free", pagesUsed: 0, pages: cap + 1, ok: false },
+    { what: "a trial's second batch, with room", tier: "free", pagesUsed: 4, pages: 4, ok: true },
+    { what: "a trial's third batch, with none", tier: "free", pagesUsed: cap, pages: 1, ok: false },
+    { what: "partial batches that add up past it", tier: "free", pagesUsed: 6, pages: 3, ok: false },
+    { what: "a paid tier well past the cap", tier: "ai", pagesUsed: 999, pages: 16, ok: true },
+    { what: "the top tier", tier: "ai_max", pagesUsed: 999, pages: 16, ok: true },
+    { what: "an unknown tier — treated as the trial, like the allowance", tier: "nonsense", pagesUsed: cap, pages: 4, ok: false },
+    { what: "no photos at all", tier: "free", pagesUsed: cap, pages: 0, ok: true },
+  ];
+  for (const r of rows) {
+    const got = photoCapDecision({
+      perMonth: allowanceForTier(r.tier).perMonth,
+      pagesUsed: r.pagesUsed,
+      pages: r.pages,
+      cap,
+    });
+    assert.equal(got.ok, r.ok, `${r.what}: expected ok=${r.ok}`);
+    if (!r.ok) assert.equal(got.code, "free_photo_limit", `${r.what}: wrong refusal code`);
+  }
+  /* NON-VACUITY: the table must contain both answers, or it is one
+     claim written ten times. */
+  assert.ok(rows.some((r) => r.ok) && rows.some((r) => !r.ok), "the table does not exercise both outcomes");
+
+  /* THE REFUSAL NAMES WHAT IS LEFT, which is the only thing the student
+     can act on. */
+  const partial = photoCapDecision({ perMonth: false, pagesUsed: 4, pages: 8, cap });
+  assert.equal(partial.ok, false);
+  assert.equal(partial.remaining, 4, "the refusal does not say how many pages are still available");
+
+  /* AN UNKNOWN TIER GETS THE TRIAL, matching allowanceForTier: a typo
+     in the dashboard costs a demonstration, and defaulting the other
+     way costs uncapped photographs on an account nobody is paying for. */
+  assert.equal(
+    photoCapDecision({ perMonth: allowanceForTier(undefined).perMonth, pagesUsed: 99, pages: 4, cap }).ok,
+    false
+  );
+});
+
+test("the cap is refused BEFORE the provider call, and counted wherever credits are", () => {
+  /* THE ORDERING IS THE CLAIM. A cap checked after the call refuses
+     something already paid for; pages counted only on success let
+     unusable output be retried against the cap for ever. Both are read
+     off the handler's source, in ORDER, because that is what they are
+     about. */
+  const fn = source("supabase/functions/ai-text/index.ts");
+  const capAt = fn.indexOf("checkPhotoPages(");
+  const providerAt = fn.indexOf('stage = "provider"');
+  assert.ok(capAt > 0, "the handler does not check the photo cap at all");
+  assert.ok(providerAt > 0, "could not find the provider stage — this test is reading the wrong file");
+  assert.ok(capAt < providerAt, "the photo cap is checked AFTER the provider call, so a refusal costs money");
+
+  /* Counted on BOTH billing paths — the success path and the
+     billed-but-unusable one. Two call sites, asserted as two. */
+  const billed = fn.split("billPhotoPages(admin").length - 1;
+  assert.equal(billed, 2, `pages are counted at ${billed} of the 2 places credits are billed`);
+
+  /* AND ONLY FOR A TRIAL. That claim is about what billPhotoPages
+     DOES, not about how it is written — the first version of it greped
+     for `isTrialTier(String(profile?.tier))` and went red the moment
+     that branch was corrected to ask the allowance's question instead,
+     which is a guard pinned to an implementation's wording inside a
+     test written to catch exactly that. It is asserted against the
+     REAL BUNDLED HANDLER in test-ai-text-function.mjs, where the
+     runner is async and TypeScript is compiled rather than stripped. */
+});
+
+test("every code the photo cap can return has wording, and it names the cheaper path", () => {
+  const entry = failuresCopy.AI_TEXT_FAILURES.free_photo_limit;
+  assert.ok(entry, 'the endpoint can return "free_photo_limit" and no wording is defined for it');
+  const words = `${entry.title} ${entry.detail}`;
+  /* IT MUST POINT AT PASTING. A refusal that only closes a door leaves
+     a student with a photographed reading and nothing to do with it —
+     and pasting is uncapped and costs a sixth as much. */
+  assert.match(words, /past(e|ing)/i, "the refusal does not mention the path that still works");
+  assert.doesNotMatch(words, /\bunits?\b/i);
+
+  /* The client's own pre-flight sentence, which is the one most
+     students will actually see. */
+  const left = READING_COPY.freePhotoCap({ left: 4, cap: MAX_FREE_PHOTO_PAGES, count: 8 });
+  assert.match(left, /\b4\b/, "the pre-flight refusal does not say how many pages are left");
+  assert.match(left, /past(e|ing)/i);
+  const none = READING_COPY.freePhotoCap({ left: 0, cap: MAX_FREE_PHOTO_PAGES, count: 4 });
+  assert.doesNotMatch(none, /\b0 left\b/i, "an exhausted cap should not read as a number to send");
+  assert.notEqual(left, none, "the two states render the same sentence");
+});
+
+test("an uncapped or unknown allowance is never read as a cap of zero", () => {
+  /* THE fetchNote RULE, one screen over: `null` means uncapped and is
+     not the same as nothing left. A helper that answered 0 for a paid
+     tier would refuse every paying student's photographs. */
+  assert.equal(freePhotoPagesLeft({ tier: "ai", photoPagesUsed: 0 }), null, "a paid tier reads as capped");
+  assert.equal(freePhotoPagesLeft({ tier: "ai_max", photoPagesUsed: 0 }), null);
+  assert.equal(freePhotoPagesLeft({ unavailable: true, tier: "free" }), null, "an unreadable allowance reads as a cap");
+  assert.equal(freePhotoPagesLeft(null), null);
+  assert.equal(freePhotoPagesLeft({ tier: "free", photoPagesUsed: 0 }), MAX_FREE_PHOTO_PAGES);
+  assert.equal(freePhotoPagesLeft({ tier: "free", photoPagesUsed: 6 }), 2);
+  assert.equal(freePhotoPagesLeft({ tier: "free", photoPagesUsed: 99 }), 0, "a cap cannot go negative");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

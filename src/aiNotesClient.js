@@ -64,7 +64,15 @@ export async function fetchUsage(session, { supabaseClient = supabase, isDemo = 
        the App Store's page are different places, and sending somebody
        to the wrong one is a dead end that reads as the app being
        broken. Another column on a read that already happens. */
-    .select("tier, trial_credits_used, active_device_id, active_device_at, store")
+    /* `trial_photo_pages_used` rides along for the same reason as all
+       of the above — it is the trial's photo cap and it is a column on
+       a row we are already fetching. MIGRATION 0021 MUST BE APPLIED
+       BEFORE THIS SHIPS: PostgREST answers an unknown column with a
+       400, which lands in `profileErr` below and reports the whole
+       allowance as unavailable. That is not a crash, which is what
+       makes it 0015's failure exactly — the badge quietly disappears
+       and the text features report an unknown allowance. */
+    .select("tier, trial_credits_used, active_device_id, active_device_at, store, trial_photo_pages_used")
     .eq("user_id", session.user.id)
     .maybeSingle();
   if (profileErr || !profile) return { creditsUsed: 0, tier: null, unavailable: true };
@@ -80,6 +88,11 @@ export async function fetchUsage(session, { supabaseClient = supabase, isDemo = 
       creditsUsed: Number(profile.trial_credits_used) || 0,
       tier: profile.tier,
       store: profile.store || null,
+      /* Only a trial tier carries this. A paid tier's photographs are
+         metered by credits and nothing reads the column, so returning
+         a figure for one would invite a reader to cap an account that
+         bought an uncapped plan. */
+      photoPagesUsed: Number(profile.trial_photo_pages_used) || 0,
       unavailable: false,
       standing,
     };
