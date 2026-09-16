@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   buildStub,
+  KEPT_META_KEYS,
   buildContent,
   buildPreviews,
   previewFor,
@@ -161,6 +162,129 @@ async function run() {
     assert.equal(Object.keys(stub.aiMeta.previews).sort().join(","), "en,vi");
     assert.match(previewFor({ aiMeta: { ...stub.aiMeta, activeLanguage: "vi" } }), /Tổng quan/);
     assert.match(previewFor({ aiMeta: { ...stub.aiMeta, activeLanguage: "en" } }), /English overview/);
+  });
+
+  /* ---------- the whitelist, and the two fields it had already lost ----------
+
+     buildStub rebuilds aiMeta from a fixed list, so a key that a later
+     feature put on the object is dropped the moment the note migrates
+     — silently, with nothing erroring, on the one path every signed-in
+     student takes. Two live features were already broken by it when
+     this was written, and the tests below are named for them because
+     "the whitelist works" is not a claim anybody can act on. */
+
+  await test("sourceReadingId SURVIVES MIGRATION — the Textbook tab's Summarised link reads it off the stub", () => {
+    const page = aiPage({ aiMeta: { translations: { en: summary() }, sourceReadingId: "reading-42" } });
+    assert.equal(page.aiMeta.sourceReadingId, "reading-42", "the fixture itself must carry it, or this proves nothing");
+    assert.equal(
+      buildStub(page).aiMeta.sourceReadingId,
+      "reading-42",
+      "the link from a reading to its summary is lost on the first sync after summarising"
+    );
+  });
+
+  /* THE RENDER HALF IS IN test-app-smoke.mjs, deliberately not here.
+     An earlier draft reproduced Textbook's summaries map in this file
+     and asserted over it — which is a restatement of the reader, and a
+     restatement of the reader is what let this bug live behind a green
+     suite in the first place. The real claim ("THE SUMMARISED LINK
+     RENDERS FOR A MIGRATED NOTE") mounts the real Textbook over a page
+     built by the real buildStub, and it goes red when the key stops
+     being carried. What belongs here is the data claim above. */
+
+  await test("partsMerged SURVIVES, and FALSE is the value that matters", () => {
+    /* A merged-locally reading records partsMerged:false so it still
+       says next month that it is sections put end to end. A carry
+       written as `if (meta[key])` keeps every other field and drops
+       exactly this one. */
+    const page = aiPage({ aiMeta: { translations: { en: summary() }, partsMerged: false, parts: 4 } });
+    const stub = buildStub(page);
+    assert.equal(stub.aiMeta.partsMerged, false);
+    assert.equal(stub.aiMeta.parts, 4);
+  });
+
+  await test("THE WHITELIST IS SWEPT AGAINST THE SOURCE — a key the app writes onto aiMeta is kept or excused BY NAME", () => {
+    /* The guard the two fields above needed. Without it the fix is
+       two entries in a list and the third feature drops out the same
+       way; the ledger's own rule is that a rule written beside one
+       caller is not a guard. */
+    const EXCUSED = {
+      translations: "it IS the content the row exists to hold — previews replace it",
+      remote: "written BY buildStub, never carried into it",
+      previews: "built BY buildStub from the translations",
+    };
+
+    /* A BRACE SCANNER, NOT A REGEX. The first version matched
+       `aiMeta:` alone and therefore read NOTHING out of
+       PlannerApp.jsx — the one file where both dropped keys are
+       written, because that file ASSIGNS (`pageItem.aiMeta = {...}`).
+       Its "the sweep found something" check passed on keys from the
+       other files while it was blind to its own subject. */
+    const literalsIn = (src) => {
+      const out = [];
+      const re = /aiMeta\s*[:=]\s*\{/g;
+      let m;
+      while ((m = re.exec(src))) {
+        let depth = 0;
+        let k = m.index + m[0].length - 1;
+        const start = k + 1;
+        for (; k < src.length; k++) {
+          if (src[k] === "{") depth++;
+          else if (src[k] === "}" && --depth === 0) break;
+        }
+        if (depth === 0) out.push(src.slice(start, k));
+      }
+      return out;
+    };
+    /* `name:` and bare shorthand `name` alike — shorthand is how
+       sourceReadingId is written, so a pattern taking only `name:`
+       would miss the very key this exists for. A `...spread` is
+       preceded by a dot and a `meta.course` value is followed by one,
+       so neither is picked up. */
+    const keysIn = (lit) =>
+      [...lit.matchAll(/(?:^|[,{]|\n)\s*([A-Za-z_$][\w$]*)\s*(?=[:,}\n]|$)/g)].map((m) => m[1]);
+
+    const files = ["src/PlannerApp.jsx", "src/aiNotes.jsx", "src/aiNotesLogic.js", "src/aiNotesStore.js"];
+    const written = new Set();
+    const perFile = new Map();
+    for (const f of files) {
+      /* Comments name what they forbid — the ledger's own rule, five
+         instances deep — so strip them before matching. */
+      const src = fs
+        .readFileSync(path.join(rootDir, f), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:])\/\/.*$/gm, "$1");
+      const keys = [];
+      for (const lit of literalsIn(src)) keys.push(...keysIn(lit));
+      for (const m of src.matchAll(/aiMeta\.([A-Za-z_$][\w$]*)\s*=/g)) keys.push(m[1]);
+      perFile.set(f, keys);
+      for (const k of keys) written.add(k);
+    }
+
+    /* NON-VACUITY, PER FILE. "the sweep found something" is satisfied
+       by one file out of four, which is the state the first version of
+       this guard shipped in. */
+    const witness = {
+      "src/PlannerApp.jsx": "sourceReadingId",
+      "src/aiNotes.jsx": "activeLanguage",
+      "src/aiNotesLogic.js": "translations",
+      "src/aiNotesStore.js": "course",
+    };
+    for (const [f, key] of Object.entries(witness)) {
+      assert.ok(
+        (perFile.get(f) || []).includes(key),
+        `the sweep read nothing useful out of ${f} — it never found "${key}", so the pattern is blind to that file`
+      );
+    }
+
+    const kept = new Set(KEPT_META_KEYS);
+    const orphans = [...written].filter((k) => !kept.has(k) && !EXCUSED[k]);
+    assert.deepEqual(
+      orphans,
+      [],
+      `these aiMeta keys are written by the app and silently dropped by buildStub: ${orphans.join(", ")}. ` +
+        "Add each to KEPT_META_KEYS, or excuse it in this test with the reason it need not survive."
+    );
   });
 
   await test("a preview falls back rather than rendering blank", () => {

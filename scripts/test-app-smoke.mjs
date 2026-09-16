@@ -20,6 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { JSDOM } from "jsdom";
+import { buildStub } from "../src/aiNotesStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -742,6 +743,24 @@ for (const [tabName, phrases] of [
       "  );\n" +
       "  return host;\n" +
       "};\n" +
+      /* THE READING PLANNER, for the "Summarised" link. It is probed
+         HERE rather than through SummariseReading because the lookup
+         from a reading to its summary lives in Textbook's own map --
+         the child is handed the page already chosen, so mounting the
+         child asserts nothing about finding it. */
+      'import { Textbook } from "../src/PlannerApp.jsx";\n' +
+      "window.__probeTextbook = (reading, pages) => {\n" +
+      '  const host = document.createElement("div");\n' +
+      "  document.body.appendChild(host);\n" +
+      "  createRoot(host).render(\n" +
+      '    <Textbook textbook={[reading]} courses={[{ id: "c1", name: "PHYS1001" }]}\n' +
+      "      addItem={() => {}} patchItem={() => {}} removeItem={() => {}} focused={null}\n" +
+      '      pages={pages} session={{ token: "t", user: { id: "u" } }}\n' +
+      "      textAllowance={{ allowance: { tier: 'free', limit: 10, used: 0, remaining: 10, fraction: 0, perMonth: false }, applyFraction: () => {} }}\n" +
+      "      onSummariseReading={() => {}} onOpenSummary={() => {}} />\n" +
+      "  );\n" +
+      "  return host;\n" +
+      "};\n" +
       /* The semester archive panel, which the tab walk can only ever see
          signed out (its gate) -- the working state needs an account, so
          it gets a probe, per the rule: a demo-mode walk cannot cover a
@@ -830,10 +849,24 @@ for (const [tabName, phrases] of [
     /* Collapsed is the state that ships on every reading row, so it is
        the one that has to be one quiet line rather than a panel. */
     const collapsed = dom.window.__probeReading(allowance, reading, null);
-    const summarised = dom.window.__probeReading(allowance, reading, {
+    /* THE SUMMARY PAGE GOES THROUGH buildStub, and that is the whole
+       point of this line. It used to be written out by hand as
+       `{ id, aiMeta: { sourceReadingId } }` — a shape the app does not
+       produce for anybody who is signed in, because migration rebuilds
+       aiMeta from a whitelist that did not name that key. So the check
+       passed for a year over a link that was broken in production, for
+       the fifth time in the stand-in-weaker-than-production ledger.
+       Building the fixture the way the app builds it is what makes
+       the claim about the app. */
+    const migratedSummary = buildStub({
       id: "note-1",
-      aiMeta: { sourceReadingId: "r1" },
+      aiMeta: { course: "PHYS1001", week: "3", translations: { en: { overview: "A summary." } }, sourceReadingId: "r1" },
     });
+    check(
+      migratedSummary.aiMeta.sourceReadingId === "r1",
+      "A MIGRATED SUMMARY STILL KNOWS WHICH READING IT CAME FROM — without this the probe below is about a shape nothing produces"
+    );
+    const summarised = dom.window.__probeReading(allowance, reading, migratedSummary);
     await new Promise((r) => setTimeout(r, 200));
 
     const collapsedText = collapsed.textContent || "";
@@ -872,6 +905,40 @@ for (const [tabName, phrases] of [
       (summarised.textContent || "").includes("Summarised"),
       "a reading that already has a summary says so instead",
       (summarised.textContent || "").slice(0, 200)
+    );
+
+    /* THE LINK, THROUGH THE COMPONENT THAT ACTUALLY FINDS IT.
+
+       The check above hands SummariseReading the page, so it says
+       nothing about whether the app could FIND it — it stayed green
+       under the mutation that reintroduced the real bug, which is how
+       a guard can be correct, non-vacuous, and about the wrong layer.
+       Textbook builds the map, keyed on sourceReadingId, and that key
+       is what migration was dropping.
+
+       Both sides are driven, and they must DIFFER: a Textbook that
+       said "Summarised" over every reading would satisfy the positive
+       half on its own. */
+    const readingRow = { id: "r9", course: "PHYS1001", week: "3", pages: "ch. 9" };
+    const migratedStub = buildStub({
+      id: "note-9",
+      title: "Reading notes — PHYS1001 ch. 9",
+      aiMeta: { course: "PHYS1001", week: "3", translations: { en: { overview: "A summary." } }, sourceReadingId: "r9" },
+    });
+    const withSummary = dom.window.__probeTextbook(readingRow, [migratedStub]);
+    const withoutSummary = dom.window.__probeTextbook(readingRow, []);
+    await new Promise((r) => setTimeout(r, 250));
+    const withText = withSummary.textContent || "";
+    const withoutText = withoutSummary.textContent || "";
+    check(
+      !withoutText.includes("Summarised"),
+      "a reading with NO summary does not claim to have one — or the check below passes over anything",
+      withoutText.slice(0, 200)
+    );
+    check(
+      withText.includes("Summarised"),
+      "THE SUMMARISED LINK RENDERS FOR A MIGRATED NOTE — the reading planner can find a summary after it has synced",
+      withText.slice(0, 300)
     );
 
     /* Opened: the whole panel, in the row. */

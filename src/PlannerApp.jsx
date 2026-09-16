@@ -781,7 +781,14 @@ function ReadTick({ state, onCycle, label }) {
   );
 }
 
-function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused, pages = [], session, textAllowance, onSummariseReading, onOpenSummary }) {
+/* EXPORTED FOR A PROBE, the ArchivePanel arrangement and for the same
+   reason: the "Summarised" link needs a real session, so the demo-mode
+   tab walk can never render it, and the lookup it depends on lives
+   HERE rather than in SummariseReading -- which is handed the page
+   already chosen. A test that mounts the child can never exercise the
+   parent's map, which is how the fixture below it went on describing a
+   shape the app stopped producing. */
+export function Textbook({ textbook, courses, addItem, patchItem, removeItem, focused, pages = [], session, textAllowance, onSummariseReading, onOpenSummary }) {
   /* Which readings already have a summary. Built once per render rather
      than scanned per row: sourceReadingId lives on the stub's aiMeta,
      so this is a pass over pages, not a pass per reading over pages. */
