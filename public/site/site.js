@@ -178,32 +178,53 @@ const el = (tag, className, html) => {
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 /* The hero button follows the visitor, and its LABEL says which build
-   it is offering. "Download" alone on a Mac, where there is nothing to
-   download, is the version of this that wastes somebody's click. */
+   it is offering. "Download" alone on a platform where there is nothing
+   to download is the version of this that wastes somebody's click.
+
+   IT READS THE CARD RATHER THAN A TABLE OF PLATFORMS, and that is the
+   whole change. The table said `mac: "Open the web app"` — written
+   when there was no Mac build — so a signed, notarised .dmg sat in the
+   download box while the hero button above it sent Mac visitors to the
+   web app. The same defect as the dead "null" button and the stale
+   note under the box: a sentence about a flag, in a place the flag is
+   not read. Asking `downloadsFor` makes it impossible for the hero and
+   the card to disagree about whether a build exists. */
 function fillHeroCta() {
   const a = document.querySelector("[data-hero-cta]");
   if (!a) return;
-  const label = {
-    windows: "Download for Windows",
-    linux: "Download for Linux",
-    mac: "Open the web app",
-    ios: "Open the web app",
-    android: "Open the web app",
-    other: "Get UniPlanner",
-  }[platform];
-  a.textContent = label;
-  /* On a platform with no desktop build, the hero button goes to the
-     app rather than to a downloads section that has nothing for them. */
-  if (platform === "mac" || platform === "ios" || platform === "android") a.setAttribute("href", APP_URL);
+  const { cards } = downloadsFor(platform, { slug, assets });
+  /* A phone visitor has no desktop card of their own — `lead` falls
+     back to Windows for them, which is right for ORDERING the box and
+     wrong for a button that says what THIS machine can run. */
+  const mine = platform === "windows" || platform === "mac" || platform === "linux" ? platform : null;
+  const card = mine ? cards.find((c) => c.id === mine) : null;
+  if (card && card.available) {
+    a.textContent = `Download for ${card.label}`;
+    a.setAttribute("href", "#download");
+    return;
+  }
+  /* No build for this machine — send them to the app rather than to a
+     downloads section that has nothing in it for them. */
+  a.textContent = platform === "other" ? "Get UniPlanner" : "Open the web app";
+  if (platform !== "other") a.setAttribute("href", APP_URL);
 }
 
 function fillStoreBadges() {
   const box = document.querySelector("[data-store-badges]");
   if (!box) return;
   const badges = [
-    { flag: FLAGS.playBadge, name: "Google Play", href: null },
-    { flag: FLAGS.appStoreBadge, name: "App Store", href: null },
+    { id: "android", flag: FLAGS.playBadge, name: "Google Play", href: null },
+    { id: "ios", flag: FLAGS.appStoreBadge, name: "App Store", href: null },
   ];
+  /* ORDERED BY THE VISITOR'S PLATFORM, NOT FILTERED BY IT — the same
+     rule `downloadsFor` states for the cards, and for the same reason:
+     the person choosing is often not on the machine they are choosing
+     for, and a student on a laptop looking for the phone app is the
+     ordinary case. So an iPhone sees the App Store first and Google
+     Play second, rather than seeing one store and being told nothing
+     about the other. */
+  const mine = platform === "ios" ? "ios" : platform === "android" ? "android" : null;
+  if (mine) badges.sort((a, b) => (a.id === mine ? -1 : b.id === mine ? 1 : 0));
   for (const b of badges) {
     /* THE SLOT EXISTS AND IS HIDDEN, rather than being absent. Turning
        a listing on is then a boolean in site/flags.js, on the day it
@@ -248,7 +269,7 @@ function fillPricing() {
 function fillDownloads() {
   const box = document.querySelector("[data-downloads]");
   if (!box) return;
-  const { lead, cards } = downloadsFor(platform, { slug, assets });
+  const { lead, cards, unavailable } = downloadsFor(platform, { slug, assets });
 
   const make = ({ id, title, blurb, href, label, soon, note, alt }) => {
     const d = el("div", `d${soon ? " soon" : ""}${id === lead ? " lead" : ""}`);
@@ -283,10 +304,15 @@ function fillDownloads() {
 
      A per-id branch is what let one platform stop following its own
      data, so there is no longer one to leave behind. */
+  /* THE HEADING IS NOT IN HERE. It is the card's own `label`, so the
+     platform has ONE name across the data layer, the heading and the
+     hero button — three copies of "macOS" is three chances for one of
+     them to still say it after somebody renames the platform, which is
+     exactly what item 2 was. Blurb and button wording stay Grace's. */
   const LOOK = {
-    windows: { title: "Windows", blurb: "Desktop app, auto-updating", label: "Download .exe" },
-    mac: { title: "macOS", blurb: "Desktop app", label: "Download .dmg" },
-    linux: { title: "Linux", blurb: "AppImage, no install needed", label: "Download AppImage" },
+    windows: { blurb: "Desktop app, auto-updating", label: "Download .exe" },
+    mac: { blurb: "Desktop app", label: "Download .dmg" },
+    linux: { blurb: "AppImage, no install needed", label: "Download AppImage" },
   };
   for (const c of cards) {
     const look = LOOK[c.id];
@@ -294,7 +320,7 @@ function fillDownloads() {
     box.appendChild(
       make({
         id: c.id,
-        title: look.title,
+        title: c.label,
         blurb: look.blurb,
         href: c.href,
         /* `c.soon` is the sentence a card carries INSTEAD of a
@@ -315,6 +341,24 @@ function fillDownloads() {
   box.appendChild(
     make({ id: "ios", title: "iPhone and iPad", blurb: "App Store", href: null, label: "Coming soon", soon: !FLAGS.appStoreBadge })
   );
+
+  /* THE NOTE UNDER THE BOX, and it is rendered from the cards rather
+     than written into index.html. The hand-written one outlived the
+     thing it described — "not signed by Apple yet" sat under a signed
+     build for as long as nobody re-read the page — so there is no
+     longer a place to write a sentence about a platform that is not
+     beside that platform's own availability. An empty list renders
+     nothing at all. */
+  const after = document.querySelector("[data-downloads-note]");
+  if (after) {
+    after.textContent = "";
+    after.hidden = unavailable.length === 0;
+    for (const u of unavailable) {
+      const p = el("p", "note", `<b>${esc(u.label)}:</b> ${esc(u.instead)}`);
+      p.style.textAlign = "left";
+      after.appendChild(p);
+    }
+  }
 }
 
 releaseTheOldWorker();

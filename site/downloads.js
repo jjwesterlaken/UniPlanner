@@ -166,7 +166,13 @@ export function downloadsFor(platform, { slug, assets }) {
     },
     {
       id: "mac",
-      label: "macOS",
+      /* "Mac" rather than "macOS" (Jared, 16 September 2026). It is
+         what the platform is called on a download button, and it is
+         the name the RENDERER uses too — site.js takes the card
+         heading from this field rather than keeping its own copy, so
+         the two cannot come to disagree about what the platform is
+         called. The blurb and the words on the button stay Grace's. */
+      label: "Mac",
       /* THE ONE CARD THAT READS A FLAG, because it is the one whose
          availability depends on something outside this repository.
 
@@ -197,6 +203,18 @@ export function downloadsFor(platform, { slug, assets }) {
         : null,
       available: FLAGS.macDownload,
       soon: FLAGS.macDownload ? null : "Coming soon",
+      /* WHAT TO DO INSTEAD, and it is on the CARD so it cannot outlive
+         the card's own availability. A hand-written paragraph under the
+         download box said "a desktop build exists but is not signed by
+         Apple yet -- use the web app in the meantime", and it was still
+         there beside a working, signed, notarised .dmg: the same defect
+         as the dead "null" button, in prose rather than in a renderer,
+         and for the same reason -- a sentence about a flag, written
+         somewhere the flag is not read.
+
+         `downloadsFor` returns it only for a card that is NOT
+         available, so it is unreachable while there is a download. */
+      instead: FLAGS.macDownload ? null : "A Mac build is coming. The web app works in the meantime.",
     },
     {
       id: "linux",
@@ -211,6 +229,12 @@ export function downloadsFor(platform, { slug, assets }) {
     lead,
     /* Sorted, not filtered. */
     cards: [...cards].sort((a, b) => (a.id === lead ? -1 : b.id === lead ? 1 : 0)),
+    /* THE NOTE UNDER THE BOX, DERIVED FROM THE CARDS THEMSELVES. It is
+       an array so an empty one renders nothing, and it can only ever
+       describe a platform whose card is unavailable — which is what
+       makes "the Mac note beside the Mac download" unreachable rather
+       than merely fixed. */
+    unavailable: cards.filter((c) => !c.available && c.instead).map((c) => ({ label: c.label, instead: c.instead })),
     allReleases: releasesUrl(slug),
   };
 }

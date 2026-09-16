@@ -1639,9 +1639,22 @@ test("every download card offers what its own data says it offers", () => {
     if (c.href !== "#") assert.ok(/^https?:\/\//.test(c.href), `the ${c.title} card links to "${c.href}"`);
   }
 
+  /* THE NAMES ARE DERIVED, NOT TYPED. This read `byTitle("macOS")`,
+     and renaming the card to "Mac" — one word, in the data layer —
+     broke a guard that exists to check the card's LINK. A test that
+     pins what a platform is CALLED cannot survive it being called
+     something else, which is the ledger's first entry in the smallest
+     possible costume. The card's own `label` is what the renderer puts
+     in the heading, so asking `downloadsFor` for it is asking the one
+     source both sides already read. */
+  const named = downloadsFor("mac", {
+    slug: { owner: "o", repo: "r" },
+    assets: { windowsInstaller: "w.exe", windowsPortable: "p.exe", linuxAppImage: "l.AppImage", macDmg: "m.dmg" },
+  });
+  const labelOf = (id) => named.cards.find((c) => c.id === id).label;
   const byTitle = (t) => rendered.find((c) => c.title === t);
-  const mac = byTitle("macOS");
-  assert.ok(mac, `no macOS card among: ${rendered.map((c) => c.title).join(", ")}`);
+  const mac = byTitle(labelOf("mac"));
+  assert.ok(mac, `no ${labelOf("mac")} card among: ${rendered.map((c) => c.title).join(", ")}`);
   const dmg = assetName(desktopPkg.build.dmg.artifactName, { productName: desktopPkg.build.productName, ext: "dmg" });
   if (FLAGS.macDownload) {
     assert.ok(mac.href.endsWith("/" + dmg), `the macOS button points at "${mac.href}", which is not the ${dmg} the build produces`);
@@ -1657,12 +1670,171 @@ test("every download card offers what its own data says it offers", () => {
   /* The other two, so a renderer that special-cases macOS back into
      existence cannot pass by fixing only the card this test is named
      for. Both notes come off the same card field the macOS one does. */
-  assert.ok(byTitle("Linux").note, "the Linux card lost its AppImage note");
+  assert.ok(byTitle(labelOf("linux")).note, "the Linux card lost its AppImage note");
   assert.equal(
-    Boolean(byTitle("Windows").note),
+    Boolean(byTitle(labelOf("windows")).note),
     FLAGS.windowsUnsignedNote,
     "the Windows note no longer follows FLAGS.windowsUnsignedNote — the flag turns off a sentence nobody sees, or leaves one nobody wants"
   );
+});
+
+/* ==================================================================
+   THE PAGE FOLLOWS THE VISITOR, AND NOTHING SURVIVES ITS OWN FLAG
+
+   Three claims, all of them about the RENDERED page rather than the
+   data layer — which is the distinction the dead "null" button was
+   made of: `downloads.js` was right the whole time and nothing read
+   what the renderer produced.
+   ================================================================== */
+
+/** Mount the built page as a given platform and hand back the document. */
+function renderSiteAs(userAgent, { maxTouchPoints = 0 } = {}) {
+  const out = path.join(rootDir, "dist-site");
+  const bundle = path.join(os.tmpdir(), `site-plat-${process.pid}-${Math.random().toString(36).slice(2)}.js`);
+  buildSync({ entryPoints: [path.join(out, "site/site.js")], bundle: true, format: "iife", outfile: bundle, logLevel: "silent" });
+  const dom = new JSDOM(fs.readFileSync(path.join(out, "index.html"), "utf8"), {
+    url: SITE_URL + "/",
+    runScripts: "dangerously",
+    pretendToBeVisual: true,
+  });
+  const w = dom.window;
+  w.matchMedia = w.matchMedia || (() => ({ matches: false, addEventListener() {}, addListener() {} }));
+  Object.defineProperty(w.navigator, "userAgent", { value: userAgent, configurable: true });
+  Object.defineProperty(w.navigator, "maxTouchPoints", { value: maxTouchPoints, configurable: true });
+  const tag = w.document.createElement("script");
+  tag.textContent = fs.readFileSync(bundle, "utf8");
+  w.document.body.appendChild(tag);
+  fs.rmSync(bundle, { force: true });
+  return w.document;
+}
+
+const UA = {
+  windows: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+  mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+  linux: "Mozilla/5.0 (X11; Linux x86_64)",
+  ios: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+  android: "Mozilla/5.0 (Linux; Android 14; moto g05)",
+};
+
+test("the hero button offers THIS machine's build, and never one that does not exist", () => {
+  /* IT USED TO BE A TABLE OF PLATFORMS with `mac: "Open the web app"`
+     written into it before the Mac build was signed — so a signed,
+     notarised .dmg sat in the download box while the button above it
+     sent Mac visitors away. The claim is that the button and the card
+     cannot disagree, so it is checked on the RENDERED page for every
+     platform rather than on the label table. */
+  const seen = {};
+  for (const [name, ua] of Object.entries(UA)) {
+    const doc = renderSiteAs(ua, { maxTouchPoints: name === "ios" ? 5 : 0 });
+    const cta = doc.querySelector("[data-hero-cta]");
+    assert.ok(cta, `${name}: no hero button rendered — the probe is reading the wrong element`);
+    seen[name] = { text: cta.textContent.trim(), href: cta.getAttribute("href") };
+    assert.ok(seen[name].text, `${name}: the hero button has no words on it`);
+    assert.doesNotMatch(seen[name].text, /null|undefined/, `${name}: "${seen[name].text}" reached the hero button`);
+  }
+  /* NON-VACUITY: the platforms must not all get the same button, or
+     this test is one assertion run five times. */
+  assert.ok(new Set(Object.values(seen).map((x) => x.text)).size > 1, "every platform gets the same hero button");
+
+  /* A DESKTOP PLATFORM WITH A LIVE CARD IS OFFERED IT, by name. */
+  for (const id of ["windows", "mac", "linux"]) {
+    const card = downloadsFor(id, {
+      slug: { owner: "o", repo: "r" },
+      assets: { windowsInstaller: "w.exe", windowsPortable: "p.exe", linuxAppImage: "l.AppImage", macDmg: "m.dmg" },
+    }).cards.find((c) => c.id === id);
+    if (!card.available) continue;
+    assert.equal(
+      seen[id].text,
+      `Download for ${card.label}`,
+      `${id} has a download and the hero button says "${seen[id].text}"`
+    );
+    assert.equal(seen[id].href, "#download", `${id}'s hero button should go to the downloads box`);
+  }
+
+  /* A PHONE HAS NO DESKTOP BUILD, so it gets the app rather than a
+     downloads box with nothing in it — `lead` falls back to Windows
+     for ordering and must not reach the button. */
+  for (const id of ["ios", "android"]) {
+    assert.doesNotMatch(seen[id].text, /^Download for/, `${id} was offered a desktop download: "${seen[id].text}"`);
+    assert.equal(seen[id].href, APP_URL, `${id}'s hero button goes to "${seen[id].href}" rather than the app`);
+  }
+});
+
+test("the store badges lead with the visitor's store, and still name the other", () => {
+  /* ORDERED, NOT FILTERED — the rule downloadsFor states for the cards.
+     Somebody on a laptop looking for the phone app is the ordinary
+     case, so hiding a store is the trap; leading with theirs is the
+     convenience. */
+  const order = (ua, touch) =>
+    [...renderSiteAs(ua, { maxTouchPoints: touch }).querySelectorAll("[data-store-badges] .badge b")].map(
+      (b) => b.textContent
+    );
+  const onIos = order(UA.ios, 5);
+  const onAndroid = order(UA.android, 5);
+  const onDesktop = order(UA.windows, 0);
+
+  assert.equal(onIos.length, 2, `the iOS visitor sees ${onIos.length} badge(s) — a store was hidden rather than moved`);
+  assert.deepEqual([...onIos].sort(), [...onAndroid].sort(), "the two phones are offered different sets of stores");
+  assert.deepEqual([...onIos].sort(), [...onDesktop].sort(), "a desktop visitor is offered a different set of stores");
+
+  assert.equal(onIos[0], "App Store", `an iPhone leads with "${onIos[0]}"`);
+  assert.equal(onAndroid[0], "Google Play", `an Android phone leads with "${onAndroid[0]}"`);
+  /* AND THE TWO REALLY DIFFER, so a renderer that ignores the platform
+     cannot satisfy both lines above by accident. */
+  assert.notDeepEqual(onIos, onAndroid, "the badge order does not follow the platform at all");
+});
+
+test("no note survives the flag it describes — the box note comes off the cards", () => {
+  /* THE DEFECT, IN PROSE: "Mac: a desktop build exists but is not
+     signed by Apple yet. Use the web app in the meantime." was written
+     into index.html and was still under a signed, notarised,
+     downloadable .dmg. The remedy is the dead-button remedy — there is
+     no longer anywhere to write a sentence about a platform that is not
+     beside that platform's own availability. */
+  const html = fs.readFileSync(path.join(rootDir, "public/site/index.html"), "utf8");
+  const body = html.replace(/<!--[\s\S]*?-->/g, " ");
+  assert.doesNotMatch(body, /not signed by Apple/i, "the pre-signing Mac note is back in the page");
+
+  const doc = renderSiteAs(UA.mac);
+  const slot = doc.querySelector("[data-downloads-note]");
+  assert.ok(slot, "the derived note has no slot — the renderer has nowhere to put it");
+  const shown = [...slot.querySelectorAll("p")].map((p) => p.textContent);
+  const cards = downloadsFor("mac", {
+    slug: { owner: "o", repo: "r" },
+    assets: { windowsInstaller: "w.exe", windowsPortable: "p.exe", linuxAppImage: "l.AppImage", macDmg: "m.dmg" },
+  }).cards;
+  const missing = cards.filter((c) => !c.available);
+  assert.equal(
+    shown.length,
+    missing.filter((c) => c.instead).length,
+    `${shown.length} note(s) rendered for ${missing.length} unavailable platform(s): ${shown.join(" | ")}`
+  );
+  /* THE CLAIM THAT MATTERS, stated over every card rather than over
+     macOS: a platform you can download must not carry a sentence about
+     not being able to. */
+  for (const c of cards) {
+    if (!c.available) continue;
+    assert.ok(
+      !shown.some((t) => t.startsWith(`${c.label}:`)),
+      `${c.label} is downloadable and the box still carries a note about it: ${shown.join(" | ")}`
+    );
+  }
+});
+
+test("the AI notes section no longer advertises readings", () => {
+  /* Removed by instruction (Jared, 16 September 2026). Asserted on the
+     SECTION rather than on the whole page, because "readings" is a real
+     feature named legitimately elsewhere — the reading planner is in
+     the "And the rest of it" grid — and a page-wide ban would be a
+     guard that has to be suppressed to let that stay. */
+  const html = fs.readFileSync(path.join(rootDir, "public/site/index.html"), "utf8");
+  const start = html.indexOf("How the AI notes work");
+  assert.ok(start > 0, "the AI notes section is gone — this guard is reading the wrong page");
+  const section = html.slice(start, html.indexOf("</section>", start));
+  assert.doesNotMatch(section, /It also does readings/i, "the readings paragraph is back under the AI notes steps");
+  /* Non-vacuity: the section still has its three steps, so the
+     assertion above is not passing over an emptied block. */
+  assert.equal((section.match(/class="stepn"/g) || []).length, 3, "the AI notes section lost its steps");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
