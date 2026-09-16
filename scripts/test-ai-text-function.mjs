@@ -625,7 +625,7 @@ async function main() {
 
     const prompts = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-text/prompts.js"), "utf8");
     const stated = prompts.match(
-      /the weight\s+stays (\d+) for an input between (\d+) and (\d+) tokens: (\d+) tokens of\s+headroom above the measured (\d+)/
+      /weight stays (\d+) for an input between (\d+) and (\d+) tokens: (\d+)\s+tokens of headroom above the measured (\d+)/
     );
     assert.ok(stated, "prompts.js no longer states the band the weight is stable over");
     assert.deepEqual(

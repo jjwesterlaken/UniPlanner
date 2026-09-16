@@ -52,14 +52,23 @@ export const TASK_CREDITS = {
    IT USED TO BE HELD at one text chunk, because the honest weight on
    gpt-4o-mini was ~34 credits and at that price a 16-page reading is
    most of a month. Both gates in COST-MODEL.md 12.7 ran on 16 September
-   2026 (12.9 records them), the photo path moved to gpt-5.4-nano, and
-   the measured bill for a batch is 5.
+   2026; the photo path is gpt-5.4-mini and the MEASURED bill for a
+   batch is 18 (12.9 and 12.11).
 
-   The number a student meets: a 16-page reading is 22 credits, about as
-   much as a 22-minute lecture -- and it FITS INSIDE THE 60-CREDIT
-   TRIAL, which is the thing credits.ts says the trial has to be able to
-   demonstrate and which no other candidate managed. */
-export const PHOTO_BATCH_CREDITS = 5;
+   The number a student meets: four photographed pages cost 18 credits,
+   about as much as an 18-minute lecture, and a 16-page reading is 72.
+   THAT IS THE EXPENSIVE PATH AND THE SCREEN SAYS SO -- the same reading
+   PASTED is 9, so the comparison is put in front of the student before
+   they choose rather than discovered afterwards. photoVsPasteLine()
+   below is the one place that sentence is built.
+
+   IT NO LONGER FITS INSIDE THE 60-CREDIT TRIAL, and that is a rule
+   change rather than a regression: credits.ts used to say the trial
+   must demonstrate a whole photographed READING, which only the model
+   that fabricates could afford. A trial demonstrates ONE BATCH, which
+   18 of 60 credits buys with room for the lecture recording that is
+   the other half of what is being sold. */
+export const PHOTO_BATCH_CREDITS = 18;
 
 /* THE TIERS, mirrored from _shared/credits.ts.
 
@@ -149,3 +158,14 @@ export const canAffordCredits = (state, credits) => !!state && state.remaining >
 
 export const sectionsAffordable = (state) =>
   !state ? 0 : Math.floor(state.remaining / (TASK_CREDITS.summarise || 1));
+
+/* ---------- the two paths ----------
+
+   PHOTOGRAPHING IS THE EXPENSIVE PATH AND THE STUDENT HAS TO KNOW
+   BEFORE THEY CHOOSE. The sentence that says so is `photoVsPasteLine`
+   in readingChunks.js, NOT here, and the reason is a real constraint
+   rather than taste: it needs PHOTOS_PER_CHUNK and CHUNK_MAX_CHARS,
+   which live there, and that module already imports the two prices
+   from this one. Putting it here would make the cycle. */
+export const photoUnitCredits = () => PHOTO_BATCH_CREDITS;
+export const pasteUnitCredits = () => TASK_CREDITS.summarise || 0;

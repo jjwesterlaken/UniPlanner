@@ -189,16 +189,47 @@ export function batchPhotos(count, { perChunk = PHOTOS_PER_CHUNK, maxPhotos = MA
   return { ok: true, batches };
 }
 
+/* ---------- the two paths, priced side by side ----------
+
+   PHOTOGRAPHING IS THE EXPENSIVE PATH AND THE STUDENT HAS TO KNOW
+   BEFORE THEY CHOOSE, not from the allowance badge afterwards. Four
+   photographed pages cost PHOTO_BATCH_CREDITS; a pasted section of up
+   to CHUNK_MAX_CHARS costs TASK_CREDITS.summarise. On the shipped
+   figures that is 18 against 3, and a 16-page reading is 74
+   photographed against about 11 pasted.
+
+   BOTH NUMBERS ARE CEILINGS THE SERVER ENFORCES, and the sentence
+   deliberately stops there rather than converting pages into
+   characters. "A page is about 3,000 characters" is a modelled
+   constant of exactly the kind this project keeps being bitten by, and
+   it would put a made-up multiple on a screen; the two unit prices are
+   both real, and the direction they imply is what a student can act
+   on.
+
+   A SCREENSHOT IS AN IMAGE. It is the obvious thing to try with a PDF
+   open on a laptop, it looks cheaper because it is cleaner, and it
+   costs exactly the same as a photograph — so the sentence says so,
+   rather than leaving a student to find out one batch at a time. What
+   IS cheaper is selecting the text in that PDF and pasting it, which
+   is the action this line exists to point at.
+
+   ONE PLACE, because it is the same claim on the picker, in the
+   pre-flight estimate and in the help topic, and three copies of a
+   price is three chances for one of them to stop being true. */
+export const photoVsPasteLine = () =>
+  `Photographs cost ${PHOTO_BATCH_CREDITS} credits for every ${PHOTOS_PER_CHUNK} pages. ` +
+  `Pasting the text instead costs ${TASK_CREDITS.summarise} credits for a section of up to ` +
+  `${CHUNK_MAX_CHARS.toLocaleString()} characters, so pasting is much cheaper where you ` +
+  `can select the text. A screenshot is an image, so it costs the same as a photograph.`;
+
 /**
  * The photo estimate, in the same shape estimateReading returns.
  *
  * A batch is priced by PHOTO_BATCH_CREDITS rather than by
- * TASK_CREDITS.summarise, even though the two are equal today. They are
- * equal because the photo price is HELD pending the model decision, not
- * because a batch of photographed pages costs what a text chunk costs —
- * it costs about eleven times as much on the model we call. Reading the
- * held constant is what makes lifting the hold change this number
- * instead of requiring somebody to notice this line.
+ * TASK_CREDITS.summarise. They are very different numbers now — 18
+ * against 3 — and reading the photo constant is what keeps this
+ * following the model rather than requiring somebody to notice this
+ * line.
  */
 export function estimatePhotos(count, opts = {}) {
   const split = batchPhotos(count, opts);

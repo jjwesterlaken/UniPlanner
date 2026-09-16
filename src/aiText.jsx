@@ -31,7 +31,14 @@ import {
   sectionsAffordable,
   TASK_CREDITS,
 } from "./aiTextLimits.js";
-import { estimateReading, estimatePhotos, photoNumberFor, combineParts, MAX_READING_PHOTOS } from "./readingChunks.js";
+import {
+  estimateReading,
+  estimatePhotos,
+  photoNumberFor,
+  combineParts,
+  photoVsPasteLine,
+  MAX_READING_PHOTOS,
+} from "./readingChunks.js";
 import { bodyOf } from "./noteBlocks.js";
 import { ConsentNeededNotice } from "./aiNotesConsent.jsx";
 import { fetchTextAllowance, callAiText } from "./aiTextClient.js";
@@ -782,6 +789,17 @@ export function SummariseReading({
       {!text.trim() && (
         <div className="space-y-1.5">
           <label className={labelCls}>{READING_COPY.photosLabel}</label>
+          {/* WHAT EACH PATH COSTS, AT THE MOMENT OF CHOOSING. Rendered
+              whether or not any photo has been added — after the first
+              photo the choice has already been made, and a price shown
+              only then is a price discovered rather than offered.
+              Photographing is roughly six times pasting, and a
+              screenshot is a photograph as far as the bill is
+              concerned, which is the thing a student with a PDF open
+              is most likely to get wrong. One source: readingChunks.js. */}
+          <p className="text-xs text-stone-500" data-photo-vs-paste>
+            {photoVsPasteLine()}
+          </p>
           {photos.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {photos.map((url, i) => (
@@ -836,8 +854,23 @@ export function SummariseReading({
 
       {/* THE PRE-FLIGHT ESTIMATE, before anything is spent -- photos
           count in parts exactly the way text chunks do. */}
-      {usingPhotos && estimate.ok && <p className="text-xs text-stone-500">{READING_COPY.photosEstimate(estimate)}</p>}
-      {!usingPhotos && text.trim() && estimate.ok && <p className="text-xs text-stone-500">{READING_COPY.estimate(estimate)}</p>}
+      {/* `data-reading-estimate` is a HANDLE, not decoration. The smoke
+          walk asserts no estimate of the student's own content appears
+          before there is content to price, and it used to do that by
+          looking for the word "characters" — which the price
+          comparison above now also uses, in a sentence that is
+          SUPPOSED to be there beforehand. A guard pinned to a word two
+          sentences share is a guard about the wrong thing. */}
+      {usingPhotos && estimate.ok && (
+        <p className="text-xs text-stone-500" data-reading-estimate>
+          {READING_COPY.photosEstimate(estimate)}
+        </p>
+      )}
+      {!usingPhotos && text.trim() && estimate.ok && (
+        <p className="text-xs text-stone-500" data-reading-estimate>
+          {READING_COPY.estimate(estimate)}
+        </p>
+      )}
 
       {usingPhotos && estimate.code === "too_many" && (
         <p className="rounded-lg bg-stone-100 px-2.5 py-2 text-xs text-stone-600">

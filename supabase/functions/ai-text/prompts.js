@@ -90,19 +90,26 @@ const SYSTEM = {
      a section, and capping entries is how that gets undone. Every rule
      above removes a defect; none of them asks for less.
 
-     THE WEIGHT DOES NOT MOVE FOR THIS, and the four numbers that say so
-     are asserted rather than asserted-in-prose -- see "the photo weight
-     does not move for a prompt change" in test-ai-text-function.mjs,
-     which re-derives them from the shipped rates and compares them with
-     this sentence. PHOTO_BATCH_CREDITS is derived from
-     MEASURED_PHOTO_BATCH_INPUT_TOKENS, and at those rates the weight
-     stays 5 for an input between 2933 and 6362 tokens: 2317 tokens of
-     headroom above the measured 4045, against roughly 200 added here.
+     THE PROMPT IS PART OF THE PRICE, and on gpt-5.4-mini the margin
+     for that is thin. These rules added 189 input tokens, and the
+     measured batch bill in _shared/model.ts is the figure WITH them in
+     it -- 4234, taken from the same run that judged the output.
 
-     A re-measured figure belongs in _shared/model.ts all the same,
-     because that constant is a bill for ONE configuration and this
-     changed it. scripts/measure-photo-prompt.mjs reports the new count
-     beside the recorded one on every run. */
+     The four numbers below are asserted rather than asserted-in-prose;
+     see "the photo weight does not move for a prompt change" in
+     test-ai-text-function.mjs, which re-derives them from the shipped
+     rates and compares them with this sentence. At those rates the
+     weight stays 18 for an input between 4005 and 4918 tokens: 684
+     tokens of headroom above the measured 4234.
+
+     684 IS NOT MUCH -- roughly 2,900 characters of prompt, against the
+     1,715 this one already is. On gpt-5.4-nano the band was 2,933 to
+     6,362 and no realistic prompt edit could move the price; mini's
+     input is 3.75x dearer, so the band is a quarter as wide and the
+     next edit to this text genuinely can re-price the feature. Re-run
+     scripts/measure-photo-prompt.mjs and move
+     MEASURED_PHOTO_BATCH_INPUT_TOKENS in the same commit; the test
+     above goes red if the sentence and the constants disagree. */
   summariseImages:
     `${SHARED_RULES} The images are photographs of pages from a reading the student is studying. ` +
     "Summarise their content into the structure the app uses for lecture notes. " +

@@ -295,10 +295,23 @@ export const READING_COPY = {
     "Photos are sent to the AI to read the pages and aren't stored anywhere — not in your planner and not on our server. Only the summary is saved.",
   photosQuality:
     "The notes can only be as good as the photos — good light, straight on, one page per photo works best.",
-  photosEstimate: ({ count, chunks }) =>
+  /* THE ESTIMATE NAMES CREDITS NOW, AND THE REASON IS THAT PARTS HID
+     THE PRICE. "Both numbers in parts, never units" was written when a
+     photo batch and a text chunk cost the SAME, so parts really were
+     the whole story. They are not: a batch is 18 credits and a chunk
+     is 3, which means eight photographed pages and eight pages of
+     pasted text are both "2 parts" and differ sixfold in what they
+     cost. A currency that cannot express a sixfold difference is not
+     hiding an internal weight any more, it is hiding a price.
+
+     The banned word was always "units" — an internal weight that meant
+     nothing to anybody — and credits are sayable, because a credit is
+     a minute of recorded lecture. Parts stay: they say how the work
+     will be done, which is a different question from what it costs. */
+  photosEstimate: ({ count, chunks, credits }) =>
     chunks > 1
-      ? `${count} page${count === 1 ? "" : "s"}, so it'll be done in ${chunks} parts and then combined.`
-      : `${count} page${count === 1 ? "" : "s"}, done in one go.`,
+      ? `${count} page${count === 1 ? "" : "s"} — ${credits} credits, done in ${chunks} parts and then combined.`
+      : `${count} page${count === 1 ? "" : "s"} — ${credits} credits, done in one go.`,
   photosTooMany: ({ count, max }) =>
     `That's ${count} photos and the most this can take is ${max}. Do it in two goes — each gets its own summary.`,
   unreadablePages: (pages) =>
@@ -307,10 +320,10 @@ export const READING_COPY = {
   /* THE PRE-FLIGHT ESTIMATE. Mandatory before any call: the cost of a
      reading is variable, and nothing else on screen would hint that a
      long one costs four times what a short one does. */
-  estimate: ({ chars, chunks }) =>
+  estimate: ({ chars, chunks, credits }) =>
     chunks > 1
-      ? `That's about ${chars.toLocaleString()} characters, so it'll be done in ${chunks} parts and then combined.`
-      : `That's about ${chars.toLocaleString()} characters, so it'll be done in one go.`,
+      ? `That's about ${chars.toLocaleString()} characters — ${credits} credits, done in ${chunks} parts and then combined.`
+      : `That's about ${chars.toLocaleString()} characters — ${credits} credits, done in one go.`,
 
   /* Refused rather than trimmed. Names the overage, because "too long"
      without a number leaves someone guessing how much to cut. */

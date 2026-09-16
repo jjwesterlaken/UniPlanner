@@ -8,10 +8,14 @@
    If it reproduces, the mechanism is wrong and the recommendation is
    void.
 
-   Gate 2 (QUALITY): can gpt-5.4-nano actually READ a photographed page
-   of print? It is the cheapest model in the family and OCR of a phone
-   photo is the hardest thing we would ask of it. A cheap feature that
-   garbles the reading is worth nothing.
+   Gate 2 (QUALITY): can the candidate actually READ a photographed page
+   of print? OCR of a phone photo is the hardest thing we ask of a
+   model, and a cheap feature that garbles the reading is worth
+   nothing. THIS GATE REVERSED ITS OWN FIRST ANSWER: nano passed on 16
+   September on "every date and figure correct", and failed on a second
+   reading of the same output, which had invented a term and welded two
+   claims into a false sentence. Read the notes against the pages, and
+   read them twice.
 
    THIS SCRIPT MAKES THE CALLS AND PRINTS BOTH ANSWERS. It does not
    decide anything: gate 2 is a judgement about four summaries you have
@@ -87,13 +91,13 @@ const CANDIDATES = [
   },
   {
     name: "gpt-5.4-nano",
-    label: "THE RECOMMENDATION",
+    label: "cheaper, and REJECTED on gate 2 -- see COST-MODEL 12.11",
     detail: "original",
     predict: (w, h) => patchTokens(w, h, 2.46),
   },
   {
     name: "gpt-5.4-mini",
-    label: "the fallback if nano cannot read a page",
+    label: "THE SHIPPED VISION_MODEL",
     detail: "original",
     predict: (w, h) => patchTokens(w, h, 1.62),
   },

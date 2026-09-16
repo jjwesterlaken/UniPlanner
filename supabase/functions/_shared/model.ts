@@ -20,13 +20,33 @@
    So the model is chosen per MEDIUM. Text and audio transcript
    summaries go one way; images go another.
 
-   VISION_MODEL HAS MOVED. Both gates in COST-MODEL.md 12.7 were run on
-   16 September 2026 against four phone photographs of printed pages,
-   and section 12.9 records what came back. The short form: the
-   documented tokenisation was CONSERVATIVE rather than wrong — every
-   reported count came in BELOW prediction, so the 66,000-token report
-   did not reproduce on the shape we send — and gpt-5.4-nano read the
-   pages, getting every date and figure right and inventing nothing.
+   VISION_MODEL IS gpt-5.4-mini, AND IT WAS gpt-5.4-nano FOR ONE DAY.
+   Both gates in COST-MODEL.md 12.7 ran on 16 September 2026 against
+   four phone photographs of printed pages; 12.9 and 12.11 record what
+   came back. Gate 1 held — every reported count came in BELOW
+   prediction, so the 66,000-token report did not reproduce on the
+   shape we send. Gate 2 is what moved, and it took a second run to
+   settle, because nano's first output was accurate and the defects
+   read as presentation.
+
+   NANO FABRICATES AND FUSES, AND A PROMPT DID NOT FIX IT. Told in as
+   many words to write one claim about one subject, it still produced
+   "a screen resembling desktop-sized programmable calculator" — two
+   devices welded into one phrase — and its earlier run had invented an
+   "ARPANET / Internet" term for a page that says Ethernet. mini, on
+   the same photographs under the same prompt, is atomic, and it ALONE
+   read three things nano missed entirely: the Programma 101, the Z1's
+   weight, and that ENIAC was built at the University of Pennsylvania.
+   Jared's ruling, 16 September 2026.
+
+   AND THE ARGUMENT THAT HAD SETTLED IT FOR NANO WAS A RULE NOBODY HAD
+   RE-EXAMINED. 12.9 chose nano because `credits.ts` said the trial must
+   demonstrate a whole photographed READING, and at 18 credits a batch
+   that is 72 of 60 credits — impossible, so nano won by default. The
+   rule was the problem: a trial demonstrates ONE BATCH. See
+   TRIAL_CREDITS' own comment. **A constraint nobody has re-derived can
+   decide a quality question on its own; check the rule before letting
+   it choose the product.**
 
    THE RATES LIVE HERE, BESIDE THE MODEL THEY BELONG TO, and that is the
    point of putting them in this file rather than in credits.ts: a model
@@ -40,27 +60,40 @@
 export const SUMMARY_MODEL = "gpt-4o-mini";
 
 /** Photographed pages. */
-export const VISION_MODEL = "gpt-5.4-nano";
+export const VISION_MODEL = "gpt-5.4-mini";
 
 /* Published rates for VISION_MODEL, reproduced independently on
-   16 September 2026. MOVE THESE IN THE SAME COMMIT AS THE STRING. */
-export const VISION_USD_PER_1M_INPUT = 0.2;
-export const VISION_USD_PER_1M_OUTPUT = 1.25;
+   15 September 2026 (COST-MODEL 12.1 and 12.12). MOVE THESE IN THE
+   SAME COMMIT AS THE STRING -- the day they lag it, PHOTO_BATCH_CREDITS
+   is derived from another model's prices and is wrong by 3.75x on the
+   input side alone, which is the exact drift this file exists to stop. */
+export const VISION_USD_PER_1M_INPUT = 0.75;
+export const VISION_USD_PER_1M_OUTPUT = 4.5;
 
 /* WHAT WE ACTUALLY GET BILLED for one batch of PHOTOS_PER_CHUNK pages
-   at maxEdge 1024 and detail "original" — MEASURED, not modelled.
+   at maxEdge 1024 and detail "original" — MEASURED, not modelled, on
+   the prompt that ships.
 
    The documented patch arithmetic predicted 8,082 for nano and 5,394
-   for gpt-5.4-mini. Both reported EXACTLY 4,045, which is two findings
-   at once: the published per-model multipliers are not what is applied,
-   and the two models bill an image IDENTICALLY — so the choice between
-   them was a pure price-per-token decision rather than a tokenisation
-   one.
+   for gpt-5.4-mini. Both reported EXACTLY 4,045 on the shorter prompt
+   and EXACTLY 4,234 on this one, which is two findings at once: the
+   published per-model multipliers are not what is applied, and the two
+   models bill an image IDENTICALLY — so the choice between them was
+   never a tokenisation question, only price against output quality.
 
    BECAUSE THE MECHANISM IS NOT UNDERSTOOD, THIS NUMBER DOES NOT
    EXTRAPOLATE. It is the bill for THIS configuration — four pages,
-   771x1024, detail "original" — and changing maxEdge, the page count or
-   the detail setting invalidates it. That is acceptable only because
-   1024 and "original" are exactly what ships; re-measure before moving
-   either. scripts/measure-photo-gates.mjs is the instrument. */
-export const MEASURED_PHOTO_BATCH_INPUT_TOKENS = 4045;
+   771x1024, detail "original", and THIS PROMPT — and changing maxEdge,
+   the page count, the detail setting or the system prompt invalidates
+   it. scripts/measure-photo-prompt.mjs prints the new count beside
+   this one on every run, which is how the +189 from the noise rules
+   was caught.
+
+   THE HEADROOM IS NARROW NOW AND THAT IS A REAL CHANGE. On nano the
+   weight held for anything from 2,933 to 6,362 input tokens, so a
+   prompt edit could never move the price. mini's input is 3.75x
+   dearer, so the band is 4,005 to 4,918 — 684 tokens above the
+   measured figure, or roughly 2,900 characters of prompt. A prompt
+   change of any size now needs this re-measured; a test asserts the
+   band rather than leaving it in this sentence. */
+export const MEASURED_PHOTO_BATCH_INPUT_TOKENS = 4234;

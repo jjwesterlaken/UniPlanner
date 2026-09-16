@@ -1039,6 +1039,72 @@ test re-derives all four numbers and compares them with the sentence in
 ONE configuration and the prompt is part of it, so the A/B prints the
 new count beside the recorded one on every run.
 
+### AND THE PROMPT DID NOT FIX IT — a model is not a prompt problem
+
+The pair ran, and it reversed the decision. Both nano arms produced
+ZERO counted defects, which the script had warned would say nothing;
+the judgement half did all the work, which is what a guard that names
+its hole is for.
+
+**nano fabricates and fuses, and a direct instruction did not stop
+it.** Its earlier run invented a term — `ARPANET / Internet` on a page
+that says **Ethernet** — and under a prompt saying *"each key point is
+a single claim about a single subject"* in as many words it still
+produced *"a screen resembling desktop-sized programmable calculator"*,
+welding the Xerox Alto to the Programma 101. `gpt-5.4-mini` on the same
+photographs under the same prompt is atomic, and it ALONE read three
+things nano missed on both runs. **A prompt cannot fix a model that
+fuses claims** — and nano AFTER, on its own, would have read as a clean
+run. The pair is what made that visible rather than arguable.
+
+**AND THE ARGUMENT THAT HAD CHOSEN NANO WAS A RULE NOBODY HAD
+RE-DERIVED.** 12.9 settled on nano because `credits.ts` said the trial
+must let a student "complete one photographed reading", and at mini's
+18 credits a batch a 16-page reading is 74 of 60 credits — impossible,
+so the cheap model won by arithmetic. Every number was right and the
+RULE was wrong: it made a whole reading a trial requirement, which made
+the cheapest vision model mandatory, which is how a fabricating model
+became the recommendation. A trial demonstrates ONE BATCH.
+
+> **A constraint nobody has re-derived can decide a quality question on
+> its own.** It does not arrive as a decision; it arrives as
+> arithmetic, and the arithmetic is correct.
+
+That is `TYPICAL_SUMMARY_OUTPUT_TOKENS` with the subject changed —
+there an unmeasured constant set the price of the product, here an
+unexamined rule chose the model.
+
+**THE PRICE IS DERIVED AGAIN AND THE HEADROOM IS NOW LIVE.** 4,234
+measured input tokens at mini's $0.75/$4.50 give **18 credits** a
+batch, covering the batch's own cost at 0.986x. But the weight holds
+only between 4,005 and 4,918 input tokens — 684 of headroom against
+nano's 2,317, because mini's input is 3.75x dearer. **The next edit to
+the vision prompt can re-price the feature**, so the re-measure moves
+in the same commit; `prompts.js` states the band and a test re-derives
+it.
+
+**EVERY TIER PAYS FOR ITSELF AT 100% PHOTO USAGE, and it is a test
+rather than a paragraph** (`test-readings.mjs`), derived from
+`model.ts`, `credits.ts`, `config.ts` and `site/pricing.js`, asserted
+at a **stressed FX of 0.50** so it reddens when the product economics
+break and not when the currency moves. Worst case is Study AI Max
+annual at the 30% cut: +$4.41 a month against $2.03 of provider spend.
+
+**AND PARTS HAD STARTED HIDING A PRICE.** Eight photographed pages and
+eight pages of pasted text are both "2 parts" and cost 38 credits
+against 8. "Both numbers in parts, never units" was written when a
+photo batch and a text chunk cost the SAME; a currency that cannot
+express a sixfold difference is no longer hiding an internal weight,
+it is hiding a price. The banned word was always *units*, and credits
+are sayable — so both estimates carry them, and `photoVsPasteLine()`
+renders at the picker BEFORE the first photo, because after it the
+choice is made. **A screenshot is an image and the sentence says so**:
+it is the obvious thing to try with a PDF open, it looks cheaper
+because it is cleaner, and it costs the same. What it will not do is
+convert pages into characters — "a page is about 3,000 characters"
+would put a modelled multiple on a screen, and both figures quoted are
+ceilings the server enforces.
+
 **A marker a machine greps for is not vocabulary.** The deploy refuses
 while `config.ts` carries the unmeasured flag. Writing that word in a
 sentence — even to say something is *not* it — blocks the deploy. That
