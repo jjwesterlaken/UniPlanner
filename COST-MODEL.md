@@ -1336,6 +1336,44 @@ four pages could truncate, which the adapter turns into a hard error. Raising
 `MAX_TOKENS.summarise` re-prices the batch automatically, so that is a decision
 with a number attached rather than a free one.
 
+## 12.10 The prompt answer to 12.9's noise, and why one run cannot report it
+
+The paragraph above predicted the noise was a prompt property. Three rules now
+name the three defects — the layout hyphenation reaching the note, the repeated
+term, and the fused claim — and `scripts/measure-photo-prompt.mjs` is what says
+whether they worked.
+
+**A SINGLE RUN OF THE NEW PROMPT WOULD PROVE NOTHING.** These defects are
+intermittent: a model that produced `crunc(h)ers` once need not produce it
+again, so a clean run after the change is as likely to be the model's day as
+the prompt's doing. The instrument therefore runs the pair — the same model,
+the same photographs, the same bytes, detail and ceiling, under the prompt in
+the working tree and the prompt **at a git ref** — and it REFUSES when the two
+prompts are identical, because a comparison between two identical things
+reports success either way. That refusal is exercised by the suite in both
+directions through a `--dry-run` that spends nothing.
+
+**Two of the three defects are counted; the third cannot be.** An in-word
+bracketed letter and a duplicate term are patterns. "Hopper was the first group
+to be granted a PhD" is ordinary words in correct grammar, so it is printed for
+a person to judge and the script says so rather than implying coverage it does
+not have.
+
+**And the control on the fix**: entries and words per section, both arms, on the
+same page as the defect counts. Noise falling because the model said *less* is
+the depth regression 12.9 warns about, not a fix.
+
+### One loose end, with its bound
+
+`MEASURED_PHOTO_BATCH_INPUT_TOKENS` (4,045) is a bill for one configuration and
+the prompt is part of that configuration — it grew by roughly 200 tokens, so the
+constant is now slightly low. **The weight does not move**: at the shipped rates
+it is 5 credits for anything between 2,933 and 6,362 input tokens, which is
+2,317 tokens of headroom. Those four numbers are re-derived by a test and
+compared with the sentence in `prompts.js` rather than left as a comment. The
+A/B prints the new count beside the recorded one, so the re-measure lands with
+the next run.
+
 ---
 
 ## 13. The margin on an ACCOUNT, and the cap that bounds it

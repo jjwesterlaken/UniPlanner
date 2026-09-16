@@ -992,6 +992,53 @@ one measurement away from being unnecessary.
 an extrapolation from a short one — a 5-minute sample cannot say what a
 3-hour recording produces, and that constant only matters for long ones.
 
+### A prompt change is a CONFIGURATION change, so it needs the pair
+
+The same lesson one endpoint over, and the thing it adds is that an
+intermittent defect cannot be reported by a single run.
+
+`gpt-5.4-nano`'s measured photo run was accurate and noisy in three
+ways: `Data crunc(h)ers` (a line-break hyphenation, with the missing
+letter offered in brackets as an uncertainty marker), the same term
+defined twice, and *"Hopper was the first group to be granted a PhD"* —
+two true claims about two subjects welded into one false sentence. Each
+is now a rule in `SYSTEM.summariseImages` that NAMES ITS DEFECT, because
+a model told vaguely to be cleaner trims content instead; and nothing
+caps how much it says, since thoroughness was never the complaint and
+capping entries is how the +189% above gets undone.
+
+**ONE RUN OF THE NEW PROMPT WOULD HAVE PROVED NOTHING.** A model that
+produced `crunc(h)ers` once need not produce it again, so a clean run
+afterwards is as likely to be the model's day as the prompt's doing.
+`scripts/measure-photo-prompt.mjs` runs the PAIR — same model, same
+photographs, same bytes, detail and ceiling, one arm under the prompt in
+the working tree and one under the prompt **at a git ref**, extracted
+rather than retyped so a pasted "before" cannot go on describing a
+prompt somebody has since edited. **It refuses when the two prompts are
+identical**, which is the vacuous-pass shape arriving in a measurement
+script: two samples of one configuration, and every difference printed
+is run-to-run variation reported as an improvement. The refusal is RUN
+by the suite in both directions — always-refuse satisfies half of it and
+makes the script useless — through a `--dry-run` that stops before any
+call, so the check needs no key, no photograph and no network.
+
+**Two of the three defects are counted and the third cannot be**, which
+the script says rather than implies: a bracketed letter inside a word
+and a duplicate term are patterns, while a fused claim is ordinary words
+in correct grammar. **And the control on the fix itself** is entries and
+words per section, both arms, printed beside the defect counts — noise
+falling because the model said LESS is the depth regression, not a fix,
+and the number that would show it has to be on the same page as the one
+that would flatter the change.
+
+**The price did not move and that is asserted, not commented.** The
+prompt grew ~200 tokens; `PHOTO_BATCH_CREDITS` is 5 for an input between
+2,933 and 6,362 tokens, so the measured 4,045 has 2,317 of headroom. A
+test re-derives all four numbers and compares them with the sentence in
+`prompts.js`. `MEASURED_PHOTO_BATCH_INPUT_TOKENS` is still a bill for
+ONE configuration and the prompt is part of it, so the A/B prints the
+new count beside the recorded one on every run.
+
 **A marker a machine greps for is not vocabulary.** The deploy refuses
 while `config.ts` carries the unmeasured flag. Writing that word in a
 sentence — even to say something is *not* it — blocks the deploy. That
