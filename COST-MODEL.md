@@ -1237,3 +1237,194 @@ number this project has never been able to take back.
 **The trigger to run it is unchanged:** before the photo path moves model, and
 before any re-weighting. `scripts/measure-photo-gates.mjs`, three calls, an OpenAI
 key and four photographed pages.
+
+---
+
+## 13. The margin on an ACCOUNT, and the cap that bounds it
+
+Sections 4 and 12 price an ACTION. This prices an ACCOUNT, which is the
+question a per-tier loss is actually about: what a tier's whole allowance costs
+us if it is spent on the one action that is under-charged, against what that
+tier pays. Every figure is printed by `scripts/measure-cost-model.mjs` — section
+13 of its output — which lifts the rates, the credit's value and the summarise
+weight out of `_shared/credits.ts` and `ai-text/config.ts` and **imports the
+tier table from `site/pricing.js`**, the same file the pricing page renders.
+
+**It uses the SHIPPED rounding, and that is not a detail.** The preview
+arithmetic earlier in that script uses `Math.ceil`; `creditsFor` rounds with a
+floor of 1. A margin computed with the wrong rounding is a margin about a
+product nobody sells.
+
+### 13.1 The three assumptions that are not derived
+
+| | value | why it is here |
+|---|---|---|
+| AUD → USD | 0.714 (14 September 2026) | prices are AUD, provider bills are USD |
+| GST | one eleventh removed | Australian consumer prices INCLUDE 10% GST, which is remitted and is not revenue |
+| Commission | **per channel**, below | one "store cut" was the wrong shape — they differ by a factor of ten |
+
+**THE COMMISSION IS PER CHANNEL, and the first version of this section had it as
+one number.** Corrected 16 September 2026:
+
+| Channel | rate | status |
+|---|---|---|
+| Apple App Store | **15%** | Small Business Programme, **Jared is enrolled** |
+| Google Play | 15% or 30% | the equivalent programme is a **separate enrolment** and is not confirmed here |
+| Stripe, on the web | ~2.9% + A$0.30 | a payment fee, not a commission — and the flat fee is charged **per transaction**, so an annual plan pays it once rather than twelve times |
+
+**Every bound here is read off Google Play at 30%, the worst channel in use.** Not
+an average and not Apple's rate: the revenue mix at launch is unknown, and a bound
+that only holds on the friendliest channel is not a bound. Stripe is the cheapest
+of the three and never binds.
+
+A figure that depends on an exchange rate has a half-life. That is why the
+**break-even batch counts** below matter more than the dollar margins: they move
+only when a price or an allowance does.
+
+### 13.2 The loss is real, on every paid tier and every period
+
+A credit is defined as **$0.000686**. One four-photo batch really costs
+**$0.0233** — **34.0 credits** of real cost — and is charged **3**.
+**An 11.3× under-charge**, which is section 4's "roughly 10×" measured exactly.
+
+Every credit spent on photo batches, against net revenue:
+
+| Tier | All-photos cost | What the price assumed | monthly | 6-month | annual |
+|---|---|---|---|---|---|
+| Free (60, once ever) | $0.47 | $0.04 | — | — | — |
+| Study AI (900/mo) | $7.00 | $0.62 | **−$2.91** | **−$3.59** | **−$3.97** |
+| Study AI Max (3000/mo) | $23.33 | $2.06 | **−$14.70** | **−$16.14** | **−$16.90** |
+
+*(net of GST, at Google Play's standard 30%.)*
+
+**AND THE COMMISSION DOES NOT CHANGE THE ANSWER, which is worth stating rather
+than leaving as an absence.** At Apple's 15% the same losses are $2.04 / $2.86 /
+$3.32 and $12.85 / $14.60 / $15.52; on Stripe, the cheapest channel, they are
+$1.55 / $2.31 / $2.82 and $11.58 / $13.39 / $14.42. **Every tier, every period,
+every channel is a loss**, and the reason it is insensitive is arithmetic rather
+than luck: fifteen points of commission moves net revenue by about 21%, and the
+gap being closed is **11.3×**. A commission correction cannot reach an
+order-of-magnitude mispricing, and if it could, the mispricing would not be the
+thing to fix.
+
+**Free is not a problem and should not be treated as one.** 60 credits is 20
+batches, $0.47, **once ever** — the trial's whole shape is what bounds it, which
+is the argument `credits.ts` makes for the shape in the first place.
+
+**The loss is a TAIL, not a typical case.** A student doing two eight-page
+readings a month spends 4 batches — nine cents. The loss appears only near the
+cap, which is exactly why a cap is the instrument: it bounds the tail without
+touching anybody's ordinary month.
+
+### 13.3 What a tier can absorb
+
+Break-even, with the rest of the allowance at its nominal cost, at Play's 30%:
+
+| Tier | monthly | 6-month | annual |
+|---|---|---|---|
+| Study AI | 162 batches (648 pages) | 131 (524) | **113 (452)** |
+| Study AI Max | 308 (1,232) | 241 (964) | **205 (820)** |
+
+The annual column is the binding one: it is the least revenue per month, so a cap
+set under it holds for every period.
+
+### 13.4 THE RECOMMENDATION — model and weight, one decision, unchanged
+
+**`gpt-5.4-nano`, `detail: "original"`, `maxEdge` 1024, a batch weighted at 6
+credits**, with `SUMMARY_MODEL` and `VISION_MODEL` split in `_shared/` first and
+text and lectures left on `gpt-4o-mini`. That is section 12.7's recommendation
+and re-deriving it changed nothing.
+
+**Two of the three published rates it rests on have now been independently
+reproduced** (15 September 2026): `gpt-4o-mini` at $0.15/$0.60, `gpt-5.4-mini` at
+$0.75/$4.50 and `gpt-5.4-nano` at $0.20/$1.25 all match 12.1's table exactly.
+OpenAI's own pages remain unreachable from this container — `platform.openai.com`
+and `developers.openai.com` are both refused by the egress proxy — so this is a
+second independent agreement rather than a reading at the source.
+
+**IT DOES NOT CLOSE GATE 1, and the distinction is the whole reason gate 1
+exists.** A published rate is what a token costs. Gate 1 asks **how many tokens
+the API actually bills for our image**, and the report it exists to resolve is a
+disagreement between the documented arithmetic and a real invoice. A rate and a
+count are different claims; confirming one says nothing about the other.
+
+**One thing about that report has narrowed, and it is not a resolution.** The
+1920×1080 / ~66,000-token case is described as having been sent at
+**`detail: "high"`** — the setting 12.3 recommends moving OFF, and the
+recommended configuration is `original`. So the reported configuration is not the
+recommended one. The thread itself is unreachable from here, no staff answer is
+visible, and **nothing about our own numbers has been measured**, so this lowers
+the prior and closes nothing. Gate 1 stands.
+
+### 13.5 The model change CANNOT ship before launch, and the reason is structural
+
+Both gates need a real `OPENAI_API_KEY` and **four photographs of a real page of
+print** — a phone photo, not a screenshot, because the thing being tested is
+whether a model can read a photograph. Neither exists in a build container, and
+no amount of work here substitutes for either. `scripts/measure-photo-gates.mjs`
+is the entire procedure and it is one command:
+
+```
+export OPENAI_API_KEY=sk-...
+npm i --no-save sharp
+node scripts/measure-photo-gates.mjs page1.jpg page2.jpg page3.jpg page4.jpg
+```
+
+It costs well under a cent at the documented rates, and a few cents if gate 1
+fails — which is the point of running it.
+
+### 13.6 SO: A PHOTO-BATCH CAP, DERIVED FROM THE TIER'S OWN ALLOWANCE
+
+**15% of the tier's allowance, in batches**, applied to per-month tiers only:
+
+| Tier | cap | pages a month | worst case (annual, Play 30%) |
+|---|---|---|---|
+| Study AI | 45 batches | 180 | **+$1.45** |
+| Study AI Max | 150 batches | 600 | **+$1.19** |
+
+Both stay profitable at the least generous period and the worst commission,
+which is the property being bought. 180 pages a month is about eleven sixteen-page
+readings; the cap is roughly **a third of break-even**, so it survives an
+exchange-rate move that the dollar figures would not.
+
+Five things about the shape, each of which is a rule this codebase already holds:
+
+- **DERIVED, not a second table.** `floor(credits × PHOTO_CAP_FRACTION /
+  PHOTO_BATCH_CREDITS)` follows the tier table, so a tier added or an allowance
+  changed carries its own cap and there is no second list to keep in step.
+- **PER-MONTH TIERS ONLY, and this falls out of `allowanceForTier`'s existing
+  shape rather than needing a branch of its own.** 15% of the trial is 3 batches,
+  which would stop a free account finishing a 16-page reading — the exact thing
+  `credits.ts` says the trial has to be able to demonstrate. The trial is bounded
+  once-ever at $0.47 and needs no cap.
+- **The counter belongs beside `credits_used`** in `ai_usage`, keyed
+  `(user_id, month)`, incremented in the same atomic RPC — the row is already
+  being written, so it costs no extra query and inherits migration 0011's fix for
+  the lost update.
+- **The refusal is PRE-FLIGHT.** `sectionsAffordable` already exists for the
+  variable-cost case; the cap folds into it, so a student is told before the work
+  rather than halfway through a reading. A cap discovered mid-reading is the
+  keep-what-was-charged rule doing its job over a refusal that should have come
+  first.
+- **The copy states the specific situation**, as the readings refusal already
+  does: how many batches are left this month, and that pasted text is not capped —
+  which is the one thing the student can act on, and is also the cheaper path we
+  would rather they took.
+
+### 13.7 WHAT IS DELIBERATELY NOT RECOMMENDED: re-weighting to 34
+
+It is the honest number and it would make the feature unusable — a 16-page
+reading becomes 138 credits, more than twice the whole free trial and 15% of a
+Study AI month. Section 12.6 says this in as many words: *at an honest weight the
+feature is unusable on this model.*
+
+The argument 12.7 makes against re-weighting is that the model move is imminent,
+and that argument is **weaker now** than when it was written, because the move is
+gated on a measurement nobody has been able to take. It is not gone: 34 would be
+a visible, user-facing number that is wrong by 5.7× in the other direction the
+moment the model moves, and this project has a ledger of what visible wrong
+numbers cost. The cap keeps the price honest for every ordinary month and bounds
+the tail, which is what re-weighting was for.
+
+**The cap is a bound, not a fix, and it should be removed when the model moves.**
+Whatever ships should say so where somebody will read it, next to the constant.
