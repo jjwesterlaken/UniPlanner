@@ -38,9 +38,10 @@
    or a video of a recital. A feature that took those would need a
    different constraint, not a wider input.
 
-   The ruling belongs in ESSAY-FEEDBACK.md §2, which is still on the
-   unmerged `claude/essay-feedback-scoping` branch — it should be
-   written in when that lands.
+   ESSAY-FEEDBACK.md §2 carries the ruling and the reasoning behind
+   the half that matters: the no-photographs half is not the same
+   decision as the no-upload half, because the no-writing guarantee is
+   not weakened for non-text material, it is ABSENT.
 
    ------------------------------------------------------------------
    USAGE — on your own machine, with your own key
@@ -58,6 +59,12 @@
      --rubric <file>    required: the criteria it was marked against
      --model <id>       default is the shipped SUMMARY_MODEL
      --runs <n>         default 3. MORE THAN ONE ON PURPOSE — see below
+     --redact           print NUMBERS ONLY. No model output, no quoted
+                        spans, no novel-run text, and none of it in the
+                        --json file either. Required for any corpus
+                        whose licence forbids redistributing the text —
+                        the ASAP essays are one, which is why the
+                        sampler always passes it.
      --dry-run          resolve the prompt and the inputs, print sizes,
                         make no call and spend nothing
      --json <file>      also write the raw measurements, for a second
@@ -115,6 +122,11 @@ const opt = (name) => {
 const has = (name) => argv.includes(name);
 
 const dryRun = has("--dry-run");
+/* WITHOUT THIS THE SCRIPT PRINTS ESSAY TEXT, and that is not a
+   hypothetical: the per-field section prints every quoted span, and a
+   span the model quoted VERBATIM is the student's own words. Any
+   corpus under a no-redistribution licence needs this on. */
+const redact = has("--redact");
 const essayFile = opt("--essay");
 const rubricFile = opt("--rubric");
 const jsonOut = opt("--json");
@@ -240,15 +252,26 @@ for (let run = 1; run <= runCount; run++) {
   });
   if (error) {
     console.error(`run ${run} failed: ${error}`);
-    console.error(JSON.stringify(json, null, 2).slice(0, 800));
+    /* `json` IS UNDEFINED WHEN THE BODY WAS NOT JSON AT ALL — a 502
+       HTML page, a proxy's "host not in allowlist", a rate-limit page.
+       Stringifying it unguarded threw a TypeError that took the whole
+       PROCESS down, so one transient failure lost every remaining
+       essay in a thirty-essay run instead of one. Found by running the
+       sampler end to end against a fake rather than by reading it. */
+    if (json !== undefined) console.error(JSON.stringify(json, null, 2).slice(0, 800));
     continue;
   }
   let parsed;
   try {
     parsed = JSON.parse(json.choices[0].message.content);
   } catch (e) {
-    console.error(`run ${run}: the model returned output that is not JSON; printing it raw`);
-    console.error(String(json.choices?.[0]?.message?.content).slice(0, 1200));
+    /* Redacted: the raw body is model output ABOUT the essay and can
+       quote it. The shape is what a person needs here, not the words. */
+    const raw = json && json.choices && json.choices[0] && json.choices[0].message
+      ? String(json.choices[0].message.content || "")
+      : "";
+    console.error(`run ${run}: the model returned output that is not JSON (${raw.length} chars)`);
+    if (!redact) console.error(raw.slice(0, 1200));
     continue;
   }
 
@@ -275,8 +298,12 @@ for (let run = 1; run <= runCount; run++) {
     });
     measurements.push(row);
   }
-  console.log(`\n--- run ${run} output, in full (read this for QUALITY; the numbers do not) ---`);
-  console.log(JSON.stringify(parsed, null, 2));
+  if (redact) {
+    console.log(`\n--- run ${run}: ${fields.length} fields measured (output withheld: --redact) ---`);
+  } else {
+    console.log(`\n--- run ${run} output, in full (read this for QUALITY; the numbers do not) ---`);
+    console.log(JSON.stringify(parsed, null, 2));
+  }
 }
 
 if (measurements.length === 0) {
@@ -321,10 +348,14 @@ for (const m of [...measurements].sort((a, b) => b.real[K] - a.real[K])) {
   console.log(`\n  run ${m.run}  ${m.label}`);
   console.log(`    ${m.words} words | novel run vs essay: ${m.real[K]} | vs control: ${m.control[K]}  (matchUnit ${K})`);
   for (const q of m.quotes) {
-    console.log(`    quote ${q.words}w ${q.verbatim ? "VERBATIM" : "*** NOT IN THE ESSAY ***"}: ${q.text.slice(0, 80)}`);
+    const tail = redact ? "" : `: ${q.text.slice(0, 80)}`;
+    console.log(`    quote ${q.words}w ${q.verbatim ? "VERBATIM" : "*** NOT IN THE ESSAY ***"}${tail}`);
   }
   for (const r of novelRuns(m.text, `${essay}\n${criteria}`, { matchUnit: K })) {
-    if (r.length >= 6) console.log(`    novel ${String(r.length).padStart(3)}w: ${r.text.slice(0, 110)}`);
+    if (r.length >= 6) {
+      const tail = redact ? "" : `: ${r.text.slice(0, 110)}`;
+      console.log(`    novel ${String(r.length).padStart(3)}w${tail}`);
+    }
   }
 }
 
@@ -384,6 +415,15 @@ console.log(`
 `);
 
 if (jsonOut) {
-  fs.writeFileSync(jsonOut, JSON.stringify({ model, promptSource, matchUnits: MATCH_UNITS, measurements }, null, 2));
+  /* THE JSON IS REDACTED TOO. A file is the likeliest thing to get
+     attached to a message, so a --redact that cleaned only the
+     terminal would be the leak wearing a different hat. */
+  const forFile = redact
+    ? measurements.map(({ text, quotes, ...rest }) => ({
+        ...rest,
+        quotes: quotes.map(({ text: _t, ...q }) => q),
+      }))
+    : measurements;
+  fs.writeFileSync(jsonOut, JSON.stringify({ model, promptSource, redacted: redact, matchUnits: MATCH_UNITS, measurements: forFile }, null, 2));
   console.log(`  raw measurements written to ${jsonOut}\n`);
 }
