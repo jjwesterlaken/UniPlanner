@@ -68,7 +68,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { readDocxText } from "./lib/docx-text.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -92,6 +92,16 @@ const seed = Number(opt("--seed", "1"));
    not essays. */
 const minWords = Number(opt("--min-words", "50"));
 const dryRun = argv.includes("--dry-run");
+/* `two-arm` is the mode that answers the question now: does the
+   STRUCTURE separate description from ghostwriting, and where does the
+   note cap go. `novelty` is the original single-arm instrument, kept
+   because it is still the right tool for a question about overlap —
+   it is just not the one that decides this. */
+const mode = opt("--mode", "two-arm");
+if (!["two-arm", "novelty"].includes(mode)) {
+  console.error(`--mode must be two-arm or novelty, not "${mode}"`);
+  process.exit(1);
+}
 const SETS = (opt("--sets", "1,2,7,8")).split(",").map((s) => Number(s.trim()));
 
 if (!dir) {
@@ -239,7 +249,8 @@ if (wordCounts[0] < minWords) {
 }
 console.log(`anonymisation stripped (@CAPS/@PERSON/@LOCATION/@NUM and the rest)`);
 console.log(`rubrics      ${rubricNote.join(" | ")}`);
-console.log(`runs each    ${runs}   (${chosen.length * Number(runs)} provider calls in total)`);
+console.log(`mode         ${mode}`);
+console.log(`runs each    ${runs}${mode === "two-arm" ? " per arm" : ""}   (${chosen.length * Number(runs) * (mode === "two-arm" ? 2 : 1)} provider calls in total)`);
 console.log(`redaction    ON — no essay text is printed or written, by --redact`);
 /* THE IDS, so a run is reproducible and auditable. An essay_id is an
    index into a public dataset, not content — and without it "same
@@ -269,20 +280,24 @@ try {
     try {
       /* process.execPath, never npx and never a .bin shim: on Windows
          the shim is a .cmd and modern Node refuses to execute it. */
-      execFileSync(
-        process.execPath,
-        [
-          path.join(ROOT, "scripts", "measure-no-writing.mjs"),
-          "--essay", eFile,
-          "--rubric", rFile,
-          "--runs", String(runs),
-          "--redact",
-          "--json", jFile,
-        ],
-        { stdio: ["ignore", "ignore", "inherit"], env: process.env }
-      );
+      /* NEITHER CHILD IS EVER ASKED TO SHOW TEXT. measure-no-writing
+         needs --redact because its default prints quotes;
+         measure-two-arm withholds by default because every quote it
+         collects is the student's own words by construction. Two
+         scripts, two defaults, one rule. */
+      const child =
+        mode === "two-arm"
+          ? [path.join(ROOT, "scripts", "measure-two-arm.mjs"), "--essay", eFile, "--rubric", rFile, "--runs", String(runs), "--json", jFile]
+          : [path.join(ROOT, "scripts", "measure-no-writing.mjs"), "--essay", eFile, "--rubric", rFile, "--runs", String(runs), "--redact", "--json", jFile];
+      execFileSync(process.execPath, child, { stdio: ["ignore", "ignore", "inherit"], env: process.env });
       const parsed = JSON.parse(fs.readFileSync(jFile, "utf8"));
-      for (const m of parsed.measurements) results.push({ ...m, set: row.set, essayId: row.id });
+      if (mode === "two-arm") {
+        for (const arm of ["constrained", "adversarial"]) {
+          for (const m of parsed.measured[arm] || []) results.push({ ...m, arm, set: row.set, essayId: row.id });
+        }
+      } else {
+        for (const m of parsed.measurements) results.push({ ...m, set: row.set, essayId: row.id });
+      }
     } catch (e) {
       console.error(`  set ${row.set} essay ${row.id}: FAILED (${e.message.split("\n")[0]})`);
     }
@@ -298,6 +313,12 @@ if (results.length === 0) {
 }
 
 /* ---------- ONE combined summary ---------- */
+
+if (mode === "two-arm") {
+  const { summariseTwoArm } = await import(pathToFileURL(path.join(ROOT, "scripts", "lib", "two-arm-summary.mjs")).href);
+  summariseTwoArm(results, { sets: SETS, essays: chosen.length });
+  process.exit(0);
+}
 
 const MATCH_UNITS = [3, 4, 5, 6];
 const K = 5;
