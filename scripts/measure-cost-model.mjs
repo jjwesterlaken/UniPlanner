@@ -424,11 +424,19 @@ console.log(out.join(""));
    a choice:
 
      FX          AUD -> USD. Prices are AUD; provider bills are USD.
-     STORE_CUTS  Apple and Google take 15% under their small-business
-                 programmes and 30% otherwise. Both are printed; the
-                 recommendation is read off the 30% column, because a
-                 bound that only holds on the generous commission is
-                 not a bound.
+     CHANNELS    The commission is PER CHANNEL and they differ by a
+                 factor of ten, so one "store cut" was the wrong shape.
+                 Apple's Small Business Programme is 15% and Jared is
+                 ENROLLED (16 September 2026). Google's equivalent is a
+                 SEPARATE enrolment and is not confirmed here, so Play
+                 is carried at both. Stripe on the web is a payment fee,
+                 not a commission, and is nearly an order of magnitude
+                 smaller.
+
+                 THE CAP IS READ OFF THE WORST CHANNEL IN USE, not off
+                 an average: a bound that only holds on the friendliest
+                 channel is not a bound, and the revenue mix is unknown
+                 at launch.
      GST         Australian consumer prices INCLUDE 10% GST, which is
                  remitted and is not revenue. One eleventh off.
 
@@ -437,7 +445,17 @@ console.log(out.join(""));
    margins: they move much more slowly than the exchange rate does. */
 
 const FX_AUD_USD = 0.714;      // 14 September 2026
-const STORE_CUTS = [0.15, 0.3];
+/* Each channel as {label, cut, fixedAud} — Stripe charges a percentage
+   AND a flat fee, which matters at these prices: 30c on a A$8.99 month
+   is another 3.3%. */
+const CHANNELS = [
+  { label: "Apple (SBP 15%)", cut: 0.15, fixedAud: 0 },
+  { label: "Play (SBP 15%?)", cut: 0.15, fixedAud: 0 },
+  { label: "Play (standard)", cut: 0.3, fixedAud: 0 },
+  { label: "Stripe web", cut: 0.029, fixedAud: 0.3 },
+];
+/* The channel every bound below is read off. */
+const WORST = CHANNELS.reduce((a, b) => (a.cut >= b.cut ? a : b));
 const GST_FRACTION = 1 / 11;
 const MONTHS_IN = { monthly: 1, sixMonth: 6, annual: 12 };
 
@@ -482,11 +500,20 @@ if (!Array.isArray(PRICED_TIERS) || PRICED_TIERS.length === 0) {
   throw new Error("site/pricing.js exported no tiers — every margin below would be a claim about nothing");
 }
 
-const netUsdPerMonth = (tier, period, cut) =>
-  (tier.prices[period] / MONTHS_IN[period]) * (1 - GST_FRACTION) * (1 - cut) * FX_AUD_USD;
+/* A channel's fixed fee is charged PER TRANSACTION, so it is spread
+   across the months the transaction bought — an annual plan pays it
+   once, not twelve times. Getting that wrong makes the annual column
+   look worse than it is, which is the column every bound is read off. */
+const netUsdPerMonth = (tier, period, channel) => {
+  const grossAud = tier.prices[period];
+  const netAud = grossAud * (1 - GST_FRACTION) * (1 - channel.cut) - (channel.fixedAud || 0);
+  return (netAud / MONTHS_IN[period]) * FX_AUD_USD;
+};
 
 console.log("\nSECTION 13 — THE MARGIN ON AN ACCOUNT");
-console.log(`  assumptions: AUD->USD ${FX_AUD_USD}, GST 1/11 removed, store cuts ${STORE_CUTS.map((c) => c * 100 + "%").join(" and ")}`);
+console.log(`  assumptions: AUD->USD ${FX_AUD_USD}, GST 1/11 removed`);
+console.log(`  channels:    ${CHANNELS.map((c) => c.label + " " + (c.cut * 100).toFixed(1) + "%" + (c.fixedAud ? " +A$" + c.fixedAud : "")).join(",  ")}`);
+console.log(`  every bound below is read off ${WORST.label}, the worst channel in use`);
 console.log(`  a credit is defined as            ${usd(USD_PER_CREDIT)}`);
 console.log(`  one ${PHOTOS_PER_BATCH}-photo batch really costs  ${usd(batchUsdToday)}  = ${batchRealCredits.toFixed(1)} credits of real cost`);
 console.log(`  it is charged                     ${CHARGED_PER_BATCH} credits`);
@@ -503,11 +530,11 @@ for (const t of PRICED_TIERS) {
     continue;
   }
   for (const period of Object.keys(MONTHS_IN)) {
-    const cells = STORE_CUTS.map((cut) => {
-      const margin = netUsdPerMonth(t, period, cut) - allPhotos;
-      return `${cut * 100}%: ${margin < 0 ? "LOSS " : "+"}${usd(Math.abs(margin))}`;
+    const cells = CHANNELS.map((ch) => {
+      const margin = netUsdPerMonth(t, period, ch) - allPhotos;
+      return `${ch.label}: ${margin < 0 ? "LOSS " : "+"}${usd(Math.abs(margin))}`;
     });
-    console.log(`     ${period.padEnd(9)} ${cells.join("   ")}`);
+    console.log(`     ${period.padEnd(9)} ${cells.join("  ")}`);
   }
   console.log("");
 }
@@ -515,10 +542,10 @@ for (const t of PRICED_TIERS) {
 /* THE BREAK-EVEN COUNT IS THE DURABLE NUMBER. The dollar margins above
    move with the exchange rate; how many batches a tier can absorb moves
    only when a price or an allowance does. */
-console.log("  BREAK-EVEN BATCHES A MONTH (rest of the allowance at its nominal cost, 30% cut)");
-const breakEven = (t, period) => {
+console.log(`  BREAK-EVEN BATCHES A MONTH (rest of the allowance at its nominal cost, ${WORST.label})`);
+const breakEven = (t, period, channel = WORST) => {
   let n = 0;
-  const net = netUsdPerMonth(t, period, 0.3);
+  const net = netUsdPerMonth(t, period, channel);
   while (
     (n + 1) * CHARGED_PER_BATCH <= t.credits &&
     (n + 1) * batchUsdToday + (t.credits - (n + 1) * CHARGED_PER_BATCH) * USD_PER_CREDIT <= net
@@ -534,12 +561,12 @@ for (const t of PRICED_TIERS) {
 
 /* A CAP AS A FRACTION OF THE TIER'S OWN ALLOWANCE, so it follows the
    table rather than being a second hand-written one beside it. */
-console.log("\n  A DERIVED CAP — worst case at the annual price and the 30% cut");
+console.log(`\n  A DERIVED CAP — worst case at the annual price on ${WORST.label}`);
 for (const frac of [0.1, 0.15, 0.2, 0.25]) {
   const cells = PRICED_TIERS.filter((t) => t.perMonth).map((t) => {
     const cap = Math.floor((t.credits * frac) / CHARGED_PER_BATCH);
     const margin =
-      netUsdPerMonth(t, "annual", 0.3) - cap * batchUsdToday - (t.credits - cap * CHARGED_PER_BATCH) * USD_PER_CREDIT;
+      netUsdPerMonth(t, "annual", WORST) - cap * batchUsdToday - (t.credits - cap * CHARGED_PER_BATCH) * USD_PER_CREDIT;
     return `${t.name}: ${pad(cap, 3)} batches / ${pad(cap * PHOTOS_PER_BATCH, 4)} pages  ${margin < 0 ? "LOSS " : "+"}${usd(Math.abs(margin))}`;
   });
   console.log(`     ${pad((frac * 100).toFixed(0) + "%", 4)}  ${cells.join("    ")}`);

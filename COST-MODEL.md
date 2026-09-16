@@ -1135,8 +1135,22 @@ product nobody sells.
 | | value | why it is here |
 |---|---|---|
 | AUD → USD | 0.714 (14 September 2026) | prices are AUD, provider bills are USD |
-| Store commission | 15% and 30% | Apple and Google's small-business and standard rates; **the recommendation is read off 30%**, because a bound that only holds on the generous commission is not a bound |
 | GST | one eleventh removed | Australian consumer prices INCLUDE 10% GST, which is remitted and is not revenue |
+| Commission | **per channel**, below | one "store cut" was the wrong shape — they differ by a factor of ten |
+
+**THE COMMISSION IS PER CHANNEL, and the first version of this section had it as
+one number.** Corrected 16 September 2026:
+
+| Channel | rate | status |
+|---|---|---|
+| Apple App Store | **15%** | Small Business Programme, **Jared is enrolled** |
+| Google Play | 15% or 30% | the equivalent programme is a **separate enrolment** and is not confirmed here |
+| Stripe, on the web | ~2.9% + A$0.30 | a payment fee, not a commission — and the flat fee is charged **per transaction**, so an annual plan pays it once rather than twelve times |
+
+**Every bound here is read off Google Play at 30%, the worst channel in use.** Not
+an average and not Apple's rate: the revenue mix at launch is unknown, and a bound
+that only holds on the friendliest channel is not a bound. Stripe is the cheapest
+of the three and never binds.
 
 A figure that depends on an exchange rate has a half-life. That is why the
 **break-even batch counts** below matter more than the dollar margins: they move
@@ -1156,8 +1170,17 @@ Every credit spent on photo batches, against net revenue:
 | Study AI (900/mo) | $7.00 | $0.62 | **−$2.91** | **−$3.59** | **−$3.97** |
 | Study AI Max (3000/mo) | $23.33 | $2.06 | **−$14.70** | **−$16.14** | **−$16.90** |
 
-*(net of GST and a 30% store cut; at 15% the losses are $2.04 / $2.86 / $3.32 and
-$12.85 / $14.60 / $15.52.)*
+*(net of GST, at Google Play's standard 30%.)*
+
+**AND THE COMMISSION DOES NOT CHANGE THE ANSWER, which is worth stating rather
+than leaving as an absence.** At Apple's 15% the same losses are $2.04 / $2.86 /
+$3.32 and $12.85 / $14.60 / $15.52; on Stripe, the cheapest channel, they are
+$1.55 / $2.31 / $2.82 and $11.58 / $13.39 / $14.42. **Every tier, every period,
+every channel is a loss**, and the reason it is insensitive is arithmetic rather
+than luck: fifteen points of commission moves net revenue by about 21%, and the
+gap being closed is **11.3×**. A commission correction cannot reach an
+order-of-magnitude mispricing, and if it could, the mispricing would not be the
+thing to fix.
 
 **Free is not a problem and should not be treated as one.** 60 credits is 20
 batches, $0.47, **once ever** — the trial's whole shape is what bounds it, which
@@ -1170,7 +1193,7 @@ touching anybody's ordinary month.
 
 ### 13.3 What a tier can absorb
 
-Break-even, with the rest of the allowance at its nominal cost, at 30%:
+Break-even, with the rest of the allowance at its nominal cost, at Play's 30%:
 
 | Tier | monthly | 6-month | annual |
 |---|---|---|---|
@@ -1229,7 +1252,7 @@ fails — which is the point of running it.
 
 **15% of the tier's allowance, in batches**, applied to per-month tiers only:
 
-| Tier | cap | pages a month | worst case (annual, 30%) |
+| Tier | cap | pages a month | worst case (annual, Play 30%) |
 |---|---|---|---|
 | Study AI | 45 batches | 180 | **+$1.45** |
 | Study AI Max | 150 batches | 600 | **+$1.19** |
