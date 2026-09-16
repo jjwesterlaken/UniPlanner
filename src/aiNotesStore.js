@@ -62,22 +62,73 @@ export function buildPreviews(translations = {}, chars = PREVIEW_CHARS) {
  * the blob where an ordinary per-item merge handles it — and keeping it
  * out of the row is what leaves that row immutable, with no client
  * update path and no update policy.
+ *
+ * THIS IS A WHITELIST, AND IT HAD SILENTLY LOST TWO FIELDS. It is
+ * `COLLECTIONS` one file over: a key that a later feature put on
+ * `aiMeta` is dropped the moment the note migrates — in silence, with
+ * no error, on the one path every signed-in student takes.
+ *
+ *   `sourceReadingId` is what the Textbook tab reads to show
+ *   "Summarised" on a reading and link to the note it produced. A
+ *   comment at that reader says, in as many words, that it "lives on
+ *   the stub's aiMeta". Running this function disproves it. So the
+ *   link worked in demo mode and on the first render after
+ *   summarising, and was gone by the next sync for everybody who
+ *   could actually use the feature.
+ *
+ *   `partsMerged` and `parts` are how a chunk-merged reading still
+ *   says, next month, that it is four sections put end to end rather
+ *   than one summary — which is the whole reason that flag is
+ *   recorded on the note instead of being a property of the session.
+ *
+ * A WHITELIST IS STILL THE RIGHT SHAPE. Spreading unknown keys would
+ * let `translations` straight back into the blob and undo the storage
+ * move entirely. What was wrong is that dropping a key was invisible,
+ * so `KEPT_META_KEYS` makes it enumerable and `test-ai-store.mjs`
+ * sweeps the source for every key the app writes onto an `aiMeta`,
+ * requiring each to be kept here or excused BY NAME with a reason.
+ * A new field now fails a test instead of disappearing.
  */
+
+/* Carried through the stub. `translations` is deliberately absent —
+   that is the content, and moving it out is the entire point of the
+   row; `previews` is what replaces it. */
+export const KEPT_META_KEYS = [
+  "course",
+  "week",
+  "generatedAt",
+  "activeLanguage",
+  "capped",
+  "sourceReadingId",
+  "partsMerged",
+  "parts",
+];
+
 export function buildStub(page) {
   const meta = (page && page.aiMeta) || {};
+  const carried = {};
+  /* `!== undefined` rather than truthiness: `partsMerged` is FALSE
+     exactly when it matters, and an `if (meta[key])` carry would drop
+     the one value the field exists to record. */
+  for (const key of KEPT_META_KEYS) {
+    if (meta[key] !== undefined) carried[key] = meta[key];
+  }
   return {
     ...page,
     body: "",
     html: "",
     strokes: [],
     aiMeta: {
+      /* The four with defaults keep them, so a stub with no course
+         reads as "" everywhere rather than as undefined — which would
+         merge differently and render differently. */
       course: meta.course || "",
       week: meta.week || "",
       generatedAt: meta.generatedAt || "",
       activeLanguage: meta.activeLanguage || "en",
+      ...carried,
       remote: true,
       previews: buildPreviews(meta.translations),
-      ...(meta.capped ? { capped: meta.capped } : {}),
     },
   };
 }
