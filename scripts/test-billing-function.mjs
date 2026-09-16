@@ -71,7 +71,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { createPgHarness } from "./lib/pg-harness.mjs";
 
@@ -120,7 +120,7 @@ fs.writeFileSync(fnPath, bundle.outputFiles[0].text);
 /* The pure module is imported directly as well — its table of cases is
    the cheapest place to pin the entitlement rules, and importing it
    from source means a change there cannot be hidden by a bundle. */
-const ent = await import(path.join(rootDir, "supabase/functions/_shared/entitlement.ts").replace(/\.ts$/, ".ts"));
+const ent = await import(pathToFileURL(path.join(rootDir, "supabase/functions/_shared/entitlement.ts")).href);
 
 /* ---------- the world the handler runs in ---------- */
 
@@ -294,7 +294,7 @@ async function deliver(world, event, opts = {}) {
     const v1 = opts.v1 ?? (await sign(opts.signingSecret ?? SIGNING_SECRET, t, signBody));
     headers.set("x-revenuecat-webhook-signature", opts.sigHeader ?? `t=${t},v1=${v1}`);
   }
-  const mod = await import(`${fnPath}?v=${Math.random()}`);
+  const mod = await import(`${pathToFileURL(fnPath).href}?v=${Math.random()}`);
   const res = await mod.handle(new Request("https://fn.test/billing-webhook", { method: "POST", headers, body: raw }));
   return { status: res.status, body: await res.json() };
 }

@@ -311,7 +311,7 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
   const origErr = console.error;
   console.log = (...a) => logs.push(a.join(" "));
   console.error = (...a) => logs.push(a.join(" "));
-  await import(`${fnPath}?v=${Math.random()}`);
+  await import(`${pathToFileURL(fnPath).href}?v=${Math.random()}`);
   const res = await handler(
     new Request("https://x/ai-notes", {
       method: "POST",

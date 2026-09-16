@@ -30,7 +30,7 @@
 import { encode } from "gpt-tokenizer/model/gpt-4o-mini";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tok = (s) => encode(s).length;
@@ -85,12 +85,12 @@ const SYS_NOTES_TR = tok(eval(ternary[1].replace("${translateTo}", "es")));
 const SYS_NOTES_NO = tok(eval(ternary[2]));
 const SCHEMA = tok(JSON.stringify(eval("(" + grab(/const LECTURE_SUMMARY_SCHEMA = (\{[\s\S]*?\n\};)/).replace(/;$/, "") + ")")));
 
-const { HELP_TOPICS } = await import(path.join(ROOT, "src/helpText.js"));
+const { HELP_TOPICS } = await import(pathToFileURL(path.join(ROOT, "src/helpText.js")).href);
 const HELP_PROSE = Object.values(HELP_TOPICS)
   .flatMap((t) => [t.what, t.example, t.cost, ...[].concat(t.detail || [])])
   .join(" ");
 
-const { buildMessages } = await import(path.join(ROOT, "supabase/functions/ai-text/prompts.js"));
+const { buildMessages } = await import(pathToFileURL(path.join(ROOT, "supabase/functions/ai-text/prompts.js")).href);
 const sysTok = (task, body) => tok(buildMessages(task, body).find((m) => m.role === "system").content);
 const SYS = {
   explain: sysTok("explain", { topic: "", text: "" }),

@@ -21,6 +21,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+/* A dynamic import takes a URL, never a filesystem path: on Windows a
+   drive letter parses as a SCHEME and Node refuses it with
+   ERR_UNSUPPORTED_ESM_URL_SCHEME "Received protocol 'c:'". */
+const toUrl = (p) => pathToFileURL(p).href;
 import { build } from "esbuild";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -86,19 +91,16 @@ const creditsBundle = await build({
 });
 fs.writeFileSync(path.join(tmpDir, "credits.mjs"), creditsBundle.outputFiles[0].text);
 
-const cfg = await import(pathToUrl(path.join(tmpDir, "cfg.mjs")));
-const credits = await import(pathToUrl(path.join(tmpDir, "credits.mjs")));
+const cfg = await import(toUrl(path.join(tmpDir, "cfg.mjs")));
+const credits = await import(toUrl(path.join(tmpDir, "credits.mjs")));
 
 const fnPath = path.join(tmpDir, "fn.mjs");
 fs.writeFileSync(fnPath, bundle.outputFiles[0].text);
 
 // Deno.serve runs at module load, so the global has to exist first.
 globalThis.Deno = { serve: () => {}, env: { get: (n) => (n === "OPENAI_API_KEY" ? "sk-test" : "set") } };
-const { handle } = await import(pathToUrl(fnPath));
+const { handle } = await import(toUrl(fnPath));
 
-function pathToUrl(p) {
-  return new URL(`file://${p}`).href;
-}
 
 /* ---------- fakes ---------- */
 
@@ -724,7 +726,7 @@ async function main() {
     /* Pinned the same way the AI notes billing sentence is: charging and
        saying only "that didn't work" is how a support ticket becomes a
        chargeback. */
-    const { AI_TEXT_FAILURES } = await import(pathToUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    const { AI_TEXT_FAILURES } = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
     const charged = `${AI_TEXT_FAILURES.ai_failed_charged.title} ${AI_TEXT_FAILURES.ai_failed_charged.detail}`;
     assert.match(charged, /charged/i, "the charged failure no longer says it was charged");
     assert.match(charged, /AI study help/, "it must name what was used, in the words the student sees elsewhere");
@@ -788,7 +790,7 @@ async function main() {
 
   /* ---------- prompts ---------- */
 
-  const { buildMessages, parseTaskResult } = await import(pathToUrl(path.join(rootDir, "supabase/functions/ai-text/prompts.js")));
+  const { buildMessages, parseTaskResult } = await import(toUrl(path.join(rootDir, "supabase/functions/ai-text/prompts.js")));
 
   await test("the student's text is never interpolated into the instructions", async () => {
     /* The whole reason it is a separate user message. Spliced into the
@@ -846,8 +848,8 @@ async function main() {
     /* The fifth instance of the restatement pattern taught the rule: a
        mirror is allowed where it cannot be avoided, and the EQUALITY
        becomes the guard. A comment would not have caught this. */
-    const server = await import(pathToUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
-    const client = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    const server = await import(toUrl(path.join(rootDir, ".fn-text-tmp", "cfg.mjs")));
+    const client = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
     assert.deepEqual(client.TASK_CREDITS, server.TASK_CREDITS);
     assert.deepEqual(client.TEXT_TIERS, server.TEXT_TIERS);
     assert.equal(client.MONTHLY_CREDITS_LIMIT, server.MONTHLY_CREDITS_LIMIT);
@@ -858,14 +860,14 @@ async function main() {
   });
 
   await test("a student learns an action is unaffordable before doing the work", async () => {
-    const { allowanceState, canAfford, isLastAction } = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    const { allowanceState, canAfford, isLastAction } = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
 
     /* Derived from the trial size rather than typed, so re-sizing the
        trial re-runs the arithmetic instead of leaving a stale 9 here.
        One credit left: an explanation (1) fits, a summarise (3) and a
        practice set (2) do not. Knowing that BEFORE the text box is the
        point. */
-    const { TRIAL_CREDITS, TASK_CREDITS } = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    const { TRIAL_CREDITS, TASK_CREDITS } = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
     const nearlyOut = allowanceState({ tier: "free", creditsUsed: TRIAL_CREDITS - TASK_CREDITS.explain });
     assert.equal(canAfford(nearlyOut, "explain"), true);
     assert.equal(canAfford(nearlyOut, "summarise"), false);
@@ -882,7 +884,7 @@ async function main() {
   });
 
   await test("a trial account at its limit is told what the plan adds, not only what it can't do", async () => {
-    const { describeExhausted } = await import(pathToUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    const { describeExhausted } = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
     const free = describeExhausted({ perMonth: false });
     assert.match(free.detail, /AI plan/i, "a trial user out of allowance must learn what upgrading gives them");
     assert.ok(
@@ -907,8 +909,8 @@ async function main() {
        It cannot be evaded by a sentence moving between functions, and
        the completeness check below means it cannot be evaded by a new
        function either. */
-    const copy = await import(pathToUrl(path.join(rootDir, "src/aiTextCopy.js")));
-    const limits = await import(pathToUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    const copy = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    const limits = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
 
     /* Every export that can render an allowance sentence, mapped to a
        call that renders ALL of it — every band, every section count. */
@@ -1015,7 +1017,7 @@ async function main() {
   });
 
   await test("an unreadable allowance degrades to 'unknown', never to 'none left'", async () => {
-    const { fetchTextAllowance } = await import(pathToUrl(path.join(rootDir, "src/aiTextClient.js")));
+    const { fetchTextAllowance } = await import(toUrl(path.join(rootDir, "src/aiTextClient.js")));
     const offline = {
       from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }), maybeSingle: async () => ({ data: null }) }) }) }),
     };
@@ -1025,7 +1027,7 @@ async function main() {
   });
 
   await test("demo mode reports the allowance as unavailable rather than crashing", async () => {
-    const { fetchTextAllowance } = await import(pathToUrl(path.join(rootDir, "src/aiTextClient.js")));
+    const { fetchTextAllowance } = await import(toUrl(path.join(rootDir, "src/aiTextClient.js")));
     assert.deepEqual(await fetchTextAllowance(null, { supabaseClient: null, isDemo: true }), { unavailable: true });
   });
 

@@ -31,7 +31,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -52,12 +52,12 @@ async function test(name, fn) {
 
 /* ---------- the pure halves, imported directly ---------- */
 
-const plans = await import(path.join(rootDir, "src/purchasePlans.js"));
-const copy = await import(path.join(rootDir, "src/plansCopy.js"));
-const refresh = await import(path.join(rootDir, "src/entitlementRefresh.js"));
-const limits = await import(path.join(rootDir, "src/aiTextLimits.js"));
-const keys = await import(path.join(rootDir, "src/purchaseKeys.js"));
-const links = await import(path.join(rootDir, "src/legalLinks.js"));
+const plans = await import(pathToFileURL(path.join(rootDir, "src/purchasePlans.js")).href);
+const copy = await import(pathToFileURL(path.join(rootDir, "src/plansCopy.js")).href);
+const refresh = await import(pathToFileURL(path.join(rootDir, "src/entitlementRefresh.js")).href);
+const limits = await import(pathToFileURL(path.join(rootDir, "src/aiTextLimits.js")).href);
+const keys = await import(pathToFileURL(path.join(rootDir, "src/purchaseKeys.js")).href);
+const links = await import(pathToFileURL(path.join(rootDir, "src/legalLinks.js")).href);
 
 /* ---------- the SDK layer, through a bundle with the plugin faked ---------- */
 
@@ -120,7 +120,7 @@ const bundle = await build({
 });
 const sdkPath = path.join(tmpDir, "purchases.mjs");
 fs.writeFileSync(sdkPath, bundle.outputFiles[0].text);
-const sdk = await import(sdkPath);
+const sdk = await import(pathToFileURL(sdkPath).href);
 
 const SESSION = { user: { id: "11111111-1111-4111-8111-111111111111" } };
 const NATIVE_IOS = { isNative: true, platform: "ios", iosKey: "appl_test", androidKey: "" };

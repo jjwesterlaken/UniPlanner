@@ -55,7 +55,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -106,7 +106,7 @@ function patchTokens(w, h, multiplier, budget = 10000) {
 
 /* ---------- the app's real prompt, extracted rather than retyped ---------- */
 
-const { buildMessages } = await import(path.join(ROOT, "supabase/functions/ai-text/prompts.js"));
+const { buildMessages } = await import(pathToFileURL(path.join(ROOT, "supabase/functions/ai-text/prompts.js")).href);
 
 /* ---------- input ---------- */
 
