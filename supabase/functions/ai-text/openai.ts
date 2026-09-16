@@ -49,8 +49,24 @@ export const openaiTextAdapter = {
         /* Never absent. Without it the model may emit its full
            16,384-token output on every call, which is what would set the
            price of the product -- see MAX_TOKENS in config.ts, where each
-           task's number is justified against the shape of its output. */
-        max_tokens: maxTokens,
+           task's number is justified against the shape of its output.
+
+           AND THE PARAMETER IS NAMED DIFFERENTLY PER FAMILY, which is a
+           400 rather than a degradation: the GPT-5 models take
+           `max_completion_tokens` and REJECT `max_tokens` outright, and
+           gpt-4o-mini is the other way round. VISION_MODEL is a GPT-5
+           model now and SUMMARY_MODEL is not, so both spellings are
+           live in this one function simultaneously -- which is exactly
+           the shape that would have made every photographed reading
+           fail with an unexplained 400 the moment the model string
+           moved.
+
+           It was caught because measure-photo-gates.mjs had to branch
+           on it to make its three calls at all, and wrote down why. A
+           note in a measurement script is not a guard; this is. */
+        ...(model.startsWith("gpt-5")
+          ? { max_completion_tokens: maxTokens }
+          : { max_tokens: maxTokens }),
       }),
     });
 
