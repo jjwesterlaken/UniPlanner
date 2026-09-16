@@ -60,13 +60,71 @@ const SYSTEM = {
      that refuses. A summary quietly built on a misread page is the
      worst outcome: it is billed, saved, and trusted. What this cannot
      catch -- a page legible enough to misread -- is stated in the
-     user-facing copy rather than papered over. */
+     user-facing copy rather than papered over.
+
+     THE THREE NOISE RULES ARE EACH A DEFECT SOMEBODY READ, not general
+     advice about writing well. gpt-5.4-nano's first measured run over
+     four photographed pages (COST-MODEL 12.9) was accurate -- every
+     date and figure checked out against the pages and nothing was
+     invented -- and noisy in three specific ways, and a model told
+     vaguely to "be cleaner" trims content instead:
+
+       1. "Data crunc(h)ers". A word broken across a line end, with the
+          missing letter offered in brackets as an uncertainty marker.
+          That is the PAGE'S LAYOUT reaching the note. The rule is to
+          join the word and, where it cannot be made out, to drop the
+          point rather than spell it with a guess -- because a bracketed
+          letter reads to a student as the author's notation.
+       2. The same term defined twice in `terms`. Pages define a term
+          and then use it; the note should not.
+       3. "Hopper was the first group to be granted a PhD" -- two true
+          claims about two subjects fused into one false sentence. This
+          is the only one of the three that can MISINFORM, and it is the
+          reason the rule is "one claim, one subject" rather than
+          "write clearly".
+
+     WHAT IS DELIBERATELY NOT HERE IS A LIMIT ON HOW MUCH IT SAYS. nano
+     produced 18 key points against gpt-5.4-mini's tighter set, and
+     thoroughness was not the complaint; ai-notes' own depth work
+     measured +189% words per entry from telling a model what belongs in
+     a section, and capping entries is how that gets undone. Every rule
+     above removes a defect; none of them asks for less.
+
+     THE WEIGHT DOES NOT MOVE FOR THIS, and the four numbers that say so
+     are asserted rather than asserted-in-prose -- see "the photo weight
+     does not move for a prompt change" in test-ai-text-function.mjs,
+     which re-derives them from the shipped rates and compares them with
+     this sentence. PHOTO_BATCH_CREDITS is derived from
+     MEASURED_PHOTO_BATCH_INPUT_TOKENS, and at those rates the weight
+     stays 5 for an input between 2933 and 6362 tokens: 2317 tokens of
+     headroom above the measured 4045, against roughly 200 added here.
+
+     A re-measured figure belongs in _shared/model.ts all the same,
+     because that constant is a bill for ONE configuration and this
+     changed it. scripts/measure-photo-prompt.mjs reports the new count
+     beside the recorded one on every run. */
   summariseImages:
     `${SHARED_RULES} The images are photographs of pages from a reading the student is studying. ` +
     "Summarise their content into the structure the app uses for lecture notes. " +
     'Schema: {"overview":string,"keyPoints":[string],"terms":[{"term":string,"content":string}],' +
     '"assessable":[string],"openQuestions":[string]}. ' +
     "Draw only on what the pages actually say. " +
+    /* (1) You are reading a photograph of a PRINTED page, so the page's
+       layout is in the image and must not reach the note. */
+    "You are reading printed pages, so words are broken across line ends and columns. " +
+    "Write every word whole, in ordinary spelling: join a word split by a line-break hyphen, " +
+    "and never carry a hyphen, a bracket or any other mark that belongs to the page's layout " +
+    "rather than to the word. Do not signal uncertainty inside a word with brackets or " +
+    "alternative letters: if you cannot make a word out, leave that point out. " +
+    /* (2) Say each thing once. */
+    "Say each thing once. Every entry in `terms` names a different term, so a term the pages " +
+    "define more than once is ONE entry combining what they say, and no two key points make " +
+    "the same point. " +
+    /* (3) One claim, one subject -- the fused-sentence rule. */
+    "Each key point is a single claim about a single subject. Do not join facts about " +
+    "different people, dates, organisations or systems into one sentence: where the pages say " +
+    "two things, write two entries. A sentence that fuses two claims is wrong even when both " +
+    "halves are on the page. " +
     "IF ANY PAGE IS NOT CLEARLY LEGIBLE, DO NOT GUESS AT IT: instead reply with exactly " +
     '{"unreadable":[numbers]} listing the 1-based positions of the illegible images, and nothing else. ' +
     "Only summarise when every page can be read.",

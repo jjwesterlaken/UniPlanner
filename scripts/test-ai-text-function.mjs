@@ -21,6 +21,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
 
 /* A dynamic import takes a URL, never a filesystem path: on Windows a
    drive letter parses as a SCHEME and Node refuses it with
@@ -594,6 +595,128 @@ async function main() {
       cfg.TASK_CREDITS.summarise,
       "the photo weight has fallen back to a text chunk's, which is the HELD value the model move replaced"
     );
+  });
+
+  await test("the photo weight does not move for a prompt change, and prompts.js says the real band", async () => {
+    /* THE VISION PROMPT GREW BY ~200 TOKENS when its three noise rules
+       landed, and the note in prompts.js says that does not move the
+       price. That is a claim with two numbers in it, so it is derived
+       here and compared with the numbers in the comment rather than
+       taken on trust — a comment instead of an assertion is the one
+       form the restatement ledger never allows.
+
+       The band is over INPUT TOKENS: the output ceiling is fixed, so
+       the weight is a step function of the input alone. */
+    const weightFor = (inputTokens) =>
+      Math.max(
+        1,
+        Math.round(
+          (inputTokens * (model.VISION_USD_PER_1M_INPUT / 1_000_000) +
+            cfg.MAX_TOKENS.summarise * (model.VISION_USD_PER_1M_OUTPUT / 1_000_000)) /
+            credits.USD_PER_CREDIT
+        )
+      );
+    const at = model.MEASURED_PHOTO_BATCH_INPUT_TOKENS;
+    let lo = at;
+    let hi = at;
+    while (lo > 1 && weightFor(lo - 1) === weightFor(at)) lo--;
+    while (hi < at * 100 && weightFor(hi + 1) === weightFor(at)) hi++;
+    assert.ok(hi > at, "the measured figure sits at the top of its band — the band is not a band");
+
+    const prompts = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-text/prompts.js"), "utf8");
+    const stated = prompts.match(
+      /the weight\s+stays (\d+) for an input between (\d+) and (\d+) tokens: (\d+) tokens of\s+headroom above the measured (\d+)/
+    );
+    assert.ok(stated, "prompts.js no longer states the band the weight is stable over");
+    assert.deepEqual(
+      stated.slice(1).map(Number),
+      [weightFor(at), lo, hi, hi - at, at],
+      "prompts.js states a weight, a band or a headroom the shipped constants do not produce"
+    );
+
+    /* And the claim the band exists FOR: the prompt that ships is well
+       inside it. Measured at ~4.2 characters a token, which is the
+       figure credits.ts itself uses. */
+    const vision = (await import(pathToFileURL(path.join(rootDir, "supabase/functions/ai-text/prompts.js")).href))
+      .buildMessages("summarise", { images: ["data:image/jpeg;base64,AA"] })[0].content;
+    assert.ok(
+      vision.length / credits.CHARS_PER_TOKEN < hi - at,
+      "the vision prompt is now longer than the headroom above the measured batch — re-measure before trusting the weight"
+    );
+  });
+
+  await test("the prompt A/B refuses to compare a configuration with itself", async () => {
+    /* THE INSTRUMENT'S OWN NON-VACUITY, run rather than read. A before
+       and an after that are the same prompt produce two samples of one
+       configuration, and every difference printed is run-to-run
+       variation reported as an improvement — the colour-coincidence
+       shape, in a measurement script.
+
+       BOTH DIRECTIONS, because "always refuse" satisfies the first
+       half on its own and makes the script useless.
+
+       --dry-run stops before any call, so this costs nothing and needs
+       no key. Skips when prompts.js is modified relative to HEAD (the
+       identical case cannot be constructed then); REQUIRE_BASELINE=1
+       in CI turns that skip into a failure, the arrangement the
+       coverage ratchet and the consent ledger already use. */
+    const rel = "supabase/functions/ai-text/prompts.js";
+    const script = path.join(rootDir, "scripts/measure-photo-prompt.mjs");
+    const run = (args) => {
+      try {
+        return {
+          code: 0,
+          out: execFileSync(process.execPath, [script, "--dry-run", ...args], {
+            cwd: rootDir,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          }),
+        };
+      } catch (err) {
+        return { code: err.status ?? 1, out: `${err.stdout || ""}${err.stderr || ""}` };
+      }
+    };
+
+    let clean = true;
+    try {
+      execFileSync("git", ["diff", "--quiet", "HEAD", "--", rel], { cwd: rootDir, stdio: "ignore" });
+    } catch {
+      clean = false;
+    }
+    if (!clean) {
+      if (process.env.REQUIRE_BASELINE === "1") {
+        throw new Error(`${rel} is modified relative to HEAD, so the identical-prompt case cannot be built`);
+      }
+    } else {
+      const same = run(["--baseline", "HEAD"]);
+      assert.notEqual(same.code, 0, "the A/B ran with the baseline equal to the working tree");
+      assert.match(
+        same.out,
+        /REFUSING TO RUN/,
+        "the A/B did not say why it refused an identical pair"
+      );
+    }
+
+    /* The other direction: the parent of whichever commit last touched
+       the prompt really does hold a different one, so the script must
+       get PAST the refusal. Derived rather than pinned to a sha, for
+       the usual reason. */
+    let parent = null;
+    try {
+      const last = execFileSync("git", ["log", "-1", "--format=%H", "--", rel], {
+        cwd: rootDir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      parent = execFileSync("git", ["rev-parse", `${last}^`], { cwd: rootDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    } catch {
+      if (process.env.REQUIRE_BASELINE === "1") throw new Error("no git history to build the differing case from");
+      return;
+    }
+    const differs = run(["--baseline", parent]);
+    assert.equal(differs.code, 0, `the A/B refused a genuinely different baseline:\n${differs.out}`);
+    assert.doesNotMatch(differs.out, /REFUSING TO RUN/, "the A/B refuses every baseline, so the refusal discriminates nothing");
+    assert.match(differs.out, /nothing was called and nothing was spent/, "--dry-run did not confirm it spent nothing");
   });
 
   await test("a failed provider call bills nothing, because nothing was produced", async () => {
