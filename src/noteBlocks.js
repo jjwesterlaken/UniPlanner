@@ -52,15 +52,24 @@ const asString = (v) => (typeof v === "string" ? v : "");
 /**
  * Whether this page is (or can become) a stack of blocks.
  *
- * Reference sheets have `entries` and their own editor; AI lecture notes
- * carry `aiMeta`, live in their own row and open in AiLectureNoteView.
- * Neither is a block note, neither is ever converted, and blocksOf
- * returns null for both so nothing tries.
+ * Reference sheets have `entries` and their own editor, so they are
+ * never block notes and blocksOf returns null for them.
+ *
+ * AI LECTURE NOTES ARE BLOCK NOTES ONCE CONVERTED, and this line is
+ * what makes the editor reachable at all. An unconverted one lives in
+ * its own row and opens in AiLectureNoteView, which renders and offers
+ * nothing to type into; a converted one has been rewritten as ordinary
+ * html and body by `convertPatch` and is edited like any other note.
+ *
+ * It asks about `convertedAt` rather than about `aiMeta`, because
+ * `aiMeta` MUST survive the conversion -- reconciliation recognises a
+ * tombstoned stub by it, and a converted note that lost it would leave
+ * its row on the server for ever when the student deleted it.
  */
 export function isBlockNote(page) {
   if (!page) return false;
   if (isReferenceSheet(page)) return false;
-  if (page.aiMeta) return false;
+  if (page.aiMeta && !page.aiMeta.convertedAt) return false;
   return true;
 }
 

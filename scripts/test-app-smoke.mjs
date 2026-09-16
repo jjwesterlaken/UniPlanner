@@ -114,11 +114,49 @@ const AI_STUB = {
   },
 };
 
+/* The same lecture note AFTER the student converted it and edited it.
+   Seeded beside the stub so the two are compared in one mount: the
+   unconverted one is read-only and quotes the AI, the converted one is
+   an ordinary note quoting the student. `remote` and `previews` stay on
+   it deliberately -- the row is kept and reconciliation still needs to
+   find it -- which is exactly why a reader asking "does this have
+   aiMeta" would get this note wrong. */
+const AI_CONVERTED = {
+  id: "ai-note-smoke-2",
+  title: "PHYS1001 — Week 4 notes",
+  body: "",
+  html: "",
+  strokes: [],
+  blocks: [
+    {
+      id: "ai-note-smoke-2:t0",
+      type: "text",
+      html: "<p>Actually the lecturer said ANGULAR momentum here.</p>",
+      body: "Actually the lecturer said ANGULAR momentum here.",
+    },
+  ],
+  style: "lined",
+  kind: "text",
+  font: "sans",
+  folderId: null,
+  updatedAt: "2026-08-02T00:00:00.000Z",
+  aiMeta: {
+    course: "PHYS1001",
+    week: "4",
+    generatedAt: "2026-08-02T00:00:00.000Z",
+    activeLanguage: "en",
+    remote: true,
+    previews: { en: "The AI's original sentence, which the student replaced." },
+    convertedAt: "2026-08-03T00:00:00.000Z",
+    convertedFrom: "en",
+  },
+};
+
 dom.window.localStorage.setItem(
   "uni-planner-v1",
   JSON.stringify({
     semester: "Semester 1",
-    semesters: { "Semester 1": { pages: [AI_STUB] } },
+    semesters: { "Semester 1": { pages: [AI_STUB, AI_CONVERTED] } },
     meta: { updatedAt: "2026-08-01T00:00:00.000Z" },
   })
 );
@@ -587,6 +625,72 @@ for (const [tabName, phrases] of [
       doc.querySelector('[aria-label="Collapse note"]').click();
       await new Promise((r) => setTimeout(r, 150));
       check(!doc.querySelector('[aria-label="Collapse note"]'), "the chevron collapses what it opened");
+    }
+  }
+
+  /* ---- a CONVERTED lecture note is an ordinary note, in a real mount ----
+
+     READ WHAT THE READER RENDERS. Every claim here is true of the pure
+     functions already and was still worth making against the DOM: the
+     note viewer rendering `body` while the editor rendered `innerHTML`
+     is the bug this technique exists for, and each half was correct on
+     its own. The two notes differ ONLY in `convertedAt`, so anything
+     that passes for both is measuring something else. */
+  {
+    const rowOf = (id) => doc.querySelector(`[data-note-row="${id}"]`);
+    const stub = rowOf("ai-note-smoke-1");
+    const conv = rowOf("ai-note-smoke-2");
+    check(!!stub && !!conv, "both lecture notes are in the list, so the comparison has two sides");
+
+    if (stub && conv) {
+      /* The row. A converted note must stop quoting the summary the AI
+         wrote -- otherwise the list shows a sentence the note no longer
+         contains, and gets further wrong with every edit. */
+      check(
+        (stub.textContent || "").includes("Newton's second law"),
+        "the UNCONVERTED row still previews the AI's summary, or the comparison below proves nothing"
+      );
+      check(
+        (conv.textContent || "").includes("ANGULAR momentum"),
+        "THE CONVERTED ROW PREVIEWS THE STUDENT'S OWN WORDS"
+      );
+      check(
+        !(conv.textContent || "").includes("The AI's original sentence"),
+        "the converted row must not still quote the stub's preview"
+      );
+
+      /* The opened note. One offers an editor, the other does not. */
+      conv.querySelector('[aria-label="Expand note"]').click();
+      await new Promise((r) => setTimeout(r, 200));
+      const openConv = rowOf("ai-note-smoke-2");
+      check(
+        (openConv.textContent || "").includes("Actually the lecturer said"),
+        "THE CONVERTED NOTE OPENS IN THE ORDINARY VIEWER, showing its own text"
+      );
+      check(
+        !!findButton("Edit"),
+        "a converted lecture note offers Edit — which is the whole feature"
+      );
+      check(
+        !openConv.querySelector("[data-convert-ai-note]"),
+        "and it does NOT offer to convert again"
+      );
+      doc.querySelector('[aria-label="Collapse note"]').click();
+      await new Promise((r) => setTimeout(r, 150));
+
+      stub.querySelector('[aria-label="Expand note"]').click();
+      await new Promise((r) => setTimeout(r, 250));
+      const openStub = rowOf("ai-note-smoke-1");
+      /* The unconverted one is remote with no client in demo mode, so
+         its fetch cannot succeed -- which is the failed-fetch state,
+         and the state in which offering Edit would write an empty note
+         over a lecture. */
+      check(
+        !openStub.querySelector("[data-convert-ai-note]"),
+        "AN UNCONVERTED NOTE WHOSE CONTENT DID NOT LOAD OFFERS NO EDIT — the failed-fetch case, on screen"
+      );
+      doc.querySelector('[aria-label="Collapse note"]')?.click();
+      await new Promise((r) => setTimeout(r, 150));
     }
   }
 }
