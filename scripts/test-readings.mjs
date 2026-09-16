@@ -29,6 +29,7 @@ import {
   estimatePhotos,
   batchPhotos,
   photoNumberFor,
+  photoVsPasteLine,
   PHOTOS_PER_CHUNK,
   MAX_READING_PHOTOS,
 } from "../src/readingChunks.js";
@@ -37,6 +38,10 @@ import * as failuresCopy from "../src/aiTextCopy.js";
 import { TASK_CREDITS, PHOTO_BATCH_CREDITS, sectionsAffordable, canAffordCredits } from "../src/aiTextLimits.js";
 import { validateRequest } from "../supabase/functions/ai-text/guards.js";
 import { buildMessages, parseTaskResult } from "../supabase/functions/ai-text/prompts.js";
+/* The plan table, for the margin sweep at the end of this file. A
+   STATIC import: this runner is synchronous and refuses a thenable,
+   which is the guard that caught the first version of that test. */
+import { TIERS as PLANS } from "../site/pricing.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -626,6 +631,164 @@ test("the copy frames the summary as something to revise from", () => {
 test("the copy says the reading itself is not kept", () => {
   assert.match(READING_COPY.privacy, /(isn'?t|not) stored/i);
   assert.match(READING_COPY.privacy, /only the summary/i);
+});
+
+/* ==================================================================
+   THE PHOTO PATH PAYS FOR ITSELF, ON EVERY TIER, AT 100% USAGE
+
+   Jared's condition for moving the photo path to gpt-5.4-mini at 18
+   credits a batch (16 September 2026): confirm every tier stays
+   profitable if a student spends their WHOLE allowance on photographed
+   pages, at 15% (Apple Small Business) and 30% (Play, and Stripe's
+   effective take at this size).
+
+   IT IS A TEST RATHER THAN A PARAGRAPH, because the numbers it rests
+   on are five constants in four files and every one of them is a thing
+   somebody will change: the weight, the measured bill, the model's
+   published rates, the allowances and the prices. A margin confirmed
+   once in a commit message is confirmed about a commit.
+
+   NOTHING HERE IS TYPED. The rates come out of _shared/model.ts, the
+   credit definition out of _shared/credits.ts, the output ceiling out
+   of ai-text/config.ts and the plans out of site/pricing.js — the same
+   four files the product actually runs on.
+   ================================================================== */
+
+const constOf = (src, name) =>
+  Function(`"use strict";return (${src.match(new RegExp(`export const ${name}\\s*=\\s*([^;]+);`))[1]})`)();
+const objOf = (src, name) =>
+  Function(`"use strict";return (${src.match(new RegExp(`export const ${name}[^=]*=\\s*(\\{[\\s\\S]*?\\});`))[1]})`)();
+
+test("every tier is profitable with the WHOLE allowance spent on photographs", () => {
+  const creditsSrc = source("supabase/functions/_shared/credits.ts");
+  const modelSrc = source("supabase/functions/_shared/model.ts");
+  const cfgSrc = source("supabase/functions/ai-text/config.ts");
+
+  /* A credit is a minute of recorded lecture — the definition, rebuilt
+     from the constants rather than restated. */
+  const inRate = constOf(creditsSrc, "USD_PER_1M_INPUT");
+  const outRate = constOf(creditsSrc, "USD_PER_1M_OUTPUT");
+  const usdPerCredit =
+    constOf(creditsSrc, "USD_PER_TRANSCRIBED_MINUTE") +
+    ((constOf(creditsSrc, "TYPICAL_SUMMARY_INPUT_TOKENS") / 1e6) * inRate +
+      (constOf(creditsSrc, "TYPICAL_SUMMARY_OUTPUT_TOKENS") / 1e6) * outRate) /
+      constOf(creditsSrc, "TYPICAL_LECTURE_MINUTES");
+
+  const maxTokens = objOf(cfgSrc, "MAX_TOKENS");
+  const batchUsd =
+    constOf(modelSrc, "MEASURED_PHOTO_BATCH_INPUT_TOKENS") *
+      (constOf(modelSrc, "VISION_USD_PER_1M_INPUT") / 1e6) +
+    maxTokens.summarise * (constOf(modelSrc, "VISION_USD_PER_1M_OUTPUT") / 1e6);
+
+  /* THE FIRST CLAIM, AND IT IS THE ONE THAT MAKES THE REST POSSIBLE:
+     the weight covers the batch's own cost. If a batch cost more than
+     the credits charged for it, no tier could be made profitable by
+     any price — the loss would scale with usage. */
+  assert.ok(
+    batchUsd <= PHOTO_BATCH_CREDITS * usdPerCredit,
+    `a photo batch costs $${batchUsd.toFixed(5)} and is charged ` +
+      `${PHOTO_BATCH_CREDITS} credits = $${(PHOTO_BATCH_CREDITS * usdPerCredit).toFixed(5)} — ` +
+      "the weight no longer covers what the batch costs"
+  );
+
+  /* FX AND GST, STATED RATHER THAN BURIED. Prices are AUD including
+     GST; costs are USD. The conversion is STRESSED to 0.50 — a severe
+     fall from the 0.714 of September 2026 — so this guard goes red
+     when the PRODUCT economics break and not when the currency moves.
+     At the real rate every margin is larger than the one asserted. */
+  const FX_STRESSED = 0.5;
+  const GST = 1 / 11;
+  const MONTHS = { monthly: 1, sixMonth: 6, annual: 12 };
+  const CUTS = { apple: 0.15, play: 0.3 };
+
+  const paid = PLANS.filter((t) => t.perMonth);
+  assert.ok(paid.length > 0, "no per-month tier to check — the sweep would pass over nothing");
+
+  const margins = [];
+  for (const t of paid) {
+    /* WORST CASE: every credit on photographs. The remainder that does
+       not fill a whole batch is charged at what a credit is priced at,
+       which is the honest floor for whatever else it gets spent on. */
+    const batches = Math.floor(t.credits / PHOTO_BATCH_CREDITS);
+    const cost = batches * batchUsd + (t.credits - batches * PHOTO_BATCH_CREDITS) * usdPerCredit;
+    for (const period of Object.keys(MONTHS)) {
+      for (const [store, cut] of Object.entries(CUTS)) {
+        const netUsd = (t.prices[period] / MONTHS[period]) * (1 - GST) * (1 - cut) * FX_STRESSED;
+        const margin = netUsd - cost;
+        margins.push(margin);
+        assert.ok(
+          margin > 0,
+          `${t.name} ${period} at the ${store} cut LOSES $${Math.abs(margin).toFixed(2)} a month ` +
+            `when all ${t.credits} credits go on photographs (${batches} batches, $${cost.toFixed(4)})`
+        );
+      }
+    }
+  }
+  assert.equal(margins.length, paid.length * 3 * 2, "the sweep did not cover every tier, period and store");
+
+  /* NON-VACUITY: the two store cuts must produce DIFFERENT answers, or
+     the sweep is one comparison run twice and says nothing about the
+     30% case it exists for. */
+  assert.ok(
+    new Set(margins.map((m) => m.toFixed(4))).size > 1,
+    "every margin is identical — the cuts and periods are not reaching the arithmetic"
+  );
+
+  /* AND THE FREE TIER, which has no revenue to be profitable against.
+     What bounds it is that the allowance is once ever, so the whole
+     exposure of an account that only ever photographs is one number. */
+  const free = PLANS.find((t) => !t.perMonth);
+  assert.ok(free, "no trial tier in the table");
+  const freeWorst = Math.floor(free.credits / PHOTO_BATCH_CREDITS) * batchUsd;
+  assert.ok(
+    freeWorst < 0.1,
+    `a trial account spending everything on photographs costs $${freeWorst.toFixed(4)} — ` +
+      "once ever, but large enough to want checking"
+  );
+});
+
+/* ---------- the two paths, priced where the student chooses ---------- */
+
+test("the picker states what each path costs, and that a screenshot is a photograph", () => {
+  const line = photoVsPasteLine();
+  /* DERIVED FROM THE SAME CONSTANTS THE SERVER BILLS ON, so a weight
+     change moves the sentence instead of making it false. */
+  assert.match(line, new RegExp(`\\b${PHOTO_BATCH_CREDITS}\\b`), "the photo price is not in the sentence");
+  assert.match(line, new RegExp(`\\b${TASK_CREDITS.summarise}\\b`), "the paste price is not in the sentence");
+  assert.match(line, /screenshot/i, "nothing tells a student a screenshot is an image");
+  assert.match(line, /same/i, "the screenshot sentence does not say it costs the same");
+  assert.doesNotMatch(line, /\bunits?\b/i);
+
+  /* The claim the sentence exists to make: photographing is dearer.
+     Asserted on the NUMBERS, not on the adjective, because "much
+     cheaper" is wording and Grace may reword it. */
+  assert.ok(
+    PHOTO_BATCH_CREDITS > TASK_CREDITS.summarise,
+    "photographing is no longer the expensive path — this sentence now misleads and must be rewritten"
+  );
+
+  /* AND IT REACHES THE SCREEN. A sentence no component renders is a
+     sentence, not a disclosure — the gap `data-photo-vs-paste` closes. */
+  const jsx = source("src/aiText.jsx");
+  assert.match(jsx, /photoVsPasteLine\(\)/, "nothing renders the comparison");
+  assert.match(jsx, /data-photo-vs-paste/, "the comparison has no handle to assert on");
+});
+
+test("both estimates state what the run will cost, not only how many parts", () => {
+  /* PARTS ALONE HID A SIXFOLD DIFFERENCE. Eight photographed pages and
+     eight pages of pasted text are both "2 parts"; one is 38 credits
+     and the other is 8. That is why these lines now carry credits —
+     and why the assertion is that the two DIFFER, since a copy change
+     that dropped the figure would leave both matching /\d+ credits/
+     through the character and page counts alone. */
+  const photos = estimatePhotos(8);
+  const pasted = estimateReading("x".repeat(24_000));
+  const photoLine = READING_COPY.photosEstimate(photos);
+  const pasteLine = READING_COPY.estimate(pasted);
+  assert.match(photoLine, new RegExp(`${photos.credits} credits`), "the photo estimate hides its price");
+  assert.match(pasteLine, new RegExp(`${pasted.credits} credits`), "the paste estimate hides its price");
+  assert.notEqual(photos.credits, pasted.credits, "the two media cost the same — this test discriminates nothing");
+  assert.doesNotMatch(`${photoLine} ${pasteLine}`, /\bunits?\b/i);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

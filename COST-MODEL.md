@@ -1336,6 +1336,185 @@ four pages could truncate, which the adapter turns into a hard error. Raising
 `MAX_TOKENS.summarise` re-prices the batch automatically, so that is a decision
 with a number attached rather than a free one.
 
+## 12.11 THE REVERSAL: mini at 18, and the rule that had chosen for us
+
+The pair ran on the same four photographs (Jared, 16 September 2026). The
+tightened prompt did **not** fix nano, and the honest reading of the two
+outputs reversed 12.9.
+
+### What the second run showed
+
+| | nano BEFORE | nano AFTER | **mini AFTER** |
+|---|---|---|---|
+| key points | 16 / 512 words | 15 / 358 | **35 / 436** |
+| terms | 16 | 17 | 13 |
+| in-word brackets, dangling hyphens, duplicate terms | 0 | 0 | 0 |
+| output tokens of a 2,000 ceiling | 1,696 | 1,888 | **1,314** |
+
+**The counted defects were zero on every arm, which is exactly what the
+script warned would happen** — it printed *"the BEFORE arm produced none
+this run, so this comparison says nothing about the two prompts"*. The
+mechanical half discriminated nothing; the judgement half did all the
+work. That is the design working, not failing: a guard that named its
+hole kept a null result from reading as a pass.
+
+### The defects that decided it are the ones no pattern can see
+
+- **nano BEFORE fabricated a term.** It listed `ARPANET / Internet` as a
+  term of the reading. The page says **Ethernet**. Not a misreading of a
+  word — an invented entity attached to a real sentence.
+- **nano AFTER still fused claims**, under a prompt that says *"each key
+  point is a single claim about a single subject"* in as many words:
+  *"a screen resembling desktop-sized programmable calculator"* welds
+  the Xerox Alto's screen to the Programma 101. It also degraded
+  elsewhere: the overview lost a third of its words and `openQuestions`
+  doubled to six, which is padding.
+- **mini AFTER is atomic**, 35 one-claim key points, and it ALONE read
+  three things nano missed on both runs: the **Programma 101** by name,
+  the **Z1's 2,000 pounds**, and that **ENIAC was built at the
+  University of Pennsylvania**.
+
+**A PROMPT CANNOT FIX A MODEL THAT FUSES CLAIMS.** The three rules were
+written against three observed defects and applied precisely; two were
+already absent and the third survived a direct instruction. That is the
+boundary between what a prompt buys and what a model is — and the pair
+is what made it visible rather than arguable, because nano AFTER on its
+own would have read as a clean run.
+
+### And the argument that had chosen nano was a rule nobody re-derived
+
+12.9 settled on nano with this: *"`credits.ts` says the 60-credit trial
+must be able to demonstrate the feature, and at mini's 18 a 16-page
+reading is 74 credits — more than the whole trial. At nano's 5 it is 22.
+No other candidate manages it."*
+
+Every number there is right. **The rule was wrong.** `credits.ts` said a
+trial must let a student *"complete one photographed reading"*, which
+nobody had examined since it was written — and it made a whole reading a
+trial requirement, which made the CHEAPEST vision model mandatory, which
+is how a fabricating model came to be the recommendation. The rule now
+reads: a trial demonstrates **one batch**.
+
+> **A constraint nobody has re-derived can decide a quality question on
+> its own.** It does not announce itself as a decision; it arrives as
+> arithmetic, and the arithmetic is correct.
+
+This is the `TYPICAL_SUMMARY_OUTPUT_TOKENS` lesson with the subject
+changed. There, an unmeasured constant was setting the price of the
+product. Here, an unexamined *rule* was choosing the model.
+
+### The price, derived again
+
+`MEASURED_PHOTO_BATCH_INPUT_TOKENS` is **4,234** — mini, four pages at
+771x1024, `detail: "original"`, on the prompt that ships, from the run
+above. At mini's published $0.75 / $4.50 per 1M:
+
+```
+4,234 × $0.75/1M  +  2,000 × $4.50/1M  =  $0.012176
+$0.012176 / $0.000686 per credit       =  17.75  ->  18 credits
+```
+
+**A batch of four photographed pages is 18 credits; a 16-page reading is
+74.** The weight covers its own cost at **0.986x** — the credits charged
+are worth marginally more than the batch costs, which is the property
+every other weight in `config.ts` has.
+
+**THE HEADROOM IS A QUARTER OF WHAT IT WAS, and that is a live
+constraint rather than trivia.** The weight holds for an input between
+**4,005 and 4,918** tokens: 684 above the measured figure, against
+nano's 2,317. mini's input is 3.75x dearer, so **the next edit to the
+vision prompt can genuinely re-price the feature** — re-run
+`scripts/measure-photo-prompt.mjs` and move the constant in the same
+commit. `prompts.js` states the band and a test re-derives it.
+
+### Every tier pays for itself at 100% photo usage
+
+Worst case: every credit in the allowance spent on photographed pages.
+AUD ex-GST, converted at 0.714 (September 2026).
+
+| tier | batches | our cost | Apple 15% | Play/Stripe 30% |
+|---|---|---|---|---|
+| Study AI, monthly | 50 (200 pages) | $0.61 | +$4.35 (88%) | +$3.48 (85%) |
+| Study AI, annual | 50 | $0.61 | +$3.07 (83%) | **+$2.42 (80%)** |
+| Study AI Max, monthly | 166 (664 pages) | $2.03 | +$8.45 (81%) | +$6.60 (76%) |
+| Study AI Max, annual | 166 | $2.03 | +$5.79 (74%) | **+$4.41 (68%)** |
+
+Free is 3 batches, $0.041, once ever.
+
+**It is a test, not a table.** `test-readings.mjs` re-derives all of it
+from `model.ts`, `credits.ts`, `config.ts` and `site/pricing.js` and
+fails naming the tier, the period and the store — and it asserts at a
+**stressed FX of 0.50**, so it goes red when the product economics break
+rather than when the currency moves. At 0.40 the worst margin is still
++$1.09.
+
+### The student has to see which path is cheaper, before choosing
+
+**Parts hid a sixfold difference.** Eight photographed pages and eight
+pages of pasted text are both *"2 parts"*, and they cost **38 credits
+and 8**. The "both numbers in parts, never units" rule was written when
+a photo batch and a text chunk cost the same, so parts really were the
+whole story; they are not, and a currency that cannot express a sixfold
+difference has stopped hiding an internal weight and started hiding a
+price. The banned word was always *units*. **Credits are sayable.**
+
+So both estimates now carry credits, and `photoVsPasteLine()` renders at
+the picker — before the first photo is added, because after it the
+choice is made:
+
+> Photographs cost 18 credits for every 4 pages. Pasting the text
+> instead costs 3 credits for a section of up to 20,000 characters, so
+> pasting is much cheaper where you can select the text. **A screenshot
+> is an image, so it costs the same as a photograph.**
+
+The screenshot sentence is there because it is the obvious thing to try
+with a PDF open on a laptop, it *looks* cheaper because it is cleaner,
+and it costs the same. The sentence deliberately does not convert pages
+into characters: "a page is about 3,000 characters" is a modelled
+constant of the kind this document exists to be suspicious of, and it
+would put a made-up multiple on a screen. Both figures quoted are
+ceilings the server enforces.
+
+---
+
+## 12.10 The prompt answer to 12.9's noise, and why one run cannot report it
+
+The paragraph above predicted the noise was a prompt property. Three rules now
+name the three defects — the layout hyphenation reaching the note, the repeated
+term, and the fused claim — and `scripts/measure-photo-prompt.mjs` is what says
+whether they worked.
+
+**A SINGLE RUN OF THE NEW PROMPT WOULD PROVE NOTHING.** These defects are
+intermittent: a model that produced `crunc(h)ers` once need not produce it
+again, so a clean run after the change is as likely to be the model's day as
+the prompt's doing. The instrument therefore runs the pair — the same model,
+the same photographs, the same bytes, detail and ceiling, under the prompt in
+the working tree and the prompt **at a git ref** — and it REFUSES when the two
+prompts are identical, because a comparison between two identical things
+reports success either way. That refusal is exercised by the suite in both
+directions through a `--dry-run` that spends nothing.
+
+**Two of the three defects are counted; the third cannot be.** An in-word
+bracketed letter and a duplicate term are patterns. "Hopper was the first group
+to be granted a PhD" is ordinary words in correct grammar, so it is printed for
+a person to judge and the script says so rather than implying coverage it does
+not have.
+
+**And the control on the fix**: entries and words per section, both arms, on the
+same page as the defect counts. Noise falling because the model said *less* is
+the depth regression 12.9 warns about, not a fix.
+
+### One loose end, with its bound
+
+`MEASURED_PHOTO_BATCH_INPUT_TOKENS` (4,045) is a bill for one configuration and
+the prompt is part of that configuration — it grew by roughly 200 tokens, so the
+constant is now slightly low. **The weight does not move**: at the shipped rates
+it is 5 credits for anything between 2,933 and 6,362 input tokens, which is
+2,317 tokens of headroom. Those four numbers are re-derived by a test and
+compared with the sentence in `prompts.js` rather than left as a comment. The
+A/B prints the new count beside the recorded one, so the re-measure lands with
+the next run.
+
 ---
 
 ## 13. The margin on an ACCOUNT, and the cap that bounds it

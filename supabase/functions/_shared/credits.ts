@@ -127,11 +127,31 @@ export const creditsFor = (usd: number) => Math.max(1, Math.round(usd / USD_PER_
    WHAT A TRIAL IS FOR, and it decides the size: 60 credits has to be
    enough to DEMONSTRATE the thing being sold, or the trial cannot sell
    it. A student must be able to record a lecture and get notes back,
-   and — once the photo model lands — complete one photographed reading.
-   At today's held photo weight a 16-page reading is ~138 credits and a
-   free account cannot finish one, which is a real argument for the
-   model move and is recorded in COST-MODEL.md 12.6 rather than fixed
-   by making the trial bigger. */
+   and to photograph ONE BATCH of pages and see what comes back.
+
+   THAT LAST CLAUSE USED TO SAY "complete one photographed reading",
+   AND THE REWORDING IS A RULING RATHER THAN A TIDY-UP (Jared, 16
+   September 2026). A whole 16-page reading is four batches; at the
+   measured weight that is 72 credits, so the old rule made a full
+   reading a trial requirement and therefore made the CHEAPEST vision
+   model mandatory. COST-MODEL.md 12.9 duly chose it — and 12.11 is
+   what that model's output actually looked like: fabricated terms and
+   fused claims that a prompt could not remove.
+
+   **A CONSTRAINT NOBODY HAS RE-DERIVED CAN DECIDE A QUALITY QUESTION
+   ON ITS OWN.** The rule was never examined; it was quoted. A trial
+   demonstrates a FEATURE, which for photographs is one batch — the
+   student sees their own pages come back as notes and knows whether
+   they want it. Demanding a whole reading spends most of the trial on
+   one action and leaves nothing for the lecture recording that is the
+   other half of what is being sold.
+
+   MAX_FREE_PHOTO_PAGES enforces the demonstration rather than trusting
+   the credit arithmetic to bound it: at 18 credits a batch a free
+   student could spend 54 of their 60 credits on three batches of
+   photographs and never record the lecture. The cap ends the
+   demonstration; the paid tiers are uncapped because credits meter
+   them. */
 export const TIERS = ["free", "ai", "ai_max"] as const;
 export type Tier = (typeof TIERS)[number];
 
@@ -141,6 +161,26 @@ export const isTrialTier = (tier: string) => TRIAL_TIERS.includes(tier);
 
 /** The lifetime trial, for `free` — the only tier that is not bought. */
 export const TRIAL_CREDITS = 60;
+
+/* HOW MANY PHOTOGRAPHED PAGES A TRIAL ACCOUNT MAY EVER SEND.
+
+   Two batches, so the demonstration is a demonstration: a student sends
+   four pages, reads what comes back, and if they want a second opinion
+   they get one. It is PAGES rather than batches because pages are what
+   the student picks and what the refusal has to count in — a partial
+   batch of three is still three pages of somebody's reading.
+
+   PER ACCOUNT AND FOR EVER, like the credits themselves, and counted in
+   its own column for the same reason `trial_credits_used` is: a
+   lifetime quantity has no month, and a sentinel month is invisible to
+   every query that filters on the current one.
+
+   THE PAID TIERS ARE NOT CAPPED. Credits meter them, and a cap on top
+   of a meter is a second limit to explain and a second one to get
+   wrong. This exists because the trial has no meter worth the name —
+   60 credits is three batches, so without it the "trial" of the photo
+   feature IS the whole trial. */
+export const MAX_FREE_PHOTO_PAGES = 8;
 
 const MONTHLY: Record<string, number> = {
   ai: 900,

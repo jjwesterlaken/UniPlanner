@@ -885,9 +885,28 @@ for (const [tabName, phrases] of [
       "it says up front that the pasted text isn't kept",
       openText.slice(0, 250)
     );
-    /* Nothing pasted yet, so nothing has been priced. The estimate must
-       not appear (or read as zero) before there is anything to price. */
-    check(!openText.includes("characters"), "no cost is quoted before anything is pasted");
+    /* Nothing pasted yet, so the student's own content has not been
+       priced. Asserted on the estimate's OWN HANDLE rather than on the
+       word "characters": the paths comparison below is a price list
+       that is deliberately shown before anything is pasted, and it
+       quotes a character ceiling, so the old token could no longer
+       tell the two sentences apart. */
+    check(
+      !collapsed.querySelector("[data-reading-estimate]"),
+      "no estimate is quoted before there is anything to price"
+    );
+    /* AND THE POSITIVE HALF, which is why the check above had to move:
+       what each path COSTS must be visible at the moment of choosing,
+       not after the first photo has been added. Jared, 16 September
+       2026 — photographing is roughly six times pasting, and a
+       screenshot is a photograph as far as the bill is concerned. */
+    const paths = collapsed.querySelector("[data-photo-vs-paste]");
+    check(!!paths, "the two paths are priced before the student chooses");
+    check(
+      /screenshot/i.test((paths && paths.textContent) || ""),
+      "the student is told a screenshot costs the same as a photograph",
+      ((paths && paths.textContent) || "").slice(0, 200)
+    );
 
     /* THE AI NOTES PANEL, signed in and past consent.
 

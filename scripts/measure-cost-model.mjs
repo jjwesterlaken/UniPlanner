@@ -530,8 +530,8 @@ const netUsdPerMonth = (tier, period, channel) => {
 const GATE_RUN = [
   { model: "gpt-4o-mini @1536", tokens: 147544, inRate: 0.15, outRate: 0.6, note: "modelled — the config that USED to ship" },
   { model: "gpt-4o-mini @1024", tokens: 102210, inRate: 0.15, outRate: 0.6, note: "MEASURED (the control)" },
-  { model: "gpt-5.4-mini @1024", tokens: 4045, inRate: 0.75, outRate: 4.5, note: "MEASURED" },
-  { model: "gpt-5.4-nano @1024", tokens: 4045, inRate: 0.2, outRate: 1.25, note: "MEASURED — now VISION_MODEL" },
+  { model: "gpt-5.4-mini @1024", tokens: 4234, inRate: 0.75, outRate: 4.5, note: "MEASURED — the shipped VISION_MODEL, on the shipped prompt" },
+  { model: "gpt-5.4-nano @1024", tokens: 4045, inRate: 0.2, outRate: 1.25, note: "MEASURED — rejected on gate 2 (12.11)" },
 ];
 
 console.log("\nSECTION 12.9 — THE GATE RUN, AND THE PRICE THAT CAME OUT OF IT");
