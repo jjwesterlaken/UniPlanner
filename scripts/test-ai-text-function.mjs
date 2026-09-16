@@ -697,20 +697,63 @@ async function main() {
       );
     }
 
-    /* The other direction: the parent of whichever commit last touched
-       the prompt really does hold a different one, so the script must
-       get PAST the refusal. Derived rather than pinned to a sha, for
-       the usual reason. */
+    /* The other direction: a commit whose PROMPT really differs, so the
+       script must get PAST the refusal.
+
+       THE FIRST VERSION TOOK THE PARENT OF THE LAST COMMIT TO TOUCH THE
+       FILE, and that is not the same claim — a commit that edits only a
+       COMMENT changes the file and leaves the prompt byte-identical,
+       which is exactly what the next commit here did. It passed
+       locally, where the working tree was mid-edit, and went red in CI
+       on a clean checkout against a correct script: the guard was
+       reading "the file changed" as evidence for "the prompt changed".
+
+       So the search is over the thing the claim is about: walk the
+       commits that touched the file, extract each one's prompt the way
+       the script does, and take the first that DIFFERS. */
+    const extract = (blob) => {
+      const m = blob.match(/summariseImages:\s*([\s\S]*?),\n\n/);
+      return m ? m[1] : blob;
+    };
+    const promptAt = (ref) =>
+      extract(
+        execFileSync("git", ["show", `${ref}:${rel}`], {
+          cwd: rootDir,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        })
+      );
     let parent = null;
+    let searched = 0;
     try {
-      const last = execFileSync("git", ["log", "-1", "--format=%H", "--", rel], {
+      const here = extract(fs.readFileSync(path.join(rootDir, rel), "utf8"));
+      const history = execFileSync("git", ["log", "-20", "--format=%H", "--", rel], {
         cwd: rootDir,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-      parent = execFileSync("git", ["rev-parse", `${last}^`], { cwd: rootDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      })
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+      for (const sha of history) {
+        searched++;
+        if (promptAt(sha) !== here) {
+          parent = sha;
+          break;
+        }
+      }
     } catch {
       if (process.env.REQUIRE_BASELINE === "1") throw new Error("no git history to build the differing case from");
+      return;
+    }
+    if (!parent) {
+      /* A REAL RESULT, NOT A SKIP TO IGNORE: no commit in the last 20
+         touching this file holds a different prompt, so the differing
+         direction cannot be exercised here. That is a legitimate state
+         — the prompt has simply not changed — and it is printed rather
+         than passed over silently. */
+      assert.ok(searched > 0, "no history for the prompt file at all — the search read nothing");
+      console.log(`      (no differing prompt in the last ${searched} commits; that half not exercised)`);
       return;
     }
     const differs = run(["--baseline", parent]);
