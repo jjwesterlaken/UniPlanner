@@ -735,6 +735,52 @@ device rather than a decision.
     `"never"` and keep whichever is right. Do this before the store
     screenshots, since the screenshots are what expose it.
 
+### The review prompt — verified at the precondition, never at the symptom
+
+`@capacitor-community/in-app-review`, wired to fire once per install
+after the FIRST lecture note that saves successfully. Nothing below is
+reachable from a build machine.
+
+**What the suite DOES prove**, so this list is read for what it adds:
+the decision table across every platform (web, desktop-reporting-web,
+an unknown native platform, both stores); that a FAILED save never
+asks; that the record is written BEFORE the prompt is requested, so a
+storage failure means no prompt rather than a prompt on every lecture
+for ever; that a second saved lecture asks nothing; that a throwing
+plugin costs the request and nothing else; and — against the real
+bundled module with the plugin and the Capacitor bridge faked — that
+the plugin is reached ZERO times off a native shell and a non-zero
+number of times on one.
+
+**WHAT IT CANNOT PROVE, and the reason is the platform API rather than
+our code:** `requestReview` is a REQUEST. iOS shows the prompt at most
+three times a year per app and may show nothing at all; Android's quota
+is not published. Nothing either returns says whether a human saw
+anything. So there is no assertion available anywhere — here or on a
+device — of the form "the prompt appeared".
+
+**On hardware:**
+
+- [ ] Record and save a lecture note on a fresh install. A review
+      prompt MAY appear. If it does not, that is not a failure — check
+      `localStorage["uni-planner-review-asked"]` in Safari's Web
+      Inspector (iOS) or `chrome://inspect` (Android). A timestamp
+      there means the app asked and the OS declined to show anything,
+      which is the system working as documented.
+- [ ] Save a SECOND lecture note. Nothing must happen, and the
+      timestamp must not change.
+- [ ] Delete and reinstall, then save a note. The flag is gone with
+      the app's storage, so it may ask again. That is "once per
+      install" behaving correctly.
+- [ ] **The desktop build must never prompt.** Electron reports itself
+      as web, so this is covered by the suite — but it is worth one
+      look, because it is the case where a prompt would be pointing at
+      a store the student cannot reach.
+
+**If it prompts twice in one install, stop and read the flag.** That is
+the failure the record-before-ask ordering exists to prevent, and it
+would mean the storage write is failing silently on that device.
+
 ### Subscriptions — nothing here has run, and none of it can
 
 **Phase 2 shipped the client half of billing on 7 September 2026.**

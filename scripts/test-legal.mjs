@@ -813,6 +813,10 @@ async function run() {
       noUserContent:
         "which of six tabs this device was last on, so reopening lands where you left off. One short id, device-local and deliberately unsynced; it holds none of the student's work and reveals nothing about it beyond which screen was open",
     },
+    "uni-planner-review-asked": {
+      noUserContent:
+        "one timestamp recording that this install has already been asked to rate the app, so it is asked once and never again. Device-local and deliberately unsynced, because the platform's own review quota is per-device and a synced flag would mean two devices disagreeing through last-write-wins. It holds none of the student's work, nothing about what they recorded or wrote, and not even whether a prompt appeared — the platform API is a request and never says",
+    },
     "uni-planner-archive-pending": {
       noUserContent:
         "the id a half-finished semester archive was parked under, so a retry lands on the same row instead of forking a duplicate. An id and a bucket name, device-local, cleared on success; none of the semester's content passes through it — the content goes to the archive row the documents already describe",
