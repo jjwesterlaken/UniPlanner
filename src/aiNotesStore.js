@@ -102,6 +102,13 @@ export const KEPT_META_KEYS = [
   "sourceReadingId",
   "partsMerged",
   "parts",
+  /* Added by the editable-lecture-notes change. Without it, migrating
+     a note the student has converted drops the marker: the edits stay
+     in `blocks` and the page routes back to the read-only viewer,
+     which renders none of them. The sweep above is what would have
+     caught its absence. */
+  "convertedAt",
+  "convertedFrom",
 ];
 
 export function buildStub(page) {

@@ -854,10 +854,16 @@ export function folderForRecording({ folders = [], course, uid, nowISO }) {
   return { folderId: folder.id, newFolder: folder };
 }
 
-/** A short preview for the notes list, now that AI notes carry no body. */
+/** A short preview for the notes list, now that AI notes carry no body.
+ *
+ * A CONVERTED note returns "" so the caller falls back to the note's
+ * own text: the summary in `translations` is what the AI wrote, and
+ * the student has since edited a copy of it. Quoting the original in
+ * the list would be the row disagreeing with the note it opens. */
 export function aiNotePreview(page, limit = 200) {
   if (!page) return "";
   const meta = page.aiMeta;
+  if (meta && meta.convertedAt) return "";
   if (!meta || !meta.translations) return page.body || "";
   const content = meta.translations[meta.activeLanguage] || meta.translations.en;
   const overview = (content && content.overview) || "";

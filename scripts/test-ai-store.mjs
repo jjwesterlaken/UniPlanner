@@ -244,7 +244,7 @@ async function run() {
     const keysIn = (lit) =>
       [...lit.matchAll(/(?:^|[,{]|\n)\s*([A-Za-z_$][\w$]*)\s*(?=[:,}\n]|$)/g)].map((m) => m[1]);
 
-    const files = ["src/PlannerApp.jsx", "src/aiNotes.jsx", "src/aiNotesLogic.js", "src/aiNotesStore.js"];
+    const files = ["src/PlannerApp.jsx", "src/aiNotes.jsx", "src/aiNotesLogic.js", "src/aiNotesStore.js", "src/aiNoteConvert.js"];
     const written = new Set();
     const perFile = new Map();
     for (const f of files) {
@@ -269,6 +269,7 @@ async function run() {
       "src/aiNotes.jsx": "activeLanguage",
       "src/aiNotesLogic.js": "translations",
       "src/aiNotesStore.js": "course",
+      "src/aiNoteConvert.js": "convertedAt",
     };
     for (const [f, key] of Object.entries(witness)) {
       assert.ok(

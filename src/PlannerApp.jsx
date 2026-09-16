@@ -160,6 +160,7 @@ import {
   reconcile,
   previewFor,
 } from "./aiNotesStore.js";
+import { escapeHtml, isConverted, isLectureNote, convertPatch } from "./aiNoteConvert.js";
 import { noteCache } from "./noteCache.js";
 import { deleteAccount, confirmationMatches, DELETE_CONFIRMATION_PHRASE } from "./accountDeletion.js";
 import { PlansPanel } from "./plans.jsx";
@@ -1532,12 +1533,11 @@ function sanitizeHtml(dirty) {
   }
 }
 
-/** Plain text made safe to render as HTML. Used for notes saved before
-    the editor stored html, where `body` is the only content there is —
-    it must reach the screen as text, never as markup. */
-function escapeHtml(text) {
-  return String(text || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-}
+/* `escapeHtml` moved to aiNoteConvert.js, which is where the second
+   caller appeared: converting a lecture note renders model output into
+   stored html, so the same escape is needed in a module a Node test
+   can import. Two copies of an escape are two chances for one of them
+   to miss a character. */
 
 /** Plain text version, used for list previews and the study cards. */
 function htmlToText(html) {
@@ -2021,8 +2021,19 @@ function NoteEditor({ draft, setDraft, onSave, onCancel, saveLabel = "Save note"
   );
 }
 
-/** The list's preview, whichever of the three shapes a note is in. */
-const notePreview = (p) => (isRemote(p) ? previewFor(p) : aiNotePreview(p));
+/** The list's preview, whichever of the three shapes a note is in.
+ *
+ * A CONVERTED NOTE FALLS THROUGH TO ITS OWN HTML, and that is the
+ * point of asking here rather than only at the router. The stub's
+ * preview was built from the summary at migration time; once a student
+ * has edited the note, showing it would be the list quoting a sentence
+ * the note no longer contains, and getting further wrong with every
+ * edit. `aiNotePreview` returns "" for a converted note for the same
+ * reason, so the caller's `|| htmlToText(htmlOf(p))` takes over. */
+const notePreview = (p) => {
+  if (isConverted(p)) return "";
+  return isRemote(p) ? previewFor(p) : aiNotePreview(p);
+};
 
 /* Extracted from NoteRow so the read-only view can carry the same menu.
    The brief asks for it in both modes, and two copies of a folder picker
@@ -2642,12 +2653,33 @@ function ExpandedNote({ page, folders, draft, setDraft, onSave, sheetOk = true, 
       </>
     );
   }
-  if (page.aiMeta) {
+  /* A lecture note, not merely an AI one: once converted it is an
+     ordinary note and falls through to NoteView and the editor below.
+     `aiMeta` stays on it for ever -- reconciliation needs it -- so the
+     question a reader asks is never "does this have aiMeta". */
+  if (isLectureNote(page)) {
     return (
       <AiLectureNoteView
         page={page}
         patchItem={patchItem}
         onClose={onCollapse}
+        /* CONVERT, THEN OPEN THE EDITOR IN THE SAME TAP. The patch is
+           applied here rather than inside the viewer because this is
+           the component that already holds BOTH halves -- patchItem to
+           write it and setDraft to open it -- so there is no prop to
+           relay and nothing for a later refactor to drop. Landing the
+           student in a read-only view whose only control is a second
+           button reading "Edit" would be the feature half-arriving.
+
+           A REFUSED CONVERSION CHANGES NOTHING AND OPENS NOTHING.
+           `convertPatch` returns null when it was handed no content,
+           which is what a failed fetch looks like from here. */
+        onConvert={(p, content, language) => {
+          const patch = convertPatch({ page: p, content, language, nowISO });
+          if (!patch) return;
+          patchItem("pages", p.id, patch);
+          setDraft({ ...p, ...patch });
+        }}
         /* Only ever called for a row that is DEFINITIVELY absent -- the
            other device deleted it and this one still has the stub. */
         onMissing={(id) => {

@@ -11,7 +11,7 @@
    ================================================================== */
 
 import { useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
-import { Mic, Square, Pause, Play, Check, X, TriangleAlert, RefreshCw, Globe, Download } from "lucide-react";
+import { Mic, Square, Pause, Play, Check, X, TriangleAlert, RefreshCw, Globe, Download, Pencil } from "lucide-react";
 import { ConsentGate } from "./aiNotesConsent.jsx";
 import { SummariseReading } from "./aiText.jsx";
 import {
@@ -1710,7 +1710,7 @@ function RecoveryGate({ session, courses, data, setData, recording }) {
 /*  Viewer for a saved AI note (opened from Notes/Folders)             */
 /* ------------------------------------------------------------------ */
 
-export function AiLectureNoteView({ page, patchItem, onClose, onMissing }) {
+export function AiLectureNoteView({ page, patchItem, onClose, onMissing, onConvert }) {
   const meta = (page && page.aiMeta) || {};
   const remote = isRemote(page);
 
@@ -1782,10 +1782,30 @@ export function AiLectureNoteView({ page, patchItem, onClose, onMissing }) {
   return (
     <Card className="mt-3">
       <div className="flex items-start justify-between gap-2">
-        <h3 className="font-serif text-base font-semibold text-stone-800">{page.title}</h3>
-        <button className={iconBtn} onClick={onClose} aria-label="Close">
-          <X size={16} />
-        </button>
+        <h3 className="min-w-0 flex-1 font-serif text-base font-semibold text-stone-800">{page.title}</h3>
+        <div className="flex flex-shrink-0 items-center gap-0.5">
+          {/* EDIT IS OFFERED ONLY WITH THE CONTENT IN HAND. `content` is
+              truthy exactly when the fetch returned a summary (or the
+              note never left the blob), so the button is absent while
+              loading, absent on a failed fetch, and absent on a note
+              deleted elsewhere. Showing it and refusing the click would
+              be worse: a control that does nothing reads as the app
+              being broken, and the student has no way to tell that
+              trying again later would work.
+
+              The guard is NOT only here. `convertPatch` refuses without
+              content of its own accord, because a UI-only gate is one
+              refactor from writing an empty note over a lecture -- the
+              same reasoning as the AI boundary refusals. */}
+          {content && onConvert && (
+            <button className={btnGhost} onClick={() => onConvert(page, content, activeLang)} data-convert-ai-note>
+              <Pencil size={15} /> Edit
+            </button>
+          )}
+          <button className={iconBtn} onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       {langs.length > 1 && (
