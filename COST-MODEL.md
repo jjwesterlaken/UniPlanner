@@ -1240,7 +1240,123 @@ key and four photographed pages.
 
 ---
 
+## 12.9 THE GATES RAN. The swap shipped.
+
+Both gates were run on **16 September 2026**, on Windows, against four phone
+photographs of consecutive printed pages of a computing-history textbook.
+`scripts/measure-photo-gates.mjs` prints every figure below.
+
+### Gate 1 — out of band, and in the SAFE direction
+
+| configuration | predicted | reported | |
+|---|---|---|---|
+| `gpt-4o-mini` @1024, detail high | 147,550 | **102,210** | the control |
+| `gpt-5.4-nano` @1024, detail original | 8,082 | **4,045** | |
+| `gpt-5.4-mini` @1024, detail original | 5,394 | **4,045** | |
+
+The script called this a FAIL, because it bands the ratio at 0.8–1.25 and all
+three came in low. **Read the direction, not just the band.** Gate 1 exists to
+catch a bill MANY TIMES the arithmetic — the 66,000-token report. Every count
+came in BELOW prediction. **The report did not reproduce on the shape we send**,
+and the documented tokenisation was conservative rather than wrong. The band is
+now a two-sided check on a one-sided risk, which is a flaw in the instrument
+and is recorded in it.
+
+**The control's miss was the SCRIPT, and it was a restatement.** `predict` for
+`gpt-4o-mini` hardcoded `2833 + 6 * 5667` — six tiles, which is right for an A4
+page at maxEdge **1536** and wrong for the 1024 the script sends. At 771×1024 the
+shortest side scales 768/771, the long side lands at 1020, and that is 2×2 = **4
+tiles**. Computed from the dimensions it already had, the prediction is
+**102,210 against 102,210 reported — exact.** The tiling model was never in
+doubt; the prediction had stopped reading its own inputs.
+
+**AND THE TWO PATCH MODELS REPORTED THE SAME NUMBER, which is two findings.**
+4,045 for both, where the documented multipliers (2.46 and 1.62) predict 8,082
+and 5,394. So the published per-model multipliers are **not what is applied**,
+and nano and mini **bill an image identically** — which made the choice between
+them a pure price-per-token decision rather than a tokenisation one.
+
+**The mechanism is not understood and is deliberately not guessed at.** Two
+observations of one image size cannot separate "a 1.2× multiplier" from "a
+different patch count" from "a flat per-image rate", and a coincidence between
+two ratios is not a mechanism. The consequence is stated rather than papered
+over: **`MEASURED_PHOTO_BATCH_INPUT_TOKENS` does not extrapolate.** It is the
+bill for four pages at 771×1024 and detail `original`; moving maxEdge, the page
+count or the detail setting invalidates it and the price derived from it.
+
+### Gate 2 — both models read the pages; neither invented anything
+
+Judged against the actual pages: every date and figure both models reported is
+correct — 1880 census, HP 1939, ENIAC 1943, Intel's microchip 1970, Xerox Alto
+1973, AAUW 1881, women under 30% of STEM.
+
+- **nano** is more thorough (18 key points) and **noisy**: "Data crunc(h)ers", a
+  duplicated COBOL term, and "Hopper was the first group to be granted a PhD"
+  garbled.
+- **mini** is cleaner (10 key points) and caught two things nano missed
+  (Programma 101, Ethernet). **Volume is not coverage.**
+
+### The price that came out of it
+
+Input MEASURED, output at `MAX_TOKENS.summarise` — because a price built on one
+observation of a variable quantity is the `TYPICAL_SUMMARY_OUTPUT_TOKENS`
+mistake again:
+
+| configuration | in tokens | batch | credits | 16-page reading |
+|---|---|---|---|---|
+| `gpt-4o-mini` @1536 *(what used to ship)* | 147,544 | $0.0233 | **34** | 138 |
+| `gpt-4o-mini` @1024 | 102,210 | $0.0165 | 24 | 98 |
+| `gpt-5.4-mini` @1024 | 4,045 | $0.0120 | **18** | 74 |
+| **`gpt-5.4-nano` @1024** | **4,045** | **$0.00331** | **5** | **22** |
+
+### nano, and the argument that decided it
+
+Both passed gate 2's actual bar. nano's defects are presentation quality, not
+accuracy — it read everything correctly and invented nothing — and nano is
+**3.6× cheaper**.
+
+**What settles it is the trial.** `credits.ts` says the 60-credit trial has to
+be able to demonstrate what is being sold, and names completing one
+photographed reading. At mini's 18 a 16-page reading is **74 credits — more
+than the whole trial**, so a free student could not finish one. At nano's 5 it
+is **22**. No other candidate manages it.
+
+**The noise is a prompt property, and that is a claim with a precedent rather
+than a hope**: `ai-notes` output was "helpful but shallower than I'd like" until
+its prompt was told what belonged in each section, measured at +189% words per
+key point with the ceiling untouched. `ai-text`'s summarise prompt is still a
+schema and one sentence — PRODUCT-PLANS.md has the depth work queued against
+exactly this prompt. A duplicated term and a garbled clause are what that work
+addresses. **If Grace judges the output quality unacceptable, `gpt-5.4-mini` at
+18 credits is the fallback** and that is her call, not this document's.
+
+**One measured risk, stated because it is headroom rather than price:** nano
+produced **1,591 output tokens against a 2,000 ceiling — 80% of it.** A denser
+four pages could truncate, which the adapter turns into a hard error. Raising
+`MAX_TOKENS.summarise` re-prices the batch automatically, so that is a decision
+with a number attached rather than a free one.
+
+---
+
 ## 13. The margin on an ACCOUNT, and the cap that bounds it
+
+> **STATUS AFTER 12.9: THE LOSS THIS SECTION MEASURES NO LONGER EXISTS.**
+> Everything below is true of the configuration that shipped until 16 September
+> 2026 — `gpt-4o-mini` at maxEdge 1536, a batch costing 34 credits and charged
+> 3 — and it is kept because it is the argument that justified the swap.
+>
+> With `gpt-5.4-nano` at a **derived** 5 credits against a measured 4.8, a
+> batch is charged 1.0× what it costs, and **every tier, every period and every
+> channel is profitable even when the entire allowance is spent on photos**:
+>
+> | | monthly | 6-month | annual |
+> |---|---|---|---|
+> | Study AI (Play 30%) | +$3.49 | +$2.81 | **+$2.43** |
+> | Study AI Max (Play 30%) | +$6.64 | +$5.21 | **+$4.45** |
+>
+> There is no break-even to stay under: spending the whole allowance on photos
+> is profitable, so the cap in 13.6 bounds nothing. **It is built and held
+> unmerged as insurance against the swap being reverted**, not as pending work.
 
 Sections 4 and 12 price an ACTION. This prices an ACCOUNT, which is the
 question a per-tier loss is actually about: what a tier's whole allowance costs

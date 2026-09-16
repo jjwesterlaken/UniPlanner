@@ -486,12 +486,24 @@ const shippedCreditsFor = (u) => Math.max(1, Math.round(u / USD_PER_CREDIT));
 const PHOTOS_PER_BATCH = lift(cfgSrc, "PHOTOS_PER_CHUNK");
 const SHIPPED_MAX_TOKENS = liftObj(cfgSrc, "MAX_TOKENS");
 const SHIPPED_MAX_CHARS = liftObj(cfgSrc, "MAX_INPUT_CHARS");
+/* WHAT A PHOTO BATCH IS CHARGED, derived the way the shipped config
+   derives it: from the vision model's own rates and the MEASURED batch
+   bill, lifted out of _shared/model.ts. It used to be read as
+   TASK_CREDITS.summarise, which was correct only while the price was
+   HELD at one text chunk — reading it that way after the model moved
+   printed an "under-charge" figure about a weight nothing charges. */
+const modelSrc = fs.readFileSync(path.join(ROOT, "supabase/functions/_shared/model.ts"), "utf8");
+const VISION_IN = lift(modelSrc, "VISION_USD_PER_1M_INPUT");
+const VISION_OUT = lift(modelSrc, "VISION_USD_PER_1M_OUTPUT");
+const MEASURED_BATCH_TOKENS = lift(modelSrc, "MEASURED_PHOTO_BATCH_INPUT_TOKENS");
 const CHARGED_PER_BATCH = shippedCreditsFor(
-  (SHIPPED_MAX_CHARS.summarise / SHIPPED_CPT) * (SHIPPED_IN / 1e6) +
-    SHIPPED_MAX_TOKENS.summarise * (SHIPPED_OUT / 1e6)
+  MEASURED_BATCH_TOKENS * (VISION_IN / 1e6) + SHIPPED_MAX_TOKENS.summarise * (VISION_OUT / 1e6)
 );
 
-const batchUsdToday = photoBatch(PHOTOS_PER_BATCH);
+/* The batch's real cost is now the MEASURED one at the shipped
+   configuration, not the modelled tiling figure — that model shipped
+   until 16 September 2026 and is kept above for the comparison. */
+const batchUsdToday = MEASURED_BATCH_TOKENS * (VISION_IN / 1e6) + SHIPPED_MAX_TOKENS.summarise * (VISION_OUT / 1e6);
 const batchRealCredits = batchUsdToday / USD_PER_CREDIT;
 
 const { TIERS: PRICED_TIERS } = await import(pathToFileURL(path.join(ROOT, "site/pricing.js")).href);
@@ -509,6 +521,33 @@ const netUsdPerMonth = (tier, period, channel) => {
   const netAud = grossAud * (1 - GST_FRACTION) * (1 - channel.cut) - (channel.fixedAud || 0);
   return (netAud / MONTHS_IN[period]) * FX_AUD_USD;
 };
+
+/* ---------- section 12.9: what the gates actually reported ---------- */
+
+/* MEASURED, 16 September 2026, four phone photographs of printed pages
+   at 771x1024. These are REPORTED prompt_tokens, not predictions, and
+   they are what the swap was priced on. */
+const GATE_RUN = [
+  { model: "gpt-4o-mini @1536", tokens: 147544, inRate: 0.15, outRate: 0.6, note: "modelled — the config that USED to ship" },
+  { model: "gpt-4o-mini @1024", tokens: 102210, inRate: 0.15, outRate: 0.6, note: "MEASURED (the control)" },
+  { model: "gpt-5.4-mini @1024", tokens: 4045, inRate: 0.75, outRate: 4.5, note: "MEASURED" },
+  { model: "gpt-5.4-nano @1024", tokens: 4045, inRate: 0.2, outRate: 1.25, note: "MEASURED — now VISION_MODEL" },
+];
+
+console.log("\nSECTION 12.9 — THE GATE RUN, AND THE PRICE THAT CAME OUT OF IT");
+console.log("  the output ceiling is MAX_TOKENS.summarise; the input is what was billed\n");
+console.log("  " + "configuration".padEnd(20) + "in tok".padStart(9) + "batch $".padStart(11) + "credits".padStart(9) + "16 pages".padStart(10));
+for (const g of GATE_RUN) {
+  const usdBatch = g.tokens * (g.inRate / 1e6) + SHIPPED_MAX_TOKENS.summarise * (g.outRate / 1e6);
+  const c = shippedCreditsFor(usdBatch);
+  console.log(
+    "  " + g.model.padEnd(20) + pad(g.tokens, 9) + usd(usdBatch).padStart(11) + pad(c, 9) + pad(4 * c + 2, 10) + "   " + g.note
+  );
+}
+console.log(`\n  the 60-credit trial buys a 16-page reading only at ${GATE_RUN.filter((g) => {
+  const c = shippedCreditsFor(g.tokens * (g.inRate / 1e6) + SHIPPED_MAX_TOKENS.summarise * (g.outRate / 1e6));
+  return 4 * c + 2 <= 60;
+}).map((g) => g.model).join(", ") || "NONE OF THEM"}`);
 
 console.log("\nSECTION 13 — THE MARGIN ON AN ACCOUNT");
 console.log(`  assumptions: AUD->USD ${FX_AUD_USD}, GST 1/11 removed`);

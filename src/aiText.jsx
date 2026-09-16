@@ -180,7 +180,15 @@ function FailureNotice({ code, allowance }) {
    high-detail tiling actually reads), JPEG at 0.8. This is what keeps a
    12MP camera original off the wire and under the server's per-image
    cap -- the cap exists for hand-built requests, not for this path. */
-async function downscalePhoto(file, { maxEdge = 1536, quality = 0.8 } = {}) {
+/* maxEdge 1024, not 1536, and it became a LEVER when the model moved.
+   Under gpt-4o-mini's tiling the shortest side was normalised to 768 in
+   both directions, so a portrait page was 6 tiles whatever we sent and
+   downscaling saved exactly nothing -- settled, in COST-MODEL 4. Under
+   the patch tokenisation VISION_MODEL uses now, the budget is a CAP
+   rather than a target and the bill falls with what we send. 1024 is
+   what both gates were measured at; moving it invalidates
+   MEASURED_PHOTO_BATCH_INPUT_TOKENS and therefore the price. */
+async function downscalePhoto(file, { maxEdge = 1024, quality = 0.8 } = {}) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((resolve, reject) => {

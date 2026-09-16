@@ -20,18 +20,47 @@
    So the model is chosen per MEDIUM. Text and audio transcript
    summaries go one way; images go another.
 
-   BOTH ARE gpt-4o-mini TODAY, and VISION_MODEL is the one expected to
-   move: section 12.7 recommends gpt-5.4-nano at detail "original" and
-   maxEdge 1024, subject to a cost gate (an unresolved report of 27x the
-   documented image tokenisation on exactly the shape we send) and a
-   quality gate (whether nano can read a photographed page of print at
-   all). Until both land this file has two identical strings, which is
-   the point: when the gate clears, the change is one line here rather
-   than three greps across two functions.
-   ================================================================== */
+   VISION_MODEL HAS MOVED. Both gates in COST-MODEL.md 12.7 were run on
+   16 September 2026 against four phone photographs of printed pages,
+   and section 12.9 records what came back. The short form: the
+   documented tokenisation was CONSERVATIVE rather than wrong — every
+   reported count came in BELOW prediction, so the 66,000-token report
+   did not reproduce on the shape we send — and gpt-5.4-nano read the
+   pages, getting every date and figure right and inventing nothing.
+
+   THE RATES LIVE HERE, BESIDE THE MODEL THEY BELONG TO, and that is the
+   point of putting them in this file rather than in credits.ts: a model
+   swap that left its prices behind is precisely the restatement that
+   made a photo batch cost eleven text chunks while being billed as one.
+   `PHOTO_BATCH_CREDITS` is derived from these, so changing the string
+   without changing the numbers re-prices the feature wrongly and
+   loudly rather than quietly. */
 
 /** Lecture transcripts, pasted text, and merges. */
 export const SUMMARY_MODEL = "gpt-4o-mini";
 
-/** Photographed pages. Expected to move — see the note above. */
-export const VISION_MODEL = "gpt-4o-mini";
+/** Photographed pages. */
+export const VISION_MODEL = "gpt-5.4-nano";
+
+/* Published rates for VISION_MODEL, reproduced independently on
+   16 September 2026. MOVE THESE IN THE SAME COMMIT AS THE STRING. */
+export const VISION_USD_PER_1M_INPUT = 0.2;
+export const VISION_USD_PER_1M_OUTPUT = 1.25;
+
+/* WHAT WE ACTUALLY GET BILLED for one batch of PHOTOS_PER_CHUNK pages
+   at maxEdge 1024 and detail "original" — MEASURED, not modelled.
+
+   The documented patch arithmetic predicted 8,082 for nano and 5,394
+   for gpt-5.4-mini. Both reported EXACTLY 4,045, which is two findings
+   at once: the published per-model multipliers are not what is applied,
+   and the two models bill an image IDENTICALLY — so the choice between
+   them was a pure price-per-token decision rather than a tokenisation
+   one.
+
+   BECAUSE THE MECHANISM IS NOT UNDERSTOOD, THIS NUMBER DOES NOT
+   EXTRAPOLATE. It is the bill for THIS configuration — four pages,
+   771x1024, detail "original" — and changing maxEdge, the page count or
+   the detail setting invalidates it. That is acceptable only because
+   1024 and "original" are exactly what ships; re-measure before moving
+   either. scripts/measure-photo-gates.mjs is the instrument. */
+export const MEASURED_PHOTO_BATCH_INPUT_TOKENS = 4045;

@@ -28,6 +28,14 @@ import {
   USD_PER_1M_OUTPUT,
   creditsFor,
 } from "../_shared/credits.ts";
+/* The vision model's own rates and the MEASURED bill for one batch,
+   imported from the file that owns the model string so a swap cannot
+   leave its prices behind. */
+import {
+  VISION_USD_PER_1M_INPUT,
+  VISION_USD_PER_1M_OUTPUT,
+  MEASURED_PHOTO_BATCH_INPUT_TOKENS,
+} from "../_shared/model.ts";
 
 export const SUMMARY_PROVIDER = "openai";
 
@@ -212,34 +220,42 @@ export const TASK_CREDITS: Record<Task, number> = Object.fromEntries(
   TASKS.map((task) => [task, creditsFor(usdForTask(task))])
 ) as Record<Task, number>;
 
-/* ---------- the photo batch price is HELD, not derived ----------
+/* ---------- the photo batch price, DERIVED FROM A MEASUREMENT ----------
 
-   Every other price in this file falls out of the arithmetic above. This
-   one cannot, and pretending otherwise would be worse than saying so.
+   IT WAS HELD, AND THE HOLD IS OVER. For as long as the photo path ran
+   on gpt-4o-mini this number could not be derived honestly: the true
+   weight was about 34 credits, at which a 16-page reading is most of a
+   month and the feature does not exist, and setting 34 against a model
+   we were about to leave would have told students a reading cost a
+   third of their month when it was about to cost a fortieth. So it sat
+   at one text chunk with a comment saying it was known to be wrong.
 
-   Derived honestly against the model we call TODAY, a batch of four
-   photographed pages is about 33 credits — gpt-4o-mini bills an image at
-   2,833 base + 5,667 a tile, which is 36,835 tokens for an A4 page, 12x
-   what a full 20,000-character text chunk costs. At that price a
-   16-page reading is most of a month and the feature does not exist.
+   BOTH GATES RAN ON 16 SEPTEMBER 2026 and COST-MODEL.md 12.9 records
+   them. The tokenisation was CONSERVATIVE rather than wrong -- every
+   count came back below prediction, so the 66,000-token report did not
+   reproduce -- and gpt-5.4-nano read four photographed pages of print
+   with every date and figure correct and nothing invented.
 
-   Derived against the model it is RECOMMENDED to move to — gpt-5.4-nano
-   at detail "original" and maxEdge 1024 — it is about 6.
+   SO THIS IS DERIVED AGAIN, and from the place that cannot drift: the
+   MEASURED input tokens for one batch at the shipped configuration,
+   priced at VISION_MODEL's own published rates, plus this task's output
+   ceiling. Raise MAX_TOKENS.summarise and the photo batch re-prices
+   itself, exactly as every other weight in this file does.
 
-   Setting 33 against a model we are about to leave would tell students a
-   reading costs a third of their month when it is about to cost a
-   fortieth, and a visibly wrong number is worse than an invisible one.
-   Setting 6 against a model we have not measured would undercharge for
-   the app's most expensive action on the strength of two third-hand
-   published rates.
+   THE INPUT IS MEASURED AND THE OUTPUT IS A CEILING, deliberately: the
+   measured run produced 1,591 output tokens, but a price built on one
+   observation of a variable quantity is the TYPICAL_SUMMARY_OUTPUT_TOKENS
+   mistake again. The ceiling is what any single call CAN cost us.
 
-   So it stays where it has always been — the same as one text chunk —
-   and this comment is the record that it is known to be wrong in a
-   known direction. IT MOVES WHEN COST-MODEL.md SECTION 12.7'S TWO GATES
-   LAND: the three-call cost test that resolves the 66,000-token report,
-   and the side-by-side quality comparison on real page photographs.
-   A test asserts the hold, so lifting it is deliberate. */
-export const PHOTO_BATCH_CREDITS = TASK_CREDITS.summarise;
+   WORTH KNOWING BEFORE RAISING THE CEILING: 1,591 of 2,000 is 80% of
+   it, so nano is verbose enough that a denser four pages could truncate
+   -- which the adapter turns into a hard error. That is a headroom
+   risk on the output cap, not a pricing one, and it is measured rather
+   than feared. */
+export const PHOTO_BATCH_CREDITS = creditsFor(
+  MEASURED_PHOTO_BATCH_INPUT_TOKENS * (VISION_USD_PER_1M_INPUT / 1_000_000) +
+    MAX_TOKENS.summarise * (VISION_USD_PER_1M_OUTPUT / 1_000_000)
+);
 
 /* ---------- who gets these features ----------
 

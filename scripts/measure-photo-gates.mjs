@@ -64,12 +64,27 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CANDIDATES = [
   {
     name: "gpt-4o-mini",
-    label: "the control — what ships today",
+    label: "the control — the previous VISION_MODEL",
     detail: "high",
-    /* Tiles. 2,833 base + 5,667 a tile, and the tiler normalises the
-       SHORTEST side to 768px in both directions, so a portrait page is
-       always 6 tiles whatever we send. */
-    predict: () => 2833 + 6 * 5667,
+    /* Tiles. 2,833 base + 5,667 a tile.
+
+       THIS USED TO HARDCODE SIX TILES, and that is the whole reason the
+       control read as "out of band" on 16 September 2026: a portrait A4
+       page at maxEdge 1536 IS 6 tiles, so the constant was right about
+       the configuration it was written for and wrong about the one the
+       script sends, which is 1024. At 771x1024 the shortest side scales
+       768/771, the long side lands at 1020, and that is 2x2 = 4 tiles.
+
+       Computed from the real dimensions now, it predicts 102,210 for
+       four pages against 102,210 reported — EXACT. The tiling model was
+       never in doubt; the prediction had stopped reading its own
+       inputs. Same shape as every other entry in the restatement
+       ledger, in a `predict` function. */
+    predict: (w, h) => {
+      const scale = 768 / Math.min(w, h);
+      const tiles = Math.ceil((w * scale) / 512) * Math.ceil((h * scale) / 512);
+      return 2833 + tiles * 5667;
+    },
   },
   {
     name: "gpt-5.4-nano",
@@ -106,7 +121,7 @@ function patchTokens(w, h, multiplier, budget = 10000) {
 
 /* ---------- the app's real prompt, extracted rather than retyped ---------- */
 
-const { buildMessages } = await import(pathToFileURL(path.join(ROOT, "supabase/functions/ai-text/prompts.js")).href);
+const { buildMessages, parseTaskResult } = await import(pathToFileURL(path.join(ROOT, "supabase/functions/ai-text/prompts.js")).href);
 
 /* ---------- input ---------- */
 
@@ -276,15 +291,28 @@ for (const r of results) {
       console.log(`  REFUSED as illegible, pages: ${parsed.unreadable.join(", ")}`);
       continue;
     }
-    console.log(`\n  overview: ${parsed.overview || "(none)"}\n`);
+    /* RENDERED THROUGH THE APP'S OWN PARSER, which is the difference
+       between showing what the MODEL said and showing what a STUDENT
+       would get — and the first version showed the former.
+
+       On 16 September gpt-4o-mini returned `assessable` and
+       `openQuestions` as STRINGS where the schema declares [string].
+       This block read the raw JSON and iterated, so a string iterated
+       BY CHARACTER and printed as 82 and 90 single-letter entries. That
+       display was this script's; production did something quieter and
+       worse, silently dropping both fields to []. Both are fixed —
+       asArray coerces a lone string to one entry now — and gate 2 is a
+       judgement about the SAVED NOTE, so it has to be judged on what
+       the parser produces. */
+    const shaped = parseTaskResult("summarise", content);
+    console.log(`\n  overview: ${shaped.overview || "(none)"}\n`);
     for (const k of ["keyPoints", "assessable", "openQuestions"]) {
-      const list = parsed[k] || [];
+      const list = shaped[k] || [];
       console.log(`  ${k} (${list.length}):`);
       for (const item of list) console.log(`    - ${item}`);
     }
-    const terms = parsed.terms || [];
-    console.log(`  terms (${terms.length}):`);
-    for (const t of terms) console.log(`    - ${t.term}: ${t.content}`);
+    console.log(`  terms (${shaped.terms.length}):`);
+    for (const t of shaped.terms) console.log(`    - ${t.term}: ${t.content}`);
   } catch {
     console.log("  output did not parse as JSON — the app treats this as ai_failed_charged:");
     console.log(`  ${content.slice(0, 800)}`);
@@ -294,9 +322,14 @@ for (const r of results) {
 }
 
 console.log("\n\n================ WHAT TO DO WITH THIS ================\n");
-console.log("  gate 1 passes and nano reads the pages   -> ship the recommendation:");
-console.log("     VISION_MODEL = gpt-5.4-nano, detail \"original\", maxEdge 1024,");
-console.log("     PHOTO_BATCH_CREDITS = 6, and update its three mirrors together.");
-console.log("  gate 1 passes and nano misreads          -> gpt-5.4-mini instead, and say so:");
-console.log("     worse economics (~19 credits a batch), a feature that works.");
-console.log("  gate 1 fails                             -> stop. Re-derive before anything moves.\n");
+console.log("  BOTH GATES RAN ON 16 SEPTEMBER 2026 AND THE SWAP SHIPPED. COST-MODEL.md 12.9");
+console.log("  records the numbers; this script is now a RE-measurement tool rather than a");
+console.log("  decision procedure. Re-run it whenever VISION_MODEL, maxEdge or the detail");
+console.log("  setting moves, because MEASURED_PHOTO_BATCH_INPUT_TOKENS in _shared/model.ts");
+console.log("  is what PHOTO_BATCH_CREDITS is derived from and it is a bill for ONE");
+console.log("  configuration: four pages, 771x1024, detail \"original\".");
+console.log("");
+console.log("  A COUNT BELOW PREDICTION IS NOT THE FAILURE THIS GATE WAS BUILT FOR. It exists");
+console.log("  to catch a bill MANY TIMES the arithmetic — the 66,000-token report. Under is");
+console.log("  conservative; over is the thing that voids a price. Read the direction, not");
+console.log("  just the band.\n");

@@ -118,7 +118,13 @@ export function buildMessages(task, body) {
           role: "user",
           content: [
             { type: "text", text: `Photographs of ${body.images.length} consecutive pages, in order:` },
-            ...body.images.map((url) => ({ type: "image_url", image_url: { url, detail: "high" } })),
+            /* detail "original" rather than "high": the docs recommend it
+               for OCR and small text, and "high"/"low" may RESIZE the
+               image and obscure fine detail -- so "high" was letting the
+               provider pick the resolution of a page of print. At
+               maxEdge 1024 it also costs the same, because the patch
+               budget is not binding at that size. COST-MODEL 12.3. */
+            ...body.images.map((url) => ({ type: "image_url", image_url: { url, detail: "original" } })),
           ],
         },
       ];
@@ -152,7 +158,38 @@ export function buildMessages(task, body) {
   ];
 }
 
-const asArray = (v) => (Array.isArray(v) ? v : []);
+/* A LONE STRING IS ONE ENTRY, NOT NOTHING — and this was losing real,
+   paid-for content in production.
+
+   `ai-text` asks the provider for `json_object`, which guarantees VALID
+   JSON and says nothing about the SCHEMA. (`ai-notes` uses a strict
+   `json_schema`; this endpoint never did, because its five tasks have
+   five shapes.) So a model is free to answer `"assessable": "Explain
+   the significance of two figures..."` where the schema declares
+   `[string]` — and gpt-4o-mini, on the photo path, did exactly that for
+   BOTH `assessable` and `openQuestions` on a measured four-page
+   reading.
+
+   What used to happen then is the quiet failure this file's own header
+   warns about: `Array.isArray` is false for a string, so the field
+   became `[]`, the note SAVED, the student was BILLED, and two sections
+   came out empty — "indistinguishable, to a student, from a lecture
+   that genuinely had nothing to say."
+
+   COERCING AND NOT THROWING, deliberately, and it is the same rule as
+   the failed merge: the content is right there and was paid for, so
+   discarding it over a shape wobble takes the money and returns less.
+   Throwing would fail a whole reading for a formatting difference the
+   student cannot see or fix.
+
+   It lives in `asArray` rather than at the five call sites, so
+   `keyPoints` and `terms` are covered by the same line. A blank or
+   whitespace-only string is still nothing. */
+const asArray = (v) => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string" && v.trim()) return [v];
+  return [];
+};
 const asString = (v) => (typeof v === "string" ? v : "");
 
 /**

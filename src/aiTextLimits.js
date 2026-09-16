@@ -43,14 +43,23 @@ export const TASK_CREDITS = {
   merge: 2,
 };
 
-/* HELD, not derived. A batch of four photographed pages really costs
-   about 34 credits on the model we call today and about 6 on the one it
-   is recommended to move to, and setting either number before that
-   decision lands would be a visible lie in one direction or an
-   invisible subsidy in the other. See COST-MODEL.md section 12.7 and
-   PHOTO_BATCH_CREDITS in the Edge Function's config, where the same
-   hold is recorded next to the same reasoning. */
-export const PHOTO_BATCH_CREDITS = TASK_CREDITS.summarise;
+/* A MIRROR, and the mirror is the allowed form here: this is a browser
+   module and the figure is derived in Deno, from the vision model's own
+   rates and a MEASURED token count, in ai-text/config.ts. What is never
+   allowed is a mirror with a comment instead of an assertion, so
+   test-readings.mjs compares the two.
+
+   IT USED TO BE HELD at one text chunk, because the honest weight on
+   gpt-4o-mini was ~34 credits and at that price a 16-page reading is
+   most of a month. Both gates in COST-MODEL.md 12.7 ran on 16 September
+   2026 (12.9 records them), the photo path moved to gpt-5.4-nano, and
+   the measured bill for a batch is 5.
+
+   The number a student meets: a 16-page reading is 22 credits, about as
+   much as a 22-minute lecture -- and it FITS INSIDE THE 60-CREDIT
+   TRIAL, which is the thing credits.ts says the trial has to be able to
+   demonstrate and which no other candidate managed. */
+export const PHOTO_BATCH_CREDITS = 5;
 
 /* THE TIERS, mirrored from _shared/credits.ts.
 
