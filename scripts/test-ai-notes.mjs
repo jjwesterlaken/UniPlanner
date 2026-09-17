@@ -3078,6 +3078,22 @@ async function run() {
     }
   });
 
+  await test("AN EXAMPLE ENV FILE IS STILL COMMITTABLE — the ignore must not swallow the template", () => {
+    /* `.env.*` would take `.env.example` with it, and a committed
+       template with empty values is how the next person learns which
+       names to set. The negation is the kind of line that gets
+       "tidied" away, and a list of ignored-path probes cannot see it
+       go: every one of those would still pass. */
+    for (const keep of [".env.example", ".env.production.example"]) {
+      const r = spawnSync("git", ["check-ignore", "-q", keep], { cwd: rootDir, encoding: "utf8" });
+      assert.notEqual(r.status, 0, `${keep} is ignored — the negation for example files was lost, so nobody can commit a template`);
+    }
+    /* Non-vacuity: the thing it is negated FROM must really be ignored,
+       or this passes in a repo that ignores no env files at all. */
+    const real = spawnSync("git", ["check-ignore", "-q", ".env.production"], { cwd: rootDir, encoding: "utf8" });
+    assert.equal(real.status, 0, ".env.production is not ignored, so the negation above is about nothing");
+  });
+
   await test("git REALLY ignores a keystore at each of those paths, not just the entry text", () => {
     /* THE FAILURE THE TEXT CHECK ABOVE CANNOT SEE. An entry can be
        present and still not bite: a later negation un-ignores it, a
@@ -3098,6 +3114,29 @@ async function run() {
       "mobile/android/app/uniplanner-upload.jks",
       "release.keystore",
       "transcript.txt",
+      /* ENVIRONMENT AND CREDENTIAL FILES, added 17 September 2026 after
+         a full-history sweep found the gap. Nothing had ever been
+         committed -- these are the same backstop as the keystore
+         entries, for the file far likelier to be created inside the
+         repo than a keystore is. The timing was the Stripe switch-on:
+         `stripe listen` prints a signing secret to a terminal beside an
+         open editor, and the Supabase CLI writes supabase/.env itself. */
+      ".env",
+      ".env.local",
+      ".env.production",
+      "supabase/.env",
+      "mobile/.env",
+      "desktop/.env",
+      ".npmrc",
+      ".netrc",
+      "key.pem",
+      "cert.p12",
+      "signing.pfx",
+      "id_rsa",
+      "service-account.json",
+      "google-services.json",
+      "GoogleService-Info.plist",
+      "mobile/GoogleService-Info.plist",
       /* Build output, not a secret — but it reached main three times
          through the same mechanism the entries above exist to stop:
          `git add -A` after a coverage run, with nothing ignoring c8's
