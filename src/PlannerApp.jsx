@@ -192,7 +192,7 @@ import {
   ENTRY_BODY_MAX,
   SHEET_ENTRIES_MAX,
 } from "./reference.js";
-import { PRIVACY_URL, DELETE_ACCOUNT_URL } from "./legalLinks.js";
+import { PRIVACY_URL, DELETE_ACCOUNT_URL, SUPPORT_URL } from "./legalLinks.js";
 import {
   htmlOf,
   bodyOf,
@@ -5001,11 +5001,42 @@ export function buildId() {
   return value && !value.startsWith("__") ? value : "development";
 }
 
+/* THE VERSION, AND THE WAY TO REPORT SOMETHING WRONG WITH IT — in one
+   place, deliberately.
+
+   "Which build is this user on" is the first question after any
+   caching or rendering bug, and the build id is the only thing that
+   answers it. Putting the way to get in touch anywhere else on the
+   screen would mean a student writes in without it and somebody has to
+   ask, which costs a round trip on every report.
+
+   IT LINKS TO THE SUPPORT PAGE RATHER THAN OPENING A MAIL CLIENT. A
+   `mailto:` is the shortest path on web and desktop and is not
+   reliably handled inside a Capacitor WebView, which is the platform
+   most students are on — and a link that silently does nothing is the
+   dead "coming soon" button one screen over. The support page is an
+   ordinary https URL, works on every shell, and is already the one
+   place that knows how to reach us: the email lives there, so it does
+   not need repeating here where it could drift.
+
+   IT SENDS NOTHING. An anchor makes no request until it is clicked,
+   and nothing about the planner travels with it — the student quotes
+   the version themselves. `test-local-only` still proves the
+   signed-out app makes no outbound call at all. */
 function BuildLine() {
   return (
-    <p className="mt-4 text-center text-xs text-stone-400">
-      Version <span className="font-mono">{buildId()}</span>
-    </p>
+    <div className="mt-4 text-center text-xs text-stone-400">
+      <p>
+        Version <span className="font-mono">{buildId()}</span>
+      </p>
+      <p className="mt-1">
+        Something not working?{" "}
+        <a className="underline" href={SUPPORT_URL} target="_blank" rel="noreferrer">
+          Get in touch
+        </a>{" "}
+        &mdash; quote the version above.
+      </p>
+    </div>
   );
 }
 
