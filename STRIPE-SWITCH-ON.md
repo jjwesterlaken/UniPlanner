@@ -72,6 +72,19 @@ a forgotten field is a checkout that cannot start rather than a missing
 link — the right direction, and a five-minute diagnosis only if you
 know to look. (DEPLOY-CHECKLIST §2b and §7d.)
 
+**IT IS ACCOUNT-WIDE, NOT PER MODE — do it once.** Observed on the
+dashboard, 17 September 2026, which is why it is stated as fact here
+rather than as a caution: setting it in test mode is REFUSED with
+*"Only live keys can access this method"*, and test mode's Customer
+portal page already displays the live values. Business details are one
+setting for the account.
+
+This entry exists because the rest of this file is written per mode and
+somebody will reasonably assume this field is too — then either hunt
+for a test-mode setting that does not exist, or worse, read the refusal
+as a broken account. The steps that genuinely are per mode are 2, 3
+and 5; this one is not.
+
 ## 5. Create the webhook endpoint
 
 ```
@@ -114,6 +127,29 @@ Phase 6 step 4 says to use the endpoint's and step 6 says
 `stripe listen` prints one for step 4 — both true of different
 rehearsals, and easy to cross. For live it is the endpoint's.
 
+**AND SO ARE THE TEST AND LIVE ONES, WHICH DECIDES HOW THIS WHOLE
+SEQUENCE RUNS.** There is ONE deployment of `stripe-webhook` and it
+reads ONE secret:
+
+```ts
+const signingSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET") || "";
+…
+const expected = await signStripePayload(signingSecret, sig.t, raw);
+```
+
+Test mode and live mode issue different signing secrets for the same
+endpoint URL, so **the two cannot both verify at once** — whichever
+secret is not in the environment has its deliveries rejected as
+unsigned, which looks identical to a forged one. So this is not
+"configure both and they coexist": run test mode end to end, then swap
+BOTH secrets to live together. The live endpoint may exist from the
+start; it simply will not verify until its secret is the one in place.
+
+The alternative — accepting a list of secrets and trying each — is not
+built, deliberately. It would mean a function that verifies against a
+secret nobody intended to be live, and the whole point of verify-before-
+parse is that exactly one key is authoritative at a time.
+
 ## 7. Deploy the Edge Functions
 
 The workflow derives its list from the directory and passes
@@ -128,7 +164,68 @@ code runs: nothing errors, nothing is logged, and the symptom is
 stripe trigger customer.subscription.updated
 ```
 
-Then confirm a row in `billing_events`.
+Then confirm a row in `billing_events`:
+
+```sql
+select id, event_type, user_id, app_user_id, received_at
+from billing_events
+order by received_at desc
+limit 5;
+```
+
+**The column is `received_at`, not `created_at`.** 0017 names it that and
+indexes `(user_id, received_at desc)`; an earlier draft of this file said
+`created_at` and the query simply errored. Corrected from Jared's run,
+17 September 2026.
+
+**WHAT SUCCESS LOOKS LIKE IS NOT WHAT YOU EXPECT: rows with `user_id`
+NULL.** `stripe trigger` invents a customer with no `profiles` row, so
+the handler records the event, writes nothing to anyone's tier, and
+answers 200. That is the `no_such_user` path, and it is designed: an
+event for an account we do not hold is exactly the thing to notice — a
+deleted account with a live subscription, or a webhook pointed at the
+wrong project — so the row is kept rather than skipped, and answered 200
+because nothing about it will differ on the fourth delivery.
+
+**MORE THAN ONE ROW IS EXPECTED, AND ONE OF THEM PROVES THE IGNORE
+PATH.** `stripe trigger` builds prerequisite objects, so the run
+produces a cascade — Jared's produced `customer.subscription.updated`,
+`customer.subscription.created` and `invoice.paid`. The last is NOT in
+`ACTIONABLE`, and seeing it recorded with no action taken is the
+unenumerated-type branch working: recorded, answered 200, nothing done.
+A type nobody enumerated does nothing rather than something
+unintended.
+
+### What else is visible in that table, and it is not noise
+
+A `billing_events` query at this point also shows **RevenueCat** rows,
+because `billing-webhook` writes the same table. Jared's run surfaced
+EXPIRATION and CANCELLATION from 13 September 2026 — Grace's sandbox
+Apple subscription lapsing on its own.
+
+That is worth more than it looks. **The lapse path had never been
+observed**: every RevenueCat delivery before it was a dashboard test
+event or a purchase. A real expiry is the event that exercises the rule
+a careless `max` gets wrong — a tier must be able to go DOWN — and
+`tierFromProviders` is a max over rows that are still live precisely so
+the last one lapsing takes the account to `free`.
+
+**CHECK WHAT IT WROTE, because the reader and the writer disagree about
+one shape.** A lapse should write `('revenuecat', 'free')` with
+`expires_at` set:
+
+```sql
+select user_id, source, tier, expires_at, updated_at
+from entitlements order by updated_at desc limit 10;
+```
+
+`{ tier: 'free', expires_at: null }` is **exempt and correct** — that is
+the one shape `open_ended_refused` deliberately does not cover, because
+a refusal covering `free` would make cancellation unrecordable and hold
+every expired tier open for ever. A PAID row with a null `expires_at`
+is the thing to escalate: the writer should have refused it, and the
+reader now skips it, but a build deployed either side of that change
+can still produce one.
 
 ## 9. Flip the client flag
 
