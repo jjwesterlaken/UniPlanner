@@ -211,7 +211,18 @@ export function PlansPanel({ session }) {
     ),
   })).filter((g) => g.durations.length > 0);
 
-  const token = session && session.access_token;
+  /* THE APP'S SESSION IS SHAPED, and this read had the raw Supabase
+     field name on it. `shapeSession` in sync.js maps a Supabase
+     session to `{ user: { id, email }, token }` -- deliberately, so
+     nothing outside that module depends on the provider's field
+     names -- and every other caller in the app (aiNotes, aiText, the
+     re-summarise retry) reads `session.token`. This one read
+     `session.access_token`, which is undefined on a shaped session,
+     so `callBilling` threw `unauthenticated` and every plan button
+     refused with "Please sign in again." on a fully signed-in
+     account, before any request was made. Live on production build
+     9d11767cb604. */
+  const token = session && session.token;
 
   const buyOnWeb = async (t, duration) => {
     setBusy(`${t}-${duration}`);

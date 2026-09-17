@@ -750,6 +750,81 @@ async function run() {
     assert.ok(built.includes("purchaseCapability") || built.includes("capabilityFrom") || built.includes("app_store"), "the purchase code is not in the bundle at all, so this check reads nothing");
   });
 
+  await test("NOTHING OUTSIDE sync.js READS THE PROVIDER'S SESSION FIELD NAMES", async () => {
+    /* THE BUG, live on production build 9d11767cb604: `plans.jsx` read
+       `session.access_token`. The app's session is SHAPED by
+       `shapeSession` to `{ user, token }`, so that read was undefined
+       on every signed-in account and every web purchase refused with
+       "Please sign in again." before any request left the browser.
+       `billing-checkout` had no invocation at all.
+
+       The click-through test in test-rendered-tabs.mjs is what catches
+       the BEHAVIOUR. This catches the CLASS, and it is derived on both
+       sides rather than restated: the provider's field names are read
+       out of `shapeSession`'s own body, and so is the app's key set, so
+       renaming either follows instead of going stale. A guard naming
+       "access_token" as a literal would be the restatement pattern
+       inside the test meant to stop it. */
+    const syncSrc = fs.readFileSync(path.join(rootDir, "src/sync.js"), "utf8");
+    const body = (syncSrc.split("export const shapeSession")[1] || "").split("export const supabaseBackend")[0];
+    assert.ok(body.trim(), "shapeSession was not found in sync.js — this guard is reading the wrong thing");
+
+    /* What the app's session HAS: the keys of the object literal. */
+    const appKeys = [...body.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
+    /* What it reads FROM: every `session.<name>` inside that body. */
+    const providerNames = [...new Set([...body.matchAll(/session\.(\w+)/g)].map((m) => m[1]))];
+
+    assert.ok(appKeys.includes("token"), `shapeSession does not produce a token key: ${appKeys.join(", ") || "(none)"}`);
+    assert.ok(providerNames.length > 0, "no provider field names derived from shapeSession, so the sweep below forbids nothing");
+
+    /* THE NAMES THAT MAY NOT LEAK are the provider's own, minus any
+       the app happens to keep under the same spelling — `user` is read
+       from the session AND kept as `user`, so forbidding it would
+       forbid every correct reader in the app. That subtraction is what
+       makes this about the RENAMED fields, which are the ones a caller
+       can get wrong. */
+    const forbidden = providerNames.filter((n) => !appKeys.includes(n));
+    assert.ok(
+      forbidden.length > 0,
+      `shapeSession renames nothing (${providerNames.join(", ")} vs ${appKeys.join(", ")}), so there is no leak for this guard to be about`
+    );
+
+    const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+    const walk = (dir) =>
+      fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) return walk(full);
+        return /\.(js|jsx)$/.test(e.name) ? [full] : [];
+      });
+    const files = walk(path.join(rootDir, "src")).filter((f) => path.basename(f) !== "sync.js");
+    assert.ok(files.length > 10, `only ${files.length} source files swept — this guard is reading the wrong directory`);
+
+    /* NON-VACUITY, and it is the half that matters: the sweep must
+       find the CORRECT reader. If `session.token` appears nowhere then
+       either the shape changed or the pattern is wrong, and an empty
+       offender list would mean nothing either way. */
+    const readers = [];
+    const offenders = [];
+    for (const file of files) {
+      const text = strip(fs.readFileSync(file, "utf8"));
+      const rel = path.relative(rootDir, file);
+      if (new RegExp(`session\\s*\\.\\s*token\\b`).test(text)) readers.push(rel);
+      for (const name of forbidden) {
+        if (new RegExp(`session\\s*\\.\\s*${name}\\b`).test(text)) offenders.push(`${rel} reads session.${name}`);
+      }
+    }
+    assert.ok(
+      readers.length > 0,
+      `no file in src/ reads session.token, so an empty offender list says nothing about the session shape`
+    );
+    assert.deepEqual(
+      offenders,
+      [],
+      `the provider's session field names escaped sync.js — undefined on a shaped session, so the caller ` +
+        `refuses a signed-in student before the network:\n        ${offenders.join("\n        ")}`
+    );
+  });
+
   fs.rmSync(tmpDir, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

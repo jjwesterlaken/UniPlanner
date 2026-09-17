@@ -390,7 +390,21 @@ function readable(error) {
   return raw || "Something went wrong. Please try again.";
 }
 
-const shapeSession = (session) =>
+/* THE ONE PLACE A SUPABASE SESSION BECOMES AN APP SESSION, and the
+   reason it is exported is that it was not. The app's session is
+   `{ user: { id, email }, token }`; the provider's field is
+   `access_token`. Nothing outside this module should know that name --
+   and the day `plans.jsx` read `session.access_token` instead of
+   `session.token`, every web purchase refused with "Please sign in
+   again." on a fully signed-in account, before any request was made.
+
+   PlannerApp's PASSWORD_RECOVERY handler used to restate this body
+   inline. It agreed, which is exactly the trap: a copy that MATCHES
+   its source and a copy DERIVED from it are indistinguishable until
+   the source moves. `scripts/test-purchases.mjs` derives the app's
+   session key set from here and refuses any other reader of the
+   provider's name. */
+export const shapeSession = (session) =>
   session
     ? {
         user: { id: session.user.id, email: session.user.email },
