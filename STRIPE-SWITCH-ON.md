@@ -72,6 +72,19 @@ a forgotten field is a checkout that cannot start rather than a missing
 link — the right direction, and a five-minute diagnosis only if you
 know to look. (DEPLOY-CHECKLIST §2b and §7d.)
 
+**IT IS ACCOUNT-WIDE, NOT PER MODE — do it once.** Observed on the
+dashboard, 17 September 2026, which is why it is stated as fact here
+rather than as a caution: setting it in test mode is REFUSED with
+*"Only live keys can access this method"*, and test mode's Customer
+portal page already displays the live values. Business details are one
+setting for the account.
+
+This entry exists because the rest of this file is written per mode and
+somebody will reasonably assume this field is too — then either hunt
+for a test-mode setting that does not exist, or worse, read the refusal
+as a broken account. The steps that genuinely are per mode are 2, 3
+and 5; this one is not.
+
 ## 5. Create the webhook endpoint
 
 ```
@@ -113,6 +126,29 @@ prints one for the CLI tunnel; the dashboard endpoint has its own.
 Phase 6 step 4 says to use the endpoint's and step 6 says
 `stripe listen` prints one for step 4 — both true of different
 rehearsals, and easy to cross. For live it is the endpoint's.
+
+**AND SO ARE THE TEST AND LIVE ONES, WHICH DECIDES HOW THIS WHOLE
+SEQUENCE RUNS.** There is ONE deployment of `stripe-webhook` and it
+reads ONE secret:
+
+```ts
+const signingSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET") || "";
+…
+const expected = await signStripePayload(signingSecret, sig.t, raw);
+```
+
+Test mode and live mode issue different signing secrets for the same
+endpoint URL, so **the two cannot both verify at once** — whichever
+secret is not in the environment has its deliveries rejected as
+unsigned, which looks identical to a forged one. So this is not
+"configure both and they coexist": run test mode end to end, then swap
+BOTH secrets to live together. The live endpoint may exist from the
+start; it simply will not verify until its secret is the one in place.
+
+The alternative — accepting a list of secrets and trying each — is not
+built, deliberately. It would mean a function that verifies against a
+secret nobody intended to be live, and the whole point of verify-before-
+parse is that exactly one key is authoritative at a time.
 
 ## 7. Deploy the Edge Functions
 
