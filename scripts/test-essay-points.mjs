@@ -234,6 +234,53 @@ test("the quality control is printed beside the refusals", () => {
   assert.match(src, /quote variety/);
 });
 
+test("THE SYNTHETIC PAIR IS A FIXTURE AND SAYS SO — a self-authored recall check flatters by construction", () => {
+  /* The enum, the essay and the checker have one author. A number off
+     that pair cannot say whether the enum covers the faults real
+     essays have; the 32 ASAP essays can, because nobody who wrote
+     them had heard of this schema. The README has to lead with that
+     rather than bury it, or somebody quotes a recall figure from it. */
+  const readme = read("fixtures/essay-feedback/README.md");
+  assert.match(readme, /a fixture, not evidence/i);
+  assert.match(readme, /closed loop/i);
+  assert.match(readme, /ASAP essays are the measurement/i);
+  /* And the planted ground truth is enumerated, or a run over it can
+     only be read for vibes. */
+  for (const d of ["contradiction", "undefined-term", "unattributed-source", "off-criterion"]) {
+    assert.ok(readme.includes(d), `the planted-fault table does not name ${d}`);
+  }
+  /* The half that makes it worth having: faults the enum has NO value
+     for, so the schema's own narrowness is testable. */
+  assert.match(readme, /the enum has NO value for/i);
+});
+
+test("the fixture's essay and rubric exist and are long enough to measure", () => {
+  const essay = read("fixtures/essay-feedback/essay.txt");
+  const rubric = read("fixtures/essay-feedback/rubric.txt");
+  const words = (s) => s.trim().split(/\s+/).length;
+  assert.ok(words(essay) >= 400, `the fixture essay is ${words(essay)} words; too short to carry nine planted faults`);
+  assert.ok(words(rubric) >= 60, "the rubric must be a real marking scheme, not a line");
+  /* The planted Thompson borrowing, unmarked on purpose — if somebody
+     "tidies" it into a quotation the unattributed-source fault
+     disappears and the table above becomes wrong. */
+  assert.match(essay, /present at its own making/);
+  assert.ok(!/["\u201C]present at its own making/.test(essay), "the unattributed borrowing was turned into a quotation, removing the planted fault");
+});
+
+test("THE QUALITY JUDGEMENT IS RECORDED AS OPEN, with what would answer it", () => {
+  /* It is the one question none of the measurement touches, and the
+     failure mode is it quietly getting folded into the numbers that
+     ARE available. */
+  const doc = read("ESSAY-FEEDBACK.md");
+  assert.match(doc, /OPEN, AND IT STAYS OPEN/);
+  assert.match(doc, /before it ships to students/i);
+  assert.match(doc, /STILL OPEN as of/);
+  /* And the two questions are kept apart, with different evidence and
+     different deadlines. */
+  assert.match(doc, /Does the structure stop ghostwriting/i);
+  assert.match(doc, /before the endpoint is built/i);
+});
+
 test("npm test runs this file", () => {
   assert.match(JSON.parse(read("package.json")).scripts.test, /test-essay-points\.mjs/);
 });

@@ -504,12 +504,70 @@ the same lesson this project keeps relearning:
   the way the summariser's depth was (+189% words per key point with the
   ceiling untouched) — and only then the ceiling.
 
+## OPEN, AND IT STAYS OPEN — the quality judgement (Jared, 17 September 2026)
+
+> **Is the feedback any good?** Nothing measured so far answers that,
+> and nothing measured so far was trying to.
+
+**THE SEARCH FOR AN EXEMPLAR FAILED AND THE WORK PROCEEDS ANYWAY.**
+No annotated Australian university essay with its mark and its
+criteria could be found — UC's study-help material carries none, and
+public sources came up empty. That is a blocker for the QUALITY
+question and for nothing else, so the mechanism work is unblocked with
+a synthetic pair (`fixtures/essay-feedback/`) and this question is
+recorded rather than quietly folded into the numbers that ARE
+available.
+
+**THE TWO QUESTIONS HAVE DIFFERENT EVIDENCE AND DIFFERENT DEADLINES**,
+and keeping them apart is the whole point of writing this down:
+
+| | answered by | due |
+|---|---|---|
+| Does the structure stop ghostwriting? | the two-arm run over the 32 ASAP essays | before the endpoint is built |
+| Is the feedback worth 3 credits? | a person reading output beside a real mark | **before it ships to students** |
+
+**WHY NOT BEFORE THE MECHANISM IS MEASURED.** A quality judgement made
+against a mechanism that does not hold is a judgement about output
+nobody would ship — the constrained prompt exists to be refused into
+shape, and reading its prose before the operating characteristic says
+whether the shape works is reading a draft. If the structure fails,
+the feedback's quality is moot; if it holds, the quality question is
+asked of output produced under the rules that will actually govern it.
+
+**WHAT WOULD ANSWER IT**, so nobody has to reconstruct this later:
+
+- one real essay a student submitted, with the criteria it was marked
+  against and the mark it received;
+- the constrained arm run over it, at whatever thresholds the ASAP run
+  settles on;
+- Jared or Grace reading the points beside that mark and answering:
+  would this have helped, and is any of it wrong?
+
+**THE SYNTHETIC PAIR CANNOT SUBSTITUTE**, and its own README says so
+in the first paragraph: the enum, the essay and the checker have one
+author, so recall against it is flattering by construction. It buys
+text that may be SHOWN — the ASAP runs are redacted and a redacted run
+gives nothing to look at when something seems wrong — and that is all
+it buys.
+
+**WHAT IT CAN HONESTLY PRODUCE** is a finding about the SCHEMA rather
+than about any essay: faults are planted that the enum has no value
+for, including the largest one in the fixture (the rubric asks 2,000
+words, the essay is ~500). If the constrained arm invents values for
+those rather than using `off-criterion`, the enum is too narrow and
+needs widening before anything ships. That is a claim about our own
+design, which a fixture we wrote is allowed to make.
+
+---
+
 ## What this document cannot answer
 
 - **Whether the model can grade against a rubric well enough to be worth
   3 credits.** Nothing here has called a provider. That needs a real
   essay, a real rubric, and Jared or Grace reading the output beside a
-  mark the essay actually got.
+  mark the essay actually got. **STILL OPEN as of 17 September 2026** —
+  no exemplar found; see the section directly above for what would
+  answer it and when it is due.
 - **Whether the no-writing constraint holds in practice.** The mechanism
   is sound; the window is not measured, and a model that evades it in
   some way nobody predicted is exactly what a first run would show.
