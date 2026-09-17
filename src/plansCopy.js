@@ -94,9 +94,22 @@ export function resetLine(tier) {
 
 /** The disclosures, in the order they are shown. */
 export const DISCLOSURES = {
+  /* "FROM YOUR STORE ACCOUNT" WAS FALSE ON THE WEB, and it is the same
+     drift `managedByStoreLine` below was written to fix — a flat
+     sentence about who handles your subscription, written when the two
+     stores were the only way to buy. On the web you cancel in Stripe's
+     billing portal and no store is involved, which is what Terms
+     section 5 has said all along.
+
+     THE FIX IS TO DROP THE PLATFORM CLAIM, not to make this string
+     platform-aware. Where to cancel is already answered per platform
+     twice over — `managedByStoreLine` on this same panel, and the
+     `data-web-manage` control that opens the portal — so a third
+     answer here is a third thing to keep true. What is left is a
+     sentence that is true on every platform. */
   autoRenew:
     "Subscriptions renew automatically at the end of each period until you cancel. " +
-    "You can cancel any time from your store account, and you keep access until the period you have paid for ends.",
+    "You can cancel any time, and you keep access until the period you have paid for ends.",
   noRollover: "Unused credits don't roll over. Each period starts fresh at the full amount.",
   refund:
     "If a subscription is refunded, the plan ends straight away and goes back to Free. " +

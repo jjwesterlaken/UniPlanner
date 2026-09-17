@@ -507,6 +507,158 @@ async function run() {
     assert.ok(html.includes(links.APPLE_EULA_URL), "the Terms don't link the same Apple licence URL the app links");
   });
 
+  await test("\"A SMALL PORTION\" IS A NUMBER THE SERVER CAN ANSWER, in both documents", () => {
+    /* THE POLICY IS APPLIED BY HAND FROM support@, so the threshold has
+       to be checkable rather than arguable — and the moment it is a
+       number in a public document it is a promise, which puts it under
+       the same rule as every other figure in the Terms: re-derived from
+       credits.ts, never typed.
+
+       THE SPLIT OF SOURCES IS THE POINT. The 10% is a POLICY decision
+       and its home is the document, so it is parsed OUT of the document
+       rather than restated here — a constant named REFUND_FRACTION in
+       this file would be the ledger's first entry wearing a percentage.
+       The allowances are CODE. Neither side is retyped, and the credit
+       figures are the product of the two.
+
+       AND THE ALLOWANCE COMES FROM credits.ts, NOT FROM THE BROWSER
+       MIRROR, which the first version of this test got wrong — it read
+       `allowanceForTier` out of `src/aiTextLimits.js` while its own
+       comment claimed credits.ts, and the mutation that proved it was
+       changing the SERVER's `ai: 900` and watching this pass. The
+       document's figure has to follow the number the server ENFORCES;
+       a mirror is one file further from that.
+
+       IT ALSO CLOSES A GAP THAT WAS ALREADY THERE. The mirror-equality
+       guard in test-ai-notes.mjs compares `MONTHLY_CREDITS_LIMIT`,
+       which is `MONTHLY.ai` alone — so `ai_max`'s 3,000 has never been
+       asserted equal to the server's. Both are compared here, over the
+       derived tier list, so a third paid tier inherits it. */
+    const terms = prose("terms.html");
+    const support = prose("support.html");
+
+    const creditsTs = fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/credits.ts"), "utf8");
+    const table = creditsTs.match(/const MONTHLY: Record<string, number> = \{([^}]*)\}/);
+    assert.ok(table, "the MONTHLY table was not found in credits.ts — this guard is reading the wrong shape");
+    const enforced = new Map([...table[1].matchAll(/(\w+)\s*:\s*(\d+)/g)].map((m) => [m[1], Number(m[2])]));
+    assert.ok(enforced.size >= 2, `only ${enforced.size} tiers parsed out of credits.ts — the parse is wrong, not the table`);
+
+    const pct = terms.match(/no more than (\d+)% of one month's credits/i);
+    assert.ok(pct, "the Terms no longer define \"a small portion\" as a percentage of a month's credits");
+    const fraction = Number(pct[1]) / 100;
+    assert.ok(fraction > 0 && fraction < 1, `the refund fraction parsed as ${pct[1]}%, which is not a portion`);
+
+    /* THE PAID TIERS, DERIVED. A tier added later is either given a
+       threshold or goes red; the trial tiers are excluded because there
+       is no first payment to refund on one. */
+    const paid = TIERS.filter((t) => allowanceForTier(t).perMonth);
+    assert.ok(paid.length >= 2, `only ${paid.length} paid tiers found — this sweep reads too little`);
+
+    const expected = new Map();
+    for (const tier of paid) {
+      const server = enforced.get(tier);
+      assert.ok(server, `credits.ts has no monthly allowance for the paid tier "${tier}"`);
+      /* THE MIRROR IS CHECKED HERE TOO, for every paid tier rather than
+         for `ai` alone: the document's figure is only a true promise if
+         the screen and the server agree about what it is a tenth of. */
+      assert.equal(
+        allowanceForTier(tier).credits,
+        server,
+        `the browser mirror says ${tier} gets ${allowanceForTier(tier).credits} credits and the server enforces ${server}`
+      );
+      expected.set(tier, Math.round(fraction * server));
+    }
+    /* DISTINCT, or one number quoted twice would satisfy the whole
+       sweep — the two tiers differ by design and the thresholds must
+       too. */
+    assert.equal(new Set(expected.values()).size, paid.length, `two tiers share a threshold: ${[...expected].join(", ")}`);
+
+    for (const [tier, threshold] of expected) {
+      const name = TIER_NAMES[tier];
+      assert.ok(name, `no display name for the paid tier "${tier}"`);
+      for (const [doc, text] of [["Terms", terms], ["support page", support]]) {
+        assert.ok(
+          new RegExp(`\\b${threshold}\\b`).test(text),
+          `the ${doc} never states ${name}'s refund threshold of ${threshold} credits ` +
+            `(${pct[1]}% of ${enforced.get(tier)}) — a figure somebody is applying by hand`
+        );
+        assert.ok(text.includes(name), `the ${doc} never names the ${tier} plan in the refund rule`);
+      }
+    }
+
+    /* THE TWO DOCUMENTS MUST AGREE ON THE WINDOW, because the support
+       page is what a student reads and the Terms are what they are
+       pointed at. Both halves parsed, not one asserted and the other
+       assumed. */
+    for (const [doc, text] of [["Terms", terms], ["support page", support]]) {
+      assert.match(text, /within 14 days/i, `the ${doc} does not state the 14-day window`);
+      assert.match(
+        text,
+        new RegExp(`${pct[1]}%`),
+        `the ${doc} does not quote the same ${pct[1]}% the Terms define`
+      );
+    }
+  });
+
+  await test("THE REFUND WINDOW IS AN ADDITION, and does not swallow the cases that have no window", () => {
+    /* THE CONTRADICTION THIS EXISTS FOR. A no-fault 14-day window reads
+       naturally as "and not otherwise", which would QUIETLY NARROW two
+       promises that were already in this document: that we refund when
+       something did not work, and that we refund a renewal charged
+       after a cancellation or a payment taken twice. Neither has a time
+       limit and neither has a usage limit.
+
+       Worse, under the Australian Consumer Law a representation that a
+       guarantee is limited is itself actionable — so the risk is not
+       only that we treat a student unfairly, it is that the document
+       becomes the problem. The ACL paragraph therefore comes FIRST and
+       says the limits below are additional, and the fault cases are
+       asserted to survive alongside the window. */
+    const text = prose("terms.html");
+
+    /* The ACL, stated as unlimited rather than merely mentioned — the
+       checklist test already proves the phrase is present, so what is
+       added here is that it is not quietly bounded. */
+    assert.match(
+      text,
+      /no time limit and no usage limit/i,
+      "the Terms no longer say the consumer guarantees are unbounded, so the 14 days reads as a cap on them"
+    );
+    assert.match(
+      text,
+      /on top of\b[\s\S]{0,60}never instead of|in addition to/i,
+      "the Terms no longer say the refund offer is on top of the consumer guarantees rather than instead of them"
+    );
+
+    /* THE FAULT CASES, EXPLICITLY UNBOUNDED. This is the sentence that
+       stops the window from being read as the whole policy. */
+    assert.match(
+      text,
+      /not limited by the 14 days/i,
+      "nothing says the something-went-wrong refund is unlimited by the window — the new offer has narrowed an older promise"
+    );
+    assert.match(
+      text,
+      /unreasonably refuse a refund where something did not work/i,
+      "the fault-based refund promise is gone"
+    );
+
+    /* RENEWALS ARE QUALIFIED, NOT FLATLY EXCLUDED. "Renewals aren't
+       refunded" on its own contradicts the promise directly above it
+       about a renewal charged after a cancellation — and a blanket
+       no-refund statement is the shape the ACL treats as misleading. */
+    assert.match(
+      text,
+      /renewals are not refunded as a matter of course/i,
+      "the Terms state a flat renewals-are-never-refunded rule, which contradicts the double-charge promise"
+    );
+    assert.match(
+      text,
+      /after\b[\s\S]{0,80}already cancelled/i,
+      "the Terms no longer promise a refund for a renewal charged after a cancellation"
+    );
+  });
+
   await test("the Terms do not promise a refund Apple and Google will not give us", () => {
     /* The trap in writing this section is offering a blanket refund. We
        cannot refund a purchase we never took payment for, and promising
@@ -519,8 +671,29 @@ async function run() {
       "the Terms don't say store purchases are refunded by the store"
     );
     /* And the web half must NOT be disclaimed away, or the section is
-       one-sided in the direction that suits us. */
-    assert.match(text, /can be refunded by us/i, "the Terms don't say we refund what we did charge for");
+       one-sided in the direction that suits us.
+
+       THIS PIN WAS THE PHRASE "can be refunded by us" AND THE REWRITE
+       BROKE IT — the ledger's first entry, for the umpteenth time: a
+       guard pinned to the writing cannot survive the writing being
+       improved, and the claim was true throughout. What is asserted now
+       is the CLAIM, in two halves that a one-sided document cannot
+       satisfy: we refund a web payment OURSELVES, and we say so as a
+       thing we will do rather than a thing we might consider. */
+    assert.match(
+      text,
+      /\bwe (will )?refund\b/i,
+      "the Terms never say WE refund anything — the section is now only about what the stores do"
+    );
+    assert.match(
+      text,
+      /we will refund your first payment in full/i,
+      "the Terms don't commit to refunding a payment we took ourselves"
+    );
+    /* THE ASYMMETRY IS THE WHOLE POINT, so both directions are named:
+       the stores refund theirs, we refund ours. A document with only
+       the first half is the brush-off this test exists to prevent. */
+    assert.match(text, /not by\s+us/i, "the store half of the asymmetry is gone");
   });
 
   await test("the canonical URLs are the extensionless form Pages actually serves", () => {
