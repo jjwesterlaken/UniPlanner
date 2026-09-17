@@ -20,7 +20,11 @@
 import { corsHeaders, jsonResponse } from "../ai-notes/_shared/cors.ts";
 import { getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
-import { APP_URL, stripeRequest } from "../_shared/stripe.ts";
+import {
+  APP_URL,
+  stripeFailureCode,
+  stripeRequest,
+} from "../_shared/stripe.ts";
 
 const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra, "billing-portal"));
 // deno-lint-ignore no-explicit-any
@@ -72,7 +76,7 @@ export async function handle(req: Request): Promise<Response> {
     });
     if (!session.ok) {
       logFailure(stage, session.error);
-      return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+      return jsonResponse({ ok: false, code: stripeFailureCode(session) }, 503);
     }
     const url = String(session.data.url || "");
     if (!url.startsWith("https://")) {

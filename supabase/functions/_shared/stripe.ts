@@ -370,8 +370,57 @@ export function invoiceSubscriptionOf(
  * indistinguishable from one over a partial refund of a hardware
  * invoice — and those need different fixes.
  */
+/**
+ * WHICH INVOICE A CHARGE PAID — and `charge.invoice` is not the answer
+ * on the version we pin.
+ *
+ * **THE BUG THIS EXISTS FOR, live on 18 September 2026.** Every real
+ * subscription refund ended at `not_an_invoice`, answered 200, and
+ * changed nothing: the tier stayed paid on a refunded subscription.
+ * `refundEndsSubscription` read `charge.invoice`, and from
+ * **2025-03-31.basil** a Charge no longer carries one — the link from a
+ * payment to its invoice moved to the **InvoicePayment** object. We pin
+ * `2026-04-22.dahlia`, so that field has been absent on every delivery
+ * since the endpoint was created, and the confirmed live payload has no
+ * `invoice` key at all.
+ *
+ * SO THIS IS THE FIELD-MOVE LESSON FOR THE THIRD TIME, and the third
+ * one arrived inside the commit that cited the second. #107 added
+ * `invoiceSubscriptionOf` to read `invoice.subscription` from both
+ * places, with a comment calling it "the field-move lesson applied
+ * rather than re-learned" — while the field one level UP, the one that
+ * gets you to the invoice in the first place, had already moved and the
+ * fixture invented it. **The lesson was applied to the field being
+ * thought about, not to the field being read.**
+ *
+ * THE LEGACY FIELD IS STILL READ FIRST, for the reason `periodEndOf`
+ * keeps its fallback: what is confirmed is what this PINNED version
+ * sends today, and a pin is a thing somebody changes. An observation
+ * tells you which branch is live, never that the other one is dead.
+ */
+export function invoiceIdForCharge(
+  charge: Record<string, unknown> | null | undefined,
+  invoicePayments: Record<string, unknown> | null | undefined
+): { invoiceId: string; source: "charge" | "invoice_payments" | "absent" } {
+  const legacy = (charge ?? {})["invoice"];
+  if (typeof legacy === "string" && legacy) return { invoiceId: legacy, source: "charge" };
+
+  /* The list endpoint's shape: `{ data: [ { invoice, payment, status } ] }`.
+     ONLY THE FIRST is taken — the query is filtered to one payment
+     intent and limited to one row, so a second would be a different
+     payment and answering with it would cancel a subscription the
+     refund was not about. */
+  const rows = ((invoicePayments ?? {})["data"] ?? []) as Array<Record<string, unknown>>;
+  const first = Array.isArray(rows) ? rows[0] : undefined;
+  const fromPayment = (first ?? {})["invoice"];
+  if (typeof fromPayment === "string" && fromPayment) return { invoiceId: fromPayment, source: "invoice_payments" };
+
+  return { invoiceId: "", source: "absent" };
+}
+
 export function refundEndsSubscription(
   charge: Record<string, unknown> | null | undefined,
+  invoiceId: string,
   invoice: Record<string, unknown> | null | undefined
 ): {
   subscriptionId: string;
@@ -385,14 +434,33 @@ export function refundEndsSubscription(
      lookup at all. */
   if ((charge ?? {})["refunded"] !== true) return { ...none, reason: "partial_refund" };
 
-  const invoiceId = (charge ?? {})["invoice"];
-  if (typeof invoiceId !== "string" || !invoiceId) return { ...none, reason: "not_an_invoice" };
+  /* THE INVOICE ID IS NOW AN ARGUMENT rather than a field of the
+     charge, because getting it takes a second request on this API
+     version. `invoiceIdForCharge` is what answers it. */
+  if (!invoiceId) return { ...none, reason: "not_an_invoice" };
 
   const { subscriptionId, source } = invoiceSubscriptionOf(invoice);
   if (!subscriptionId) return { ...none, reason: "not_a_subscription", invoiceSource: source };
 
   return { subscriptionId, reason: "ends_subscription", invoiceSource: source };
 }
+
+/** The list query that finds an invoice from the payment intent that paid it. */
+export const invoicePaymentsQuery = (paymentIntentId: string) =>
+  `/invoice_payments?payment[type]=payment_intent&payment[payment_intent]=${encodeURIComponent(paymentIntentId)}&limit=1`;
+
+/**
+ * The code a caller should answer with when a Stripe call failed.
+ *
+ * A PERMISSION ERROR IS NOT AN OUTAGE and must not read as one. Both
+ * still return 5xx — for the webhook because the event must not be
+ * lost, and a retry after somebody fixes the key is exactly the right
+ * behaviour — but the CODE says which, so "students pay and nothing
+ * happens" is distinguishable in a log from "Stripe was briefly
+ * unreachable" without reading the message.
+ */
+export const stripeFailureCode = (res: { forbidden?: boolean }) =>
+  res.forbidden ? "stripe_permission_denied" : "upstream_unavailable";
 
 /* ---------- talking to Stripe ---------- */
 
@@ -434,7 +502,10 @@ export async function stripeRequest(
     idempotencyKey?: string;
     fetchImpl?: typeof fetch;
   }
-): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; missing?: true; status?: number; error: unknown }> {
+): Promise<
+  | { ok: true; data: Record<string, unknown> }
+  | { ok: false; missing?: true; forbidden?: boolean; status?: number; error: unknown }
+> {
   try {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${secretKey}`,
@@ -450,7 +521,32 @@ export async function stripeRequest(
     });
     if (res.status === 404) return { ok: false, missing: true, status: 404, error: new Error("Stripe: not found") };
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, status: res.status, error: new Error(`Stripe returned ${res.status}`) };
+    if (!res.ok) {
+      /* STRIPE'S OWN MESSAGE, CARRIED RATHER THAN DISCARDED. This line
+         used to throw the body away and substitute `Stripe returned
+         403`, and the body is where the remedy lives: a permission
+         error names the grant to enable, in as many words
+         ("Enabling Charges and Refunds Read ('charge_read')
+         permissions on this key would allow this request to
+         continue"). That sentence was already parsed and already in
+         memory, and dropping it cost a live diagnosis that needed the
+         dashboard instead.
+         It goes into the Error rather than a new field so every
+         existing `logFailure` picks it up with no caller change. */
+      const detail = (((data as { error?: { message?: unknown } }).error || {}).message) ?? "";
+      const suffix = typeof detail === "string" && detail ? `: ${detail}` : "";
+      return {
+        ok: false,
+        status: res.status,
+        /* 401 and 402/403 are OUR CONFIGURATION, not an outage, and a
+           retry cannot fix either — so they are told apart here rather
+           than collapsed into the same shape as a timeout. Same
+           three-outcomes discipline this function already applies to
+           404. */
+        forbidden: res.status === 401 || res.status === 403,
+        error: new Error(`Stripe returned ${res.status}${suffix}`),
+      };
+    }
     return { ok: true, data: data as Record<string, unknown> };
   } catch (error) {
     return { ok: false, error };
