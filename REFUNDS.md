@@ -75,6 +75,42 @@ Compare against the threshold in the table above for their tier. At or under
 it, refund. Over it, the 14-day offer does not apply — but read step 5
 before saying no.
 
+## The path a refund takes, PROVEN LIVE
+
+Confirmed end to end on 18 September 2026, on the first real refund the
+account has taken. Recorded because two of the three hops turned out to
+use the newer of two possible shapes, and neither was answerable from
+this repository until a delivery said so.
+
+```
+charge.refunded
+  → GET /charges/{id}                      refunded: true
+  → GET /invoice_payments?payment[...]     invoice_id_source: invoice_payments
+  → GET /invoices/{id}                     invoice_source: parent
+  → GET /subscriptions/{id}                status: active
+  → DELETE /subscriptions/{id}             status: canceled
+  → apply                                  before: ai, after: free
+```
+
+The evidence line, which is the one to look for in the function log:
+
+```json
+{"stage":"refund_ends_subscription","invoice_id_source":"invoice_payments","invoice_source":"parent"}
+```
+
+**BOTH SOURCES ARE THE NEWER SHAPE, and both legacy fields are dead on
+this pinned version.** `charge.invoice` is gone (2025-03-31.basil moved
+the link to InvoicePayment) and `invoice.subscription` is gone
+(the subscription moved under `parent.subscription_details`). The code
+still reads both legacy fields FIRST, because what is confirmed is what
+`2026-04-22.dahlia` sends TODAY and a pin is a thing somebody changes —
+an observation tells you which branch is live, never that the other one
+is dead.
+
+**Stripe then sends its own `customer.subscription.deleted`** for the
+cancellation we just made, which re-derives `free` and writes the same
+value. That is idempotent by design and is not a second decision.
+
 ## 4. Refund it, in this order
 
 1. **Refund the charge in Stripe** (dashboard → the payment → Refund).

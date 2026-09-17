@@ -57,6 +57,30 @@ Once, in the Stripe dashboard. Stripe refuses to create a portal
 session until it has been set up, and that failure only appears when a
 real student taps **Manage**.
 
+**CANCEL AT PERIOD END, AND NOTHING IN THE CODE PINS IT.**
+`billing-portal` sends only `customer` and `return_url` — no
+`configuration` parameter — and nothing in the repository POSTs to
+`/v1/billing_portal/configurations`. So whether cancelling in the
+portal ends the subscription immediately or at the end of the paid
+period is **entirely this dashboard setting**.
+
+**Observed to be "at period end", 18 September 2026**, and worth
+recording because the inference is not the obvious one. A portal
+cancellation wrote `canceled_at` 08:51 UTC and the subscription was
+still ACTIVE thirteen minutes later, when a refund found it and ended
+it; the `ended_at` of 09:04:53 in that `customer.subscription.deleted`
+is **our own DELETE**, not the portal's. What proves the setting is the
+gap, not the end time.
+
+**That matters because two documents promise it.** Terms section 5 and
+the panel's `autoRenew` disclosure both say a student keeps access
+until the period they have paid for ends — a promise resting on a
+dropdown that no test can see. Pinning it by passing `configuration`
+explicitly is recorded as an option and NOT taken: it would mean
+creating and versioning a portal configuration in code, and the
+cheaper half is to verify this setting whenever the portal is touched.
+Verify it here, at this step.
+
 ## 4. Set the Terms of Service URL
 
 Stripe → Settings → Public details → **Terms of service**:
@@ -122,6 +146,47 @@ memory.
 PARTIAL refunds too, and the handler acts only on a FULL refund of a
 SUBSCRIPTION invoice — so subscribing to it cannot end a plan somebody
 is still paying for.
+
+## 5a. The restricted key needs SEVEN grants, and three of them are for refunds
+
+If `STRIPE_SECRET_KEY` is a restricted key (`rk_live_…`) rather than a
+full `sk_live_…`, it needs every grant the code's calls require — and
+the refund path alone makes four calls across three resources.
+
+| Editor row | Level | Which calls need it |
+|---|---|---|
+| Prices | Read | the checkout's price lookup by `lookup_key` |
+| Customers | Write | creating the Stripe customer at first checkout |
+| Checkout Sessions | Write | starting a checkout |
+| Customer portal | Write | opening the billing portal |
+| **Charges and Refunds** | **Read** | `GET /charges/{id}` — the first call of the refund path |
+| **Invoices** | **Read** | `GET /invoice_payments` and `GET /invoices/{id}` |
+| **Subscriptions** | **Write** | the subscription read AND the `DELETE` that cancels it |
+
+**THE LAST THREE WERE MISSING AND IT COST A LIVE REFUND.** The first
+real refund taken on the account 403'd three times, answered 503, and
+Stripe retried for three days while the tier stayed paid — a test
+purchase rather than a student's, which is the only reason it was
+cheap. Stripe's own message named the remedy
+exactly — *"Enabling Charges and Refunds Read ('charge_read')
+permissions on this key would allow this request to continue"* — and
+the code discarded the body before logging it, so the diagnosis needed
+the dashboard instead. Both halves are fixed; the grants still have to
+be right.
+
+**ADD ALL THREE AT ONCE.** Each one only buys a single stage: with
+Charges alone the next retry 403s on `invoice_payments`, and with
+Invoices too it 403s on the `DELETE`. Three round trips through a
+student's refund window to learn something a table could have said.
+
+**Subscriptions must be WRITE, not Read.** Read covers the lookup and
+not the cancellation, and the cancellation is the entire point — a
+refund that does not end the plan leaves a refunded student with a paid
+tier, which is what the panel promises does not happen.
+
+A permission error now answers `stripe_permission_denied` rather than
+`upstream_unavailable`, so it is distinguishable in a log from an
+outage without reading the message.
 
 ## 6. Set the two secrets
 

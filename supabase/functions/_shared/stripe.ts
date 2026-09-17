@@ -322,12 +322,19 @@ export function periodEndOf(
  * a month of credits — silent, and in the direction that costs us
  * money rather than erroring.
  *
- * WHICH ONE `2026-04-22.dahlia` SENDS IS NOT ANSWERABLE FROM THIS
- * REPOSITORY, so `source` is logged on every refund, the same
- * arrangement that answered the period question from a live delivery.
- * The classic field is preferred when both are present: it is the one
- * Stripe has always meant, and a version that stops sending it leaves
- * the nested form to answer.
+ * IT WAS NOT ANSWERABLE FROM THIS REPOSITORY, so `source` is logged on
+ * every refund — the arrangement that answered the period question from
+ * a live delivery. **AND IT CAME BACK: `parent`.** Confirmed on the
+ * first real refund, 18 September 2026, which logged
+ * `"invoice_source":"parent"`. So on this pinned version the classic
+ * `invoice.subscription` never answers, exactly as `charge.invoice`
+ * never answers one hop earlier — and `test-stripe.mjs`'s default
+ * invoice fixture is the `parent` shape for that reason.
+ *
+ * The classic field is still preferred when present: it is the one
+ * Stripe has always meant, and a version that stops sending the nested
+ * form leaves it to answer. An observation tells you which branch is
+ * live, never that the other one is dead.
  */
 export function invoiceSubscriptionOf(
   invoice: Record<string, unknown> | null | undefined
