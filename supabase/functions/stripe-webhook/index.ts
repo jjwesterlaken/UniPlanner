@@ -49,6 +49,7 @@
 import { corsHeaders, jsonResponse } from "../ai-notes/_shared/cors.ts";
 import { getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
+import { recordFailure } from "../_shared/failureLog.ts";
 import { applyEntitlement, isOurUserId } from "../_shared/entitlement.ts";
 import {
   invoiceIdForCharge,
@@ -65,7 +66,32 @@ import {
 
 const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra, "stripe-webhook"));
 // deno-lint-ignore no-explicit-any
-const logFailure = (stage: string, err: any, extra: Record<string, unknown> = {}) =>
+/* ---- WHICH FAILURES ARE RECORDED, AND WHY NOT ALL OF THEM ----
+
+   `recordFailure` writes a row to `function_errors` so the daily
+   digest can see it. On THIS function that has to be gated, and the
+   test that caught it is the one named "REFUSED, having done nothing".
+
+   This endpoint is deployed with `--no-verify-jwt`, because a payment
+   provider cannot mint a Supabase JWT — so anybody at all can POST to
+   it, and a forged delivery is refused by the signature check. If a
+   refused delivery wrote a row, an unauthenticated caller could insert
+   one row per request: disk, and a digest so full of noise that the
+   real failure is buried in it. "Having done nothing" is a property
+   worth keeping.
+
+   So a failure BEFORE the signature verifies is printed and not
+   recorded, and one after it is both. The flag is per REQUEST, set
+   inside the handler — module-level state would be shared across
+   concurrent requests in one isolate, which is how a forged delivery
+   would come to be recorded because a real one happened to be in
+   flight.
+
+   `env_check` is deliberately on the unrecorded side too, and it costs
+   nothing: with the environment missing, `getSupabaseAdmin()` cannot
+   build a client, so there was never going to be a row. */
+// deno-lint-ignore no-explicit-any
+const printFailure = (stage: string, err: any, extra: Record<string, unknown> = {}) =>
   console.error(failureLine(stage, err, extra, "stripe-webhook"));
 
 /* THE EVENTS THAT MEAN "GO AND LOOK". Everything else is recorded and
@@ -90,6 +116,12 @@ const ACTIONABLE = new Set([
 
 export async function handle(req: Request): Promise<Response> {
   let stage = "env_check";
+  /* See the note above printFailure: only a delivery whose signature
+     verified may write a row. */
+  let verified = false;
+  // deno-lint-ignore no-explicit-any
+  const logFailure = (stage: string, err: any, extra: Record<string, unknown> = {}) =>
+    verified ? recordFailure("stripe-webhook", stage, err, extra) : printFailure(stage, err, extra);
   try {
     const secretKey = Deno.env.get("STRIPE_SECRET_KEY") || "";
     const signingSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET") || "";
@@ -121,6 +153,8 @@ export async function handle(req: Request): Promise<Response> {
       logFailure(stage, new Error("signature did not verify over the raw body"));
       return jsonResponse({ ok: false, code: "unauthorized" }, 401);
     }
+
+    verified = true;
 
     /* ---- parse: only now, and only for routing ---- */
     stage = "parse";

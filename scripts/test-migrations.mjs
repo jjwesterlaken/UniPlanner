@@ -1251,6 +1251,7 @@ async function run() {
     "planner_data.user_id": "the auth user id, minted by Supabase rather than by anything in this repo",
     "client_errors.id": "gen_random_uuid() default on the column; the client never supplies one",
     "client_errors.user_id": "the auth user id when signed in, null when not — only ever copied from the session",
+    "function_errors.id": "gen_random_uuid() default on the column, and no client can write this table at all — anon and authenticated have no insert grant and no policy, so nothing outside the database ever mints one",
     "ai_notes.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
     "ai_notes_requests.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
     "ai_usage.user_id": "the auth user id, minted by Supabase and only ever copied from the session",

@@ -124,6 +124,16 @@ function makeWorld({ profiles = {}, events = {}, entitlements = {}, env = {}, st
         trace.push(`db:${name}.insert`);
         const row = Array.isArray(v) ? v[0] : v;
         writes.push({ table: name, op: "insert", values: row, filters: [] });
+        /* ONE TABLE PER STORE, and it had to be said out loud. This
+           model used to put EVERY insert into `events` regardless of
+           table, which was harmless while `billing_events` was the only
+           thing inserted — and the moment `recordFailure` started
+           writing `function_errors`, a recorded failure counted as a
+           recorded EVENT and "nothing was recorded" failed on a
+           function that had recorded nothing of the kind. A fake that
+           does not model table identity answers a question about one
+           table with another's rows. */
+        if (name !== "billing_events") return Promise.resolve({ data: row, error: null });
         if (Object.prototype.hasOwnProperty.call(events, row.id)) {
           return Promise.resolve({ data: null, error: { code: "23505", message: "duplicate key" } });
         }
@@ -431,6 +441,25 @@ const invoiceNoSubscription = () => ({ id: "in_1", object: "invoice", parent: nu
 
 const refundEvent = (over = {}) =>
   event({ id: over.id ?? "evt_refund", type: "charge.refunded", data: { object: charge(over.charge || {}) } });
+
+/* WRITES THAT CHANGE A STUDENT'S STANDING — everything except the
+   diagnostics table.
+
+   `recordFailure` writes a `function_errors` row on any failure AFTER
+   the signature verified, so an unscoped "it wrote nothing" would
+   forbid the daily digest from ever seeing the refusal the test is
+   about. The claim these tests make is that nothing about the
+   student's plan moved, so that is what they assert — paired, in each
+   case, with a POSITIVE assertion that the failure WAS recorded, so
+   the exclusion is not a hole.
+
+   The two PRE-AUTHENTICATION tests deliberately keep using `w.writes`
+   unfiltered, because there the claim really is that nothing at all
+   was written: this endpoint has no JWT verification, so an
+   unauthenticated caller must not be able to insert a row per
+   request. */
+const standingWrites = (w) => w.writes.filter((x) => x.table !== "function_errors");
+const recordedFailures = (w) => w.writes.filter((x) => x.table === "function_errors");
 
 async function run() {
   /* ---------- 1. the tier a subscription implies ---------- */
@@ -756,7 +785,8 @@ async function run() {
     w.restore();
     assert.ok(res.status >= 500, `answered ${res.status}, so Stripe will not retry and nobody will notice`);
     assert.equal(w.profiles[USER].tier, "ai_max", "a paying subscriber was downgraded because a price was not recognised");
-    assert.deepEqual(w.writes, [], "something was written for a subscription we could not price");
+    assert.deepEqual(standingWrites(w), [], "something was written for a subscription we could not price");
+    assert.ok(recordedFailures(w).length > 0, "an unrecognised price was refused without being recorded, so the digest would never see the missing lookup key");
   });
 
   await test("AN UNKNOWN PRICE IS A REFUSAL ONLY WHEN THERE IS SOMEBODY TO PROTECT", async () => {
@@ -804,7 +834,8 @@ async function run() {
 
     assert.ok(forSomebody.status >= 500, `a real subscriber on an unknown price: answered ${forSomebody.status}, so nobody is told to fix the dashboard`);
     assert.equal(somebody.profiles[USER].tier, "ai", "a paying subscriber was downgraded because a price was not recognised");
-    assert.deepEqual(somebody.writes, [], "something was written for a subscription we could not price");
+    assert.deepEqual(standingWrites(somebody), [], "something was written for a subscription we could not price");
+    assert.ok(recordedFailures(somebody).length > 0, "an unrecognised price was refused without being recorded, so the digest would never see the missing lookup key");
   });
 
   await test("THE ROW THAT LANDS carries the expiry, in the shape the live API sends", async () => {
@@ -971,7 +1002,8 @@ async function run() {
       w.restore();
       assert.ok(res.status >= 500, "a failed read must not be answered 2xx");
       assert.equal(w.profiles[USER].tier, "ai", "a paying student lost their tier because a request failed");
-      assert.deepEqual(w.writes, [], "something was written on an unknown read");
+      assert.deepEqual(standingWrites(w), [], "something was written on an unknown read");
+      assert.ok(recordedFailures(w).length > 0, "a failed Stripe read was not recorded, so the digest would never see it");
     }
   });
 

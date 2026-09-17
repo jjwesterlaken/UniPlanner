@@ -876,6 +876,17 @@ async function run() {
       privacy: /error report never\s+contains what you have written/i,
       deletion: /Error reports linked to your account/i,
     },
+    /* THE SERVER SIDE OF THE SAME THING, and the two must NOT read as
+       one. A client error report is LINKED to an account and deleted
+       with it; a function failure record carries no account identifier
+       at all (0022's header has the reasoning), so the deletion page has
+       to say that rather than list it as deleted. The two documents make
+       different promises about the two tables and both are true, which
+       is the ai_notes/ai_notes_requests distinction one pair over. */
+    function_errors: {
+      privacy: /record of the failure[\s\S]*?no identifier for\s+your account/i,
+      deletion: /record of failures on our own servers/i,
+    },
     /* A subscription record is OURS, about a transaction — not the
        student's content, and not something they can restore. Both
        documents have to say the two halves that a reader actually
@@ -1055,18 +1066,66 @@ async function run() {
   });
 
   await test("the deletion page's list matches what the code deletes", () => {
-    // Every row must correspond to something actually removed by
-    // delete_my_account_data(), the cascade, or the client-side audio step.
+    /* Every row must correspond to something actually removed by
+       delete_my_account_data(), the cascade, or the client-side audio
+       step.
+
+       AND THE OTHER DIRECTION, which this used to assume away: a table
+       with NO user_id column cannot be deleted by account, so for that
+       one the document must say it is NOT covered rather than promise
+       it is. `function_errors` is the first — it holds our own
+       diagnostics and carries no account identifier at all (0022's
+       header has the reasoning) — and this guard would have failed a
+       correct document while the wording was right, which is the
+       ledger's first entry in its usual costume.
+
+       Which branch a table takes is DERIVED from its own create
+       statement, not declared here, so the next table decides for
+       itself. */
     const text = prose("delete-account.html");
     const sql = migrationSql();
+    const notCoveredAt = text.search(/What is not covered/i);
+    assert.ok(notCoveredAt > 0, "the deletion page has no not-covered section, so the split below proves nothing");
+    const notCovered = text.slice(notCoveredAt);
+
+    let owned = 0;
+    let unowned = 0;
     for (const table of schemaTables()) {
       if (table === "planner_data") continue; // deleted dynamically, guarded in test-migrations.mjs
+      const create = sql.match(new RegExp(`create table (?:if not exists )?public\\.${table} \\(([\\s\\S]*?)\\n\\);`));
+      assert.ok(create, `public.${table} has no create statement this guard can read`);
+      const hasUserId = /\buser_id\b/.test(create[1]);
+
+      if (hasUserId) {
+        owned += 1;
+        assert.match(
+          sql,
+          new RegExp(`delete from public\\.${table} where user_id = uid`),
+          `nothing deletes public.${table}, but it names an account and the deletion page promises it`
+        );
+        continue;
+      }
+
+      unowned += 1;
+      /* NOT DELETED BY ACCOUNT — so it must be said, in the section
+         that exists for saying it. A table quietly missing from both
+         halves is the state this guard exists to refuse. */
+      assert.ok(
+        !new RegExp(`delete from public\\.${table} where user_id = uid`).test(sql),
+        `public.${table} is deleted by user_id but has no user_id column, which cannot both be true`
+      );
       assert.match(
-        sql,
-        new RegExp(`delete from public\\.${table} where user_id = uid`),
-        `nothing deletes public.${table}, but the deletion page promises it`
+        notCovered,
+        DOCUMENTED_AS[table].deletion,
+        `public.${table} cannot be deleted with an account, so the deletion page's "what is not covered" section has to say so`
       );
     }
+    /* Non-vacuity in both directions: a schema with no owned tables
+       would satisfy every assertion in the first branch, and one with
+       no unowned tables would satisfy every assertion in the second. */
+    assert.ok(owned >= 6, `only ${owned} account-owned tables found — the first branch is guarding almost nothing`);
+    assert.ok(unowned >= 1, "no table takes the not-covered branch, so that half of this guard is untested");
+
     assert.match(text, /lecture audio still being processed/i, "the audio step isn't listed");
     assert.match(sql, /delete from auth\.users/, "the auth user is no longer deleted");
   });

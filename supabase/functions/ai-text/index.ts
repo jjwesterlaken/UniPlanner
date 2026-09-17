@@ -26,7 +26,8 @@ import { corsHeaders, jsonResponse } from "../ai-notes/_shared/cors.ts";
 import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { readAllowance, billAllowance, checkPhotoPages, billPhotoPages } from "../_shared/allowance.ts";
 import { consentSetMatches, providerFingerprint } from "../_shared/aiProviders.js";
-import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
+import { stageLine } from "../ai-notes/diagnostics.js";
+import { recordFailure } from "../_shared/failureLog.ts";
 import { validateRequest, checkTextAllowance, allowanceFraction } from "./guards.js";
 import { buildMessages, parseTaskResult } from "./prompts.js";
 import { openaiTextAdapter } from "./openai.ts";
@@ -46,7 +47,7 @@ import {
 const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra, "ai-text"));
 // deno-lint-ignore no-explicit-any
 const logFailure = (stage: string, err: any, extra: Record<string, unknown> = {}) =>
-  console.error(failureLine(stage, err, extra, "ai-text"));
+  recordFailure("ai-text", stage, err, extra);
 
 const errorResponse = (stage: string, code: string, error: string, status: number) =>
   jsonResponse({ ok: false, code, stage, error }, status);

@@ -16,7 +16,8 @@ import { supabaseAdmin, getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { readAllowance, billAllowance } from "../_shared/allowance.ts";
 import { allowanceForTier, TIERS } from "../_shared/credits.ts";
 import { TRANSCRIPTION_PROVIDER_IDS, consentSetMatches, providerFingerprint } from "../_shared/aiProviders.js";
-import { requiredEnvNames, missingEnv, envPresence, failureLine, stageLine } from "./diagnostics.js";
+import { requiredEnvNames, missingEnv, envPresence, stageLine } from "./diagnostics.js";
+import { recordFailure } from "../_shared/failureLog.ts";
 import {
   checkRequestGuards,
   selectTranscriber,
@@ -66,7 +67,7 @@ const logStage = (stage: string, extra: Record<string, unknown> = {}) => console
 
 // deno-lint-ignore no-explicit-any
 const logFailure = (stage: string, err: any, extra: Record<string, unknown> = {}) =>
-  console.error(failureLine(stage, err, extra));
+  recordFailure("ai-notes", stage, err, extra);
 
 /** Error response that also carries the stage, for debugging. The user-facing `error` string is untouched. */
 const errorResponse = (stage: string, code: string, error: string, status: number) =>

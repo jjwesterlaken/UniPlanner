@@ -19,7 +19,8 @@
 
 import { corsHeaders, jsonResponse } from "../ai-notes/_shared/cors.ts";
 import { getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
-import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
+import { stageLine } from "../ai-notes/diagnostics.js";
+import { recordFailure } from "../_shared/failureLog.ts";
 import {
   APP_URL,
   stripeFailureCode,
@@ -29,7 +30,7 @@ import {
 const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra, "billing-portal"));
 // deno-lint-ignore no-explicit-any
 const logFailure = (stage: string, err: any, extra: Record<string, unknown> = {}) =>
-  console.error(failureLine(stage, err, extra, "billing-portal"));
+  recordFailure("billing-portal", stage, err, extra);
 
 export async function handle(req: Request): Promise<Response> {
   let stage = "env_check";
