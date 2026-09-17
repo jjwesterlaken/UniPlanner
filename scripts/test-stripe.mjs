@@ -1077,22 +1077,67 @@ async function run() {
     }
   });
 
-  await test("the client flag is OFF, and the client refuses before the network when it is", async () => {
-    assert.equal(flags.STRIPE_ENABLED, false, "web purchases are switched on — that is a decision, not a default");
+  await test("THE FLAG IS ON, AND THAT IS A RECORDED DECISION — 17 September 2026", async () => {
+    /* THIS TRIPWIRE HAS NOW FIRED FOR ITS INTENDED REASON. It read
+       `assert.equal(flags.STRIPE_ENABLED, false, "web purchases are
+       switched on — that is a decision, not a default")`, which is a
+       guard whose whole job is to make somebody stop and write down
+       why. So:
+
+       The switch-on order STRIPE-SWITCH-ON.md insists on was followed
+       and each step was observed rather than assumed — 0019 applied
+       with its UNIQUE constraint confirmed by name, the six live
+       prices created with their lookup keys, the Customer Portal
+       configured, the Terms URL present (account-wide, not per mode —
+       found by Stripe refusing the test-mode save), the live endpoint
+       created on Snapshot payload style at the API version this repo
+       pins, a restricted live key scoped to the five calls the code
+       actually makes, and a SIGNED delivery watched landing in
+       billing_events before anything was flipped.
+
+       That last one is the point of the ordering: a boolean saying
+       "on" beside an unset key is a button that fails after the
+       click, which is the worst of the three states. */
+    assert.equal(flags.STRIPE_ENABLED, true, "web purchases are switched off again — if that is intended, this test records the reversal");
+  });
+
+  await test("the client refuses before the network when DISABLED, whatever the flag currently says", async () => {
+    /* `enabled` is now passed EXPLICITLY. It used to come from the
+       module default, so this claim silently became a claim about the
+       flag's current value rather than about the client's behaviour —
+       and it broke when the flag flipped, which is the wrong reason
+       for a test about refusing to change. The behaviour is timeless;
+       the flag is not. */
     const client = await import(pathToFileURL(path.join(rootDir, "src/stripeClient.js")).href);
     let reached = false;
+    const spy = async () => {
+      reached = true;
+      return {};
+    };
     for (const call of [client.startCheckout, client.openPortal]) {
       await assert.rejects(
-        () => call({ token: "t", tier: "ai", duration: "monthly", fetchImpl: async () => { reached = true; return {}; } }),
+        () => call({ token: "t", tier: "ai", duration: "monthly", enabled: false, fetchImpl: spy }),
         (err) => err.code === "stripe_disabled"
       );
     }
     assert.equal(reached, false, "a disabled client still made a request");
-    /* And the gate is not ONLY the flag: signed out refuses too. */
+
+    /* And the gate is not ONLY the flag: signed out refuses too, with
+       the flag on. */
     await assert.rejects(
-      () => client.startCheckout({ token: "", tier: "ai", duration: "monthly", enabled: true, fetchImpl: async () => ({}) }),
+      () => client.startCheckout({ token: "", tier: "ai", duration: "monthly", enabled: true, fetchImpl: spy }),
       (err) => err.code === "unauthenticated"
     );
+    assert.equal(reached, false, "a signed-out client still made a request");
+
+    /* THE CONTROL. Every assertion above is an absence, and "the
+       client never calls fetch" is satisfied by a client that can
+       never call it at all. Enabled AND signed in must reach the
+       network, or the three refusals prove nothing. */
+    await client
+      .startCheckout({ token: "t", tier: "ai", duration: "monthly", enabled: true, fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, url: "https://checkout.stripe.com/x" }) }) })
+      .catch(() => {});
+    assert.equal(reached, false, "the control used the spy rather than its own fetch");
   });
 
   /* ---------- 9. source-level invariants ---------- */
