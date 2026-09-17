@@ -343,7 +343,7 @@ async function run() {
       if (id === "account") {
         assert.match(html, /data-plan-line/, "the Account tab rendered without the Plans panel at all");
         assert.match(html, /Study AI/, "the plan line does not name the tier the profiles read returned");
-        assert.match(html, /data-purchase-unavailable/, "web does not say where plans are bought");
+        assert.match(html, /data-web-purchase/, "web offers no way to pay, with STRIPE_ENABLED on and a session present");
         assert.doesNotMatch(html, /data-purchase-controls/, "the web build is showing purchase controls");
         assert.doesNotMatch(html, /data-package=/, "the web build is showing buyable packages");
         assert.match(html, /Privacy Policy/, "the panel does not link the privacy policy, which Apple requires on a subscription screen");
@@ -766,7 +766,11 @@ async function run() {
     await close();
     assert.deepEqual(errors, [], `the Account tab threw on web:\n        ${errors.join("\n        ")}`);
     assert.deepEqual(calls, [], `the store SDK was called on web: ${calls.join(", ")}`);
-    assert.match(html, /data-purchase-unavailable/, "web is not saying where plans are bought");
+    /* NON-VACUITY, and the marker moved with the flag rather than the
+       claim. "The SDK was never called" is satisfied by a page that
+       rendered nothing at all, so something web-specific has to be on
+       it. With Stripe on and a session, that is the checkout block. */
+    assert.match(html, /data-web-purchase/, "the web panel did not render, so an empty SDK trace proves nothing");
     assert.doesNotMatch(html, /data-package=/, "web is offering packages for sale");
     assert.doesNotMatch(html, /data-restore/, "web is offering to restore a purchase it cannot make");
   });
@@ -827,12 +831,21 @@ async function run() {
     assert.match(text, /Free/i, `the panel does not show the server's tier: "${text}"`);
   });
 
-  await test("WITH STRIPE SWITCHED OFF the web panel offers no way to pay, and still shows the tier", async () => {
-    /* PHASE 6, IN THE BROWSER. `STRIPE_ENABLED` is false, so this is
-       the state that ships: web and desktop show the plan READ-ONLY.
-       Two failures are being ruled out at once and they are opposite —
-       a checkout button that reaches an unconfigured server, and a
-       flag whose "off" state accidentally hid the plan itself.
+  await test("WITH STRIPE SWITCHED ON the web panel sells, and STILL never speaks to the store SDK", async () => {
+    /* PHASE 6 LIVE. The flag went true on 17 September 2026 after the
+       live secrets were configured and a signed delivery was watched
+       landing in billing_events — the order this project insists on,
+       because a boolean saying "on" beside an unset key is a button
+       that fails after the click.
+
+       THE CLAIM THAT DID NOT CHANGE IS THE IMPORTANT ONE. A web
+       purchase goes through Stripe Checkout, which is a fetch to our
+       own Edge Function — NOT through the RevenueCat plugin. So "the
+       store SDK is called exactly zero times on web" is as true with
+       the flag on as with it off, and it stays asserted here. If a
+       refactor ever routed a web purchase through the plugin this
+       goes red, which is the whole reason it is not deleted along with
+       the off-state assertions.
 
        Measured on the built bundle rather than by reading the flag,
        because the flag is one of three things that have to agree (the
@@ -843,13 +856,53 @@ async function run() {
     assert.deepEqual(errors, [], `the Account tab threw on web:\n        ${errors.join("\n        ")}`);
     assert.deepEqual(calls, [], `the store SDK was called on web: ${calls.join(", ")}`);
 
-    for (const marker of ["data-web-purchase", "data-web-plan", "data-web-manage"]) {
-      assert.ok(!html.includes(marker), `${marker} is on the page while STRIPE_ENABLED is false — a student can start a checkout the server refuses`);
+    /* The controls a student can now reach. */
+    assert.match(html, /data-web-purchase/, "the flag is on and the web panel offers no checkout");
+    assert.match(html, /data-plan-line/, "the purchase controls replaced the plan line rather than joining it");
+
+    /* ALL SIX PLANS, not "at least one". A panel that rendered only
+       the monthlies would satisfy a looser check while hiding four
+       things a student is entitled to buy — the same failure the
+       unrecognised-package rule exists to avoid, one level up. */
+    for (const tier of ["ai", "ai_max"]) {
+      for (const duration of ["monthly", "sixmonth", "annual"]) {
+        assert.ok(
+          html.includes(`data-web-plan="${tier}-${duration}"`),
+          `no web purchase button for ${tier}-${duration}`
+        );
+      }
     }
-    /* AND THE PANEL IS STILL THERE. The web ruling is "just the tier",
-       not a blank space and not a coming-soon. */
-    assert.match(html, /data-plan-line/, "the flag being off removed the whole panel, not just the purchase controls");
-    assert.match(html, /data-purchase-unavailable/, "web no longer says where plans are bought");
+  });
+
+  await test("AND SIGNED OUT IT STILL SELLS NOTHING, with the flag on — the differential", async () => {
+    /* `webPurchases` requires a session, and the reasoning is Apple's
+       Restore rule read the other way: a screen that OFFERS purchases
+       must offer Restore, and signed out this one offers neither.
+       With the flag on, this is the ONLY remaining state in which the
+       web panel falls back to saying where plans are bought.
+
+       IT IS A DIFFERENTIAL BECAUSE THE FLAG IS GLOBAL. The test above
+       proves the on state renders controls; without this one, a panel
+       that drew a checkout for everybody — signed out included —
+       would pass everything. Two mounts of the same build, one
+       difference. */
+    const signedIn = await mountAccount({ native: false });
+    await signedIn.close();
+    const out = await mountAccount({ native: false, signedOut: true });
+    await out.close();
+
+    assert.deepEqual(out.errors, [], `the Account tab threw signed out on web:\n        ${out.errors.join("\n        ")}`);
+    assert.deepEqual(out.calls, [], `the store SDK was called signed out on web: ${out.calls.join(", ")}`);
+
+    for (const marker of ["data-web-purchase", "data-web-plan", "data-web-manage"]) {
+      assert.ok(!out.html.includes(marker), `${marker} is drawn to a signed-out visitor, who has no account to attach a subscription to`);
+    }
+    /* AND THE TWO MOUNTS MUST DIFFER, or this passes on a build where
+       the flag does nothing at all. */
+    assert.ok(
+      signedIn.html.includes("data-web-purchase"),
+      "the signed-in mount drew no checkout either, so the absence above is not about the session"
+    );
   });
 
   await browser.close();

@@ -41,7 +41,7 @@
    ================================================================== */
 
 /** Draw the web purchase controls. See the preconditions above before flipping. */
-export const STRIPE_ENABLED = false;
+export const STRIPE_ENABLED = true;
 
 /* The tier/duration pairs the web can sell. DERIVED from the same table
    the phones use, so a plan added for the stores is not silently absent
