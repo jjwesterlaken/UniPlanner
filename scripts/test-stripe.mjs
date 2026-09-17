@@ -266,15 +266,47 @@ async function post(bundle, { token, body = {} } = {}) {
   return { status: res.status, body: await res.json() };
 }
 
+const DEFAULT_PERIOD_END = Math.floor(Date.now() / 1000) + 30 * 86400;
+
+/* THE DEFAULT IS THE SHAPE PRODUCTION SENDS, and it was not.
+   `current_period_end` used to sit at the SUBSCRIPTION level here --
+   the 2024-06-20 shape -- so every assertion in this file agreed with
+   a production that had moved on, which is precisely how a live
+   subscription came to write `expires_at` NULL with the field plainly
+   in the payload. Fifth instance of the stand-in-weaker-than-
+   production pattern and the first in a fixture; leaving the default
+   on the old shape after naming both of them was the half that got
+   away.
+
+   IT IS NOW CONFIRMED rather than assumed. Jared's live purchase of
+   17 September 2026 on `2026-04-22.dahlia` -- the version this repo
+   pins and the one the live endpoint delivers -- logged
+   "periodSource":"item","periodType":"number" on BOTH events. The
+   period end is on the ITEM.
+
+   The subscription-level form is still read as a fallback and is
+   still correct when it is the only one present, so it is opted into
+   BY NAME below rather than being the thing you get by accident. */
 const subscription = (over = {}) => ({
   id: "sub_1",
   object: "subscription",
   status: "active",
   customer: "cus_1",
-  current_period_end: Math.floor(Date.now() / 1000) + 30 * 86400,
   metadata: { uid: USER },
-  items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" } }] },
+  items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: DEFAULT_PERIOD_END }] },
   ...over,
+});
+
+/** The pre-2026 shape: the period on the subscription and NOT on the item. */
+const periodOnSubscriptionOnly = (seconds) => ({
+  current_period_end: seconds,
+  items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" } }] },
+});
+
+/** Neither place carries it — the case that must be REFUSED, not guessed. */
+const periodNowhere = () => ({
+  current_period_end: undefined,
+  items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" } }] },
 });
 
 const event = (over = {}) => ({
@@ -327,10 +359,21 @@ async function run() {
 
   await test("current_period_end is read as SECONDS, which is the difference between 2026 and 1970", () => {
     const seconds = 1_800_000_000;
-    const got = stripe.tierFromStripeSubscription(subscription({ current_period_end: seconds }));
-    assert.equal(got.expiresAt, new Date(seconds * 1000).toISOString());
-    assert.ok(new Date(got.expiresAt).getUTCFullYear() > 2020, "the expiry landed in 1970 — it was read as milliseconds");
-    assert.equal(stripe.tierFromStripeSubscription(subscription({ current_period_end: null })).expiresAt, null);
+    /* ASSERTED ON BOTH SHAPES, because the seconds-vs-milliseconds
+       reading is a property of the READ and not of where the field
+       sits -- and the default fixture now carries the period on the
+       item, so testing only one shape would leave the other's
+       arithmetic unmeasured. */
+    for (const [where, sub] of [
+      ["item", subscription({ items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: seconds }] } })],
+      ["subscription", subscription(periodOnSubscriptionOnly(seconds))],
+    ]) {
+      const got = stripe.tierFromStripeSubscription(sub);
+      assert.equal(got.expiresAt, new Date(seconds * 1000).toISOString(), `the ${where} shape read the wrong value`);
+      assert.equal(got.periodSource, where, `the ${where} shape was not the one consulted`);
+      assert.ok(new Date(got.expiresAt).getUTCFullYear() > 2020, `the ${where} expiry landed in 1970 — it was read as milliseconds`);
+    }
+    assert.equal(stripe.tierFromStripeSubscription(subscription(periodOnSubscriptionOnly(null))).expiresAt, null);
   });
 
   await test("THE PERIOD END IS READ FROM THE ITEM AS WELL AS THE SUBSCRIPTION — the live NULL", () => {
@@ -341,13 +384,18 @@ async function run() {
        ITEMS produces a null with no error anywhere.
 
        AND THE FIXTURE IS WHY THE SUITE COULD NOT HAVE CAUGHT IT. The
-       default `subscription()` above puts the field at the TOP LEVEL —
-       the 2024-06-20 shape — so every test here agreed with a
-       production that had moved on. Stand-in weaker than production,
-       fifth instance, and this time the stand-in was a fixture rather
-       than a database. Hence the explicit shapes below rather than a
-       tweak to the default: naming both is what stops the next version
-       move being invisible again. */
+       default `subscription()` put the field at the TOP LEVEL — the
+       2024-06-20 shape — so every test here agreed with a production
+       that had moved on. Stand-in weaker than production, fifth
+       instance, and this time the stand-in was a fixture rather than a
+       database.
+
+       NAMING BOTH SHAPES WAS ONLY HALF THE REMEDY, which is the part
+       worth keeping: the explicit shapes below were added and the
+       DEFAULT was left on the old one, so the bulk of this file went
+       on describing the wrong world and the item branch went on
+       looking speculative beside it. The default is the live shape
+       now — see the fixture — and the old form is opted into by name. */
     const ITEM_ONLY = {
       items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: 1791547235 }] },
       current_period_end: undefined,
@@ -358,8 +406,9 @@ async function run() {
     assert.equal(onItem.periodSource, "item");
     assert.equal(onItem.tier, "ai", "the tier must be unaffected by where the period lives");
 
-    /* The OLD shape still works — this is a widening, not a move. */
-    const onSub = stripe.tierFromStripeSubscription(subscription({ current_period_end: 1791547235 }));
+    /* The OLD shape still works — this is a widening, not a move.
+       Opted into BY NAME, because the default is the live shape now. */
+    const onSub = stripe.tierFromStripeSubscription(subscription(periodOnSubscriptionOnly(1791547235)));
     assert.equal(onSub.expiresAt, "2026-10-09T12:00:35.000Z");
     assert.equal(onSub.periodSource, "subscription");
 
@@ -392,6 +441,51 @@ async function run() {
     );
     assert.equal(twoLines.tier, "ai_max", "the rank rule moved — the rest of this assertion is about the wrong line");
     assert.equal(twoLines.expiresAt, "2026-10-09T12:00:35.000Z", "a sibling item's period was used");
+  });
+
+  await test("THE ITEM IS WHERE THE LIVE API PUTS IT — confirmed, and the read cannot go unused", () => {
+    /* CONFIRMED ON A REAL PURCHASE, 17 September 2026. The comment
+       this replaces said which shape the live API sends "is not
+       answerable from this repository", which was true and is why
+       `periodSource` is logged on EVERY apply rather than only on
+       failure. The answer came back from production: Jared's live
+       subscription on `2026-04-22.dahlia` logged
+       "periodSource":"item","periodType":"number" on BOTH events, and
+       the row carried expires_at 2026-10-17.
+
+       SO THE ITEM-SIDE READ IS THE PRODUCTION PATH, not a defensive
+       extra, and this test exists so nothing can remove it as unused.
+       It is asserted on the DEFAULT fixture, which means the whole
+       file now runs the live shape — the item branch is what answers
+       in 45 other tests, so deleting it does not redden three
+       carefully-named cases, it reddens most of the suite.
+
+       THE SUBSCRIPTION-LEVEL FALLBACK STAYS, and the direction matters:
+       what is confirmed is what `2026-04-22.dahlia` sends TODAY. A
+       pinned version is a thing somebody changes, and the older shape
+       is still correct when it is the only one present. Removing the
+       fallback because production does not exercise it is the same
+       mistake as removing the item read was — one shape observed, the
+       other assumed absent. */
+    const fixture = subscription();
+    assert.equal(
+      fixture.current_period_end,
+      undefined,
+      "the default fixture carries a subscription-level period again — it is back to describing the 2024-06-20 world"
+    );
+    const item = fixture.items.data[0];
+    assert.equal(typeof item.current_period_end, "number", "the default fixture's item has no numeric period, so nothing below is measured");
+
+    const got = stripe.tierFromStripeSubscription(fixture);
+    assert.equal(got.periodSource, "item", `the default fixture resolved through ${got.periodSource}, not the item`);
+    assert.equal(got.expiresAt, new Date(item.current_period_end * 1000).toISOString());
+
+    /* THE DISCRIMINATING HALF. Without it this passes on a function
+       that answers "item" to everything, which would be the same
+       null-writing bug pointing the other way. */
+    const old = stripe.tierFromStripeSubscription(subscription(periodOnSubscriptionOnly(1791547235)));
+    assert.equal(old.periodSource, "subscription", "the fallback is gone — the older shape now reads as absent");
+    assert.notEqual(got.periodSource, old.periodSource, "both shapes report the same source, so periodSource measures nothing");
   });
 
   await test("a period end that is absent, or present and not a number, is REPORTED rather than coerced", () => {
@@ -653,10 +747,7 @@ async function run() {
        Writing the row and letting tierFromProviders skip it would
        demote a paying student on the strength of an unparseable field.
        Writing nothing leaves the tier they have, loudly. */
-    const noPeriod = subscription({
-      current_period_end: undefined,
-      items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" } }] },
-    });
+    const noPeriod = subscription(periodNowhere());
     const w = makeWorld({
       profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe" }) },
       stripeRoutes: { "/subscriptions/sub_1": noPeriod },
