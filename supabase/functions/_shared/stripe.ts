@@ -308,6 +308,92 @@ export function periodEndOf(
   return { expiresAt: new Date((picked.v as number) * 1000).toISOString(), source: picked.source, type: "number" };
 }
 
+/**
+ * WHICH SUBSCRIPTION AN INVOICE IS FOR — read from EITHER place Stripe
+ * puts it, for exactly the reason `periodEndOf` above exists.
+ *
+ * Stripe moved `invoice.subscription` under
+ * `invoice.parent.subscription_details.subscription` in the 2025
+ * versions, the same kind of move that made `current_period_end`
+ * produce a silent NULL. **This is that lesson applied rather than
+ * re-learned:** reading only the classic field would make every refund
+ * look like a non-subscription charge on a version that carries it
+ * under `parent`, and the failure would be a refunded student keeping
+ * a month of credits — silent, and in the direction that costs us
+ * money rather than erroring.
+ *
+ * WHICH ONE `2026-04-22.dahlia` SENDS IS NOT ANSWERABLE FROM THIS
+ * REPOSITORY, so `source` is logged on every refund, the same
+ * arrangement that answered the period question from a live delivery.
+ * The classic field is preferred when both are present: it is the one
+ * Stripe has always meant, and a version that stops sending it leaves
+ * the nested form to answer.
+ */
+export function invoiceSubscriptionOf(
+  invoice: Record<string, unknown> | null | undefined
+): { subscriptionId: string; source: "invoice" | "parent" | "absent" } {
+  const classic = (invoice ?? {})["subscription"];
+  if (typeof classic === "string" && classic) return { subscriptionId: classic, source: "invoice" };
+
+  const parent = (invoice ?? {})["parent"] as { subscription_details?: { subscription?: unknown } } | undefined;
+  const nested = parent?.subscription_details?.subscription;
+  if (typeof nested === "string" && nested) return { subscriptionId: nested, source: "parent" };
+
+  return { subscriptionId: "", source: "absent" };
+}
+
+/**
+ * Does this refund end a subscription?
+ *
+ * THE COPY PROMISED IT AND NOTHING DID IT. `plansCopy.js` tells a
+ * student that "if a subscription is refunded, the plan ends straight
+ * away and goes back to Free" — and `charge.refunded` was not among
+ * the subscribed events, so on the web a refund did nothing to the
+ * tier at all. A refunded student kept a month of credits. Copy and
+ * behaviour disagreed, and the copy is the promise, so the behaviour
+ * moved.
+ *
+ * TWO CONDITIONS, AND BOTH ARE LOAD-BEARING:
+ *
+ * - **The refund must be FULL.** `charge.refunded` fires on every
+ *   refund including partial ones, so a goodwill $2 back would
+ *   otherwise cancel a plan somebody is still paying for. Stripe sets
+ *   `refunded: true` only when the whole charge is returned; the
+ *   amounts are NOT compared here, because that arithmetic is Stripe's
+ *   and a rounding disagreement would silently end a subscription.
+ * - **The charge must be for a subscription invoice.** A one-off
+ *   payment carries no invoice, and an invoice can exist without a
+ *   subscription. Neither is a reason to touch anybody's plan.
+ *
+ * The reasons are NAMED rather than collapsed into a boolean, because
+ * a log saying "ignored" over a real refund that we misread is
+ * indistinguishable from one over a partial refund of a hardware
+ * invoice — and those need different fixes.
+ */
+export function refundEndsSubscription(
+  charge: Record<string, unknown> | null | undefined,
+  invoice: Record<string, unknown> | null | undefined
+): {
+  subscriptionId: string;
+  reason: "ends_subscription" | "partial_refund" | "not_an_invoice" | "not_a_subscription";
+  invoiceSource: "invoice" | "parent" | "absent";
+} {
+  const none = { subscriptionId: "", invoiceSource: "absent" as const };
+
+  /* PARTIAL FIRST, because it is the condition that protects a paying
+     student, and it is true of a charge that never reached an invoice
+     lookup at all. */
+  if ((charge ?? {})["refunded"] !== true) return { ...none, reason: "partial_refund" };
+
+  const invoiceId = (charge ?? {})["invoice"];
+  if (typeof invoiceId !== "string" || !invoiceId) return { ...none, reason: "not_an_invoice" };
+
+  const { subscriptionId, source } = invoiceSubscriptionOf(invoice);
+  if (!subscriptionId) return { ...none, reason: "not_a_subscription", invoiceSource: source };
+
+  return { subscriptionId, reason: "ends_subscription", invoiceSource: source };
+}
+
 /* ---------- talking to Stripe ---------- */
 
 /** Stripe takes form-encoded bodies, including for nested fields (`a[b]=c`). */
@@ -343,7 +429,7 @@ export async function stripeRequest(
     fetchImpl = fetch,
   }: {
     secretKey: string;
-    method?: "GET" | "POST";
+    method?: "GET" | "POST" | "DELETE";
     body?: Record<string, string | number | undefined | null>;
     idempotencyKey?: string;
     fetchImpl?: typeof fetch;

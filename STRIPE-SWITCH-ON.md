@@ -91,7 +91,7 @@ and 5; this one is not.
 https://kuhtogvewcooigudmgwj.supabase.co/functions/v1/stripe-webhook
 ```
 
-Subscribed to exactly these six, which are the `ACTIONABLE` set in
+Subscribed to exactly these seven, which are the `ACTIONABLE` set in
 `supabase/functions/stripe-webhook/index.ts` — not the
 `customer.subscription.*` shorthand Phase 6 uses:
 
@@ -102,11 +102,26 @@ customer.subscription.updated
 customer.subscription.deleted
 customer.subscription.paused
 customer.subscription.resumed
+charge.refunded
 ```
 
 Anything else is recorded and answered 200 without action. A list of
 types to ACT on is safer than a list to ignore, because a type nobody
 enumerated then does nothing rather than something unintended.
+
+**THIS LIST IS WHAT A PERSON TYPES INTO TWO DASHBOARDS, so a drift
+between it and `ACTIONABLE` reproduces the exact bug `charge.refunded`
+was added to fix**: the code was ready to act on a refund and the
+endpoint never sent one, so the panel promised a refund ends the plan
+and nothing did it. `scripts/test-stripe.mjs` therefore reads this
+fenced block and requires it to EQUAL the set in the function — the
+list is derived from the code rather than kept in step with it by
+memory.
+
+`charge.refunded` is the newest, added 17 September 2026. It fires on
+PARTIAL refunds too, and the handler acts only on a FULL refund of a
+SUBSCRIPTION invoice — so subscribing to it cannot end a plan somebody
+is still paying for.
 
 ## 6. Set the two secrets
 
