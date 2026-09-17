@@ -114,6 +114,63 @@ for (const p of DOC_PATHS) {
   fs.copyFileSync(from, path.join(OUT, file));
 }
 
+/* ---------- the guides ----------
+
+   Static pages that answer a question somebody typed into a search
+   engine, with a link into the app. No script in them at all, which is
+   asserted rather than intended: a guide is the one kind of page on
+   this origin with no reason to run anything, so anything it ran would
+   be a third-party tag or an analytics snippet arriving where nobody
+   was looking for it.
+
+   COPIED FROM THE FOLDER, NOT LISTED. A third guide comes along by
+   existing, which is the same rule as the site's data modules above and
+   the documents below — and the opposite of the deploy workflow that
+   named one Edge Function while the repo had two.
+
+   THEY ARE NOT LEGAL DOCUMENTS and deliberately do not go through
+   DOCUMENT_PATHS. That list is derived from the `*_URL` constants, and
+   every one of those URLs is in a store listing or a Stripe dashboard
+   field and is swept by test-legal for claims about a student's data. A
+   marketing page in there would be held to promises it does not make
+   and would be demanded by documents that should not mention it. */
+const GUIDE_DIR = "guides";
+/* THEY LIVE UNDER public/site/, WITH THE MARKETING PAGE, and that is
+   load-bearing rather than tidy. `build-web` copies all of `public/`
+   into `dist-web`, and `prepare-native` refuses any top-level entry of
+   dist-web that is not declared shipped or excluded — the gate that
+   exists because the marketing page once shipped inside a store
+   bundle. `site` is already excluded, with the reason "prices and
+   external download links do not belong in a store bundle", which is
+   exactly what a guide is. So site-only content belongs under it and
+   inherits that decision instead of needing a new one. */
+const guideSrc = path.join("public", "site", GUIDE_DIR);
+if (!fs.existsSync(guideSrc)) throw new Error(`public/${GUIDE_DIR}/ is missing — the guides would 404 at URLs that are indexed`);
+const guides = fs.readdirSync(guideSrc).filter((f) => f.endsWith(".html"));
+if (guides.length === 0) throw new Error(`public/${GUIDE_DIR}/ has no pages — an empty guides directory ships a folder nothing serves`);
+fs.mkdirSync(path.join(OUT, GUIDE_DIR), { recursive: true });
+for (const f of fs.readdirSync(guideSrc)) {
+  const from = path.join(guideSrc, f);
+  if (!f.endsWith(".html")) {
+    fs.copyFileSync(from, path.join(OUT, GUIDE_DIR, f));
+    continue;
+  }
+  /* THE SAME SUBSTITUTION THE MARKETING PAGE GETS, and absolute for the
+     same reason: this origin answers on two hostnames, those are two
+     origins, and a relative app link would strand an apex visitor's
+     planner on an origin nobody else ever uses. */
+  let page = fs.readFileSync(from, "utf8");
+  page = page.split("__APP_URL__").join(`${SITE_URL}${APP_PATH}`);
+  if (page.includes("__APP_")) throw new Error(`public/${GUIDE_DIR}/${f} still carries an unfilled app-link placeholder`);
+  /* AND IT MUST CARRY THE LINK AT ALL. A guide with no route into the
+     app is an article we wrote for nothing — and the placeholder is the
+     only thing that would have said so, silently, by being absent. */
+  if (!page.includes(`${SITE_URL}${APP_PATH}`)) {
+    throw new Error(`public/${GUIDE_DIR}/${f} has no link into the app — a guide with no call to action is an article written for nobody`);
+  }
+  fs.writeFileSync(path.join(OUT, GUIDE_DIR, f), page);
+}
+
 /* ---------- the app, verbatim, one level down ---------- */
 fs.cpSync(APP_BUILD, path.join(OUT, APP_DIR), { recursive: true });
 
@@ -297,5 +354,5 @@ for (const page of ["index.html", ...DOC_PATHS.map((p) => `${p.replace(/^\//, ""
 }
 
 console.log(
-  `site build OK -> ${OUT}/ (${modules.length} modules, ${DOC_PATHS.length} documents, app at ${APP_PATH}/, ${moved.length} moved paths)`
+  `site build OK -> ${OUT}/ (${modules.length} modules, ${DOC_PATHS.length} documents, ${guides.length} guides, app at ${APP_PATH}/, ${moved.length} moved paths)`
 );
