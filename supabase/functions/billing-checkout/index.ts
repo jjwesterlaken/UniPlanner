@@ -39,6 +39,7 @@ import {
   CHECKOUT_CANCEL_URL,
   CHECKOUT_SUCCESS_URL,
   lookupKeyFor,
+  stripeFailureCode,
   stripeRequest,
 } from "../_shared/stripe.ts";
 
@@ -111,7 +112,7 @@ export async function handle(req: Request): Promise<Response> {
     const prices = await stripeRequest(`/prices?lookup_keys[0]=${encodeURIComponent(lookupKey)}&active=true&limit=1`, { secretKey });
     if (!prices.ok) {
       logFailure(stage, prices.error, { lookupKey });
-      return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+      return jsonResponse({ ok: false, code: stripeFailureCode(prices) }, 503);
     }
     const priceId = (((prices.data.data as Array<{ id?: string }>) || [])[0] || {}).id;
     if (!priceId) {
@@ -136,7 +137,7 @@ export async function handle(req: Request): Promise<Response> {
       });
       if (!created.ok) {
         logFailure(stage, created.error);
-        return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+        return jsonResponse({ ok: false, code: stripeFailureCode(created) }, 503);
       }
       customerId = String(created.data.id || "");
       if (!customerId) {
@@ -225,7 +226,7 @@ export async function handle(req: Request): Promise<Response> {
     });
     if (!session.ok) {
       logFailure(stage, session.error);
-      return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+      return jsonResponse({ ok: false, code: stripeFailureCode(session) }, 503);
     }
     const url = String(session.data.url || "");
     if (!url.startsWith("https://")) {
