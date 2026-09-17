@@ -318,6 +318,33 @@ const event = (over = {}) => ({
 
 const profile = (over = {}) => ({ user_id: USER, tier: "free", tier_source: "signup", store: null, stripe_customer_id: null, ...over });
 
+/* A refunded charge, and the invoice behind it. `refunded` is Stripe's
+   own "the whole thing came back" flag; the amounts are deliberately
+   NOT what the code compares, so they are here only to make a partial
+   refund look like one. */
+const charge = (over = {}) => ({
+  id: "ch_1",
+  object: "charge",
+  amount: 899,
+  amount_refunded: 899,
+  refunded: true,
+  invoice: "in_1",
+  ...over,
+});
+
+/** The classic shape: `invoice.subscription`. */
+const invoice = (over = {}) => ({ id: "in_1", object: "invoice", subscription: "sub_1", ...over });
+
+/** The 2025+ shape, where the subscription moved under `parent`. */
+const invoiceParentShape = (subscriptionId = "sub_1") => ({
+  id: "in_1",
+  object: "invoice",
+  parent: { subscription_details: { subscription: subscriptionId } },
+});
+
+const refundEvent = (over = {}) =>
+  event({ id: over.id ?? "evt_refund", type: "charge.refunded", data: { object: charge(over.charge || {}) } });
+
 async function run() {
   /* ---------- 1. the tier a subscription implies ---------- */
 
@@ -861,6 +888,243 @@ async function run() {
     }
   });
 
+  /* ---------- 4b. a refund ends the plan, because the copy says so ---------- */
+
+  await test("THE REFUND DECISION TABLE: only a FULL refund of a SUBSCRIPTION invoice ends a plan", () => {
+    /* THE GAP THIS CLOSES. `plansCopy.js` promises "if a subscription
+       is refunded, the plan ends straight away and goes back to Free",
+       and `charge.refunded` was not a subscribed event — so on the web
+       a refund did nothing to the tier and a refunded student kept a
+       month of credits. Confirmed on Jared's own refund, 17 September
+       2026: portal cancel at period end behaved correctly, then the
+       charge was refunded in Stripe and the tier stayed `ai`.
+
+       A TABLE, because the interesting cases are the ones that must
+       NOT fire and there are more of them than there are of the one
+       that must. */
+    const cases = [
+      { name: "a full refund of a subscription invoice", charge: charge(), invoice: invoice(), reason: "ends_subscription", sub: "sub_1" },
+      /* THE ONE JARED NAMED: a partial refund of something that is not
+         a subscription payment. It must miss on BOTH counts, and the
+         partial test is what answers first. */
+      { name: "a PARTIAL refund of a non-subscription charge", charge: charge({ refunded: false, amount_refunded: 200, invoice: null }), invoice: null, reason: "partial_refund", sub: "" },
+      { name: "a PARTIAL refund of a subscription invoice — somebody still paying", charge: charge({ refunded: false, amount_refunded: 200 }), invoice: invoice(), reason: "partial_refund", sub: "" },
+      { name: "a FULL refund of a one-off payment, no invoice at all", charge: charge({ invoice: null }), invoice: null, reason: "not_an_invoice", sub: "" },
+      { name: "a FULL refund of an invoice with no subscription", charge: charge(), invoice: invoice({ subscription: null }), reason: "not_a_subscription", sub: "" },
+      /* THE FIELD-MOVE LESSON APPLIED RATHER THAN RE-LEARNED. Stripe
+         moved `invoice.subscription` under `parent.subscription_details`
+         in the 2025 versions — the same move that made
+         `current_period_end` produce a silent NULL. Reading only the
+         classic field would make every refund look like a
+         non-subscription charge, and the failure would be a refunded
+         student keeping credits: silent, and in our favour, which is
+         the worst direction for a bug to fail in. */
+      { name: "the 2025+ shape, subscription under parent", charge: charge(), invoice: invoiceParentShape(), reason: "ends_subscription", sub: "sub_1" },
+      { name: "an amount-only refund with refunded:false is NOT full", charge: charge({ refunded: false, amount_refunded: 899 }), invoice: invoice(), reason: "partial_refund", sub: "" },
+    ];
+    assert.ok(cases.length >= 6, "the table reads too little to be about anything");
+    for (const c of cases) {
+      const got = stripe.refundEndsSubscription(c.charge, c.invoice);
+      assert.equal(got.reason, c.reason, `${c.name}: read as ${got.reason}`);
+      assert.equal(got.subscriptionId, c.sub, `${c.name}: subscription ${got.subscriptionId || "(none)"}`);
+    }
+
+    /* AND THE SOURCE IS REPORTED, so a live delivery can say which
+       shape this API version sends — the arrangement that answered the
+       period question. */
+    assert.equal(stripe.refundEndsSubscription(charge(), invoice()).invoiceSource, "invoice");
+    assert.equal(stripe.refundEndsSubscription(charge(), invoiceParentShape()).invoiceSource, "parent");
+    assert.equal(stripe.invoiceSubscriptionOf({}).source, "absent");
+    /* The classic field WINS when both are present: it is the one
+       Stripe has always meant. Deliberately different values, so the
+       preference is measured rather than assumed. */
+    const both = stripe.invoiceSubscriptionOf({ subscription: "sub_classic", parent: { subscription_details: { subscription: "sub_nested" } } });
+    assert.equal(both.subscriptionId, "sub_classic");
+    assert.equal(both.source, "invoice");
+  });
+
+  await test("A FULL REFUND CANCELS IN STRIPE AND DROPS THE TIER, in that order", async () => {
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      entitlements: { [`${USER}|stripe`]: { user_id: USER, source: "stripe", tier: "ai", expires_at: "2026-10-17T00:00:00.000Z" } },
+      stripeRoutes: {
+        "/charges/ch_1": charge(),
+        "/invoices/in_1": invoice(),
+        /* The GET answers live, the DELETE answers cancelled — which is
+           what makes this a test of the ORDER and not just of the
+           calls: the tier can only come out `free` if it was derived
+           AFTER the cancellation. */
+        "/subscriptions/sub_1": (init) =>
+          init && init.method === "DELETE" ? subscription({ status: "canceled" }) : subscription(),
+      },
+    });
+    const res = await deliver(refundEvent());
+    w.restore();
+
+    assert.equal(res.status, 200, `a refund was not accepted: ${JSON.stringify(res.body)}`);
+
+    const cancel = w.stripeCalls.filter((c) => c.method === "DELETE");
+    assert.equal(cancel.length, 1, `the subscription was not cancelled in Stripe: ${w.stripeCalls.map((c) => `${c.method} ${c.url}`).join(" | ")}`);
+    assert.match(cancel[0].url, /\/subscriptions\/sub_1$/, `the wrong thing was cancelled: ${cancel[0].url}`);
+
+    /* THE ORDER, asserted on the trace rather than assumed from the
+       outcome: cancel in Stripe FIRST, then write. The reverse leaves a
+       student at `free` with a LIVE subscription that renews, and
+       nothing repairs that. */
+    const cancelAt = w.trace.findIndex((t) => t.startsWith("stripe:DELETE"));
+    const writeAt = w.trace.findIndex((t) => t === "db:entitlements.upsert");
+    assert.ok(cancelAt >= 0 && writeAt >= 0, `the trace is missing a step: ${w.trace.join(" | ")}`);
+    assert.ok(cancelAt < writeAt, `the tier was written before the cancellation: ${w.trace.join(" | ")}`);
+
+    assert.equal(w.profiles[USER].tier, "free", "a refunded student kept their tier");
+    const row = w.entitlements[`${USER}|stripe`];
+    assert.equal(row.tier, "free", "the entitlement row still grants a paid tier");
+    assert.equal(row.expires_at, null, "a lapse must record {free, null} — the one shape exempt from the open-ended refusal");
+    assert.ok(w.events["evt_refund"], "the refund was not recorded");
+  });
+
+  await test("A PARTIAL REFUND OF A NON-SUBSCRIPTION CHARGE TOUCHES NOTHING", async () => {
+    /* Jared's requirement, and the reason it is its own test rather
+       than a row in the table above: the table proves the DECISION, and
+       this proves that nothing downstream of it runs — no cancellation,
+       no tier write, and not even the invoice lookup, since a partial
+       refund is refused before a second Stripe request is worth
+       making. */
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      entitlements: { [`${USER}|stripe`]: { user_id: USER, source: "stripe", tier: "ai", expires_at: "2026-10-17T00:00:00.000Z" } },
+      stripeRoutes: {
+        "/charges/ch_1": charge({ refunded: false, amount_refunded: 200, invoice: null }),
+        "/invoices/in_1": invoice(),
+        "/subscriptions/sub_1": subscription(),
+      },
+    });
+    const res = await deliver(refundEvent({ charge: { refunded: false, amount_refunded: 200, invoice: null } }));
+    w.restore();
+
+    assert.equal(res.status, 200, `a partial refund was not accepted: ${JSON.stringify(res.body)}`);
+    assert.equal(res.body.outcome, "partial_refund", `the reason was not carried out: ${JSON.stringify(res.body)}`);
+    assert.deepEqual(w.stripeCalls.filter((c) => c.method === "DELETE"), [], "a partial refund cancelled a subscription");
+    assert.ok(
+      !w.stripeCalls.some((c) => c.url.includes("/invoices/")),
+      `a partial refund cost an invoice lookup: ${w.stripeCalls.map((c) => c.url).join(" | ")}`
+    );
+    assert.equal(w.profiles[USER].tier, "ai", "a partial refund moved the tier");
+    assert.equal(w.entitlements[`${USER}|stripe`].tier, "ai", "a partial refund rewrote the entitlement row");
+    assert.deepEqual(
+      w.writes.filter((x) => x.table === "profiles"),
+      [],
+      "profiles was written for a partial refund"
+    );
+    assert.ok(w.events["evt_refund"], "the partial refund was not recorded — it must be, or a redelivery repeats the work");
+  });
+
+  await test("A FULL REFUND OF A ONE-OFF PAYMENT TOUCHES NOTHING", async () => {
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      entitlements: { [`${USER}|stripe`]: { user_id: USER, source: "stripe", tier: "ai", expires_at: "2026-10-17T00:00:00.000Z" } },
+      stripeRoutes: { "/charges/ch_1": charge({ invoice: null }), "/subscriptions/sub_1": subscription() },
+    });
+    const res = await deliver(refundEvent({ charge: { invoice: null } }));
+    w.restore();
+
+    assert.equal(res.body.outcome, "not_an_invoice", `a one-off refund read as ${JSON.stringify(res.body)}`);
+    assert.deepEqual(w.stripeCalls.filter((c) => c.method === "DELETE"), [], "a one-off refund cancelled a subscription");
+    assert.equal(w.profiles[USER].tier, "ai", "a one-off refund moved the tier");
+  });
+
+  await test("THE PAYLOAD IS NOT EVIDENCE ON A REFUND EITHER — a forged full refund is re-read", async () => {
+    /* A delivered charge claiming `refunded: true` must not be able to
+       cancel anybody's subscription. The body says fully refunded and
+       Stripe says partial; Stripe wins, and nothing happens. The
+       signature makes this a narrow attack, and "the signature is the
+       only thing standing between a body and a cancellation" is exactly
+       the shape this project re-reads to avoid. */
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      entitlements: { [`${USER}|stripe`]: { user_id: USER, source: "stripe", tier: "ai", expires_at: "2026-10-17T00:00:00.000Z" } },
+      stripeRoutes: {
+        "/charges/ch_1": charge({ refunded: false, amount_refunded: 100 }),
+        "/invoices/in_1": invoice(),
+        "/subscriptions/sub_1": subscription(),
+      },
+    });
+    const res = await deliver(refundEvent({ charge: { refunded: true } }));
+    w.restore();
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.outcome, "partial_refund", "the delivered claim was believed over Stripe's own record");
+    assert.deepEqual(w.stripeCalls.filter((c) => c.method === "DELETE"), [], "a forged refund flag cancelled a subscription");
+    assert.equal(w.profiles[USER].tier, "ai");
+  });
+
+  await test("AN ALREADY-CANCELLED SUBSCRIPTION IS NOT CANCELLED TWICE, and the tier still lands", async () => {
+    /* A redelivery can reach the cancel: the idempotency SELECT is an
+       optimisation that may fail, with the primary key as the real
+       guarantee. Stripe refuses to cancel a cancelled subscription, so
+       re-entering this path must skip the call and still write. */
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      stripeRoutes: {
+        "/charges/ch_1": charge(),
+        "/invoices/in_1": invoice(),
+        "/subscriptions/sub_1": subscription({ status: "canceled" }),
+      },
+    });
+    const res = await deliver(refundEvent({ id: "evt_refund_again" }));
+    w.restore();
+
+    assert.equal(res.status, 200, `a redelivered refund failed: ${JSON.stringify(res.body)}`);
+    assert.deepEqual(w.stripeCalls.filter((c) => c.method === "DELETE"), [], "a cancelled subscription was cancelled again");
+    assert.equal(w.profiles[USER].tier, "free", "the tier did not land on the re-entered path");
+    assert.ok(w.logs.some((l) => l.includes("refund_already_cancelled")), `the skip was not reported: ${w.logs.join(" | ")}`);
+  });
+
+  await test("A FAILED CANCELLATION WRITES NOTHING AND RETRIES — the tier stays until Stripe agrees", async () => {
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      entitlements: { [`${USER}|stripe`]: { user_id: USER, source: "stripe", tier: "ai", expires_at: "2026-10-17T00:00:00.000Z" } },
+      stripeRoutes: {
+        "/charges/ch_1": charge(),
+        "/invoices/in_1": invoice(),
+        "/subscriptions/sub_1": (init) => (init && init.method === "DELETE" ? { __status: 500 } : subscription()),
+      },
+    });
+    const res = await deliver(refundEvent());
+    w.restore();
+
+    assert.ok(res.status >= 500, `a failed cancellation was accepted (${res.status}) — nothing will retry it`);
+    assert.equal(w.profiles[USER].tier, "ai", "the tier was taken away while Stripe still holds a live subscription");
+    assert.equal(w.entitlements[`${USER}|stripe`].tier, "ai", "the entitlement row moved on a failed cancellation");
+    assert.ok(!w.events["evt_refund"], "a failed cancellation was recorded as handled, so the retry will be refused as a duplicate");
+  });
+
+  await test("THE 2025+ INVOICE SHAPE STILL CANCELS — the field move, pre-empted", async () => {
+    /* The control that makes the table row above a claim about the
+       HANDLER and not just about a pure function. Which shape
+       2026-04-22.dahlia sends is not answerable from here, so both are
+       driven end to end. */
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      stripeRoutes: {
+        "/charges/ch_1": charge(),
+        "/invoices/in_1": invoiceParentShape(),
+        "/subscriptions/sub_1": (init) =>
+          init && init.method === "DELETE" ? subscription({ status: "canceled" }) : subscription(),
+      },
+    });
+    const res = await deliver(refundEvent({ id: "evt_refund_parent" }));
+    w.restore();
+
+    assert.equal(res.status, 200);
+    assert.equal(w.stripeCalls.filter((c) => c.method === "DELETE").length, 1, "the nested invoice shape did not resolve a subscription");
+    assert.equal(w.profiles[USER].tier, "free");
+    assert.ok(
+      w.logs.some((l) => l.includes('"invoice_source":"parent"')),
+      `the invoice shape was not logged, so a live delivery cannot say which one it sends: ${w.logs.join(" | ")}`
+    );
+  });
+
   /* ---------- 5. who it is about ---------- */
 
   await test("the uid comes from the SUBSCRIPTION's metadata, which every renewal carries", async () => {
@@ -1229,6 +1493,60 @@ async function run() {
       .startCheckout({ token: "t", tier: "ai", duration: "monthly", enabled: true, fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, url: "https://checkout.stripe.com/x" }) }) })
       .catch(() => {});
     assert.equal(reached, false, "the control used the spy rather than its own fetch");
+  });
+
+  /* ---------- 8b. the dashboard list is not a restatement ---------- */
+
+  await test("STRIPE-SWITCH-ON.md's EVENT LIST EQUALS `ACTIONABLE` — the list a person types in", () => {
+    /* THIS GUARD IS THE BUG IT GUARDS AGAINST, one layer up.
+       `charge.refunded` exists because the panel promised "if a
+       subscription is refunded, the plan ends straight away and goes
+       back to Free" and no code did it. Adding the event to ACTIONABLE
+       and NOT to the document would leave somebody configuring six
+       events at two endpoints — and the handler would be ready to act
+       on a refund that never arrives. Same silence, same promise, one
+       layer further out.
+
+       DERIVED ON BOTH SIDES. The document's fenced block is parsed and
+       the function's `ACTIONABLE` set is read out of its source, then
+       compared — rather than a count, or a check that the newest name
+       appears somewhere, either of which passes while the two lists
+       disagree about everything else. */
+    const doc = fs.readFileSync(path.join(rootDir, "STRIPE-SWITCH-ON.md"), "utf8");
+    const fn = fs.readFileSync(path.join(rootDir, "supabase/functions/stripe-webhook/index.ts"), "utf8");
+
+    const set = fn.split("const ACTIONABLE = new Set([")[1];
+    assert.ok(set, "ACTIONABLE was not found in the function — this guard is reading the wrong file");
+    const stripComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+    const inCode = [...stripComments(set.split("]);")[0]).matchAll(/"([a-z_]+(?:\.[a-z_]+)+)"/g)].map((m) => m[1]).sort();
+
+    /* The fenced block that FOLLOWS the sentence naming ACTIONABLE, so
+       a later fence elsewhere in the document cannot be picked up by
+       accident. */
+    const after = doc.split("which are the `ACTIONABLE` set in")[1];
+    assert.ok(after, "the document no longer says its list is the ACTIONABLE set — the anchor moved");
+    const fence = after.split("```")[1];
+    assert.ok(fence, "no fenced event list follows that sentence");
+    const inDoc = fence.split("\n").map((l) => l.trim()).filter(Boolean).sort();
+
+    assert.ok(inCode.length >= 6, `only ${inCode.length} events parsed out of ACTIONABLE — the parse is wrong, not the lists`);
+    assert.ok(inDoc.length >= 6, `only ${inDoc.length} events parsed out of the document`);
+    assert.deepEqual(
+      inDoc,
+      inCode,
+      `STRIPE-SWITCH-ON.md and ACTIONABLE disagree, so whoever follows the document configures the wrong endpoint.\n` +
+        `        document: ${inDoc.join(", ")}\n        function: ${inCode.join(", ")}`
+    );
+
+    /* AND THE COUNT IN THE PROSE, because "these seven" beside a list
+       of eight is the same drift in a word. */
+    const words = { 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten" };
+    const expected = words[inCode.length];
+    assert.ok(expected, `no word is known for ${inCode.length} events — extend the table`);
+    assert.ok(
+      doc.includes(`exactly these ${expected}`),
+      `the document says a count other than "${expected}", which is what somebody reads before counting the list`
+    );
   });
 
   /* ---------- 9. source-level invariants ---------- */

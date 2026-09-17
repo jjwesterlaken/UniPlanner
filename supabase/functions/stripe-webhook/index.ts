@@ -52,6 +52,7 @@ import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
 import { applyEntitlement, isOurUserId } from "../_shared/entitlement.ts";
 import {
   parseStripeSignature,
+  refundEndsSubscription,
   signStripePayload,
   stripeRequest,
   stripeTimestampFresh,
@@ -75,6 +76,13 @@ const ACTIONABLE = new Set([
   "customer.subscription.deleted",
   "customer.subscription.paused",
   "customer.subscription.resumed",
+  /* A REFUND ENDS THE PLAN, because the panel says it does. This was
+     missing while `plansCopy.js` promised "if a subscription is
+     refunded, the plan ends straight away and goes back to Free" — so
+     on the web a refund did nothing to the tier and a refunded student
+     kept a month of credits. Only a FULL refund of a SUBSCRIPTION
+     invoice acts; see refundEndsSubscription. */
+  "charge.refunded",
 ]);
 
 export async function handle(req: Request): Promise<Response> {
@@ -209,12 +217,74 @@ export async function handle(req: Request): Promise<Response> {
 
     /* ---- which subscription, and whose ---- */
     stage = "subscription_read";
+
+    /* A REFUND NAMES NO SUBSCRIPTION, so it is resolved through two
+       re-reads before the ordinary path can start: the charge, then
+       its invoice. THE PAYLOAD IS STILL ONLY A TRIGGER — a delivered
+       charge claiming `refunded: true` must not be able to cancel a
+       subscription, which is the same reason the tier is computed from
+       a re-read subscription rather than from the event. */
+    let refundedSubscriptionId = "";
+    let endsOnRefund = false;
+    if (eventType === "charge.refunded") {
+      const chargeId = typeof object.id === "string" ? object.id : "";
+      if (!chargeId) {
+        logStage("no_charge", { id: eventId, event: eventType });
+        const halted = await recordEvent({ userId: null, before: null, after: null });
+        return halted ?? jsonResponse({ ok: true, outcome: "no_charge" });
+      }
+      const chargeRead = await stripeRequest(`/charges/${encodeURIComponent(chargeId)}`, { secretKey });
+      if (!chargeRead.ok) {
+        logFailure(stage, chargeRead.error, { id: eventId, missing: !!chargeRead.missing, status: chargeRead.status });
+        return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+      }
+
+      /* THE INVOICE IS READ ONLY IF THE REFUND IS FULL, which keeps a
+         partial refund from costing a Stripe request as well as being
+         the wrong thing to act on. */
+      let invoice: Record<string, unknown> | null = null;
+      const firstPass = refundEndsSubscription(chargeRead.data, null);
+      if (firstPass.reason !== "partial_refund" && firstPass.reason !== "not_an_invoice") {
+        const invoiceId = String(chargeRead.data.invoice);
+        const invoiceRead = await stripeRequest(`/invoices/${encodeURIComponent(invoiceId)}`, { secretKey });
+        if (!invoiceRead.ok) {
+          logFailure(stage, invoiceRead.error, { id: eventId, missing: !!invoiceRead.missing, status: invoiceRead.status });
+          return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+        }
+        invoice = invoiceRead.data;
+      }
+
+      const decision = refundEndsSubscription(chargeRead.data, invoice);
+      if (decision.reason !== "ends_subscription") {
+        /* NOT AN ERROR, AND THE REASON IS NAMED. A partial refund, a
+           one-off payment and an invoice with no subscription are all
+           ordinary things that must leave every tier alone — and they
+           need different fixes if one of them ever turns out to be a
+           misread, so "ignored" would not be enough. */
+        logStage("refund_no_action", { id: eventId, reason: decision.reason, invoice_source: decision.invoiceSource });
+        const halted = await recordEvent({ userId: null, before: null, after: null });
+        return halted ?? jsonResponse({ ok: true, outcome: decision.reason });
+      }
+      /* WHERE THE INVOICE CARRIED IT, logged for the same reason
+         `periodSource` is: which shape this API version sends is not
+         answerable from this repository, and a live delivery is what
+         answers it. */
+      logStage("refund_ends_subscription", {
+        id: eventId,
+        subscription: decision.subscriptionId,
+        invoice_source: decision.invoiceSource,
+      });
+      refundedSubscriptionId = decision.subscriptionId;
+      endsOnRefund = true;
+    }
+
     const subscriptionId =
-      typeof object.subscription === "string"
+      refundedSubscriptionId ||
+      (typeof object.subscription === "string"
         ? object.subscription
         : eventType.startsWith("customer.subscription") && typeof object.id === "string"
           ? object.id
-          : "";
+          : "");
     if (!subscriptionId) {
       /* A completed checkout in a mode we do not use (a one-off
          payment) carries no subscription. Nothing to do, and nothing
@@ -234,7 +304,7 @@ export async function handle(req: Request): Promise<Response> {
       logFailure(stage, fetched.error, { id: eventId, missing: !!fetched.missing, status: fetched.status });
       return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
     }
-    const subscription = fetched.data;
+    let subscription = fetched.data;
 
     /* The uid, from the SUBSCRIPTION we just re-read where possible —
        every later renewal carries it, which is why billing-checkout
@@ -289,6 +359,64 @@ export async function handle(req: Request): Promise<Response> {
       logStage("no_account", { id: eventId, event: eventType, app_user_id: (rawAppUserId ?? "").slice(0, 48) });
       const halted = await recordEvent({ userId: null, before: null, after: null });
       return halted ?? jsonResponse({ ok: true, outcome: "no_account" });
+    }
+
+    /* ---- A REFUND CANCELS IT, IN STRIPE, BEFORE THE TIER MOVES ----
+
+       THE ORDER IS THE aiNotesStore TABLE AGAIN, and it is the whole
+       design of this branch:
+
+       | | an interruption leaves | which is |
+       |---|---|---|
+       | cancel in Stripe, then apply | a cancelled subscription, tier still `ai` | repaired by the `customer.subscription.deleted` our own cancellation triggers |
+       | apply, then cancel in Stripe | tier `free`, subscription LIVE and renewing | a student paying for nothing, and nothing repairs it |
+
+       So the cancellation goes first. The failure it leaves is a
+       refunded student holding credits for a few seconds longer; the
+       reverse failure is a charge next month for a plan we already took
+       away.
+
+       IT IS GATED ON AN ACCOUNT WE HOLD, which is why it sits below the
+       `no_account` gate rather than above it. What this exists to stop
+       is a refunded student keeping CREDITS, and credits need an
+       account; cancelling a subscription we could not attribute to
+       anybody would be a larger action on a stranger's money than
+       declining to act.
+
+       AN ALREADY-CANCELLED SUBSCRIPTION IS NOT CANCELLED TWICE. Stripe
+       refuses that, and a redelivery can reach here: the idempotency
+       SELECT is an optimisation that may fail, with the primary key as
+       the real guarantee, so this path must be safe to re-enter. The
+       apply below still runs, because a cancelled subscription computes
+       `free` and writing it again is the same value. */
+    if (endsOnRefund) {
+      const status = typeof subscription.status === "string" ? subscription.status : "";
+      if (status === "canceled") {
+        logStage("refund_already_cancelled", { id: eventId, subscription: subscriptionId });
+      } else {
+        stage = "refund_cancel";
+        const cancelled = await stripeRequest(`/subscriptions/${encodeURIComponent(subscriptionId)}`, {
+          secretKey,
+          method: "DELETE",
+        });
+        if (!cancelled.ok) {
+          /* 503 AND NOTHING WRITTEN. The tier stays where it is, which
+             leaves the student holding credits they were refunded for
+             until a retry succeeds — the right direction, because the
+             alternative is taking the plan away while Stripe carries on
+             billing for it. */
+          logFailure(stage, cancelled.error, { id: eventId, missing: !!cancelled.missing, status: cancelled.status });
+          return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+        }
+        /* THE CANCELLATION RESPONSE IS THE PROVIDER RECORD. It is
+           Stripe answering our own authenticated request rather than a
+           delivered payload, so it is evidence in the way an event body
+           is not — and using it means the tier is derived from the
+           subscription as it now stands rather than from the live one we
+           read a moment ago. */
+        subscription = cancelled.data;
+        logStage("refund_cancelled", { id: eventId, subscription: subscriptionId, status: String(subscription.status ?? "") });
+      }
     }
 
     stage = "tier";
