@@ -8,6 +8,7 @@ import {
   COLLECTIONS,
   COUNTABLE_COLLECTIONS,
   supabase,
+  shapeSession,
 } from "./sync.js";
 import {
   schedule,
@@ -5308,7 +5309,10 @@ export default function PlannerApp() {
         setRecovering(true);
         // The recovery session IS a session, so the app should reflect
         // that rather than showing a signed-out shell behind the overlay.
-        if (s) setSession({ user: { id: s.user.id, email: s.user.email }, token: s.access_token });
+        /* SHAPED BY THE ONE FUNCTION THAT SHAPES SESSIONS. This
+           restated `shapeSession`'s body, and agreed with it -- which
+           is how the provider's field names leak out of sync.js. */
+        if (s) setSession(shapeSession(s));
       }
     });
     return () => data && data.subscription && data.subscription.unsubscribe();

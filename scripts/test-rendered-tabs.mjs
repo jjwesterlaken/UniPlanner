@@ -480,12 +480,35 @@ async function run() {
           "uni-planner-v1",
           JSON.stringify({ semester: "Semester 1", semesters: {}, meta: consent })
         );
+        /* THE CHECKOUT OPENS A TAB, and a real one would take the
+           assertion with it. Captured rather than suppressed, because
+           "the panel opened Stripe" is half of what the click test
+           below is about -- a request that is made and whose URL is
+           then dropped on the floor is still a broken purchase. */
+        window.__OPENED__ = [];
+        window.open = (target) => {
+          window.__OPENED__.push(String(target));
+          return null;
+        };
       },
       { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consent: CONSENTED_META, signedOut }
     );
     await page.addInitScript(bridgeScript({ native, packages: PACKAGES, customerInfo, rejectSdk }));
+    /* EVERY EDGE FUNCTION CALL THE PAGE MAKES, with the Authorization
+       header it carried. The header is recorded and not merely the
+       path, because "it called billing-checkout" and "it called
+       billing-checkout as somebody" are different claims and the bug
+       this catches sat between them. */
+    const fnCalls = [];
     await page.route(`${SUPABASE_HOST}/**`, async (route) => {
       const url = route.request().url();
+      if (url.includes("/functions/v1/")) {
+        fnCalls.push({
+          fn: url.split("/functions/v1/")[1].split(/[?#]/)[0],
+          auth: route.request().headers()["authorization"] || "",
+        });
+        return route.fulfill(json({ ok: true, url: "https://checkout.stripe.test/c/session_probe" }));
+      }
       if (url.includes("/auth/v1/user")) return route.fulfill(json({ id: USER_ID, email: "plans-probe@example.test" }));
       if (url.includes("/auth/v1/")) return route.fulfill(json({ access_token: "test-token", user: { id: USER_ID } }));
       if (url.includes("/rest/v1/profiles")) return route.fulfill(json(profile));
@@ -504,6 +527,8 @@ async function run() {
     const read = async () => ({
       html: await page.locator("#root").innerHTML(),
       calls: await page.evaluate(() => window.__RC_CALLS__ || []),
+      fnCalls: [...fnCalls],
+      opened: await page.evaluate(() => window.__OPENED__ || []),
     });
     const first = await read();
     /* The page is handed back so a test can DO something and read
@@ -872,6 +897,134 @@ async function run() {
         );
       }
     }
+  });
+
+  await test("PRESSING A PLAN REALLY REACHES billing-checkout, carrying the session's token", async () => {
+    /* THE BUG THIS EXISTS FOR, live on production build 9d11767cb604:
+       every plan button was drawn and every one of them refused with
+       "Please sign in again." on the click, with NO invocation of
+       billing-checkout at all -- the client refused before the
+       network. `plans.jsx` read `session.access_token`, and the app's
+       session is SHAPED (`shapeSession` in sync.js) to
+       `{ user, token }`, so the raw Supabase field name is undefined
+       on it and `callBilling` threw `unauthenticated`.
+
+       EVERY GUARD ABOVE WAS GREEN OVER IT, correctly: all of them read
+       the RENDERED PANEL, and the panel was right. `webPurchases`
+       needs only `!!session`, so six buttons, six prices, the
+       differential against signed-out and all six plan markers were
+       exactly as they should be. The defect lived entirely in what
+       happens on the click.
+
+       So this is the rule this codebase already learned for the
+       consent screen, arriving one panel over: A GUARD FOR A BUG THAT
+       NEEDS A USER ACTION HAS TO PERFORM THE ACTION. An idle page
+       makes no request whatever the code does.
+
+       AND THE TOKEN IS ASSERTED, NOT JUST THE CALL. `Bearer undefined`
+       is a request that is made, reaches the function and is refused
+       there as unauthenticated -- so "billing-checkout was called"
+       would have passed on a build that could not buy anything. What
+       is checked is that the header carries the token the session
+       really holds. */
+    const m = await mountAccount({ native: false });
+    /* THE TOKEN IS READ OUT OF THE SEEDED SESSION, not retyped. The
+       fixture is the Supabase-shaped record in localStorage -- the
+       same bytes supabase-js restores from -- so this follows the
+       fixture instead of pinning a string beside it. Read BEFORE the
+       click, because everything here needs the page still open. */
+    const seeded = await m.page.evaluate(
+      (ref) => JSON.parse(localStorage.getItem(`sb-${ref}-auth-token`) || "{}").access_token || "",
+      projectRef
+    );
+    const button = m.page.locator('[data-web-plan="ai-monthly"]');
+    assert.equal(await button.count(), 1, "no Study AI monthly button to press, so this test reads nothing");
+    await button.click();
+    await m.page.waitForTimeout(600);
+    const after = await m.read();
+    const panelText = (await m.page.locator("#root").innerText()).replace(/\s+/g, " ");
+    await m.close();
+
+    assert.ok(seeded, "no access_token in the seeded session, so the header assertion below reads nothing");
+
+    assert.deepEqual(m.errors, [], `pressing a plan threw:\n        ${m.errors.join("\n        ")}`);
+
+    const checkout = after.fnCalls.filter((c) => c.fn === "billing-checkout");
+    assert.equal(
+      checkout.length,
+      1,
+      `pressing Study AI monthly made ${checkout.length} calls to billing-checkout — ` +
+        `the page called: ${after.fnCalls.map((c) => c.fn).join(", ") || "(no Edge Function at all)"}. ` +
+        `The panel says: "${panelText.slice(0, 200)}"`
+    );
+
+    assert.equal(
+      checkout[0].auth,
+      `Bearer ${seeded}`,
+      `billing-checkout was called with "${checkout[0].auth}" — a request that carries no token is refused at the function, ` +
+        `which is the same broken purchase one layer further on`
+    );
+
+    /* AND THE URL IT ANSWERED WITH IS WHERE THE STUDENT IS SENT.
+       A call that is made and whose answer is dropped is still a
+       purchase that does not happen. */
+    assert.deepEqual(
+      after.opened,
+      ["https://checkout.stripe.test/c/session_probe"],
+      `the checkout URL was not opened: ${JSON.stringify(after.opened)}`
+    );
+
+    /* THE REFUSAL COPY MUST BE ABSENT, which is the symptom Jared saw
+       and is not implied by the assertions above -- a panel could
+       call the function and still print a failure beside it. */
+    assert.ok(
+      !/Please sign in again/i.test(panelText),
+      `the panel told a signed-in student to sign in again: "${panelText.slice(0, 200)}"`
+    );
+  });
+
+  await test("AND MANAGING A SUBSCRIPTION REACHES billing-portal, carrying the same token", async () => {
+    /* THE SIBLING CALL. Both web actions took the token from one
+       variable, so the one-line fix above covered both -- and nothing
+       pressed this one. A later refactor that gave the portal its own
+       read would reintroduce exactly the shipped bug on the control a
+       student uses to CANCEL, which is the worse half to have broken:
+       a checkout that refuses costs us a sale, a portal that refuses
+       costs a student the ability to stop paying. */
+    /* A WEB SUBSCRIBER, because the manage control only exists for
+       one: `store === "stripe"` on the profile. Apple and Google
+       cannot cancel a Stripe subscription and Stripe cannot cancel
+       theirs, so the panel shows the portal to exactly the students
+       whose subscription it can manage. Mounting the default profile
+       here would find no control and pass over nothing, which is how
+       the first run of this test failed. */
+    const m = await mountAccount({ native: false, profile: { ...PROFILE_ROW, store: "stripe" } });
+    const manage = m.page.locator("[data-web-manage]");
+    assert.equal(await manage.count(), 1, "no web manage control to press, so this test reads nothing");
+    await manage.click();
+    await m.page.waitForTimeout(600);
+    const after = await m.read();
+    const panelText = (await m.page.locator("#root").innerText()).replace(/\s+/g, " ");
+    await m.close();
+
+    assert.deepEqual(m.errors, [], `pressing manage threw:\n        ${m.errors.join("\n        ")}`);
+    const portal = after.fnCalls.filter((c) => c.fn === "billing-portal");
+    assert.equal(
+      portal.length,
+      1,
+      `pressing manage made ${portal.length} calls to billing-portal — the page called: ` +
+        `${after.fnCalls.map((c) => c.fn).join(", ") || "(no Edge Function at all)"}. ` +
+        `The panel says: "${panelText.slice(0, 200)}"`
+    );
+    assert.match(
+      portal[0].auth,
+      /^Bearer .+/,
+      `billing-portal was called with "${portal[0].auth}", which the function refuses as unauthenticated`
+    );
+    assert.ok(
+      !/Please sign in again/i.test(panelText),
+      `the panel told a signed-in student to sign in again: "${panelText.slice(0, 200)}"`
+    );
   });
 
   await test("AND SIGNED OUT IT STILL SELLS NOTHING, with the flag on — the differential", async () => {
