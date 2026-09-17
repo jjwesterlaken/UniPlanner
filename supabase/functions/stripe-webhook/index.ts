@@ -51,9 +51,12 @@ import { getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
 import { applyEntitlement, isOurUserId } from "../_shared/entitlement.ts";
 import {
+  invoiceIdForCharge,
+  invoicePaymentsQuery,
   parseStripeSignature,
   refundEndsSubscription,
   signStripePayload,
+  stripeFailureCode,
   stripeRequest,
   stripeTimestampFresh,
   tierFromStripeSubscription,
@@ -216,17 +219,26 @@ export async function handle(req: Request): Promise<Response> {
     }
 
     /* ---- which subscription, and whose ---- */
-    stage = "subscription_read";
 
-    /* A REFUND NAMES NO SUBSCRIPTION, so it is resolved through two
-       re-reads before the ordinary path can start: the charge, then
-       its invoice. THE PAYLOAD IS STILL ONLY A TRIGGER — a delivered
-       charge claiming `refunded: true` must not be able to cancel a
-       subscription, which is the same reason the tier is computed from
-       a re-read subscription rather than from the event. */
+    /* A REFUND NAMES NO SUBSCRIPTION, so it is resolved through three
+       re-reads before the ordinary path can start: the charge, the
+       InvoicePayment that links it to an invoice, then the invoice.
+       THE PAYLOAD IS STILL ONLY A TRIGGER — a delivered charge claiming
+       `refunded: true` must not be able to cancel a subscription, which
+       is the same reason the tier is computed from a re-read
+       subscription rather than from the event.
+
+       EVERY STAGE BELOW NAMES THE ENDPOINT IT FETCHES, and the reason
+       is a live diagnosis this cost. All of this used to run under one
+       label, `subscription_read`, set before the charge lookup — so a
+       403 on `GET /charges/{id}` was reported as a subscription read,
+       on a key that HAD subscription read, and the log sent whoever
+       read it looking at the wrong permission. Two endpoints must
+       never share a stage. */
     let refundedSubscriptionId = "";
     let endsOnRefund = false;
     if (eventType === "charge.refunded") {
+      stage = "refund_charge_read";
       const chargeId = typeof object.id === "string" ? object.id : "";
       if (!chargeId) {
         logStage("no_charge", { id: eventId, event: eventType });
@@ -236,47 +248,93 @@ export async function handle(req: Request): Promise<Response> {
       const chargeRead = await stripeRequest(`/charges/${encodeURIComponent(chargeId)}`, { secretKey });
       if (!chargeRead.ok) {
         logFailure(stage, chargeRead.error, { id: eventId, missing: !!chargeRead.missing, status: chargeRead.status });
-        return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+        return jsonResponse({ ok: false, code: stripeFailureCode(chargeRead) }, 503);
       }
 
-      /* THE INVOICE IS READ ONLY IF THE REFUND IS FULL, which keeps a
-         partial refund from costing a Stripe request as well as being
-         the wrong thing to act on. */
+      /* NOTHING FURTHER IS FETCHED FOR A PARTIAL REFUND — it is refused
+         on the charge alone, so a goodwill part-refund costs one
+         request rather than three. */
+      let invoiceId = "";
+      let invoiceIdSource: string = "absent";
       let invoice: Record<string, unknown> | null = null;
-      const firstPass = refundEndsSubscription(chargeRead.data, null);
-      if (firstPass.reason !== "partial_refund" && firstPass.reason !== "not_an_invoice") {
-        const invoiceId = String(chargeRead.data.invoice);
-        const invoiceRead = await stripeRequest(`/invoices/${encodeURIComponent(invoiceId)}`, { secretKey });
-        if (!invoiceRead.ok) {
-          logFailure(stage, invoiceRead.error, { id: eventId, missing: !!invoiceRead.missing, status: invoiceRead.status });
-          return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+      if (chargeRead.data.refunded === true) {
+        stage = "refund_invoice_lookup";
+        /* THE INVOICE ID IS A SECOND REQUEST on this API version.
+           `charge.invoice` is gone from 2025-03-31.basil; the link is
+           the InvoicePayment object, found by the payment intent that
+           paid it. The legacy field is still preferred when present —
+           see invoiceIdForCharge. */
+        let payments: Record<string, unknown> | null = null;
+        const paymentIntentId = typeof chargeRead.data.payment_intent === "string" ? chargeRead.data.payment_intent : "";
+        if (!invoiceIdForCharge(chargeRead.data, null).invoiceId && paymentIntentId) {
+          const paymentsRead = await stripeRequest(invoicePaymentsQuery(paymentIntentId), { secretKey });
+          if (!paymentsRead.ok) {
+            logFailure(stage, paymentsRead.error, { id: eventId, missing: !!paymentsRead.missing, status: paymentsRead.status });
+            return jsonResponse({ ok: false, code: stripeFailureCode(paymentsRead) }, 503);
+          }
+          payments = paymentsRead.data;
         }
-        invoice = invoiceRead.data;
+        const found = invoiceIdForCharge(chargeRead.data, payments);
+        invoiceId = found.invoiceId;
+        invoiceIdSource = found.source;
+
+        if (invoiceId) {
+          stage = "refund_invoice_read";
+          const invoiceRead = await stripeRequest(`/invoices/${encodeURIComponent(invoiceId)}`, { secretKey });
+          if (!invoiceRead.ok) {
+            logFailure(stage, invoiceRead.error, { id: eventId, missing: !!invoiceRead.missing, status: invoiceRead.status });
+            return jsonResponse({ ok: false, code: stripeFailureCode(invoiceRead) }, 503);
+          }
+          invoice = invoiceRead.data;
+        }
       }
 
-      const decision = refundEndsSubscription(chargeRead.data, invoice);
+      const decision = refundEndsSubscription(chargeRead.data, invoiceId, invoice);
       if (decision.reason !== "ends_subscription") {
         /* NOT AN ERROR, AND THE REASON IS NAMED. A partial refund, a
            one-off payment and an invoice with no subscription are all
            ordinary things that must leave every tier alone — and they
            need different fixes if one of them ever turns out to be a
-           misread, so "ignored" would not be enough. */
-        logStage("refund_no_action", { id: eventId, reason: decision.reason, invoice_source: decision.invoiceSource });
+           misread, so "ignored" would not be enough.
+
+           `not_an_invoice` IS LOGGED AS A FAILURE while still answering
+           200, because it is the outcome that hid the field move for a
+           day: we sell nothing but subscriptions, so a refunded charge
+           we cannot tie to an invoice is either a payment we did not
+           make or a lookup that has broken again. A 200 stops Stripe
+           retrying something a retry cannot fix; the loud line is what
+           makes it visible anyway. A partial refund stays quiet — that
+           one really is routine. */
+        const detail = {
+          id: eventId,
+          reason: decision.reason,
+          invoice_id_source: invoiceIdSource,
+          invoice_source: decision.invoiceSource,
+          charge: chargeId,
+          payment_intent: typeof chargeRead.data.payment_intent === "string" ? chargeRead.data.payment_intent : null,
+        };
+        if (decision.reason === "partial_refund") logStage("refund_no_action", detail);
+        else logFailure("refund_no_action", new Error(`a refunded charge resolved to ${decision.reason}`), detail);
         const halted = await recordEvent({ userId: null, before: null, after: null });
         return halted ?? jsonResponse({ ok: true, outcome: decision.reason });
       }
       /* WHERE THE INVOICE CARRIED IT, logged for the same reason
          `periodSource` is: which shape this API version sends is not
          answerable from this repository, and a live delivery is what
-         answers it. */
+         answers it. `invoice_id_source` is the new half — it says
+         whether the legacy charge field or the InvoicePayment lookup
+         found the invoice. */
       logStage("refund_ends_subscription", {
         id: eventId,
         subscription: decision.subscriptionId,
+        invoice_id_source: invoiceIdSource,
         invoice_source: decision.invoiceSource,
       });
       refundedSubscriptionId = decision.subscriptionId;
       endsOnRefund = true;
     }
+
+    stage = "subscription_read";
 
     const subscriptionId =
       refundedSubscriptionId ||
@@ -302,7 +360,7 @@ export async function handle(req: Request): Promise<Response> {
          delivery rather than out of our own records. 5xx so Stripe
          retries. */
       logFailure(stage, fetched.error, { id: eventId, missing: !!fetched.missing, status: fetched.status });
-      return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+      return jsonResponse({ ok: false, code: stripeFailureCode(fetched) }, 503);
     }
     let subscription = fetched.data;
 
@@ -406,7 +464,7 @@ export async function handle(req: Request): Promise<Response> {
              alternative is taking the plan away while Stripe carries on
              billing for it. */
           logFailure(stage, cancelled.error, { id: eventId, missing: !!cancelled.missing, status: cancelled.status });
-          return jsonResponse({ ok: false, code: "upstream_unavailable" }, 503);
+          return jsonResponse({ ok: false, code: stripeFailureCode(cancelled) }, 503);
         }
         /* THE CANCELLATION RESPONSE IS THE PROVIDER RECORD. It is
            Stripe answering our own authenticated request rather than a

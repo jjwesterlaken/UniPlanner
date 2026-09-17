@@ -213,7 +213,16 @@ function makeWorld({ profiles = {}, events = {}, entitlements = {}, env = {}, st
     for (const [pattern, answer] of Object.entries(stripeRoutes)) {
       if (u.includes(pattern)) {
         const value = typeof answer === "function" ? answer(init) : answer;
-        if (value && value.__status) return { ok: false, status: value.__status, json: async () => ({}) };
+        if (value && value.__status) {
+          /* THE BODY IS HANDED BACK, not swallowed. A fake that returns
+             `{}` on an error makes every caller agree that there was no
+             message — which is how the assertion below first passed
+             while Stripe's message could not possibly have reached the
+             log. `__body` defaults to empty so existing routes are
+             unchanged. */
+          const body = value.__body ?? {};
+          return { ok: false, status: value.__status, json: async () => body };
+        }
         return { ok: true, status: 200, json: async () => value };
       }
     }
@@ -318,18 +327,71 @@ const event = (over = {}) => ({
 
 const profile = (over = {}) => ({ user_id: USER, tier: "free", tier_source: "signup", store: null, stripe_customer_id: null, ...over });
 
-/* A refunded charge, and the invoice behind it. `refunded` is Stripe's
-   own "the whole thing came back" flag; the amounts are deliberately
-   NOT what the code compares, so they are here only to make a partial
-   refund look like one. */
+/* A refunded charge, IN THE SHAPE 2026-04-22.dahlia ACTUALLY SENDS.
+   `refunded` is Stripe's own "the whole thing came back" flag; the
+   amounts are deliberately NOT what the code compares, so they are
+   here only to make a partial refund look like one.
+
+   THERE IS NO `invoice` KEY, AND THAT IS THE POINT. The previous
+   version of this fixture had `invoice: "in_1"` — a field Stripe
+   removed from Charge in 2025-03-31.basil — so every test in this file
+   agreed with a world the pinned API version left behind, and the live
+   endpoint answered `not_an_invoice` to every real subscription refund
+   while all of them passed. SEVENTH instance of the
+   stand-in-weaker-than-production pattern and the SECOND in a fixture,
+   after `current_period_end`.
+
+   DERIVED FROM A CONFIRMED LIVE PAYLOAD (a real refund, 18 September
+   2026): the field NAMES and their types are that payload's, and every
+   VALUE here is invented. `billing_details` and `receipt_url` are
+   dropped rather than scrubbed — the first carries an email, a name
+   and an address, the second is a live link to a receipt showing them,
+   this repository is public, and nothing in the code reads either. The
+   all-null fields of a card charge (`dispute`, `failure_code`,
+   `shipping`, `transfer_data` and the rest) are left out as noise; the
+   test below asserts the two facts that matter instead, which is
+   stronger than bulk.
+
+   `payment_intent` is the load-bearing one now: it is the only link
+   from this charge to its invoice. */
 const charge = (over = {}) => ({
   id: "ch_1",
   object: "charge",
-  amount: 899,
-  amount_refunded: 899,
+  amount: 90,
+  amount_captured: 90,
+  amount_refunded: 90,
+  calculated_statement_descriptor: "UNI-PLANNER",
+  captured: true,
+  currency: "aud",
+  customer: "cus_1",
+  description: "Subscription creation",
+  disputed: false,
+  livemode: true,
+  metadata: {},
+  paid: true,
+  payment_intent: "pi_1",
+  payment_method_details: { link: { country: "AU", funding_source_group: "lfsg_000" }, type: "link" },
   refunded: true,
-  invoice: "in_1",
+  status: "succeeded",
   ...over,
+});
+
+/* The InvoicePayment list that replaced `charge.invoice`. One row,
+   because the query names one payment intent and limits to one. */
+const invoicePayments = (over = {}) => ({
+  object: "list",
+  url: "/v1/invoice_payments",
+  has_more: false,
+  data: [
+    {
+      id: "inpay_1",
+      object: "invoice_payment",
+      invoice: "in_1",
+      payment: { type: "payment_intent", payment_intent: "pi_1" },
+      status: "paid",
+      ...over,
+    },
+  ],
 });
 
 /** The classic shape: `invoice.subscription`. */
@@ -890,6 +952,87 @@ async function run() {
 
   /* ---------- 4b. a refund ends the plan, because the copy says so ---------- */
 
+  await test("THE FIXTURE IS THE SHAPE dahlia SENDS: no charge.invoice, and a payment_intent", () => {
+    /* THE NON-VACUITY ASSERTION FOR EVERYTHING BELOW, and the one that
+       would have caught the live bug on the day it was written.
+
+       `charge.invoice` was removed from Charge in 2025-03-31.basil, and
+       we pin 2026-04-22.dahlia. The old fixture invented the field, so
+       the whole refund path was measured against a Stripe that no
+       longer exists and every real subscription refund answered
+       `not_an_invoice` in production while this file was green.
+
+       Asserted as ABSENCE of a key rather than by listing what is
+       present, because absence is the fact that matters and a fixture
+       can grow fields harmlessly. */
+    const live = charge();
+    assert.ok(
+      !("invoice" in live),
+      "the charge fixture carries an `invoice` key — Stripe removed it in 2025-03-31.basil, so this fixture describes a world the pinned version left behind"
+    );
+    assert.equal(typeof live.payment_intent, "string", "the charge fixture has no payment_intent, which is the only route to its invoice now");
+    assert.ok(live.payment_intent.length > 0, "the charge fixture's payment_intent is empty");
+
+    /* AND NO PII, because this fixture is derived from a real payload
+       and the repository is public. The live charge carried an email, a
+       full name and an address in `billing_details`, plus a
+       `receipt_url` that links to a receipt showing them; all of it is
+       dropped rather than scrubbed, since nothing in the code reads
+       any of it. */
+    const serialised = JSON.stringify(live);
+    /* THE FIELDS, NOT THE NAMES. An earlier version of this list held a
+       real surname, which put the very string it was guarding against
+       into a public file — the guard meeting its own subject for the
+       second time in one test. The PII-bearing fields are named
+       instead, plus "@" for any address that arrives inside another
+       one. */
+    for (const banned of ["billing_details", "receipt_url", "receipt_email\":\"", "@"]) {
+      assert.ok(
+        !serialised.includes(banned),
+        `the charge fixture contains "${banned}" — this file is committed to a public repository`
+      );
+    }
+  });
+
+  await test("THE INVOICE COMES FROM THE InvoicePayment OBJECT, and the legacy field still wins if present", () => {
+    /* The replacement for the field that moved. Both sources are
+       measured, and the absent case is what the live endpoint was
+       hitting on every refund. */
+    const fromPayments = stripe.invoiceIdForCharge(charge(), invoicePayments());
+    assert.equal(fromPayments.invoiceId, "in_1");
+    assert.equal(fromPayments.source, "invoice_payments");
+
+    /* THE LEGACY FIELD IS PREFERRED WHEN PRESENT, for periodEndOf's
+       reason: what is confirmed is what this PINNED version sends
+       today. Deliberately different values, so the preference is
+       measured rather than assumed. */
+    const both = stripe.invoiceIdForCharge({ invoice: "in_legacy" }, invoicePayments());
+    assert.equal(both.invoiceId, "in_legacy");
+    assert.equal(both.source, "charge");
+
+    /* NEITHER — a one-off payment. Must be reported, never guessed. */
+    assert.deepEqual(stripe.invoiceIdForCharge(charge(), { object: "list", data: [] }), { invoiceId: "", source: "absent" });
+    assert.deepEqual(stripe.invoiceIdForCharge(null, null), { invoiceId: "", source: "absent" });
+
+    /* ONLY THE FIRST ROW. The query names one payment intent and limits
+       to one, so a second row would be a different payment and
+       answering with it would cancel a subscription this refund was
+       not about. */
+    const two = stripe.invoiceIdForCharge(charge(), {
+      data: [{ invoice: "in_first" }, { invoice: "in_second" }],
+    });
+    assert.equal(two.invoiceId, "in_first");
+
+    /* THE QUERY ITSELF, because a filter that names the wrong field
+       returns every InvoicePayment on the account and the first one
+       would be somebody else's. */
+    const q = stripe.invoicePaymentsQuery("pi_abc");
+    assert.match(q, /^\/invoice_payments\?/);
+    assert.match(q, /payment\[type\]=payment_intent/, "the query does not filter by payment type");
+    assert.match(q, /payment\[payment_intent\]=pi_abc/, "the query does not filter by the payment intent");
+    assert.match(q, /limit=1/, "the query is unlimited, so it could answer with another payment");
+  });
+
   await test("THE REFUND DECISION TABLE: only a FULL refund of a SUBSCRIPTION invoice ends a plan", () => {
     /* THE GAP THIS CLOSES. `plansCopy.js` promises "if a subscription
        is refunded, the plan ends straight away and goes back to Free",
@@ -903,14 +1046,14 @@ async function run() {
        NOT fire and there are more of them than there are of the one
        that must. */
     const cases = [
-      { name: "a full refund of a subscription invoice", charge: charge(), invoice: invoice(), reason: "ends_subscription", sub: "sub_1" },
+      { name: "a full refund of a subscription invoice", charge: charge(), invoiceId: "in_1", invoice: invoice(), reason: "ends_subscription", sub: "sub_1" },
       /* THE ONE JARED NAMED: a partial refund of something that is not
          a subscription payment. It must miss on BOTH counts, and the
          partial test is what answers first. */
-      { name: "a PARTIAL refund of a non-subscription charge", charge: charge({ refunded: false, amount_refunded: 200, invoice: null }), invoice: null, reason: "partial_refund", sub: "" },
-      { name: "a PARTIAL refund of a subscription invoice — somebody still paying", charge: charge({ refunded: false, amount_refunded: 200 }), invoice: invoice(), reason: "partial_refund", sub: "" },
-      { name: "a FULL refund of a one-off payment, no invoice at all", charge: charge({ invoice: null }), invoice: null, reason: "not_an_invoice", sub: "" },
-      { name: "a FULL refund of an invoice with no subscription", charge: charge(), invoice: invoice({ subscription: null }), reason: "not_a_subscription", sub: "" },
+      { name: "a PARTIAL refund of a non-subscription charge", charge: charge({ refunded: false, amount_refunded: 20 }), invoiceId: "", invoice: null, reason: "partial_refund", sub: "" },
+      { name: "a PARTIAL refund of a subscription invoice — somebody still paying", charge: charge({ refunded: false, amount_refunded: 20 }), invoiceId: "in_1", invoice: invoice(), reason: "partial_refund", sub: "" },
+      { name: "a FULL refund of a one-off payment, no invoice at all", charge: charge(), invoiceId: "", invoice: null, reason: "not_an_invoice", sub: "" },
+      { name: "a FULL refund of an invoice with no subscription", charge: charge(), invoiceId: "in_1", invoice: invoice({ subscription: null }), reason: "not_a_subscription", sub: "" },
       /* THE FIELD-MOVE LESSON APPLIED RATHER THAN RE-LEARNED. Stripe
          moved `invoice.subscription` under `parent.subscription_details`
          in the 2025 versions — the same move that made
@@ -919,12 +1062,12 @@ async function run() {
          non-subscription charge, and the failure would be a refunded
          student keeping credits: silent, and in our favour, which is
          the worst direction for a bug to fail in. */
-      { name: "the 2025+ shape, subscription under parent", charge: charge(), invoice: invoiceParentShape(), reason: "ends_subscription", sub: "sub_1" },
-      { name: "an amount-only refund with refunded:false is NOT full", charge: charge({ refunded: false, amount_refunded: 899 }), invoice: invoice(), reason: "partial_refund", sub: "" },
+      { name: "the 2025+ shape, subscription under parent", charge: charge(), invoiceId: "in_1", invoice: invoiceParentShape(), reason: "ends_subscription", sub: "sub_1" },
+      { name: "an amount-only refund with refunded:false is NOT full", charge: charge({ refunded: false, amount_refunded: 90 }), invoiceId: "in_1", invoice: invoice(), reason: "partial_refund", sub: "" },
     ];
     assert.ok(cases.length >= 6, "the table reads too little to be about anything");
     for (const c of cases) {
-      const got = stripe.refundEndsSubscription(c.charge, c.invoice);
+      const got = stripe.refundEndsSubscription(c.charge, c.invoiceId, c.invoice);
       assert.equal(got.reason, c.reason, `${c.name}: read as ${got.reason}`);
       assert.equal(got.subscriptionId, c.sub, `${c.name}: subscription ${got.subscriptionId || "(none)"}`);
     }
@@ -932,8 +1075,8 @@ async function run() {
     /* AND THE SOURCE IS REPORTED, so a live delivery can say which
        shape this API version sends — the arrangement that answered the
        period question. */
-    assert.equal(stripe.refundEndsSubscription(charge(), invoice()).invoiceSource, "invoice");
-    assert.equal(stripe.refundEndsSubscription(charge(), invoiceParentShape()).invoiceSource, "parent");
+    assert.equal(stripe.refundEndsSubscription(charge(), "in_1", invoice()).invoiceSource, "invoice");
+    assert.equal(stripe.refundEndsSubscription(charge(), "in_1", invoiceParentShape()).invoiceSource, "parent");
     assert.equal(stripe.invoiceSubscriptionOf({}).source, "absent");
     /* The classic field WINS when both are present: it is the one
        Stripe has always meant. Deliberately different values, so the
@@ -949,6 +1092,7 @@ async function run() {
       entitlements: { [`${USER}|stripe`]: { user_id: USER, source: "stripe", tier: "ai", expires_at: "2026-10-17T00:00:00.000Z" } },
       stripeRoutes: {
         "/charges/ch_1": charge(),
+        "/invoice_payments": invoicePayments(),
         "/invoices/in_1": invoice(),
         /* The GET answers live, the DELETE answers cancelled — which is
            what makes this a test of the ORDER and not just of the
@@ -983,6 +1127,172 @@ async function run() {
     assert.ok(w.events["evt_refund"], "the refund was not recorded");
   });
 
+  await test("THE LIVE PATH REALLY CALLS invoice_payments, IN ORDER, and cannot work without it", async () => {
+    /* THE END-TO-END CLAIM the live failure needed: on the shape dahlia
+       sends, the handler gets from a charge to a subscription. The pure
+       tests above prove the decision; this proves the REQUESTS, in
+       order, through the real handler.
+
+       It is also the mutation target. Remove the InvoicePayment lookup
+       and this reddens, because there is no other route from the
+       charge to the invoice on this API version. */
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      stripeRoutes: {
+        "/charges/ch_1": charge(),
+        "/invoice_payments": invoicePayments(),
+        "/invoices/in_1": invoice(),
+        "/subscriptions/sub_1": (init) =>
+          init && init.method === "DELETE" ? subscription({ status: "canceled" }) : subscription(),
+      },
+    });
+    const res = await deliver(refundEvent({ id: "evt_refund_live_shape" }));
+    w.restore();
+
+    assert.equal(res.status, 200, `the live shape was not handled: ${JSON.stringify(res.body)}`);
+    assert.equal(w.profiles[USER].tier, "free", "the tier did not drop on the shape production actually sends");
+
+    /* THE ORDER OF THE FOUR CALLS, asserted on the trace. Each is a
+       different endpoint and each needs its own restricted-key grant,
+       so the sequence is what somebody adding permissions reads. */
+    const calls = w.stripeCalls.map((c) => `${c.method} ${c.url.replace("https://api.stripe.com/v1", "")}`);
+    const charged = calls.findIndex((c) => c.startsWith("GET /charges/"));
+    const payments = calls.findIndex((c) => c.startsWith("GET /invoice_payments"));
+    const invoiced = calls.findIndex((c) => c.startsWith("GET /invoices/"));
+    const cancelled = calls.findIndex((c) => c.startsWith("DELETE /subscriptions/"));
+    for (const [name, at] of [["charge", charged], ["invoice_payments", payments], ["invoice", invoiced], ["cancel", cancelled]]) {
+      assert.ok(at >= 0, `the ${name} call was never made: ${calls.join(" | ")}`);
+    }
+    assert.ok(charged < payments, `invoice_payments was queried before the charge was read: ${calls.join(" | ")}`);
+    assert.ok(payments < invoiced, `the invoice was read before it was located: ${calls.join(" | ")}`);
+    assert.ok(invoiced < cancelled, `the subscription was cancelled before the invoice named it: ${calls.join(" | ")}`);
+
+    /* AND THE QUERY CARRIED THE CHARGE'S OWN PAYMENT INTENT, not some
+       other filter that would have matched the first InvoicePayment on
+       the account. */
+    assert.match(
+      calls[payments],
+      /payment%5Bpayment_intent%5D=pi_1|payment\[payment_intent\]=pi_1/,
+      `the InvoicePayment query did not filter on this charge's payment intent: ${calls[payments]}`
+    );
+
+    /* WHICH SOURCE FOUND THE INVOICE, logged for the reason
+       periodSource is: the next live delivery says whether the legacy
+       field or the lookup answered. */
+    assert.ok(
+      w.logs.some((l) => l.includes('"invoice_id_source":"invoice_payments"')),
+      `the invoice source was not logged: ${w.logs.join(" | ")}`
+    );
+  });
+
+  await test("not_an_invoice IS LOUD, and a partial refund is not", async () => {
+    /* `not_an_invoice` is the outcome that hid the field move for a
+       day: it answered 200, recorded a row, changed nothing, and read
+       as routine. We sell nothing but subscriptions, so a refunded
+       charge we cannot tie to an invoice is either a payment we did not
+       make or a lookup that has broken again — it stays a 200, because
+       a retry cannot fix either, and it is logged as a FAILURE so it is
+       visible anyway.
+
+       THE DISCRIMINATING HALF: a partial refund really is routine and
+       must stay quiet, or the loud line means nothing. */
+    const oneOff = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      stripeRoutes: { "/charges/ch_1": charge(), "/invoice_payments": { object: "list", data: [] } },
+    });
+    const a = await deliver(refundEvent({ id: "evt_loud_oneoff" }));
+    oneOff.restore();
+    assert.equal(a.body.outcome, "not_an_invoice");
+    assert.ok(
+      oneOff.logs.some((l) => l.includes("FAILURE") && l.includes("not_an_invoice")),
+      `not_an_invoice was not reported loudly: ${oneOff.logs.join(" | ")}`
+    );
+    /* The charge and the payment intent are in it, or the loud line
+       names a problem nobody can then go and look at. */
+    assert.ok(
+      oneOff.logs.some((l) => l.includes("ch_1") && l.includes("pi_1")),
+      `the loud line does not identify the charge and payment intent: ${oneOff.logs.join(" | ")}`
+    );
+
+    const partial = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      stripeRoutes: { "/charges/ch_1": charge({ refunded: false, amount_refunded: 20 }) },
+    });
+    const b = await deliver(refundEvent({ id: "evt_quiet_partial", charge: { refunded: false, amount_refunded: 20 } }));
+    partial.restore();
+    assert.equal(b.body.outcome, "partial_refund");
+    assert.ok(
+      !partial.logs.some((l) => l.includes("FAILURE")),
+      `a partial refund was reported as a failure: ${partial.logs.join(" | ")}`
+    );
+    /* AND IT COSTS ONE REQUEST. A partial refund is refused on the
+       charge alone, so it must not pay for the two lookups. */
+    assert.ok(
+      !partial.stripeCalls.some((c) => c.url.includes("/invoice_payments") || c.url.includes("/invoices/")),
+      `a partial refund paid for an invoice lookup: ${partial.stripeCalls.map((c) => c.url).join(" | ")}`
+    );
+  });
+
+  await test("A PERMISSION ERROR IS NOT AN OUTAGE: its own code, and Stripe's own message in the log", async () => {
+    /* THE LIVE DIAGNOSIS THIS COST. A restricted key without
+       `charge_read` answered 403, `stripeRequest` discarded Stripe's
+       body and substituted "Stripe returned 403", and the handler
+       reported `upstream_unavailable` — indistinguishable from a
+       timeout. Stripe's body named the exact grant to enable, and it
+       had already been parsed.
+
+       Both halves are asserted: the CODE tells a configuration error
+       from an outage, and the MESSAGE carries the remedy. */
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      stripeRoutes: {
+        "/charges/ch_1": {
+          __status: 403,
+          __body: { error: { code: "more_permissions_required", message: "Enabling Charges and Refunds Read ('charge_read') permissions on this key would allow this request to continue." } },
+        },
+      },
+    });
+    const res = await deliver(refundEvent({ id: "evt_forbidden" }));
+    w.restore();
+
+    assert.ok(res.status >= 500, `a permission error was accepted (${res.status}) — the event would be lost`);
+    assert.equal(
+      res.body.code,
+      "stripe_permission_denied",
+      `a 403 still reads as an outage: ${JSON.stringify(res.body)}`
+    );
+    /* MATCHED ON A PHRASE FROM STRIPE'S SENTENCE, not on the grant
+       name: `charge_read` is a SUBSTRING of the stage label
+       `refund_charge_read`, so the first version of this assertion was
+       satisfied by the stage it sits beside and passed while the fake
+       was swallowing the body entirely. The guard met its own subject,
+       which is the oldest entry in this project's ledger. */
+    assert.ok(
+      w.logs.some((l) => l.includes("would allow this request to continue")),
+      `Stripe's own message was discarded, which is what cost the diagnosis: ${w.logs.join(" | ")}`
+    );
+    /* THE STAGE NAMES THE ENDPOINT. It used to say `subscription_read`
+       for a charge retrieve, on a key that had subscription read, which
+       sent the diagnosis at the wrong permission. */
+    assert.ok(
+      w.logs.some((l) => l.includes("refund_charge_read")),
+      `the failing stage does not name the charge read: ${w.logs.join(" | ")}`
+    );
+    assert.ok(
+      !w.logs.some((l) => l.includes("FAILURE") && l.includes('"stage":"subscription_read"')),
+      `a charge retrieve is still logged as a subscription read: ${w.logs.join(" | ")}`
+    );
+    /* AND A 500 IS STILL AN OUTAGE, or the code above is not
+       discriminating. */
+    const t = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      stripeRoutes: { "/charges/ch_1": { __status: 500 } },
+    });
+    const outage = await deliver(refundEvent({ id: "evt_outage" }));
+    t.restore();
+    assert.equal(outage.body.code, "upstream_unavailable", `a 500 does not read as an outage: ${JSON.stringify(outage.body)}`);
+  });
+
   await test("A PARTIAL REFUND OF A NON-SUBSCRIPTION CHARGE TOUCHES NOTHING", async () => {
     /* Jared's requirement, and the reason it is its own test rather
        than a row in the table above: the table proves the DECISION, and
@@ -994,12 +1304,12 @@ async function run() {
       profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
       entitlements: { [`${USER}|stripe`]: { user_id: USER, source: "stripe", tier: "ai", expires_at: "2026-10-17T00:00:00.000Z" } },
       stripeRoutes: {
-        "/charges/ch_1": charge({ refunded: false, amount_refunded: 200, invoice: null }),
+        "/charges/ch_1": charge({ refunded: false, amount_refunded: 20 }),
         "/invoices/in_1": invoice(),
         "/subscriptions/sub_1": subscription(),
       },
     });
-    const res = await deliver(refundEvent({ charge: { refunded: false, amount_refunded: 200, invoice: null } }));
+    const res = await deliver(refundEvent({ charge: { refunded: false, amount_refunded: 20 } }));
     w.restore();
 
     assert.equal(res.status, 200, `a partial refund was not accepted: ${JSON.stringify(res.body)}`);
@@ -1023,9 +1333,15 @@ async function run() {
     const w = makeWorld({
       profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
       entitlements: { [`${USER}|stripe`]: { user_id: USER, source: "stripe", tier: "ai", expires_at: "2026-10-17T00:00:00.000Z" } },
-      stripeRoutes: { "/charges/ch_1": charge({ invoice: null }), "/subscriptions/sub_1": subscription() },
+      /* A one-off payment: no invoice anywhere, so the InvoicePayment
+         list comes back empty rather than being absent. */
+      stripeRoutes: {
+        "/charges/ch_1": charge(),
+        "/invoice_payments": { object: "list", data: [], has_more: false },
+        "/subscriptions/sub_1": subscription(),
+      },
     });
-    const res = await deliver(refundEvent({ charge: { invoice: null } }));
+    const res = await deliver(refundEvent());
     w.restore();
 
     assert.equal(res.body.outcome, "not_an_invoice", `a one-off refund read as ${JSON.stringify(res.body)}`);
@@ -1044,7 +1360,7 @@ async function run() {
       profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
       entitlements: { [`${USER}|stripe`]: { user_id: USER, source: "stripe", tier: "ai", expires_at: "2026-10-17T00:00:00.000Z" } },
       stripeRoutes: {
-        "/charges/ch_1": charge({ refunded: false, amount_refunded: 100 }),
+        "/charges/ch_1": charge({ refunded: false, amount_refunded: 10 }),
         "/invoices/in_1": invoice(),
         "/subscriptions/sub_1": subscription(),
       },
@@ -1067,6 +1383,7 @@ async function run() {
       profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
       stripeRoutes: {
         "/charges/ch_1": charge(),
+        "/invoice_payments": invoicePayments(),
         "/invoices/in_1": invoice(),
         "/subscriptions/sub_1": subscription({ status: "canceled" }),
       },
@@ -1086,6 +1403,7 @@ async function run() {
       entitlements: { [`${USER}|stripe`]: { user_id: USER, source: "stripe", tier: "ai", expires_at: "2026-10-17T00:00:00.000Z" } },
       stripeRoutes: {
         "/charges/ch_1": charge(),
+        "/invoice_payments": invoicePayments(),
         "/invoices/in_1": invoice(),
         "/subscriptions/sub_1": (init) => (init && init.method === "DELETE" ? { __status: 500 } : subscription()),
       },
@@ -1108,6 +1426,7 @@ async function run() {
       profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
       stripeRoutes: {
         "/charges/ch_1": charge(),
+        "/invoice_payments": invoicePayments(),
         "/invoices/in_1": invoiceParentShape(),
         "/subscriptions/sub_1": (init) =>
           init && init.method === "DELETE" ? subscription({ status: "canceled" }) : subscription(),
