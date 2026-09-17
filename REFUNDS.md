@@ -7,7 +7,7 @@ and the order to do things in.
 
 **The rule, restated once so this file stands alone:** a web subscriber's
 FIRST payment is refundable in full within 14 days if they have spent no more
-than **10% of one month's credits**. Everything else is either a fault case
+than **20% of one month's credits**. Everything else is either a fault case
 (refund it, no window, no threshold), a store purchase (not ours), or a
 renewal (not refunded unless we charged it after a cancellation or twice).
 
@@ -15,10 +15,17 @@ The figures below are not typed here — `scripts/test-legal.mjs` re-derives
 them from `credits.ts` and fails if the documents and the code disagree. If
 a tier's allowance changes, the documents change with it.
 
-| Tier | A month's credits | 10% threshold |
+| Tier | A month's credits | 20% threshold |
 |---|---|---|
-| Study AI | 900 | **90** |
-| Study AI Max | 3,000 | **300** |
+| Study AI | 900 | **180** |
+| Study AI Max | 3,000 | **600** |
+
+**Why 20% and not 10%** (Jared, 18 September 2026): recording costs about
+one credit a minute, so 90 credits would have ruled out a student who
+recorded a single two-hour lecture and decided the app was not for them
+&mdash; which is the commonest refund there is. 180 is three hours of
+lecture. The threshold has to clear the first real use of the feature, or
+it refuses exactly the person the window is for.
 
 ## 1. Is it ours to refund?
 
@@ -111,11 +118,11 @@ Derived from `USD_PER_CREDIT` in `credits.ts`:
 
 | | credits | provider spend written off |
 |---|---|---|
-| Study AI at the cap | 90 | **~$0.06** |
-| Study AI Max at the cap | 300 | **~$0.21** |
+| Study AI at the cap | 180 | **~$0.12** |
+| Study AI Max at the cap | 600 | **~$0.41** |
 
-Six cents and twenty-one cents. The threshold is not there to protect the
-margin — at these numbers 10% could be 50% and it would not matter
+Twelve cents and forty-one cents. The threshold is not there to protect the
+margin — at these numbers 20% could be 60% and it would not matter
 financially. It is there so "a small portion" is a number rather than an
 argument, and so the offer cannot be used to run a month's credits through
 the AI and then ask for the money back. **That is the thing the cap is
@@ -123,6 +130,7 @@ sized against: usage, not cost.**
 
 ## Not decided here
 
-Whether a 14-day window plus a usage cap needs a solicitor's eye before it
-is relied on, particularly for customers outside Australia. That question is
-in the pull request that added this file and is NOT resolved by it.
+Four questions about this policy need a solicitor rather than a decision,
+and they are listed in **[LEGAL-REVIEW.md](LEGAL-REVIEW.md)** with what is
+known about each. None of them is resolved by this file, and the one about
+selling outside Australia is bigger than refunds.
