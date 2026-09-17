@@ -452,6 +452,194 @@ export function refundEndsSubscription(
   return { subscriptionId, reason: "ends_subscription", invoiceSource: source };
 }
 
+/* ==================================================================
+ * DID THE STUDENT KEEP THE TIME THEY PAID FOR?
+ *
+ * Terms §5 and the panel's `autoRenew` disclosure both promise access
+ * until the paid period ends when somebody cancels. On the web that
+ * promise rests ENTIRELY ON A DASHBOARD DROPDOWN — Stripe's Customer
+ * Portal has a cancellation-behaviour setting, and `billing-portal`
+ * sends only `customer` and `return_url`, so whatever that dropdown
+ * says is what a student gets. Nothing in this repository can read it.
+ *
+ * PINNING A PORTAL CONFIGURATION WAS CONSIDERED AND REFUSED. Passing
+ * `configuration` means creating and versioning a portal configuration
+ * object, which carries far more than cancellation behaviour, so
+ * pinning one field means owning all of them — and it converts a
+ * setting that is invisible but correct into an id that can be wrong or
+ * deleted, where a bad one fails the session outright: a student taps
+ * Manage and gets an error instead of a portal. That trades a silent
+ * risk for a loud one, which is usually right, and not when the silent
+ * risk is a dropdown somebody would have to go and change and the loud
+ * one is nobody being able to cancel at all.
+ *
+ * SO THE DROPDOWN IS OBSERVED INSTEAD, IN DATA WE ARE ALREADY SENT.
+ * Every cancellation arrives as a `customer.subscription` event
+ * carrying `cancel_at_period_end`, and the two settings produce
+ * different shapes:
+ *
+ *   | the dropdown says | what arrives |
+ *   |---|---|
+ *   | cancel at period end | `updated`, still active, `cancel_at_period_end: true` |
+ *   | cancel immediately    | `deleted`, `canceled`, `cancel_at_period_end: false` |
+ *
+ * `scheduled` is therefore the HEALTHY reading and it is logged on
+ * every event rather than only on the anomaly — a promise nobody can
+ * see being kept is a promise nobody notices being broken. Jared
+ * observed the healthy shape by hand on 17 September 2026 (`canceled_at`
+ * 08:51 with `ended_at` 09:04, so the portal had SCHEDULED the
+ * cancellation and our own refund `DELETE` is what ended it thirteen
+ * minutes later). This is that observation turned into a line that
+ * appears without anybody looking.
+ *
+ * WHAT MAKES IT CHECKABLE RATHER THAN ARGUABLE IS `secondsLost`. A
+ * subscription that ends before its period end took time a student had
+ * paid for, and how much is the number a support conversation turns
+ * on — "ended 29 days early" and "ended three seconds early" are the
+ * same boolean and different facts.
+ *
+ * FIVE EXCLUSIONS, AND EACH IS A KIND RATHER THAN A SILENCE, because
+ * "not the anomaly" and "not looked at" must not read the same:
+ *
+ *   `dunning`        Stripe's own cancellation for a failed or disputed
+ *                    payment. Not the dropdown, and `past_due` keeping
+ *                    the tier is the rule that covers it.
+ *   `our_refund`     this very delivery is the one that cancelled it.
+ *   `manual_grant`   the account's tier is a gift and `manual`
+ *                    short-circuits the apply, so its `before` says
+ *                    nothing about what Stripe granted.
+ *   `already_free`   the account was not on a paid tier before the
+ *                    apply — which is exactly what OUR refund's
+ *                    follow-on `customer.subscription.deleted` looks
+ *                    like, since the refund path wrote `free` seconds
+ *                    earlier. It is the only attribution available
+ *                    without a new Stripe write: `cancellation_details
+ *                    .reason` reads `cancellation_requested` for the
+ *                    portal AND for an API cancel, so it cannot tell
+ *                    ours from theirs.
+ *   `ran_to_period_end`  ended at or after the period it was paid for,
+ *                    which is a `cancel_at` cancellation landing on
+ *                    time rather than a dropdown taking anything away.
+ *
+ * AND ONE HOLE, NAMED: with no readable period end the loss cannot be
+ * computed, so the kind is `period_unknown` and it is NOT raised. It
+ * says nothing about the dropdown either way, and raising it would fill
+ * the digest with every cancellation whose shape moved again while
+ * saying nothing about the promise. `periodEndOf` already reports its
+ * own absence with a type, which is what a fix would need.
+ * ================================================================== */
+
+/** Below this, a difference is clock skew and not a promise broken. */
+export const IMMEDIATE_CANCELLATION_TOLERANCE_S = 3600;
+
+export type CancellationKind =
+  | "not_a_cancellation"
+  | "scheduled"
+  | "dunning"
+  | "our_refund"
+  | "manual_grant"
+  | "already_free"
+  | "ran_to_period_end"
+  | "period_unknown"
+  | "immediate";
+
+/** The cancellation fields, read off the subscription Stripe sent back. */
+export function cancellationShapeOf(subscription: Record<string, unknown> | null | undefined): {
+  status: string;
+  cancelAtPeriodEnd: boolean;
+  canceledAt: number | null;
+  endedAt: number | null;
+  periodEnd: number | null;
+  reason: string | null;
+} {
+  const sub = (subscription ?? {}) as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+  /* THE PERIOD COMES FROM THE SAME PLACE THE ENTITLEMENT'S DOES, which
+     on this API version is the ITEM (confirmed live, 17 September
+     2026). `tierFromStripeSubscription` cannot answer it here: a
+     cancelled subscription fails its status check and returns before it
+     ever reads a period. The recognised item is preferred and the first
+     is the fallback — for a tier that would be a coin toss over
+     somebody's plan, and this is only being asked how long the period
+     was. */
+  const items = ((sub["items"] as { data?: unknown[] } | undefined)?.data ?? []) as Array<Record<string, unknown>>;
+  const recognised = items.find((item) => {
+    const key = ((item?.price ?? {}) as { lookup_key?: unknown }).lookup_key;
+    return typeof key === "string" && !!STRIPE_LOOKUP_KEYS[key];
+  });
+  const item = recognised ?? items[0];
+  const period = periodEndOf(sub, item);
+
+  const details = (sub["cancellation_details"] ?? {}) as { reason?: unknown };
+
+  return {
+    status: String(sub["status"] ?? ""),
+    cancelAtPeriodEnd: sub["cancel_at_period_end"] === true,
+    canceledAt: num(sub["canceled_at"]),
+    endedAt: num(sub["ended_at"]),
+    periodEnd: period.expiresAt ? Math.round(new Date(period.expiresAt).getTime() / 1000) : null,
+    reason: typeof details.reason === "string" ? details.reason : null,
+  };
+}
+
+/**
+ * Which of the eight readings this cancellation is, and how much paid
+ * time it took. `anomaly` is true for exactly one kind.
+ *
+ * `scheduled` is tested FIRST and ON THE FLAG ALONE, because a
+ * scheduled cancellation that has since completed is `canceled` with
+ * the flag STILL TRUE — so the flag is the only field that tells a
+ * kept promise from a broken one in both of its states.
+ *
+ * WHAT THAT ORDER BUYS IS VISIBILITY, NOT SAFETY, and the difference
+ * was measured rather than assumed. Deleting the flag check does not
+ * produce a false anomaly: the portal's `updated` event falls to
+ * `not_a_cancellation` and a completed cancellation falls to
+ * `ran_to_period_end`, both of them quiet. It produces a SILENCE — and
+ * this log exists to show the promise being kept, so a silence is the
+ * failure. An earlier draft of this comment claimed the false positive;
+ * the mutation check disproved it.
+ */
+export function cancellationKind(input: {
+  shape: ReturnType<typeof cancellationShapeOf>;
+  endsOnRefund: boolean;
+  tierBefore: string | null | undefined;
+  manualGrant?: boolean;
+  now?: number;
+  toleranceS?: number;
+}): { kind: CancellationKind; anomaly: boolean; secondsLost: number | null } {
+  const { shape, endsOnRefund, tierBefore } = input;
+  const toleranceS = input.toleranceS ?? IMMEDIATE_CANCELLATION_TOLERANCE_S;
+  const nowS = Math.round((input.now ?? Date.now()) / 1000);
+
+  const at = (kind: CancellationKind, secondsLost: number | null = null) => ({ kind, anomaly: false, secondsLost });
+
+  if (shape.cancelAtPeriodEnd) return at("scheduled");
+  if (shape.status !== "canceled") return at("not_a_cancellation");
+  if (shape.reason === "payment_failed" || shape.reason === "payment_disputed") return at("dunning");
+  if (endsOnRefund) return at("our_refund");
+  /* A GIFTED TIER IS NOT EVIDENCE ABOUT THE DROPDOWN, and the App
+     Review account is precisely where somebody cancels test
+     subscriptions. `manual` short-circuits the apply, so its `before`
+     is the gift rather than anything Stripe granted — raising on it
+     would put a standing false anomaly in the digest, and a digest
+     that cries wolf is one people stop reading. */
+  if (input.manualGrant) return at("manual_grant");
+  if (typeof tierBefore !== "string" || tierBefore === "free") return at("already_free");
+  if (shape.periodEnd === null) return at("period_unknown");
+
+  /* `ended_at` is what Stripe says, and a cancellation we are reading
+     within seconds of may not carry it yet — so the fallback is NOW,
+     which is the truth about a subscription that is already `canceled`
+     whatever the field says. */
+  const endedAt = shape.endedAt ?? nowS;
+  const secondsLost = shape.periodEnd - endedAt;
+  if (secondsLost <= toleranceS) return at("ran_to_period_end", secondsLost);
+
+  return { kind: "immediate", anomaly: true, secondsLost };
+}
+
 /** The list query that finds an invoice from the payment intent that paid it. */
 export const invoicePaymentsQuery = (paymentIntentId: string) =>
   `/invoice_payments?payment[type]=payment_intent&payment[payment_intent]=${encodeURIComponent(paymentIntentId)}&limit=1`;
