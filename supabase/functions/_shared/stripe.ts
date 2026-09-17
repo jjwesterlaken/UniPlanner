@@ -228,8 +228,29 @@ export function tierFromStripeSubscription(
 
 /**
  * When this subscription's paid period ends — read from EITHER place
- * Stripe puts it, because which one depends on the API version and
- * this repository cannot ask Stripe which.
+ * Stripe puts it, because which one depends on the API version.
+ *
+ * WHICH ONE THE LIVE API SENDS IS NOW ANSWERED: the ITEM. Confirmed on
+ * a real purchase, 17 September 2026, `2026-04-22.dahlia` — two events,
+ * both logging `"periodSource":"item","periodType":"number"`, and the
+ * entitlement row carrying a correct expiry. This paragraph replaces
+ * one saying the question was not answerable from this repository,
+ * which was true and is exactly why `periodSource` is logged on EVERY
+ * apply rather than only on failure: the answer had to come back from
+ * a delivery, and it did.
+ *
+ * SO THE ITEM READ IS THE PRODUCTION PATH, not a defensive extra, and
+ * it must not be removed as unused. `test-stripe.mjs` makes that
+ * structural rather than a request: its default fixture is this shape,
+ * so deleting the item read reddens most of that file rather than
+ * three cases named for it.
+ *
+ * AND THE SUBSCRIPTION-LEVEL FALLBACK STAYS. What is confirmed is what
+ * this pinned version sends TODAY; a pin is a thing somebody changes,
+ * and the older shape is still correct when it is the only one
+ * present. Deleting the fallback because production does not exercise
+ * it would be the same mistake as the original null, pointing the
+ * other way — one shape observed, the other assumed absent.
  *
  * THE BUG THIS EXISTS FOR. A live subscription wrote an `entitlements`
  * row with `expires_at` NULL while `current_period_end: 1791547235` was
@@ -237,8 +258,10 @@ export function tierFromStripeSubscription(
  * `subscription.current_period_end` and nothing else, so a version that
  * moved the field onto the ITEMS produced a null with no error
  * anywhere — and the pin moved to `2026-04-22.dahlia` the same morning,
- * which is the coherent (not confirmed) explanation for why it appeared
- * exactly then.
+ * which was offered as the coherent (not confirmed) explanation for why
+ * it appeared exactly then. THE LIVE READ ABOVE CONFIRMS IT: that
+ * version really does carry the period on the item, so the timing was
+ * the pin and not a coincidence.
  *
  * A NULL EXPIRY IS NOT MERELY MISSING DATA HERE, and that is why this
  * is worth its own function. `tierFromProviders` reads a null

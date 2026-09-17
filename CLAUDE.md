@@ -2137,6 +2137,24 @@ checklist is BILLING-PLAN.md Phase 6, and until it has been run this is
 **built**, not **working** — the distinction 0005 and 0009 cost weeks
 to learn.
 
+**IT IS WORKING NOW, on the evidence that distinction demands.** Jared
+put a real card through the live site on 17 September 2026 and refunded
+it: `tier_source=stripe`, `store=stripe`, a stored
+`stripe_customer_id`, an `entitlements` row expiring 2026-10-17, two
+`billing_events` rows MATCHED TO THE UID rather than recorded against
+nobody, and the plan line updating without a reload — so the webhook,
+the derive step, the entitlement write and the client's bounded
+re-read ladder all ran on one purchase. Everything below this line in
+the Stripe sections was verified against fakes; this paragraph is the
+one that was verified against Stripe.
+
+**And it took one more fix to get there**, which is the part worth
+keeping rather than the milestone: the flag went on and every plan
+button still refused a signed-in student, because `plans.jsx` read
+`session.access_token` while the app shapes every session to
+`{ user, token }`. See the section below — five green guards, all of
+them reading the rendered panel, none of them pressing the button.
+
 ### The first real Stripe deliveries, and a difference that was not there
 
 Three findings from Jared's first `stripe trigger` run at the test
@@ -2240,6 +2258,19 @@ this one field, but both shapes named explicitly, plus an end-to-end
 test that drives the real handler in the shape production sends and
 asserts on the ROW.
 
+**AND NAMING BOTH SHAPES WAS ONLY HALF THE REMEDY, which is the part
+that got away for a fortnight.** The explicit shapes were added and the
+DEFAULT was left on the old one, so the bulk of that file went on
+describing the world the bug came from — and the item branch went on
+looking speculative beside it, which is precisely the impression that
+gets a read deleted as unused. Once the live shape was confirmed (below)
+the default became it, with the subscription-level form opted into BY
+NAME. Measured rather than argued: deleting the item-side read used to
+redden **3** tests, all three named for the period; it now reddens
+**12**, including signature verification and redelivery, which never
+mention the period at all. **A fixture default is what the whole file
+quietly asserts about production.**
+
 **`periodEndOf` reads both and reports WHICH.** The item first (on a
 version that carries it there it is the per-line answer, and a
 subscription mid-plan-change can hold two items with different
@@ -2250,12 +2281,29 @@ number comes back with its TYPE (`item:string`), because a string means
 something upstream changed and parsing it would hide that while looking
 correct.
 
-**WHICH SHAPE THE LIVE API SENDS IS NOT ANSWERABLE FROM THIS
+**WHICH SHAPE THE LIVE API SENDS WAS NOT ANSWERABLE FROM THIS
 REPOSITORY**, and that is the whole reason `periodSource` is logged on
 EVERY apply rather than only on failure. No test here can ask Stripe
-what `2026-04-22.dahlia` carries; the answer has to come back from a
+what `2026-04-22.dahlia` carries; the answer had to come back from a
 real delivery saying so. That is the hardware-step shape of the
 artifact rule, applied to a third party.
+
+**AND IT CAME BACK: THE ITEM. Confirmed 17 September 2026** on Jared's
+live purchase — two events, both logging
+`"periodSource":"item","periodType":"number"`, with `expires_at`
+2026-10-17 on the row. So the item-side read is the PRODUCTION path
+rather than a defensive extra, and `test-stripe.mjs` makes that
+structural: its default fixture is that shape, so the read cannot be
+removed as unused.
+
+**THE FALLBACK STAYS, and the direction is the point.** What is
+confirmed is what this PINNED version sends TODAY, and a pin is a thing
+somebody changes. Removing the subscription-level read because
+production does not exercise it would be the original bug pointing the
+other way — one shape observed, the other assumed absent. The general
+form, which is the `fetchNote` rule wearing a third costume: **an
+observation tells you which branch is live, never that the other one is
+dead.**
 
 **A MISSING PERIOD IS REFUSED AND SHOUTS — AND THE SENTENCE THIS
 REPLACES IS THE LESSON.** It read: *"A MISSING PERIOD APPLIES THE TIER
@@ -2271,8 +2319,12 @@ that rather than as a finding.** `STRIPE_API_VERSION` moved from
 `2024-06-20` to `2026-04-22.dahlia` the same morning, and the
 subscription we map is the one WE re-read at that version — so the
 event's payload and our re-read need not have the same shape at all.
-Confirming it costs nothing now: the next delivery's `periodSource`
-says which location carried it.
+Confirming it cost nothing: the next delivery's `periodSource` said
+which location carried it, and **it was the item — so the timing really
+was the pin** and not a coincidence. Recorded because the coherent
+explanation turned out to be the right one, which is not a reason to
+trust the next one: it was worth stating as a hypothesis and worth the
+one log line that settled it.
 
 ### ONLY A MANUAL GRANT MAY BE OPEN-ENDED
 
@@ -2369,6 +2421,64 @@ instance of the stand-in-weaker-than-production pattern, and the
 second in a fixture. Both now default to a real future date, because
 that is what a live provider row carries, and the null case is opted
 into by name.
+
+### THE PANEL WAS RIGHT AND THE CLICK WAS BROKEN
+
+The flag went on and **every plan button refused a fully signed-in
+student**, with `billing-checkout` showing no invocation at all — the
+client refused before the network. `plans.jsx` read
+`session.access_token`. The app's session is SHAPED by `shapeSession`
+in `sync.js` to `{ user: { id, email }, token }`, deliberately, so that
+nothing outside that module depends on Supabase's field names; every
+other caller reads `session.token`. On a shaped session the provider's
+name is undefined, so `callBilling` threw `unauthenticated` and the
+panel said *"Please sign in again."* to an account whose Sync was
+working two boxes further up the same screen.
+
+**FIVE GUARDS WERE GREEN OVER IT, AND ALL FIVE WERE CORRECT.** Every
+one of them read the RENDERED PANEL — and the panel was right.
+`webPurchases` needs only `!!session`, so six buttons, six prices, all
+six plan markers and the signed-out differential were exactly as they
+should be. The defect lived entirely in what happens on the CLICK.
+
+So this is the consent screen's rule arriving one panel over, and it is
+now the second instance rather than an anecdote: **a guard for a bug
+that needs a user action has to perform the action.** An idle page
+makes no request whatever the code does, and a render check that stops
+at the markup is a green light for every bug behind the first click.
+
+**THE TOKEN IS ASSERTED, NOT JUST THE CALL.** `Bearer undefined` is a
+request that IS made, reaches the function and is refused there — so
+"billing-checkout was called" would have passed on a build that still
+could not buy anything. The expected value is read out of the seeded
+session rather than typed beside it. Same three-outcomes discipline as
+everywhere else: *reached the network* and *reached it as somebody* are
+different claims.
+
+**THE PORTAL IS PRESSED TOO, and it is the worse half.** A checkout
+that refuses costs a sale; a portal that refuses costs a student the
+ability to STOP paying. Both read the token from ONE variable, so the
+one-line fix covered both and nothing was exercising the second — the
+shape where a fix looks complete because the two callers happen to
+share a line. Its mount carries `store: "stripe"`, because the control
+only exists for a web subscriber, and the first run found no control
+and would have passed over nothing.
+
+**THE CLASS IS CLOSED BY A DERIVED SWEEP.** No module outside `sync.js`
+may read a session field name that `shapeSession` RENAMES — and both
+sides of that come out of `shapeSession`'s own body, so renaming either
+follows instead of going stale. A guard naming `"access_token"` would
+be the restatement pattern inside the test written to stop it. It
+refuses rather than passing when `shapeSession` renames nothing, and it
+requires the sweep to find a correct `session.token` reader, or an
+empty offender list says nothing.
+
+**AND THE SECOND MAPPING SITE IS GONE.** `PlannerApp`'s
+`PASSWORD_RECOVERY` handler restated `shapeSession`'s body inline and
+AGREED with it — the is-it-DERIVED-or-does-it-merely-MATCH question,
+which is only ever answered on the day the source moves. It calls the
+exported function now, which is also what gives the sweep one source of
+truth to read.
 
 ### The Terms of Use, and the two things it had to get right
 
