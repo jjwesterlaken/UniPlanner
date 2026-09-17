@@ -19,6 +19,50 @@ mobile/android/
 *.keystore
 key.properties
 
+# ENVIRONMENT FILES AND CREDENTIAL MATERIAL. The keystore entries above
+# were added as "the backstop for the day someone creates one inside the
+# repo and runs `git add -A`" -- and .env is far likelier to be that file
+# than a keystore is. Nothing here ignored it until 17 September 2026,
+# found by a history sweep, and the timing is the point: the Stripe
+# switch-on has somebody handling sk_live_ and whsec_ values by hand, and
+# `stripe listen` prints a signing secret straight to a terminal next to
+# an open editor. The Supabase CLI writes supabase/.env on its own.
+#
+# NOT .env.example -- a committed template with empty values is how the
+# next person knows which names to set, so it is negated below.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Private keys, certificates and signing material, in every packaging the
+# three shells use. None of these has ever been committed; these entries
+# are for the same reason as the keystore ones.
+*.pem
+*.p12
+*.pfx
+*.key
+*.cer
+*.der
+*.mobileprovision
+id_rsa
+id_ed25519
+
+# Registry and machine credentials, which land in a repo by accident more
+# often than by intent: `npm config set //registry…:_authToken` writes an
+# .npmrc wherever it is run.
+.npmrc
+.netrc
+
+# Service-account and mobile platform configuration that carries project
+# secrets. google-services.json and GoogleService-Info.plist are written
+# by the Firebase console into the native project folders, which are
+# themselves ignored -- but not if somebody drops one at the root first.
+service-account*.json
+*-service-account.json
+google-services.json
+GoogleService-Info.plist
+
 # A real lecture transcript, pasted in to run scripts/measure-summary-depth.mjs.
 # It is a student's content and a lecturer's copyrighted delivery, and the
 # script takes it as a path argument, so the obvious place to put one is the
