@@ -23,11 +23,13 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { resolveEssayMessages } from "./lib/essay-prompt.mjs";
+import { productionModel } from "./lib/production-model.mjs";
 import {
   normaliseWords,
   gramSet,
@@ -319,6 +321,207 @@ test("SYSTEM is still not exported, which is why the harness follows the FUNCTIO
   const prompts = read("supabase/functions/ai-text/prompts.js");
   assert.doesNotMatch(prompts, /^export const SYSTEM/m, "SYSTEM became an export; the resolver's reasoning needs revisiting");
   assert.match(prompts, /^export function buildMessages/m, "buildMessages is what the resolver follows");
+});
+
+/* ---------- the harness measures the model the FEATURE will use ----------
+
+   THE FAILURE THIS EXISTS FOR was a single expression:
+
+     model = (src.match(/SUMMARY_MODEL\s*=\s*"([^"]+)"/) || [])[1]
+             || "gpt-4o-mini";
+
+   a regex RESTATING the constant, with a SILENT FALLBACK to a
+   hardcoded id. Add a type annotation to the constant and the regex
+   stops matching; the harness then prints `model gpt-4o-mini` on its
+   own header line, which is indistinguishable from having read it.
+   Harmless only while the fallback equals the truth — the
+   colour-coincidence class, where the stand-in and the real thing
+   agree until the day the real thing moves.
+
+   Everything below is about the harness spending real money on the
+   real configuration. */
+
+const resolvedText = await productionModel({ hasImages: false });
+const resolvedImages = await productionModel({ hasImages: true });
+
+/* The adapter, RUN rather than read, so the comparison is against what
+   a request would really be sent to. A source pattern would pass on a
+   ternary that picks the wrong branch — test-ai-text-function makes
+   the same point about the same file. */
+const adapterModels = await (async () => {
+  const { build } = await import("esbuild");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-model-"));
+  try {
+    const out = await build({
+      entryPoints: [path.join(rootDir, "supabase/functions/ai-text/openai.ts")],
+      bundle: true,
+      format: "esm",
+      platform: "neutral",
+      write: false,
+    });
+    const file = path.join(tmp, "adapter.mjs");
+    fs.writeFileSync(file, out.outputFiles[0].text);
+    const { openaiTextAdapter } = await import(pathToFileURL(file).href);
+    const sentFor = async (hasImages) => {
+      let sent = null;
+      await openaiTextAdapter.complete({
+        messages: [{ role: "user", content: "x" }],
+        maxTokens: 16,
+        apiKey: "sk-test",
+        hasImages,
+        fetchImpl: async (_u, init) => {
+          sent = JSON.parse(init.body);
+          return { ok: true, json: async () => ({ choices: [{ message: { content: "{}" }, finish_reason: "stop" }] }) };
+        },
+      });
+      return sent.model;
+    };
+    return { text: await sentFor(false), images: await sentFor(true) };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+})();
+
+/* The refusal probe, run here because the runner below refuses a
+   promise. A module holding BOTH constants and no selector is exactly
+   the state the old regex read as success. */
+const selectorProbe = await (async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "no-selector-"));
+  try {
+    const broken = path.join(tmp, "model.ts");
+    fs.writeFileSync(broken, 'export const SUMMARY_MODEL = "gpt-4o-mini";\nexport const VISION_MODEL = "gpt-5.4-mini";\n');
+    let threw = null;
+    try {
+      await productionModel({ hasImages: false, modelSource: broken });
+    } catch (err) {
+      threw = err;
+    }
+
+    const whole = path.join(tmp, "whole.ts");
+    fs.writeFileSync(
+      whole,
+      'export const SUMMARY_MODEL = "fixture-text";\nexport const VISION_MODEL = "fixture-vision";\n' +
+        "export function modelFor({ hasImages = false } = {}) { return hasImages ? VISION_MODEL : SUMMARY_MODEL; }\n"
+    );
+    let resolved = null;
+    try {
+      resolved = await productionModel({ hasImages: false, modelSource: whole });
+    } catch {
+      resolved = null;
+    }
+    return { threw, whole: resolved };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+})();
+
+test("THE HARNESS RESOLVES WHAT THE ADAPTER WOULD REALLY SEND", () => {
+  /* Essay feedback is text-only and paste-only, so the model it will
+     use is the one the adapter picks with no images. Compared against
+     the RUNNING adapter rather than against SUMMARY_MODEL: reading a
+     constant by name and asking which constant applies are different
+     questions, and they coincide here only because the feature has no
+     images — which is a fact about the feature, not about the code
+     that reads it. */
+  assert.equal(resolvedText, adapterModels.text, "the harness would call a different model from the one ai-text sends text to");
+});
+
+test("AND IT IS REALLY ASKING ABOUT THE MEDIUM, not returning a constant", () => {
+  /* NON-VACUITY. A helper that ignored its argument and returned one
+     string would satisfy the test above completely. The two media must
+     resolve differently, which is also the property COST-MODEL 12.5
+     prices: one model string would drag text wherever the photo path
+     goes. */
+  assert.equal(resolvedImages, adapterModels.images, "the image path disagrees with the adapter");
+  assert.notEqual(
+    resolvedText,
+    resolvedImages,
+    "text and images resolve to the same model, so this cannot tell a medium-aware helper from a constant"
+  );
+});
+
+test("NO MEASUREMENT SCRIPT CARRIES A MODEL ID OF ITS OWN", () => {
+  /* The fallback is the whole defect: a script that HOLDS a model id
+     can print it while having read nothing. So the ids are not there
+     to be printed.
+
+     Comments stripped first — production-model.mjs quotes the old
+     expression in its header to explain it, which is the guard
+     meeting its own subject for the sixth time in this repository. */
+  const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+  /* EVERY MEASUREMENT SCRIPT, derived from the folder — a list of the
+     three files this change happened to touch would be the same
+     restatement one level up, and it would have missed
+     measure-summary-depth.mjs, which held the literal and is the
+     script EXAM-PREP-PACK.md §4b sends people to for measuring a
+     ceiling.
+
+     Three are DECLARED WITH A REASON rather than swept, the
+     device-store shape: their job IS naming models to set against each
+     other, so a literal there is the subject rather than a stand-in.
+     An undeclared script holding one fails until somebody decides
+     which it is. */
+  const NAMES_MODELS_ON_PURPOSE = {
+    "measure-cost-model.mjs": "prices named models against each other; the names are what it compares",
+    "measure-photo-gates.mjs": "the three-model A/B that chose the vision model; naming them is the experiment",
+    "measure-photo-prompt.mjs": "runs a prompt pair and keeps COST-MODEL 12.9's named fallback as an arm — and it already derives VISION_MODEL through a read that THROWS rather than falling back",
+  };
+  const measured = fs.readdirSync(path.join(rootDir, "scripts")).filter((f) => /^measure-.*\.mjs$/.test(f));
+  assert.ok(measured.length >= 5, `only ${measured.length} measurement scripts found — this sweep is reading the wrong directory`);
+  const files = [
+    ...measured.filter((f) => !NAMES_MODELS_ON_PURPOSE[f]).map((f) => `scripts/${f}`),
+    "scripts/lib/production-model.mjs",
+  ];
+  /* Non-vacuity in both directions: something must be swept, and a
+     declaration must name a script that exists rather than
+     accumulating entries for files somebody deleted. */
+  assert.ok(files.length >= 3, `only ${files.length} scripts are swept`);
+  for (const declared of Object.keys(NAMES_MODELS_ON_PURPOSE)) {
+    assert.ok(measured.includes(declared), `${declared} is declared as naming models on purpose but no longer exists`);
+  }
+  for (const f of files) {
+    const code = strip(read(f));
+    const ids = [...code.matchAll(/["'`](gpt-[\w.\-]+)["'`]/g)].map((m) => m[1]);
+    assert.deepEqual(ids, [], `${f} holds the model id(s) ${ids.join(", ")} — it can print one without having read anything`);
+  }
+  /* AND THE SWEEP IS NOT VACUOUS: it must be reading real files with
+     real content, or an empty read would satisfy it. */
+  for (const f of files) assert.ok(read(f).length > 500, `${f} read as ${read(f).length} bytes`);
+});
+
+test("BOTH SCRIPTS ASK THE SAME QUESTION, and neither reads a constant by name", () => {
+  for (const f of ["scripts/measure-two-arm.mjs", "scripts/measure-no-writing.mjs"]) {
+    const code = read(f).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+    assert.match(code, /productionModel\(\{\s*hasImages:\s*false\s*\}\)/, `${f} does not resolve the model through the shared helper`);
+    assert.doesNotMatch(code, /SUMMARY_MODEL/, `${f} reads a constant by name again — which constant applies is the question`);
+    /* The override stays: naming a model deliberately is how you A/B
+       one. What may not exist is a DEFAULT nobody chose. */
+    assert.match(code, /opt\("--model"\)/, `${f} lost its --model override, so a deliberate comparison is no longer possible`);
+  }
+});
+
+test("IT REFUSES rather than falling back when the selector is gone", () => {
+  /* The behavioural half, and the one the old code failed. Pointed at
+     a module that has lost `modelFor`, this must THROW — the previous
+     expression returned "gpt-4o-mini" and printed it as fact.
+
+     Driven at the top of the file rather than in here, because this
+     runner refuses a promise (line 50) and would otherwise report a
+     pass before the probe settled. */
+  assert.ok(selectorProbe.threw, "a module with both constants but no selector resolved anyway — that is the silent stand-in, restored");
+  assert.match(selectorProbe.threw.message, /modelFor/, `the refusal does not name what is missing: ${selectorProbe.threw.message}`);
+
+  /* AND THE FIXTURE IS NOT REFUSED FOR AN UNRELATED REASON: the same
+     shape WITH a selector must resolve, or the assertion above passes
+     because the fixture was unreadable rather than because the
+     selector was absent. The fixture's ids are deliberately not real
+     model names, so a helper that ignored the file could not produce
+     them. */
+  assert.equal(
+    selectorProbe.whole,
+    "fixture-text",
+    "the helper could not read a well-formed module, so the refusal above proves nothing"
+  );
 });
 
 test("npm test runs this file", () => {

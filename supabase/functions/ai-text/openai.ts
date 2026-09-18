@@ -6,7 +6,7 @@
 // jobs are the call, the ceiling, and turning a truncated response into
 // an error rather than into unparseable JSON.
 
-import { SUMMARY_MODEL, VISION_MODEL } from "../_shared/model.ts";
+import { modelFor } from "../_shared/model.ts";
 
 export const openaiTextAdapter = {
   name: "openai",
@@ -32,9 +32,13 @@ export const openaiTextAdapter = {
        every one of these tasks is output-dominated and the models with
        cheap images have expensive output.
 
-       Both constants are the same string today. VISION_MODEL is the one
-       expected to move. */
-    const model = hasImages ? VISION_MODEL : SUMMARY_MODEL;
+       THE TERNARY MOVED TO `modelFor` in _shared/model.ts, and not as
+       tidiness: a measurement harness has to send its calls to the
+       model this line picks, and reading a constant BY NAME is a
+       different question from asking which one applies. One place
+       answers it now, for the adapter and for anything measuring the
+       adapter. */
+    const model = modelFor({ hasImages });
     const res = await fetchImpl("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },

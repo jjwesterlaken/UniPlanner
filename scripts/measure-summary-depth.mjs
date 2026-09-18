@@ -40,6 +40,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { productionModel } from "./lib/production-model.mjs";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -184,12 +185,20 @@ const SUMMARY_SCHEMA_OBJECT = {
   additionalProperties: false,
 };
 
+const MODEL = await productionModel({ hasImages: false });
+
 async function run(label, systemPrompt) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      /* THE MODEL THE FEATURE USES, asked of the same function the
+         adapter asks. It was the literal "gpt-4o-mini", which is the
+         right answer today and would have gone on being printed as
+         fact on the day SUMMARY_MODEL moved — and this script's whole
+         job is measuring what production does. `hasImages: false`
+         because a lecture summary is text. */
+      model: MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: transcript },

@@ -109,6 +109,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ROOT, callVision } from "./lib/photo-calls.mjs";
+import { productionModel } from "./lib/production-model.mjs";
 import { resolveEssayMessages } from "./lib/essay-prompt.mjs";
 import { normaliseWords, novelRuns, longestNovelRun, quotedSpans } from "../src/noWriting.js";
 
@@ -204,11 +205,16 @@ const { build: buildRequestMessages, source: promptSource } = resolveEssayMessag
   ],
 });
 
-let model = opt("--model");
-if (!model) {
-  const m = fs.readFileSync(path.join(ROOT, "supabase/functions/_shared/model.ts"), "utf8");
-  model = (m.match(/SUMMARY_MODEL\s*=\s*"([^"]+)"/) || [])[1] || "gpt-4o-mini";
-}
+/* THE MODEL THE FEATURE WILL USE, asked of the same function the
+   ai-text adapter asks — not read out of a constant by name, and with
+   no fallback to a hardcoded id. See scripts/lib/production-model.mjs
+   for what the previous line did on the day a constant moves.
+
+   `hasImages: false` is explicit because it is the assumption worth
+   being deliberate about: essay feedback is text-only and paste-only,
+   so this is the call site that changes if that ever stops being
+   true. */
+const model = opt("--model") || (await productionModel({ hasImages: false }));
 
 /* ---------- the control source ----------
 

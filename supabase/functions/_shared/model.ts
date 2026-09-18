@@ -62,6 +62,27 @@ export const SUMMARY_MODEL = "gpt-4o-mini";
 /** Photographed pages. */
 export const VISION_MODEL = "gpt-5.4-mini";
 
+/**
+ * WHICH MODEL A REQUEST GETS, and the rule lives here rather than at
+ * the adapter because it is this file's whole subject.
+ *
+ * It was one inline ternary in `ai-text/openai.ts`, which was fine for
+ * as long as the adapter was the only thing that had to answer the
+ * question. It is not: a measurement harness has to send its calls to
+ * the model the FEATURE will use, or it measures a stand-in and reports
+ * a number about a configuration nobody ships. Reading a constant by
+ * name is not the same as asking which one applies — the two coincide
+ * today only because the feature being measured is text-only, and a
+ * coincidence is not a derivation.
+ *
+ * PER MEDIUM, NEVER PER TASK. Photographs and pasted text are the same
+ * `summarise` task; see the header and COST-MODEL.md 12.5 for what
+ * moving the task rather than the medium would cost.
+ */
+export function modelFor({ hasImages = false }: { hasImages?: boolean } = {}): string {
+  return hasImages ? VISION_MODEL : SUMMARY_MODEL;
+}
+
 /* Published rates for VISION_MODEL, reproduced independently on
    15 September 2026 (COST-MODEL 12.1 and 12.12). MOVE THESE IN THE
    SAME COMMIT AS THE STRING -- the day they lag it, PHOTO_BATCH_CREDITS
