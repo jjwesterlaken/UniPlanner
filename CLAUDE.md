@@ -870,17 +870,62 @@ device, wrong remedy. `displayFailureKind` returns a code and
 already follows; a test asserts every kind has wording, derived rather
 than listed.
 
-**THE CLASS, LISTED AND NOT FIXED.** The instance is a capability
-check; the class is *a check that reads a global an unrelated import
-can set*. One other lives in this repository: `store` in
-`PlannerApp.jsx` prefers `window.storage` over `localStorage`
-unconditionally — a vestigial Claude-preview hook — so any dependency
-that ever sets that name silently takes over the whole planner's
-persistence. Worse blast radius, no evidence it has fired, recorded
-here rather than changed in a bug fix about audio. Nothing else in
-`src/` sniffs a global this way: `AudioContext`/`webkitAudioContext`
-is a real platform feature test, and `purchases.js` and
-`appReview.js` ask Capacitor properly.
+**THE CLASS, SWEPT.** The instance is a capability check; the class is
+*a check that reads a global an unrelated import can set*. Exactly one
+other lives in this repository and it has its own section below,
+because its blast radius is the whole planner rather than one button:
+`store`'s `window.storage` preference. Nothing else in `src/` sniffs a
+global this way — `AudioContext`/`webkitAudioContext` is a real
+platform feature test, and `purchases.js` and `appReview.js` ask
+Capacitor properly.
+
+### `window.storage` — SAME CLASS, WHOLE PLANNER. Priority: before the closed test.
+
+Found by sweeping for the class rather than the instance, 18 September
+2026. **Not fixed**, deliberately — it is not a change to make inside a
+bug fix about audio — and recorded with a priority rather than as a
+line, because it is a worse failure than anything fixed this week.
+
+`store` in `PlannerApp.jsx` (`get`, `set` and `del`, around lines
+222/243/260) prefers `window.storage` over `localStorage`
+**unconditionally**:
+
+```js
+if (typeof window !== "undefined" && window.storage && window.storage.get) {
+  const r = await window.storage.get(key);
+  return r && r.value ? r.value : null;
+}
+```
+
+It is a vestigial hook from the Claude preview this app was first built
+in. Nothing sets that name today. **The whole point of the Capacitor
+bug is that "nothing sets it today" is a statement about this week's
+dependency tree, not a property of the code** — `window.Capacitor` was
+nothing's business either until a billing library imported it.
+
+**WHAT IT WOULD COST, which is why it outranks the rest of the pending
+list.** `store.get` returning null is indistinguishable from an empty
+planner, so the app loads `DEFAULT` — and then the debounced push arms,
+which is the shape the "Clear everything" bug ran on. A signed-in
+student is probably rescued by union-by-id merge (no tombstones are
+written, so the remote copy survives and comes back). **A signed-out
+student is not**: their planner lives only on the device, the new store
+is empty, and the old one is never read again. That is every user
+before they make an account, which is most of them, and the symptom is
+"the app lost my notes".
+
+**The fix is a deletion, not a guard**: remove the branch from all
+three methods. There is no preview to support and no caller to keep
+working, so a feature test is the wrong shape — the thing to remove is
+the possibility, not to detect it better. `test-local-only.mjs` already
+proves the planner is saved locally, so the claim to add alongside is
+that it is saved to **localStorage specifically**, which is the
+assertion that makes a reintroduction go red.
+
+**Probability low, severity high, cost one deletion.** That combination
+is what puts it before the closed test rather than after launch: the
+moment there are twelve testers with local planners, the cost of being
+wrong stops being theoretical.
 
 ### Handwriting was REMOVED — feature and data, 16 August 2026
 
@@ -4710,7 +4755,8 @@ safe to ship.
 ### Pending, in order, once someone is at a desk
 
 **One item is BLOCKING and must happen before the next function
-deploy**, then two minor post-launch leftovers.
+deploy**, then a data-loss risk that is cheap to remove, then two minor
+post-launch leftovers.
 
 0. **The currency deploy, in this order and no other.** 0011 has been
    superseded by 0012 but both still apply cleanly, so run them in
@@ -4742,13 +4788,18 @@ Everything else on this list has been applied and verified; the record
 of what each migration did is kept below the line because the ordering
 lessons are load-bearing, not because the work is outstanding.
 
-1. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
+1. **Delete `store`'s `window.storage` branch** — the highest-priority
+   item on this list and the only one that can lose a user's data. See
+   *"`window.storage` — SAME CLASS, WHOLE PLANNER"* above for what it
+   costs and why the fix is a deletion rather than a guard. Before the
+   closed test.
+2. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
    Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states
    are aspirational rather than enforced. 0004 raises a notice saying so
    rather than failing. The error-report digest email waits on this same
    wiring.
-2. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
+3. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
    every workflow. Both currently target Node 20, which GitHub has
    deprecated; the runners force them onto Node 24 and they work, so this
    is a warning today and not a failure. It becomes a failure on
