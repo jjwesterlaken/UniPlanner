@@ -1,4 +1,4 @@
-// Electron main process — opens the University Planner in a native desktop window.
+// Electron main process — opens the UniPlanner in a native desktop window.
 const { app, BrowserWindow, shell, session, desktopCapturer } = require("electron");
 const path = require("path");
 
@@ -10,7 +10,7 @@ function createWindow() {
     height: 820,
     minWidth: 380,
     minHeight: 520,
-    title: "University Planner",
+    title: "UniPlanner",
     backgroundColor: "#f5f5f4",
     // Mac-style inset traffic lights; ignored on Windows/Linux.
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",

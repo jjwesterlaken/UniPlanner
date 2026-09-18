@@ -1,6 +1,6 @@
 {
   "appId": "com.uniplannerapp.planner",
-  "appName": "University Planner",
+  "appName": "UniPlanner",
   "webDir": "www",
   "ios": {
     "contentInset": "never"

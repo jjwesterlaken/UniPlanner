@@ -47,8 +47,8 @@ find **two** files:
 
 | File | What it is |
 |---|---|
-| `University Planner Setup 1.0.0.exe` | **Installer.** Double-click, choose where to install, and it adds desktop and Start Menu shortcuts. |
-| `University Planner Portable 1.0.0.exe` | **Portable.** No installing at all — double-click and the app just opens. Good for a USB stick. |
+| `UniPlanner-Setup.exe` | **Installer.** Double-click, choose where to install, and it adds desktop and Start Menu shortcuts. |
+| `UniPlanner-Portable.exe` | **Portable.** No installing at all — double-click and the app just opens. Good for a USB stick. |
 
 Use whichever suits you. The installer is the more "normal program" experience;
 the portable one is handy if you don't want to install anything.

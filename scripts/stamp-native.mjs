@@ -57,7 +57,7 @@ export const buildNumber = (now = Date.now()) => Math.floor((now - BUILD_EPOCH) 
 
 /* ---------- settings that are decisions, not defaults ---------- */
 
-/* The home-screen label. "University Planner" is 18 characters and iOS
+/* The home-screen label. "UniPlanner" is 18 characters and iOS
    truncates around 12, so it would show as "University…" on the device
    someone just installed it to. The STORE LISTING name is separate and
    can stay long. */

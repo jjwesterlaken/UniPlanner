@@ -394,7 +394,7 @@ jobs:
       # never seen. The disk image therefore carries no ticket of its
       # own, which v1.1.3 proved on the artifact:
       #
-      #   University Planner.dmg does not have a ticket stapled to it.
+      #   UniPlanner.dmg does not have a ticket stapled to it.
       #
       # THAT IS THE FILE A STUDENT DOWNLOADS, so it is the file that gets
       # the quarantine flag and the file Gatekeeper assesses when they
@@ -444,7 +444,7 @@ jobs:
           # v1.1.4 notarised and stapled this dmg successfully and
           # Gatekeeper still refused it:
           #
-          #   University Planner.dmg: rejected
+          #   UniPlanner.dmg: rejected
           #   source=no usable signature
           #
           # electron-builder signs the .app and does NOT sign the disk
@@ -612,7 +612,7 @@ jobs:
           # when it was written, so gating its source string would have been
           # guessing; it has now run, and what it printed was
           #
-          #   University Planner.dmg: rejected
+          #   UniPlanner.dmg: rejected
           #   source=no usable signature
           #
           # — an unsigned container around a perfectly notarised app. So
@@ -647,14 +647,14 @@ jobs:
           echo "Gatekeeper accepts the app and the disk image, notarised."
 
       # THE NAME IS WHAT SEPARATES THESE FROM THE WEB BUNDLE. The release
-      # job asks for `University-Planner-Desktop-*` and nothing else, so
+      # job asks for `UniPlanner-Desktop-*` and nothing else, so
       # the two categories are told apart by SHAPE rather than by a list
       # of names somebody has to keep in step — and a future matrix label
       # cannot accidentally join the web bundle's category or vice versa.
       - name: Collect the finished files
         uses: actions/upload-artifact@v4
         with:
-          name: University-Planner-Desktop-${{ matrix.label }}
+          name: UniPlanner-Desktop-${{ matrix.label }}
           path: ${{ matrix.artifacts }}
           if-no-files-found: error
           retention-days: 30
@@ -665,7 +665,7 @@ jobs:
         if: matrix.label == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: University-Planner-Web
+          name: UniPlanner-Web
           path: dist-web
           if-no-files-found: error
           retention-days: 30
@@ -694,13 +694,13 @@ jobs:
       # into one folder — so v1.1.5 published the entire marketing site
       # as release assets: app.js, privacy.html, three woff2 fonts and
       # twenty more, sitting beside the installers a student is meant to
-      # pick from. The web bundle rides in `University-Planner-Web`,
+      # pick from. The web bundle rides in `UniPlanner-Web`,
       # which cannot match this pattern.
       - name: Download the desktop builds
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: University-Planner-Desktop-*
+          pattern: UniPlanner-Desktop-*
 
       - name: Gather the files into one folder
         run: |
@@ -793,7 +793,7 @@ jobs:
           else
             gh release create "${GITHUB_REF_NAME}" release/* \
               --repo "${GITHUB_REPOSITORY}" \
-              --title "University Planner ${GITHUB_REF_NAME}" \
+              --title "UniPlanner ${GITHUB_REF_NAME}" \
               --notes "Download the file for your device and open it.
 
           - **Mac:** the .dmg file

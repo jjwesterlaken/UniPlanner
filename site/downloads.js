@@ -199,7 +199,7 @@ export function downloadsFor(platform, { slug, assets }) {
          is running out of a mounted image that vanishes on eject, and
          takes the shortcut they made with it. */
       note: FLAGS.macDownload
-        ? "Open the downloaded file and drag University Planner into the Applications folder shown, then launch it from Applications."
+        ? "Open the downloaded file and drag UniPlanner into the Applications folder shown, then launch it from Applications."
         : null,
       available: FLAGS.macDownload,
       soon: FLAGS.macDownload ? null : "Coming soon",

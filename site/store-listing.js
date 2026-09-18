@@ -10,12 +10,18 @@
    (30 / 80 / 4000) and scripts/test-readings.mjs sweeps this file with
    the same substitution ban it applies to the in-app copy.
 
-   THE NAME. "UniPlanner" everywhere a store shows it, matching the App
-   Store record. The in-app display name is still "University Planner"
-   (DISPLAY_NAME in scripts/stamp-native.mjs is "UniPlanner" for the
-   home screen, because iOS truncates at ~12 characters). Reconciling
-   the two is a real task and deliberately not one to do before the
-   first AAB. */
+   THE NAME IS "UniPlanner" EVERYWHERE NOW, and this paragraph used to
+   describe the split it replaced. The store record, the in-app header,
+   the installers and the home-screen label were three different
+   spellings of one product; "Reconciling the two is a real task and
+   deliberately not one to do before the first AAB" is what stood here,
+   and it was done on 18 September 2026 instead.
+
+   THE DEVICE DECIDED IT rather than taste: DISPLAY_NAME in
+   scripts/stamp-native.mjs has always been "UniPlanner" because iOS
+   truncates a home-screen label at ~12 characters, so "University
+   Planner" showed as "University…" on the phone somebody had just
+   installed it to. One name was only ever available as the short one. */
 
 export const STORE_NAME = "UniPlanner";
 

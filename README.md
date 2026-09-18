@@ -1,4 +1,4 @@
-# University Planner
+# UniPlanner
 
 A study planner: courses, calendar, weekly reading planner, assignments,
 to-do list, notes with folders, flashcard study game, colour themes, and

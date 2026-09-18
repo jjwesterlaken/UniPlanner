@@ -3911,7 +3911,7 @@ function BackupPanel({ data, onRestore, session }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `university-planner-backup-${stamp}.json`;
+      a.download = `uniplanner-backup-${stamp}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -5991,7 +5991,7 @@ export default function PlannerApp() {
               <GraduationCap size={19} />
             </span>
             <div className="min-w-0 flex-1">
-              <h1 className="font-serif text-xl font-semibold leading-none text-stone-800">University Planner</h1>
+              <h1 className="font-serif text-xl font-semibold leading-none text-stone-800">UniPlanner</h1>
               <p className="mt-0.5 text-xs text-stone-500">
                 {saveState === "error" ? (
                   <span className="inline-flex items-center gap-1 font-medium text-rose-600"><TriangleAlert size={11} /> Not saved on this device</span>

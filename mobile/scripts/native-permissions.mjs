@@ -58,7 +58,7 @@ import { transcriptionProviderNames } from "../../src/aiProviders.js";
    longer retention, and conflating them here would make this dialog
    inaccurate. */
 export const MIC_USAGE_DESCRIPTION =
-  "University Planner uses your microphone to record lectures so it can " +
+  "UniPlanner uses your microphone to record lectures so it can " +
   `generate an AI summary and study cards. Your recording is sent to ${transcriptionProviderNames().join(" or ")} ` +
   `for transcription and is ${AUDIO_DELETION_PROMISE}.`;
 
@@ -78,7 +78,7 @@ export const IOS_PLIST_KEY = "NSMicrophoneUsageDescription";
    and jsdom has no file picker. It took reading what the WebView
    actually presents, exactly as the audio permission did. */
 export const CAMERA_USAGE_DESCRIPTION =
-  "University Planner uses your camera so you can photograph pages of a " +
+  "UniPlanner uses your camera so you can photograph pages of a " +
   "reading to summarise. Photos are sent for summarising and are not stored by us.";
 
 export const IOS_CAMERA_PLIST_KEY = "NSCameraUsageDescription";
@@ -101,7 +101,7 @@ export const IOS_CAMERA_PLIST_KEY = "NSCameraUsageDescription";
    is always used, this can go -- but removing it needs the evidence,
    not the reasoning. */
 export const PHOTO_LIBRARY_USAGE_DESCRIPTION =
-  "University Planner uses your photo library so you can pick a photo of a " +
+  "UniPlanner uses your photo library so you can pick a photo of a " +
   "reading to summarise. Photos are sent for summarising and are not stored by us.";
 
 export const IOS_PHOTO_LIBRARY_PLIST_KEY = "NSPhotoLibraryUsageDescription";

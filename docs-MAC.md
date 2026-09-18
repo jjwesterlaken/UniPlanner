@@ -46,7 +46,7 @@ npm run build
 After a few minutes you'll find your installer here:
 
 ```
-desktop/dist/University Planner-1.0.0-arm64.dmg
+desktop/dist/UniPlanner-1.1.8-arm64.dmg
 ```
 
 (`arm64` for Apple Silicon Macs — M1/M2/M3/M4. Older Intel Macs produce
@@ -54,7 +54,7 @@ desktop/dist/University Planner-1.0.0-arm64.dmg
 
 ## Step 5 — Install it
 
-Double-click the `.dmg`, then drag **University Planner** into Applications.
+Double-click the `.dmg`, then drag **UniPlanner** into Applications.
 Done — it's now a normal Mac app you can launch from Launchpad or Spotlight.
 
 ---

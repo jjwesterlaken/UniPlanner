@@ -15,12 +15,12 @@
    ================================================================== */
 
 export const REPOSITORY_URL = "https://github.com/jjwesterlaken/UniPlanner.git";
-export const PRODUCT_NAME = "University Planner";
+export const PRODUCT_NAME = "UniPlanner";
 export const ARTIFACT_NAMES = {
-  "nsis": "University-Planner-Setup.${ext}",
-  "portable": "University-Planner-Portable.${ext}",
-  "linux": "University-Planner.${ext}",
-  "dmg": "University-Planner.${ext}"
+  "nsis": "UniPlanner-Setup.${ext}",
+  "portable": "UniPlanner-Portable.${ext}",
+  "linux": "UniPlanner.${ext}",
+  "dmg": "UniPlanner.${ext}"
 };
 
 /* Where the planner lives — ABSOLUTE, and written by the build from

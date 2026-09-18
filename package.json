@@ -3,7 +3,7 @@
   "version": "1.1.6",
   "private": true,
   "type": "module",
-  "description": "University Planner - courses, assignments, notes and study cards.",
+  "description": "UniPlanner - courses, assignments, notes and study cards.",
   "scripts": {
     "build:web": "node scripts/build-web.mjs",
     "prepare:native": "node scripts/prepare-native.mjs",

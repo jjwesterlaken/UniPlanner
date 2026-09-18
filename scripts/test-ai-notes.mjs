@@ -1470,7 +1470,7 @@ async function run() {
 <plist version="1.0">
 <dict>
 \t<key>CFBundleDisplayName</key>
-\t<string>University Planner</string>
+\t<string>UniPlanner</string>
 \t<key>UIApplicationSceneManifest</key>
 \t<dict>
 \t\t<key>UIApplicationSupportsMultipleScenes</key>
