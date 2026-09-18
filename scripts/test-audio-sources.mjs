@@ -279,6 +279,36 @@ test("CANCELLING THE SHARE DIALOG IS NOT A MICROPHONE PROBLEM", () => {
   }
 });
 
+test("EVERY SOURCE THAT OPENS A SHARE DIALOG NAMES THE AUDIO CONTROL FIRST", () => {
+  /* Windows and Linux had no pre-flight instruction at all: the audio
+     is a checkbox in a dialog nobody warned the student about, and the
+     only place the app mentioned it was the refusal AFTER a silent
+     capture. Recoverable — nothing is recorded or charged — and it
+     costs a wasted attempt on the screen where somebody is already
+     unsure the feature works. The Mac has had a pre-flight line since
+     this shipped; the other platforms now do too.
+
+     MATCHED BY SUBJECT, NOT BY PHRASE. Five wording pins in
+     test-legal.mjs have already gone red on correct improvements, so
+     this asks only that the hint mentions the audio at all — Grace can
+     reword it freely. The microphone control is the CONTROL: it opens
+     no dialog, so it must NOT carry the instruction, which is what
+     stops "mention audio somewhere" passing over a blanket sentence
+     pasted onto every option. */
+  const hint = AI_NOTES_COPY.audioSource.hint;
+  const opensShareDialog = AUDIO_SOURCES.filter((s) => s === "system" || s === "both");
+  assert.ok(opensShareDialog.length > 0, "no source opens a share dialog — this guard is reading the wrong list");
+
+  for (const s of opensShareDialog) {
+    assert.match(hint[s], /audio|sound/i, `"${s}" opens the browser's share dialog and its hint never mentions the audio`);
+  }
+  assert.doesNotMatch(
+    hint.microphone,
+    /audio|sound/i,
+    "the microphone hint carries the share-dialog instruction — it opens no dialog, so this guard can no longer discriminate"
+  );
+});
+
 test("a browser with no getDisplayMedia at all is refused rather than crashed into", () => {
   const caps = describeCapabilities(env(UA.chromeWindows, { hasGetDisplayMedia: false }));
   assert.equal(caps.system.available, false);
