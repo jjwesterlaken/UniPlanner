@@ -775,6 +775,113 @@ on iOS the `audio` background mode and an App Store review that asks why
 a study app records in the background. Different product, different
 submission risk.
 
+### ASK THE OBJECT WHAT IT IS. DO NOT TEST WHETHER IT EXISTS.
+
+Reported by Jared on 18 September 2026: on Windows, "This computer's
+audio" and "Both" were **disabled** — not failing, disabled, with a
+not-allowed cursor — in every browser and in desktop v1.1.8, and the
+same on Grace's Mac. Confirmed identical on both machines before a line
+was changed.
+
+**An import three modules away decided what a capability check believed
+about the hardware.** `readEnv` asked `!!window.Capacitor`, and
+`@capacitor/core` sets that global as a SIDE EFFECT of being imported —
+`initCapacitorGlobal` in its own `dist/index.js` — on every platform,
+reporting `getPlatform() === "web"` in a browser. Billing Phase 2
+(`983b1e6`, 7 September 2026) added `src/purchases.js`, which imports
+it, reached from `PlannerApp → plans.jsx → purchases.js`. From that
+commit the web bundle carried the global, `describeCapabilities`
+returned `platform: "ios"`, `mobile: true` on every desktop, and a
+student on a laptop was shown the sentence **"Phones and tablets can
+only record through the microphone"**. Nothing in `audioSources.js`
+changed. Nothing in the recorder changed.
+
+**THREE SYMPTOMS, ONE PREDICATE, and the other two are what made the
+diagnosis certain rather than plausible.** `mobile` and `platform`
+feed more than the buttons: `devicePicker.available` is
+`hasEnumerateDevices && platform !== "ios"`, so the **microphone
+dropdown vanished** on any desktop with two inputs; and the
+backgrounding listener is gated `if (!caps.mobile) return`, so
+switching tabs mid-recording showed a desktop user **"Phones stop apps
+recording when they aren't on screen"**. Two of those have nothing to
+do with `getDisplayMedia`, which is why they were worth predicting
+before Grace looked — a cause that explains one symptom and a cause
+that explains three are different amounts of evidence.
+
+**The right question was already being asked two modules away.**
+`purchases.js` and `appReview.js` both call
+`Capacitor.isNativePlatform()`. `audioSources.js` tested for the
+global's existence instead, and the two answers agreed for as long as
+nothing in a browser imported Capacitor. **A file that MATCHES the
+correct behaviour and a file that DERIVES it are indistinguishable
+until the day the world moves** — the icon-slot lesson, in a boolean.
+
+`readNativeShell` asks `isNativePlatform()`, falls back to
+`getPlatform()`, and answers **"not native" when the shape is
+unrecognisable** — because the user-agent test is what actually catches
+phones and this flag is only a backstop for a shell that hid its UA. A
+backstop that guesses "phone" is exactly how this reached production.
+The env field is renamed `isNativeShell` so the name cannot be re-read
+as "the global exists".
+
+**THE GUARD IS THE REAL ENVIRONMENT, and that is the half worth
+keeping.** `readEnv()` had **no caller anywhere in `src/`, `scripts/`
+or `e2e/` outside its own default parameter** — every check handed
+`describeCapabilities` a hand-built env, and the fixture factory in
+`test-audio-sources.mjs` DEFAULTED to `isCapacitor: false`. Four
+fixtures asserting a world that had stopped being production on 7
+September, which is the Stripe `current_period_end` shape again: *a
+fixture default is what the whole file quietly asserts about
+production.*
+
+So the primary assertion lives in `test-rendered-tabs.mjs`, where the
+built bundle runs in real Chromium and `readEnv` genuinely executes:
+the three source buttons' `disabled` attribute and the absence of the
+refusal note. **Its non-vacuity is the interesting part** — it asserts
+`window.Capacitor` IS present and IS reporting non-native, because if
+the bundle ever stops carrying the global every other assertion passes
+for a reason unrelated to the fix. That is the colour-coincidence class
+arriving in a guard written to close it. Mutation-checked by restoring
+the old predicate: it reddens there, naming the two buttons, and not
+only in the fixture table.
+
+That walk had been rendering this exact tab, in this exact engine,
+since the free-variable bug — and **walked straight past the picker
+without looking at it**. Rendering the screen is not the same claim as
+reading the control.
+
+**SAFARI IS THE DISCRIMINATOR AND IT IS NOW A TEST.** Safari genuinely
+cannot capture system audio, so the buttons are disabled either way —
+what differs is the SENTENCE. If the mobile check fires first, Safari
+on a Mac reads "Phones and tablets can only record through the
+microphone", which is false about the machine in front of the student;
+under the fix it reads "Needs Chrome or Edge". Both worlds are
+asserted, and the two sentences are asserted to DIFFER first, since a
+copy change collapsing them would leave every other assertion passing
+while discriminating nothing.
+
+**And one small bug on the same path.** `getDisplayMedia` rejects with
+the SAME DOMException names `getUserMedia` uses and means different
+things by them, so a cancelled screen share went through
+`describeRecorderError` and told the student "Microphone access was
+denied… allow microphone access in your browser settings" — wrong
+device, wrong remedy. `displayFailureKind` returns a code and
+`aiNotesCopy.js` holds the sentence, the rule `describeCapabilities`
+already follows; a test asserts every kind has wording, derived rather
+than listed.
+
+**THE CLASS, LISTED AND NOT FIXED.** The instance is a capability
+check; the class is *a check that reads a global an unrelated import
+can set*. One other lives in this repository: `store` in
+`PlannerApp.jsx` prefers `window.storage` over `localStorage`
+unconditionally — a vestigial Claude-preview hook — so any dependency
+that ever sets that name silently takes over the whole planner's
+persistence. Worse blast radius, no evidence it has fired, recorded
+here rather than changed in a bug fix about audio. Nothing else in
+`src/` sniffs a global this way: `AudioContext`/`webkitAudioContext`
+is a real platform feature test, and `purchases.js` and
+`appReview.js` ask Capacitor properly.
+
 ### Handwriting was REMOVED — feature and data, 16 August 2026
 
 Grace and Jared's decision, and it was explicitly both halves: not a

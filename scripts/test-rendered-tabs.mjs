@@ -303,6 +303,31 @@ async function run() {
       await page.waitForTimeout(900);
 
       const html = await page.locator("#root").innerHTML();
+
+      /* THE REAL ENVIRONMENT, read in the page before it closes. This is
+         the only place in the suite where audioSources.readEnv() is
+         EXECUTED against a real browser rather than handed a fixture —
+         see the assertions below. */
+      const audio =
+        id === "ai-notes"
+          ? await page.evaluate(() => {
+              const labels = ["Microphone", "This computer's audio", "Both"];
+              const buttons = [...document.querySelectorAll("button")]
+                .filter((b) => labels.includes((b.textContent || "").trim()))
+                .map((b) => ({ label: (b.textContent || "").trim(), disabled: !!b.disabled }));
+              return {
+                capacitorGlobal: !!window.Capacitor,
+                capacitorSaysNative:
+                  !!window.Capacitor &&
+                  typeof window.Capacitor.isNativePlatform === "function" &&
+                  window.Capacitor.isNativePlatform(),
+                hasGetDisplayMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia),
+                buttons,
+                unavailableNote: (document.body.innerText.match(/This computer's audio — [^\n]*/) || [])[0] || null,
+              };
+            })
+          : null;
+
       await ctx.close();
 
       assert.deepEqual(errors, [], `rendering "${id}" threw:\n        ${errors.join("\n        ")}`);
@@ -331,6 +356,66 @@ async function run() {
           html,
           /Summarise a reading/,
           "the AI tab rendered with no consent gate and no panel either — the signed-out notice, or nothing"
+        );
+
+        /* ===== SYSTEM AUDIO IS OFFERED ON A DESKTOP =====
+
+           THE BUG THIS EXISTS FOR, and it is the reason the assertion
+           lives HERE rather than in test-audio-sources.mjs.
+           `@capacitor/core` sets `window.Capacitor` as a side effect of
+           being imported, on every platform; `readEnv` read its mere
+           presence as "this is a phone"; and from Billing Phase 2
+           (7 September 2026) every desktop browser and the Electron
+           build came out `platform: "ios"` with both system-audio
+           options disabled and a desktop user told "Phones and tablets
+           can only record through the microphone".
+
+           NOTHING COULD HAVE CAUGHT IT. `readEnv()` had no caller
+           anywhere outside its own default parameter: test-audio-
+           sources.mjs hands describeCapabilities a hand-built env whose
+           factory DEFAULTS to the absent global, and test-app-smoke.mjs
+           builds another by hand. Four fixtures asserting a world that
+           had stopped being production, and one real render — this one
+           — that walked straight past the picker without looking at it.
+
+           So the claim is made on the artifact: the built bundle, in a
+           real engine, with the real global present and the real
+           readEnv running. Chromium on a desktop OS is exactly the
+           surface that broke. */
+        assert.ok(audio, "the ai-notes probe did not run");
+
+        /* NON-VACUITY, AND IT IS THE WHOLE POINT. If the bundle ever
+           stops setting window.Capacitor, every assertion below passes
+           for a reason that has nothing to do with the fix — the
+           colour-coincidence shape. The global must BE there and be
+           correctly read as non-native. */
+        assert.equal(
+          audio.capacitorGlobal,
+          true,
+          "window.Capacitor is not in the bundle any more, so this guard would pass without testing anything"
+        );
+        assert.equal(
+          audio.capacitorSaysNative,
+          false,
+          "Capacitor reports this as a native platform in a desktop browser — the probe is not measuring what it thinks"
+        );
+        assert.equal(audio.hasGetDisplayMedia, true, "no getDisplayMedia here, so system audio is legitimately unavailable and this proves nothing");
+
+        assert.equal(
+          audio.buttons.length,
+          3,
+          `expected the three audio-source buttons, found ${audio.buttons.length} — the picker did not render`
+        );
+        const stillDisabled = audio.buttons.filter((b) => b.disabled).map((b) => b.label);
+        assert.deepEqual(
+          stillDisabled,
+          [],
+          `disabled on a desktop browser: ${stillDisabled.join(", ")} — the mobile check is firing off a global an import sets`
+        );
+        assert.equal(
+          audio.unavailableNote,
+          null,
+          `a desktop browser is being told why it cannot record system audio: ${audio.unavailableNote}`
         );
       }
       /* THE PLANS PANEL, on the surface that cannot sell anything. The

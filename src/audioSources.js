@@ -42,21 +42,50 @@ export const MIC_SAMPLE_RATE = 16000;
 /*  Reading the environment                                           */
 /* ------------------------------------------------------------------ */
 
+/* IS THIS A NATIVE SHELL, NOT DOES THE GLOBAL EXIST — and the two came
+   apart on 7 September 2026 without a line of this file changing.
+
+   `@capacitor/core` sets `window.Capacitor` as a SIDE EFFECT of being
+   imported (initCapacitorGlobal, its dist/index.js), on every platform,
+   with `getPlatform() === "web"` in a browser. Billing Phase 2 added
+   `src/purchases.js`, which imports it, so from that commit the global
+   existed in the WEB bundle — and this function read its mere presence
+   as "this is a phone". Every desktop browser and the Electron build
+   came out `platform: "ios"`, `mobile: true`, which disabled system
+   audio, hid the microphone picker, and showed a desktop user the
+   sentence "Phones and tablets can only record through the microphone".
+
+   An import three modules away changed what a capability check believed
+   about the hardware. So ASK THE OBJECT, never test for it:
+   `isNativePlatform()` is Capacitor's own answer and was already the
+   question purchases.js and appReview.js ask. When the shape is
+   unrecognisable the answer is "not native", because the user-agent
+   test above is what actually catches phones — this flag is a backstop
+   for a shell that hid its UA, and a backstop that guesses "phone" is
+   how this bug reached production. */
+function readNativeShell(win) {
+  const cap = win && win.Capacitor;
+  if (!cap) return false;
+  if (typeof cap.isNativePlatform === "function") return !!cap.isNativePlatform();
+  const platform = typeof cap.getPlatform === "function" ? cap.getPlatform() : cap.platform;
+  return platform === "ios" || platform === "android";
+}
+
 /** Snapshots the globals this module reasons about. Called, never imported-time. */
 export function readEnv() {
   const nav = typeof navigator === "undefined" ? null : navigator;
   return {
     userAgent: (nav && nav.userAgent) || "",
-    isCapacitor: typeof window !== "undefined" && !!window.Capacitor,
+    isNativeShell: readNativeShell(typeof window === "undefined" ? null : window),
     hasGetDisplayMedia: !!(nav && nav.mediaDevices && nav.mediaDevices.getDisplayMedia),
     hasEnumerateDevices: !!(nav && nav.mediaDevices && nav.mediaDevices.enumerateDevices),
   };
 }
 
-function platformOf(ua, isCapacitor) {
+function platformOf(ua, isNativeShell) {
   if (/iPhone|iPad|iPod/i.test(ua)) return "ios";
   if (/Android/i.test(ua)) return "android";
-  if (isCapacitor) return "ios"; // a Capacitor shell that somehow hid its UA
+  if (isNativeShell) return "ios"; // a native shell that somehow hid its UA
   if (/Macintosh|Mac OS X/i.test(ua)) return "macos";
   if (/Windows/i.test(ua)) return "windows";
   if (/Linux/i.test(ua)) return "linux";
@@ -87,9 +116,9 @@ function engineOf(ua) {
  * aiNotesCopy.js so Grace can rework it without touching this.
  */
 export function describeCapabilities(env = readEnv()) {
-  const platform = platformOf(env.userAgent || "", env.isCapacitor);
+  const platform = platformOf(env.userAgent || "", env.isNativeShell);
   const engine = engineOf(env.userAgent || "");
-  const mobile = platform === "ios" || platform === "android" || env.isCapacitor;
+  const mobile = platform === "ios" || platform === "android" || !!env.isNativeShell;
 
   let system;
   if (mobile) {

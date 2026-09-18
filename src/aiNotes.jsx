@@ -23,6 +23,7 @@ import {
   uploadRefusal,
   MINIMUM_BILLED_CREDITS_HINT,
   describeRecorderError,
+  displayFailureKind,
   parseAiNotesError,
   PERMANENT_FAILURE_CODES,
   mapAiResultToItems,
@@ -224,7 +225,11 @@ function useLectureRecorder() {
           audio: systemConstraints(),
         });
       } catch (err) {
-        return { failed: true, message: describeRecorderError(err) };
+        /* NOT describeRecorderError. getDisplayMedia rejects with the
+           same DOMException names getUserMedia uses and means different
+           things by them — a cancelled picker was being reported as a
+           denied microphone. */
+        return { failed: true, message: AI_NOTES_COPY.audioSource.shareFailed[displayFailureKind(err)] };
       }
 
       /* Before the recorder exists, before anything is billed. */
