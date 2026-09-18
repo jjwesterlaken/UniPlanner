@@ -51,6 +51,8 @@ import { getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { failureLine, stageLine } from "../ai-notes/diagnostics.js";
 import { applyEntitlement, isOurUserId } from "../_shared/entitlement.ts";
 import {
+  cancellationKind,
+  cancellationShapeOf,
   invoiceIdForCharge,
   invoicePaymentsQuery,
   parseStripeSignature,
@@ -547,6 +549,53 @@ export async function handle(req: Request): Promise<Response> {
       computed: tier,
       lookupKey,
     });
+
+    /* ---- DID THIS CANCELLATION KEEP THE PROMISE? ----
+
+       `_shared/stripe.ts` has the reasoning: Terms §5 and the panel's
+       `autoRenew` disclosure both promise access until the paid period
+       ends, and on the web that promise rests entirely on a dropdown in
+       Stripe's portal configuration which nothing here can read. So the
+       dropdown is OBSERVED, in the events we are already sent.
+
+       LOGGED ON EVERY APPLY, not only on the anomaly. The healthy
+       reading is `scheduled`, and a promise nobody can see being kept
+       is one nobody notices being broken.
+
+       INSIDE ITS OWN try, and AFTER everything that decides the
+       response. This is a log line: it must never turn a delivery that
+       applied correctly into a 500 that Stripe then retries against an
+       event already recorded. Same reason the auto-folder write has
+       one — a convenience must not take down work already done. */
+    try {
+      const shape = cancellationShapeOf(subscription);
+      const verdict = cancellationKind({
+        shape,
+        endsOnRefund,
+        tierBefore: applied.before,
+        manualGrant: applied.outcome === "manual_override",
+      });
+      const detail = {
+        id: eventId,
+        event: eventType,
+        subscription: subscriptionId,
+        kind: verdict.kind,
+        cancel_at_period_end: shape.cancelAtPeriodEnd,
+        status: shape.status,
+        reason: shape.reason,
+        seconds_lost: verdict.secondsLost,
+      };
+      if (verdict.anomaly) {
+        /* A FAILURE LINE, so it reaches the digest. Nothing is wrong
+           with this delivery — it is the CONFIGURATION that is wrong,
+           and this is the only place it becomes visible. */
+        logFailure("portal_configuration", new Error("a cancellation ended a paid period early"), detail);
+      } else {
+        logStage("cancellation", detail);
+      }
+    } catch (logErr) {
+      logFailure("cancellation", logErr, { id: eventId });
+    }
 
     const matched = applied.after !== undefined;
     const halted = await recordEvent({

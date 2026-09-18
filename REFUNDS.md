@@ -164,6 +164,39 @@ argument, and so the offer cannot be used to run a month's credits through
 the AI and then ask for the money back. **That is the thing the cap is
 sized against: usage, not cost.**
 
+## The one setting this policy rests on, and how you find out it moved
+
+Steps 4 and 5 both assume a cancelled plan runs to the end of the paid
+period. Terms §5 says so and the panel's auto-renew line says so, and on
+the web the whole promise rests on **one dropdown in Stripe → Settings →
+Billing → Customer portal → cancellation behaviour**. Nothing in this
+repository can read it, and `billing-portal` sends only `customer` and
+`return_url`, so whatever it says is what a student gets.
+
+Pinning a portal configuration was considered and refused —
+`_shared/stripe.ts` has the reasoning, and the short version is that a
+bad configuration id fails the session outright, so it trades "a
+dropdown somebody would have to go and change" for "nobody can cancel
+at all".
+
+**So the dropdown is observed instead.** Every cancellation is logged,
+and the two settings produce different lines:
+
+| the dropdown says | the log line reads |
+|---|---|
+| cancel at period end | `"stage":"cancellation","kind":"scheduled"` |
+| cancel immediately | `"stage":"failure","stage":"portal_configuration","kind":"immediate"` |
+
+The healthy one is logged deliberately, not just the anomaly: a promise
+nobody can see being kept is one nobody notices being broken.
+
+**If a `portal_configuration` line appears**, read `seconds_lost` — it
+says how much paid time that student lost, and it is the number the
+conversation is about. Then check the dropdown. The line fires only when
+a **paid** period ended early and nothing accounts for it: a refund we
+issued, a failed card, a gifted tier and a cancellation that landed on
+its period end are each excluded by name.
+
 ## Not decided here
 
 Four questions about this policy need a solicitor rather than a decision,
