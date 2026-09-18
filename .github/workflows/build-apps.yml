@@ -80,8 +80,72 @@ jobs:
           test -d node_modules/tailwindcss || { echo "ERROR: tailwindcss missing"; exit 1; }
           echo "build tools present"
 
+      # THE TAG IS THE VERSION, AND IT WAS READ BY NOTHING.
+      #
+      # This workflow triggers on `v*` and then ignored the tag
+      # completely: electron-builder reads `desktop/package.json`, which
+      # read 1.1.0, so v1.1.1 through v1.1.6 all shipped installers and
+      # `latest*.yml` manifests advertising **1.1.0**. Silent in both
+      # directions — nothing errors, and the day electron-updater is
+      # wired it offers 1.1.0 to somebody already on it and does
+      # nothing.
+      #
+      # CLAUDE.md recorded this exact trap at v1.0.1 ("the next tagged
+      # release would advertise a LOWER version to auto-update and do
+      # nothing, silently") and the remedy taken then was to bump the
+      # file by hand, which is the thing that stopped happening six
+      # releases ago. So the number is DERIVED now: on a tag build the
+      # tag is the single source of truth and the committed version is
+      # irrelevant. A manual dispatch keeps using package.json, because
+      # there is no tag to read.
+      - name: Take the marketing version from the tag
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+            case "$V" in
+              [0-9]*.[0-9]*.[0-9]*) : ;;
+              *) echo "ERROR: tag '${GITHUB_REF_NAME}' is not v<major>.<minor>.<patch>, so no version can be derived from it." ; exit 1 ;;
+            esac
+            echo "Tag ${GITHUB_REF_NAME} -> version $V"
+            node -e '
+              const fs = require("fs");
+              const v = process.argv[1];
+              for (const f of ["package.json", "desktop/package.json", "mobile/package.json"]) {
+                const j = JSON.parse(fs.readFileSync(f, "utf8"));
+                j.version = v;
+                fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
+                console.log(`${f} -> ${v}`);
+              }
+            ' "$V"
+          else
+            echo "Not a tag build; keeping the committed version $(node -p "require('./package.json').version")"
+          fi
+
       - name: Build the planner
         run: npm run build
+
+      # WHAT electron-builder WILL ACTUALLY STAMP, read back before the
+      # twenty-minute package step rather than after it. On a tag build
+      # the three files must agree with the tag; a mismatch here means
+      # the step above did not take, and finding that out from a
+      # published manifest costs another tag.
+      - name: The version the installers will carry
+        shell: bash
+        run: |
+          ROOT=$(node -p "require('./package.json').version")
+          DESK=$(node -p "require('./desktop/package.json').version")
+          MOB=$(node -p "require('./mobile/package.json').version")
+          echo "root=$ROOT desktop=$DESK mobile=$MOB"
+          if [ "$ROOT" != "$DESK" ] || [ "$ROOT" != "$MOB" ]; then
+            echo "ERROR: the three package.json versions disagree, so the installers and the manifests would too."
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "$ROOT" != "${GITHUB_REF_NAME#v}" ]; then
+            echo "ERROR: building tag ${GITHUB_REF_NAME} but the version is $ROOT."
+            echo "       Every installer and every latest*.yml would advertise the wrong version."
+            exit 1
+          fi
 
       - name: Install desktop build tools
         working-directory: desktop
