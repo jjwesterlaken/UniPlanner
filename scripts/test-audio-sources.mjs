@@ -121,6 +121,22 @@ test("phones and tablets are microphone-only", () => {
   }
 });
 
+test("A PHONE IS STILL A PHONE WITH THE FLAG OFF — the user agent carries it alone", () => {
+  /* THE COST OF WEAKENING THE BACKSTOP, asserted rather than assumed.
+     readNativeShell now answers "not native" for any shape it cannot
+     read, so if Capacitor ever reported a real phone as non-native the
+     user-agent test would be the only thing left. It is sufficient:
+     both phone shells come out microphone-only with the flag FALSE.
+     Without this, the fix to the desktop bug could have opened a
+     billed-silence path on the platforms the flag exists for. */
+  for (const ua of [UA.iosCapacitor, UA.androidCapacitor]) {
+    const caps = describeCapabilities(env(ua));
+    assert.equal(caps.mobile, true, `${ua.slice(0, 40)} stopped reading as mobile without the flag`);
+    assert.equal(caps.system.available, false);
+    assert.equal(caps.system.reason, "mobile-platform");
+  }
+});
+
 test("only the phone shells are flagged as degrading in the background", () => {
   /* Android refuses mic capture to a backgrounded app without a
      foreground service; a desktop browser keeps getUserMedia alive in a
