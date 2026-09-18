@@ -207,10 +207,24 @@ export const AI_NOTES_COPY = {
       system: "This computer's audio",
       both: "Both",
     },
+    /* THE TICK BOX IS NAMED BEFORE THE DIALOG OPENS, not after it comes
+       back silent. The Mac has had a pre-flight line since this feature
+       shipped (tabOnlyHint, below) because a window share there is
+       silently audio-less; Windows and Linux had NOTHING, and on those
+       platforms the audio is a CHECKBOX the student has to find in a
+       dialog nobody warned them about. The recovery is good — the
+       capture is refused before the recorder exists, nothing recorded
+       and nothing charged — but it costs a wasted attempt on the one
+       screen where the student is already unsure whether this works.
+
+       It goes on the hint rather than in a new element: this line
+       already renders for whichever source is selected, so it appears
+       exactly when somebody picks the option and costs no layout. */
     hint: {
       microphone: "For a lecture in a room.",
-      system: "For a lecture played on this computer — a recorded video or an online class.",
-      both: "The online class and your own microphone together.",
+      system:
+        "For a lecture played on this computer — a recorded video or an online class. Tick the audio box when the browser asks what to share.",
+      both: "The online class and your own microphone together. Tick the audio box when the browser asks what to share.",
     },
 
     /* Why an option is greyed out rather than missing. A student in
