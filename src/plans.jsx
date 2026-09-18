@@ -53,6 +53,7 @@ import {
   ACTIONS,
   ACTIVATING_NOTICE,
   DISCLOSURES,
+  refundLine,
   LINKS,
   PANEL_TITLE,
   WEB,
@@ -429,7 +430,7 @@ export function PlansPanel({ session }) {
       <div className="mt-4 space-y-1 text-xs text-stone-500">
         <p>{DISCLOSURES.autoRenew}</p>
         <p>{DISCLOSURES.noRollover}</p>
-        <p>{DISCLOSURES.refund}</p>
+        <p>{refundLine(capability.reason)}</p>
         <p>{managedByStoreLine(capability.reason, capability.store)}</p>
       </div>
 

@@ -518,7 +518,7 @@ async function run() {
     const all = [
       copy.DISCLOSURES.autoRenew,
       copy.DISCLOSURES.noRollover,
-      copy.DISCLOSURES.refund,
+      copy.refundLine("web"),
       copy.managedByStoreLine("web", null),
       copy.managedByStoreLine("unknown-platform", "app_store"),
       copy.ACTIONS.restore,
@@ -532,7 +532,30 @@ async function run() {
     assert.match(copy.DISCLOSURES.autoRenew, /renew/i);
     assert.match(copy.DISCLOSURES.autoRenew, /cancel/i);
     assert.match(copy.DISCLOSURES.noRollover, /roll over|rollover/i);
-    assert.match(copy.DISCLOSURES.refund, /refund/i);
+    assert.match(copy.refundLine("web"), /refund/i);
+
+    /* THE REFUND LINE IS PER PLATFORM, and the three answers must
+       DIFFER — a helper ignoring its argument would satisfy every
+       assertion that only reads one of them, which is the hole the
+       managedByStoreLine test names. */
+    const webRefund = copy.refundLine("web");
+    const storeRefund = copy.refundLine("native");
+    assert.notEqual(webRefund, storeRefund, "refundLine returns the same sentence on web and on a store, so it is not platform-aware");
+    /* WEB PROMISES IMMEDIACY, because #107 made it mechanically true:
+       a full refund cancels the subscription in Stripe and writes the
+       tier back on the same delivery. */
+    assert.match(webRefund, /straight away/i, "the web line no longer promises what the refund path actually does");
+    /* AND A STORE PROMISES NO TIMING, because the timing is Apple's or
+       Google's. `isActive` reads expires_date, so a refund that leaves
+       that date alone leaves the plan running — which is exactly the
+       thing "straight away" would have been wrong about. */
+    assert.doesNotMatch(storeRefund, /straight away|immediately|at once/i, "the store line promises a timing we do not control");
+    assert.match(storeRefund, /once the store tells us|when the store tells us/i, "the store line does not say what the plan actually waits for");
+    /* THE CREDITS HALF IS UNCONDITIONAL, because it is true
+       everywhere: the AI work has been done and cannot be returned. */
+    for (const line of [webRefund, storeRefund]) {
+      assert.match(line, /stay spent/i, "a refund line dropped the credits half, which is true on every platform");
+    }
     /* Apple's reviewer is looking at a NATIVE screen, so the element
        they require is the native sentence — naming the store, not
        Stripe. The web variant is checked in test-legal.mjs against the
@@ -612,8 +635,15 @@ async function run() {
        entitlement ends, the tier goes back to free, and credits already
        spent are not clawed back or handed back. Copy that implied a
        credit refund would be a promise the server does not keep. */
-    assert.match(copy.DISCLOSURES.refund, /already spent stay spent|not.*returned/i);
-    assert.match(copy.DISCLOSURES.refund, /Free/, "the refund sentence does not say what the plan becomes");
+    /* ASSERTED ON BOTH PLATFORMS, because the sentence became
+       platform-aware and a claim about "the refund sentence" is now a
+       claim about two of them. Both must say what happens to credits
+       and what the plan becomes; only the TIMING differs. */
+    for (const reason of ["web", "native"]) {
+      const line = copy.refundLine(reason);
+      assert.match(line, /already spent stay spent|not.*returned/i, `the ${reason} refund sentence drops the credits half`);
+      assert.match(line, /Free/, `the ${reason} refund sentence does not say what the plan becomes`);
+    }
   });
 
   await test("web is told where plans are bought, and it is not a 'coming soon'", () => {

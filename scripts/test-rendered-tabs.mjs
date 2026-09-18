@@ -631,14 +631,25 @@ async function run() {
     const { html, errors, close } = await mountAccount({ native: true });
     await close();
     assert.deepEqual(errors, [], errors.join("\n        "));
-    const { DISCLOSURES } = await import(pathToFileURL(path.join(rootDir, "src/plansCopy.js")).href);
+    const { DISCLOSURES, refundLine } = await import(pathToFileURL(path.join(rootDir, "src/plansCopy.js")).href);
     const keys = Object.keys(DISCLOSURES);
-    assert.ok(keys.length >= 3, `only ${keys.length} disclosures are declared — this check reads nothing`);
+    /* THE REFUND LINE LEFT THIS RECORD when it became platform-aware,
+       so it is asserted BY NAME here — otherwise dropping it from the
+       panel would go unnoticed, which is the whole failure this sweep
+       exists to catch. This mount is a native shell, so it is the
+       STORE wording that must be on screen. */
+    const nativeRefund = refundLine("native").replace(/\s+/g, " ").slice(0, 40);
+    /* TWO, not three: the refund line left this record when it became
+       platform-aware, and it is asserted BY NAME above instead. The
+       floor moved down deliberately rather than being deleted — an
+       empty record must still fail, which is what this is for. */
+    assert.ok(keys.length >= 2, `only ${keys.length} flat disclosures are declared — this check reads nothing`);
     const text = html.replace(/<[^>]+>/g, " ").replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, " ");
     for (const key of keys) {
       const words = DISCLOSURES[key].replace(/\s+/g, " ").slice(0, 40);
       assert.ok(text.includes(words), `the "${key}" disclosure is gone from the panel`);
     }
+    assert.ok(text.includes(nativeRefund), "the refund disclosure is gone from the panel");
     for (const hook of ["data-restore", "data-manage", "data-terms", "data-privacy"]) {
       assert.match(html, new RegExp(hook), `${hook} is gone from the panel`);
     }

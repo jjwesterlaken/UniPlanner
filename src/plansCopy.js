@@ -111,10 +111,44 @@ export const DISCLOSURES = {
     "Subscriptions renew automatically at the end of each period until you cancel. " +
     "You can cancel any time, and you keep access until the period you have paid for ends.",
   noRollover: "Unused credits don't roll over. Each period starts fresh at the full amount.",
-  refund:
-    "If a subscription is refunded, the plan ends straight away and goes back to Free. " +
-    "Credits you have already spent stay spent — a refund returns money, not credits.",
 };
+
+/**
+ * WHAT A REFUND DOES, ON THIS PLATFORM — and the two answers are not
+ * the same promise.
+ *
+ * THE FLAT SENTENCE WAS TRUE ON THE WEB AND NOT ON iOS. It read "the
+ * plan ends straight away and goes back to Free", which on the web is
+ * now mechanically true: `stripe-webhook` cancels the subscription in
+ * Stripe on a full refund and writes the tier back through the ordinary
+ * apply path, proven end to end on 18 September 2026.
+ *
+ * ON A STORE PURCHASE WE ARE NOT THE ONE REFUNDING. Apple or Google
+ * decides it, RevenueCat tells us, and only then does the tier move —
+ * `billing-webhook` re-reads the subscriber and `tierFromSubscriber`
+ * answers `free` when nothing is active. That chain is almost certainly
+ * right and its TIMING is not ours: `isActive` reads
+ * `expires_date > now`, so if the store's refund leaves that date at
+ * the original period end the plan holds until then. Nothing in this
+ * repository can say which happens, and a sandbox refund is not a
+ * reliable way to find out.
+ *
+ * SO iOS AND ANDROID PROMISE NO TIMING AT ALL. Jared's ruling, 19
+ * September 2026. The alternative — keeping "straight away" everywhere
+ * — is a promise about a third party's pipeline that we would be
+ * making on their behalf, and the student who notices is the one who
+ * has already been refunded.
+ *
+ * The credits half is unconditional because it is true everywhere: the
+ * AI work they paid for has been done and cannot be given back.
+ */
+export function refundLine(reason) {
+  const credits = "Credits you have already spent stay spent — a refund returns money, not credits.";
+  if (reason === "web") {
+    return `If a subscription is refunded, the plan ends straight away and goes back to Free. ${credits}`;
+  }
+  return `If your purchase is refunded, the plan ends once the store tells us about the refund, and the account goes back to Free. ${credits}`;
+}
 
 /* The two stores, in the words their own guidelines use. Kept beside
    WEB.alreadySubscribed, which needs exactly the same pair — one place
