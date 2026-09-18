@@ -395,14 +395,39 @@ const invoicePayments = (over = {}) => ({
 });
 
 /** The classic shape: `invoice.subscription`. */
-const invoice = (over = {}) => ({ id: "in_1", object: "invoice", subscription: "sub_1", ...over });
+/* THE INVOICE, IN THE SHAPE dahlia SENDS: the subscription under
+   `parent.subscription_details`, not on the invoice itself.
 
-/** The 2025+ shape, where the subscription moved under `parent`. */
-const invoiceParentShape = (subscriptionId = "sub_1") => ({
+   CONFIRMED LIVE, 18 September 2026. The refund that proved the path
+   logged `"invoice_source":"parent"` — so on this pinned version the
+   classic `invoice.subscription` never answers, exactly as
+   `charge.invoice` never answers. This default was the CLASSIC shape
+   until that delivery, which made it the THIRD fixture in this file to
+   describe a Stripe the pin had left behind (after
+   `current_period_end` and `charge.invoice`). A default is what a
+   whole file quietly asserts about production, and this one asserted
+   the wrong thing three times.
+
+   ONLY THE PATH THE CODE READS IS MODELLED. A live `parent` object
+   carries more than this — a `type` discriminator among other things —
+   and none of it is invented here, because a field nobody has seen is
+   a field a fixture should not claim. */
+const invoice = (over = {}) => ({
   id: "in_1",
   object: "invoice",
-  parent: { subscription_details: { subscription: subscriptionId } },
+  parent: { subscription_details: { subscription: "sub_1" } },
+  ...over,
 });
+
+/** The pre-2025 shape, on the invoice itself. Still read as a fallback, so still tested BY NAME. */
+const invoiceLegacySubscriptionField = (subscriptionId = "sub_1") => ({
+  id: "in_1",
+  object: "invoice",
+  subscription: subscriptionId,
+});
+
+/** An invoice for no subscription at all — a one-off invoice, which must touch no tier. */
+const invoiceNoSubscription = () => ({ id: "in_1", object: "invoice", parent: null });
 
 const refundEvent = (over = {}) =>
   event({ id: over.id ?? "evt_refund", type: "charge.refunded", data: { object: charge(over.charge || {}) } });
@@ -1053,7 +1078,7 @@ async function run() {
       { name: "a PARTIAL refund of a non-subscription charge", charge: charge({ refunded: false, amount_refunded: 20 }), invoiceId: "", invoice: null, reason: "partial_refund", sub: "" },
       { name: "a PARTIAL refund of a subscription invoice — somebody still paying", charge: charge({ refunded: false, amount_refunded: 20 }), invoiceId: "in_1", invoice: invoice(), reason: "partial_refund", sub: "" },
       { name: "a FULL refund of a one-off payment, no invoice at all", charge: charge(), invoiceId: "", invoice: null, reason: "not_an_invoice", sub: "" },
-      { name: "a FULL refund of an invoice with no subscription", charge: charge(), invoiceId: "in_1", invoice: invoice({ subscription: null }), reason: "not_a_subscription", sub: "" },
+      { name: "a FULL refund of an invoice with no subscription", charge: charge(), invoiceId: "in_1", invoice: invoiceNoSubscription(), reason: "not_a_subscription", sub: "" },
       /* THE FIELD-MOVE LESSON APPLIED RATHER THAN RE-LEARNED. Stripe
          moved `invoice.subscription` under `parent.subscription_details`
          in the 2025 versions — the same move that made
@@ -1062,7 +1087,7 @@ async function run() {
          non-subscription charge, and the failure would be a refunded
          student keeping credits: silent, and in our favour, which is
          the worst direction for a bug to fail in. */
-      { name: "the 2025+ shape, subscription under parent", charge: charge(), invoiceId: "in_1", invoice: invoiceParentShape(), reason: "ends_subscription", sub: "sub_1" },
+      { name: "the pre-2025 shape, subscription on the invoice — still read as a fallback", charge: charge(), invoiceId: "in_1", invoice: invoiceLegacySubscriptionField(), reason: "ends_subscription", sub: "sub_1" },
       { name: "an amount-only refund with refunded:false is NOT full", charge: charge({ refunded: false, amount_refunded: 90 }), invoiceId: "in_1", invoice: invoice(), reason: "partial_refund", sub: "" },
     ];
     assert.ok(cases.length >= 6, "the table reads too little to be about anything");
@@ -1075,8 +1100,8 @@ async function run() {
     /* AND THE SOURCE IS REPORTED, so a live delivery can say which
        shape this API version sends — the arrangement that answered the
        period question. */
-    assert.equal(stripe.refundEndsSubscription(charge(), "in_1", invoice()).invoiceSource, "invoice");
-    assert.equal(stripe.refundEndsSubscription(charge(), "in_1", invoiceParentShape()).invoiceSource, "parent");
+    assert.equal(stripe.refundEndsSubscription(charge(), "in_1", invoice()).invoiceSource, "parent");
+    assert.equal(stripe.refundEndsSubscription(charge(), "in_1", invoiceLegacySubscriptionField()).invoiceSource, "invoice");
     assert.equal(stripe.invoiceSubscriptionOf({}).source, "absent");
     /* The classic field WINS when both are present: it is the one
        Stripe has always meant. Deliberately different values, so the
@@ -1417,17 +1442,25 @@ async function run() {
     assert.ok(!w.events["evt_refund"], "a failed cancellation was recorded as handled, so the retry will be refused as a duplicate");
   });
 
-  await test("THE 2025+ INVOICE SHAPE STILL CANCELS — the field move, pre-empted", async () => {
-    /* The control that makes the table row above a claim about the
-       HANDLER and not just about a pure function. Which shape
-       2026-04-22.dahlia sends is not answerable from here, so both are
-       driven end to end. */
+  await test("THE PRE-2025 INVOICE SHAPE STILL CANCELS — the fallback nothing exercises any more", async () => {
+    /* THIS TEST CHANGED SIDES, and the reason is worth keeping. It was
+       written as "the 2025+ shape, pre-empted" — a control for a future
+       Stripe might send — and the live refund of 18 September logged
+       `"invoice_source":"parent"`, which made that shape the PRESENT
+       and left the classic `invoice.subscription` as the branch nothing
+       in production touches.
+
+       So it guards the fallback now, and that is exactly when a
+       fallback needs a named test: the default fixture stopped covering
+       it the moment production moved, and an unexercised branch is one
+       somebody deletes as dead. The parent shape is covered by every
+       other end-to-end test in this section, through the default. */
     const w = makeWorld({
       profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
       stripeRoutes: {
         "/charges/ch_1": charge(),
         "/invoice_payments": invoicePayments(),
-        "/invoices/in_1": invoiceParentShape(),
+        "/invoices/in_1": invoiceLegacySubscriptionField(),
         "/subscriptions/sub_1": (init) =>
           init && init.method === "DELETE" ? subscription({ status: "canceled" }) : subscription(),
       },
@@ -1436,11 +1469,11 @@ async function run() {
     w.restore();
 
     assert.equal(res.status, 200);
-    assert.equal(w.stripeCalls.filter((c) => c.method === "DELETE").length, 1, "the nested invoice shape did not resolve a subscription");
+    assert.equal(w.stripeCalls.filter((c) => c.method === "DELETE").length, 1, "the legacy invoice shape did not resolve a subscription");
     assert.equal(w.profiles[USER].tier, "free");
     assert.ok(
-      w.logs.some((l) => l.includes('"invoice_source":"parent"')),
-      `the invoice shape was not logged, so a live delivery cannot say which one it sends: ${w.logs.join(" | ")}`
+      w.logs.some((l) => l.includes('"invoice_source":"invoice"')),
+      `the legacy shape did not report itself as the source: ${w.logs.join(" | ")}`
     );
   });
 
