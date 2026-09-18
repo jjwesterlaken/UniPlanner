@@ -3484,6 +3484,78 @@ reset landing on a marketing page, and installed PWAs opening the wrong
 thing. `SITE-ASSETS.md` is the screenshot spec — eight images, one
 sitting, on the moto g05 the Android build is verified on.
 
+### A REPAIR AND A REFUSAL ARE ALTERNATIVES, NOT LAYERS
+
+`build-apps.yml` triggers on `v*` and for six releases read the tag
+**nowhere**: electron-builder takes the version from
+`desktop/package.json`, which said 1.1.0, so v1.1.1 through v1.1.6 all
+shipped installers and `latest*.yml` manifests advertising **1.1.0**.
+Silent in both directions — nothing errors, and the day
+`electron-updater` is wired it offers 1.1.0 to somebody already on it
+and does nothing. It is the trap recorded at v1.0.1, with the hand-bump
+that was the remedy then being the step that stopped happening.
+
+**The first fix REWROTE all three `package.json` files from the tag.**
+Every tag build is correctly numbered afterwards, which is true and is
+the whole problem: it makes the committed version irrelevant, including
+when the commit is the wrong one. v1.1.8 was cut on a commit that
+predated the rename the release was named for, and **the version was
+the only signal that differed — a number the workflow was about to
+overwrite.** A step that overwrites a value can never compare it, so
+the repair and the refusal are alternatives and you can only have one.
+
+The refusal is the one that ships. Nothing is written; a tag whose
+commit does not carry that version fails in seconds, before the build
+and long before the twenty-minute package step, naming both numbers.
+What is given up is the forgiving behaviour — a forgotten bump used to
+still produce a correct build and now produces nothing — and that is
+the right side of the trade, because a wrong build that succeeds is
+what six releases of 1.1.0 cost.
+
+**AND THE LIMIT, WHICH IS THE PART TO READ BEFORE TRUSTING IT.** It
+caught v1.1.8 only because the version bump rode in the same pull
+request as the rename. What it checks is *the tag points at a commit
+carrying that version*, which is a proxy for *the pull request that
+bumped the version has merged* — and it is only as good as the
+convention that the bump travels with the change. Bump in one PR and
+ship the feature in a later one and the same mistake is green: tag the
+bump commit, get a build correctly stamped and carrying none of the
+work the release is named for. **"The tag contains the change it is
+named for" is not a property of a version string and this does not
+check it.**
+
+A tip-of-`main` comparison would check it directly and was **refused**
+(Jared, 18 September 2026): its false-positive class is real — a
+hotfix tag cut off `main`, or a merge landing in the seconds between
+the tag and the job — and the only weaker form is a warning inside a
+twenty-minute job, which nobody reads. A guard that cries wolf on the
+one workflow where a false positive costs a tag is a guard people
+learn to re-run around.
+
+One idea that looks available and is not: asserting the uploaded
+installer names match what `site/build-facts.js` asks for. Both are
+generated from `desktop/package.json` in the same checkout, so on the
+stale commit they would have agreed on `University-Planner` and the
+check would have been green over exactly this failure. The mismatch
+existed only between the release and the **deployed** site, which CI
+cannot see.
+
+**The test runs the STEPS, not the step.** Its first version extracted
+the check alone and ran it in isolation — and the old workflow's check
+step is itself a correct comparison, unreachable as a failure only
+because a step above it had already rewritten the files. Restoring the
+whole old workflow left that version green on the step under test and
+red on an unrelated assertion about a malformed tag. **A claim about
+what a workflow does cannot be made by running one step out of it**,
+which is the artifact rule at the level of "which layer answered", the
+same shape as `stapler validate` exiting before the disk image's
+Gatekeeper assessment ever ran. Every `run:` script from the top of the
+build job down to the check whose text mentions `package.json` is now
+concatenated in order and executed as one script, so a repair
+reintroduced anywhere above the check is inside what is measured. The
+filter is textual and says so: a step writing a version through a
+variable or a helper in `scripts/` would not be seen.
+
 ## Three product plans, and the correction inside each
 
 `PRODUCT-PLANS.md`. Plans, not builds. Sequencing: reading depth and

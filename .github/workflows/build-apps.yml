@@ -80,56 +80,36 @@ jobs:
           test -d node_modules/tailwindcss || { echo "ERROR: tailwindcss missing"; exit 1; }
           echo "build tools present"
 
-      # THE TAG IS THE VERSION, AND IT WAS READ BY NOTHING.
+      # THE TAG IS THE VERSION, AND THE COMMIT HAS TO AGREE WITH IT.
       #
-      # This workflow triggers on `v*` and then ignored the tag
-      # completely: electron-builder reads `desktop/package.json`, which
-      # read 1.1.0, so v1.1.1 through v1.1.6 all shipped installers and
+      # This workflow triggers on `v*` and for six releases read the tag
+      # NOWHERE: electron-builder reads `desktop/package.json`, which
+      # said 1.1.0, so v1.1.1 through v1.1.6 all shipped installers and
       # `latest*.yml` manifests advertising **1.1.0**. Silent in both
       # directions — nothing errors, and the day electron-updater is
       # wired it offers 1.1.0 to somebody already on it and does
       # nothing.
       #
-      # CLAUDE.md recorded this exact trap at v1.0.1 ("the next tagged
-      # release would advertise a LOWER version to auto-update and do
-      # nothing, silently") and the remedy taken then was to bump the
-      # file by hand, which is the thing that stopped happening six
-      # releases ago. So the number is DERIVED now: on a tag build the
-      # tag is the single source of truth and the committed version is
-      # irrelevant. A manual dispatch keeps using package.json, because
-      # there is no tag to read.
-      - name: Take the marketing version from the tag
-        shell: bash
-        run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            V="${GITHUB_REF_NAME#v}"
-            case "$V" in
-              [0-9]*.[0-9]*.[0-9]*) : ;;
-              *) echo "ERROR: tag '${GITHUB_REF_NAME}' is not v<major>.<minor>.<patch>, so no version can be derived from it." ; exit 1 ;;
-            esac
-            echo "Tag ${GITHUB_REF_NAME} -> version $V"
-            node -e '
-              const fs = require("fs");
-              const v = process.argv[1];
-              for (const f of ["package.json", "desktop/package.json", "mobile/package.json"]) {
-                const j = JSON.parse(fs.readFileSync(f, "utf8"));
-                j.version = v;
-                fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
-                console.log(`${f} -> ${v}`);
-              }
-            ' "$V"
-          else
-            echo "Not a tag build; keeping the committed version $(node -p "require('./package.json').version")"
-          fi
-
-      - name: Build the planner
-        run: npm run build
-
-      # WHAT electron-builder WILL ACTUALLY STAMP, read back before the
-      # twenty-minute package step rather than after it. On a tag build
-      # the three files must agree with the tag; a mismatch here means
-      # the step above did not take, and finding that out from a
-      # published manifest costs another tag.
+      # THAT WAS FIRST FIXED BY REWRITING the three package.json files
+      # from the tag, which makes every tag build correctly numbered —
+      # and makes the committed version irrelevant, including when the
+      # commit is the wrong one. v1.1.8 was cut on a commit that
+      # predated the rename the release was named for, and the one
+      # signal that differed was a version number the workflow was
+      # about to overwrite.
+      #
+      # So the remedy is the REFUSAL rather than the repair, and the
+      # two are alternatives rather than layers: a step that overwrites
+      # the version can never compare it. Nothing is written here, and
+      # a tag whose commit does not carry that version fails in
+      # seconds — before the build, and long before the twenty-minute
+      # package step.
+      #
+      # WHAT IT DOES NOT CHECK is that the tag carries the CHANGE it is
+      # named for. It caught v1.1.8 only because the bump rode in the
+      # same pull request as the rename; bump in one PR and ship the
+      # feature in a later one and the same mistake is green. CLAUDE.md
+      # (the marketing-site section) has the limit written out.
       - name: The version the installers will carry
         shell: bash
         run: |
@@ -141,11 +121,26 @@ jobs:
             echo "ERROR: the three package.json versions disagree, so the installers and the manifests would too."
             exit 1
           fi
-          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "$ROOT" != "${GITHUB_REF_NAME#v}" ]; then
-            echo "ERROR: building tag ${GITHUB_REF_NAME} but the version is $ROOT."
-            echo "       Every installer and every latest*.yml would advertise the wrong version."
-            exit 1
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+            case "$V" in
+              [0-9]*.[0-9]*.[0-9]*) : ;;
+              *) echo "ERROR: tag '${GITHUB_REF_NAME}' is not v<major>.<minor>.<patch>, so there is no version in it to compare." ; exit 1 ;;
+            esac
+            if [ "$ROOT" != "$V" ]; then
+              echo "ERROR: building tag ${GITHUB_REF_NAME} but this commit carries version $ROOT."
+              echo "       Every installer and every latest*.yml would advertise the wrong version,"
+              echo "       and a tag whose commit has not been bumped is usually a tag on the wrong commit."
+              echo "       Merge the bump, then re-cut ${GITHUB_REF_NAME} on the new tip."
+              exit 1
+            fi
+            echo "Tag ${GITHUB_REF_NAME} matches the committed version $ROOT."
+          else
+            echo "Not a tag build; the committed version $ROOT is what the installers will carry."
           fi
+
+      - name: Build the planner
+        run: npm run build
 
       - name: Install desktop build tools
         working-directory: desktop
