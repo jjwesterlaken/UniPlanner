@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import assert from "node:assert/strict";
 import {
+  readEnv,
   describeCapabilities,
   canUseSource,
   micConstraints,
@@ -23,6 +24,7 @@ import {
   MIC_SAMPLE_RATE,
 } from "../src/audioSources.js";
 import { AI_NOTES_COPY } from "../src/aiNotesCopy.js";
+import { displayFailureKind } from "../src/aiNotesLogic.js";
 
 let passed = 0;
 function test(name, fn) {
@@ -57,7 +59,7 @@ const UA = {
 
 const env = (userAgent, over = {}) => ({
   userAgent,
-  isCapacitor: false,
+  isNativeShell: false,
   hasGetDisplayMedia: true,
   hasEnumerateDevices: true,
   ...over,
@@ -112,7 +114,7 @@ test("the desktop build gets full system audio, not tab mode, on a Mac", () => {
 
 test("phones and tablets are microphone-only", () => {
   for (const ua of [UA.iosCapacitor, UA.androidCapacitor]) {
-    const caps = describeCapabilities(env(ua, { isCapacitor: true }));
+    const caps = describeCapabilities(env(ua, { isNativeShell: true }));
     assert.equal(caps.system.available, false);
     assert.equal(caps.system.reason, "mobile-platform");
     assert.equal(caps.microphone.available, true);
@@ -125,7 +127,7 @@ test("only the phone shells are flagged as degrading in the background", () => {
      background tab. Warning on desktop too would be noise, and noise is
      how a real warning gets ignored. */
   for (const ua of [UA.iosCapacitor, UA.androidCapacitor]) {
-    assert.equal(describeCapabilities(env(ua, { isCapacitor: true })).mobile, true);
+    assert.equal(describeCapabilities(env(ua, { isNativeShell: true })).mobile, true);
   }
   for (const ua of [UA.chromeWindows, UA.chromeMac, UA.electron, UA.firefox]) {
     assert.equal(describeCapabilities(env(ua)).mobile, false, `${ua.slice(0, 30)} flagged as mobile`);
@@ -133,8 +135,132 @@ test("only the phone shells are flagged as degrading in the background", () => {
 });
 
 test("iOS hides the device picker; Android keeps it", () => {
-  assert.equal(describeCapabilities(env(UA.iosCapacitor, { isCapacitor: true })).devicePicker.available, false);
-  assert.equal(describeCapabilities(env(UA.androidCapacitor, { isCapacitor: true })).devicePicker.available, true);
+  assert.equal(describeCapabilities(env(UA.iosCapacitor, { isNativeShell: true })).devicePicker.available, false);
+  assert.equal(describeCapabilities(env(UA.androidCapacitor, { isNativeShell: true })).devicePicker.available, true);
+});
+
+/* ---------- readEnv, EXECUTED ---------- */
+
+test("READENV ASKS CAPACITOR WHETHER IT IS NATIVE, rather than whether it exists", () => {
+  /* THE HOLE THIS CLOSES. Until this test, `readEnv()` had NO CALLER
+     anywhere in src/, scripts/ or e2e/ outside its own default
+     parameter — every check handed describeCapabilities a hand-built
+     env, so the one function that reads the real browser was executed
+     by nothing. `@capacitor/core` sets `window.Capacitor` as an import
+     side effect on EVERY platform, and from Billing Phase 2 the web
+     bundle carried it: readEnv read its presence as "phone", and four
+     fixtures whose factory defaults to the absent global went on
+     agreeing with a world that had stopped being production.
+
+     The real browser assertion is in test-rendered-tabs.mjs, on the
+     built bundle. This is the unit half: the function is RUN, over the
+     two shapes that differ. */
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const withWindow = (win) => {
+    Object.defineProperty(globalThis, "window", { value: win, configurable: true, writable: true });
+    try {
+      return readEnv();
+    } finally {
+      if (saved) Object.defineProperty(globalThis, "window", saved);
+      else delete globalThis.window;
+    }
+  };
+
+  /* The web bundle's real shape: the global is PRESENT and says web. */
+  assert.equal(
+    withWindow({ Capacitor: { isNativePlatform: () => false, getPlatform: () => "web" } }).isNativeShell,
+    false,
+    "a Capacitor global reporting the web platform is being read as a native shell — this is the production bug"
+  );
+
+  /* A real phone shell. */
+  assert.equal(
+    withWindow({ Capacitor: { isNativePlatform: () => true, getPlatform: () => "ios" } }).isNativeShell,
+    true
+  );
+
+  /* No global at all — a plain browser before any Capacitor import. */
+  assert.equal(withWindow({}).isNativeShell, false);
+
+  /* AN UNRECOGNISABLE SHAPE ANSWERS "NOT NATIVE", deliberately: the
+     user-agent test is what actually catches phones, and a backstop
+     that guesses "phone" is how this reached production. */
+  assert.equal(withWindow({ Capacitor: {} }).isNativeShell, false);
+  assert.equal(withWindow({ Capacitor: { getPlatform: () => "android" } }).isNativeShell, true);
+});
+
+test("A DESKTOP BROWSER IS NOT A PHONE just because a billing import left a global behind", () => {
+  /* The same claim as the render guard, against the table — so that a
+     Chromium-less machine still fails on the regression rather than
+     skipping past it. The `isNativeShell: false` here is now a fact
+     about a web Capacitor global rather than an assumption that none
+     exists, which is what the readEnv test above establishes. */
+  for (const ua of [UA.chromeWindows, UA.edgeWindows, UA.chromeMac, UA.electron]) {
+    const caps = describeCapabilities(env(ua));
+    assert.equal(caps.mobile, false, `${ua.slice(0, 40)} read as mobile`);
+    assert.notEqual(caps.platform, "ios", `${ua.slice(0, 40)} read as iOS`);
+    assert.equal(caps.system.available, true, `${ua.slice(0, 40)} was refused system audio`);
+    assert.equal(caps.devicePicker.available, true, `${ua.slice(0, 40)} lost its microphone picker`);
+  }
+});
+
+test("THE TWO REFUSALS SAY DIFFERENT THINGS, and each one belongs to its world", () => {
+  /* The discriminator Jared asked for, made mechanical. Safari must be
+     refused for being Safari and a phone for being a phone: if the
+     mobile check fires first, Safari's note reads "Phones and tablets
+     can only record through the microphone" and the student is told
+     something false about their laptop.
+
+     The two sentences are asserted to DIFFER first — a copy change that
+     collapsed them into one would make every assertion below pass while
+     discriminating nothing. */
+  const copy = AI_NOTES_COPY.audioSource.unavailable;
+  assert.notEqual(copy["unsupported-browser"], copy["mobile-platform"], "the two refusals are the same sentence, so neither can be told from the other");
+
+  const safari = describeCapabilities(env(UA.safari));
+  assert.equal(safari.system.reason, "unsupported-browser");
+  assert.match(copy[safari.system.reason], /Chrome or Edge/);
+  assert.doesNotMatch(copy[safari.system.reason], /[Pp]hones and tablets/, "Safari on a Mac is being told it is a phone");
+
+  const phone = describeCapabilities(env(UA.iosCapacitor, { isNativeShell: true }));
+  assert.equal(phone.system.reason, "mobile-platform");
+  assert.match(copy[phone.system.reason], /[Pp]hones and tablets/);
+
+  /* AND THE MAC DESKTOP APP IS NEITHER. Same Macintosh UA as Safari,
+     and it must come out available rather than refused at all. */
+  const desktop = describeCapabilities(env(UA.electron));
+  assert.equal(desktop.system.available, true);
+  assert.equal(desktop.system.reason, null);
+});
+
+/* ---------- a share that never started ---------- */
+
+test("CANCELLING THE SHARE DIALOG IS NOT A MICROPHONE PROBLEM", () => {
+  /* getDisplayMedia rejects with the SAME DOMException names
+     getUserMedia uses and means different things by them. Routing it
+     through describeRecorderError told a student who had just cancelled
+     a screen share to go and allow microphone access — wrong device,
+     wrong remedy, and nothing on screen to hint at it. */
+  const cancelled = displayFailureKind({ name: "NotAllowedError" });
+  assert.equal(cancelled, "cancelled");
+
+  const shareCopy = AI_NOTES_COPY.audioSource.shareFailed[cancelled];
+  assert.doesNotMatch(shareCopy, /[Mm]icrophone access/, "a cancelled screen share is still reported as a denied microphone");
+  assert.match(shareCopy, /none of your allowance was used/i, "the student is not told the cancel cost them nothing");
+
+  /* The one that must stay distinguishable from it: the OS refusing is
+     something the student can act on, cancelling is not a fault. */
+  assert.equal(displayFailureKind({ name: "NotReadableError" }), "os-refused");
+  assert.notEqual(AI_NOTES_COPY.audioSource.shareFailed["os-refused"], shareCopy);
+
+  /* EVERY KIND HAS WORDING, derived rather than listed — a new code
+     with no sentence would render `undefined` to a student. */
+  const kinds = ["NotAllowedError", "PermissionDeniedError", "NotReadableError", "AbortError", "NotFoundError", "SomethingNew", ""]
+    .map((name) => displayFailureKind({ name }));
+  assert.ok(kinds.length > 0, "no error names were mapped — this guard checked nothing");
+  for (const k of kinds) {
+    assert.equal(typeof AI_NOTES_COPY.audioSource.shareFailed[k], "string", `no wording for displayFailureKind "${k}"`);
+  }
 });
 
 test("a browser with no getDisplayMedia at all is refused rather than crashed into", () => {

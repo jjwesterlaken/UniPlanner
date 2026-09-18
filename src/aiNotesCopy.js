@@ -251,6 +251,27 @@ export const AI_NOTES_COPY = {
       return "That share didn't include any sound. Start again and make sure audio is included in what you share." + nothing;
     },
 
+    /* THE SHARE NEVER STARTED, keyed by displayFailureKind. These used
+       to go through describeRecorderError, which is written for
+       getUserMedia — so cancelling the share dialog produced
+       "Microphone access was denied… allow microphone access in your
+       browser settings", about a device nobody had touched.
+
+       `cancelled` is the one that matters and it is deliberately not
+       phrased as a failure: choosing nothing is a decision, and the
+       student needs to know their allowance is untouched more than they
+       need an apology. */
+    shareFailed: {
+      cancelled:
+        "Nothing was shared, so there's nothing to record. Start again and choose what to share — nothing was recorded and none of your allowance was used.",
+      "os-refused":
+        "Your computer wouldn't let the app capture its audio. On a Mac, allow screen recording for this app in System Settings → Privacy & Security → Screen Recording, then try again. Nothing was recorded and none of your allowance was used.",
+      "nothing-to-share":
+        "There was nothing available to share on this computer. Record from the microphone instead. Nothing was recorded and none of your allowance was used.",
+      unknown:
+        "The app couldn't capture this computer's audio. Start again, or record from the microphone instead. Nothing was recorded and none of your allowance was used.",
+    },
+
     /* The share ending mid-recording. Without this the recorder happily
        carries on producing silence and the billed duration keeps
        climbing, which is the same failure as above arriving late. */

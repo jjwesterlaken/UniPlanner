@@ -407,6 +407,38 @@ export function readForcedMime(storage) {
 /* ---------- error messages ---------- */
 
 /** Maps a getUserMedia/MediaRecorder DOMException to a friendly sentence. */
+/* WHAT WENT WRONG WITH THE SHARE, as a code. getDisplayMedia rejects
+   with the same DOMException NAMES as getUserMedia and means entirely
+   different things by them, so routing it through describeRecorderError
+   told a student who had just CANCELLED A SCREEN SHARE that "microphone
+   access was denied" and sent them into their microphone settings —
+   wrong noun, wrong remedy, and nothing on that screen to hint the
+   advice was about a different device.
+
+   A code rather than a sentence, which is the rule describeCapabilities
+   already follows: the wording lives in aiNotesCopy.js where Grace can
+   rework it without touching this. */
+export function displayFailureKind(err) {
+  switch ((err && err.name) || "") {
+    case "NotAllowedError":
+    case "PermissionDeniedError":
+      /* Nothing was chosen. Cancelling the picker is BY FAR the common
+         cause and is not an error at all from the student's side, so
+         the copy must not read as a refusal or a fault. */
+      return "cancelled";
+    case "NotReadableError":
+    case "AbortError":
+      /* The OS declined or dropped the capture — on a Mac that is the
+         screen-recording permission, which is not something the page
+         can ask for. */
+      return "os-refused";
+    case "NotFoundError":
+      return "nothing-to-share";
+    default:
+      return "unknown";
+  }
+}
+
 export function describeRecorderError(err) {
   const name = (err && err.name) || "";
   switch (name) {
