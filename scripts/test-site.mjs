@@ -22,7 +22,7 @@ import { STORE_NAME, SHORT_DESCRIPTION, FULL_DESCRIPTION, PRIVACY_POLICY_PATH, A
 import { SITE_URL, PRIVACY_URL, DELETE_ACCOUNT_URL, APP_URL } from "../src/legalLinks.js";
 import * as links from "../src/legalLinks.js";
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1837,7 +1837,7 @@ test("the AI notes section no longer advertises readings", () => {
   assert.equal((section.match(/class="stepn"/g) || []).length, 3, "the AI notes section lost its steps");
 });
 
-await test("A TAGGED RELEASE TAKES ITS VERSION FROM THE TAG, not from a file somebody forgot", () => {
+test("A TAG WHOSE COMMIT DOES NOT CARRY THAT VERSION IS REFUSED, not quietly repaired", () => {
   /* v1.1.1 through v1.1.6 all shipped installers and `latest*.yml`
      manifests advertising 1.1.0, because this workflow triggers on `v*`
      and then read the tag for nothing: electron-builder takes the
@@ -1849,81 +1849,165 @@ await test("A TAGGED RELEASE TAKES ITS VERSION FROM THE TAG, not from a file som
      so the day one is, it offers 1.1.0 to somebody already on 1.1.0
      and does nothing at all.
 
-     CLAUDE.md recorded this exact trap at v1.0.1, and the remedy then
-     was to bump the file by hand. This asserts the DERIVATION instead,
-     because the hand-bump is the step that stopped happening. */
+     THE FIRST REMEDY WAS A REPAIR AND IT HAS BEEN REPLACED BY A
+     REFUSAL. Rewriting the three package.json files from the tag makes
+     every tag build correctly numbered — and makes the committed
+     version irrelevant, including when the commit is the wrong one.
+     v1.1.8 was cut on a commit predating the rename it was named for,
+     and the version was the only thing that differed: a number the
+     workflow was about to overwrite. A step that overwrites the
+     version can never compare it, so the two are alternatives rather
+     than layers.
+
+     What this CANNOT see is whether the tag carries the CHANGE it is
+     named for. It catches a stale tag only when the bump travelled
+     with the change, which is a convention and not a property of a
+     version string. CLAUDE.md's marketing-site section says so at
+     length, so nobody trusts this further than it goes. */
   const wf = fs.readFileSync(path.join(rootDir, ".github/workflows/build-apps.yml"), "utf8");
 
-  /* THE STEP IS RUN, NOT READ, and the first version of this test is
-     why. It grepped for `GITHUB_REF_NAME#v` — which appears in BOTH
-     the derivation step and the readback step below it — so replacing
-     the derivation with a hardcoded 1.1.0 left the guard green on the
-     surviving occurrence. Two occurrences and one loose pattern is a
-     guard that checks whichever happens to survive, which is the
-     `spctl --assess` hole one workflow over.
+  /* THE STEPS ARE RUN, NOT READ, AND IT IS EVERY STEP THAT TOUCHES A
+     package.json — NOT JUST THIS ONE. The first version of this test
+     extracted the check step alone and ran it in isolation, which is
+     the measuring-the-wrong-layer mistake: the OLD workflow's check
+     step is itself a correct comparison, and was unreachable as a
+     failure only because a step ABOVE it had already rewritten the
+     files. Restoring the whole old workflow left this green on the
+     step under test and went red on an unrelated assertion. A claim
+     about what the workflow does cannot be made by running one step
+     out of it.
 
-     So the step's own script is extracted and EXECUTED against a fake
-     tag environment over throwaway package.json files, and what is
-     asserted is the three versions it produces. The expected value is
-     derived from the fake tag rather than typed beside it. */
-  const step = wf.split("- name: Take the marketing version from the tag")[1];
-  assert.ok(step, "the version-from-tag step is gone");
-  const script = step.split("run: |")[1].split("\n      - name:")[0];
-  assert.ok(script && script.includes("GITHUB_REF_TYPE"), "the step's script could not be extracted");
-  const dedented = script.split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n");
+     So every `run:` script from the top of the build job down to the
+     check, in order, whose text mentions package.json is concatenated
+     and executed as one script. A repair step reintroduced anywhere
+     above the check is therefore inside what is measured.
+
+     WHAT THAT CANNOT SEE, since it is a text filter rather than a
+     sandbox: a step that writes a version without naming the file —
+     through a variable, a generated path, or a helper script in
+     scripts/. The earlier steps that are skipped install node_modules
+     and cannot run here at all, which is why the filter exists. */
+  const CHECK = "The version the installers will carry";
+  const steps = [];
+  for (const chunk of wf.split("\n      - name: ").slice(1)) {
+    const name = chunk.split("\n")[0].trim();
+    const block = chunk.split("\n        run: |\n")[1];
+    /* A BLOCK SCALAR ENDS AT THE FIRST LINE INDENTED LESS THAN ITS
+       OWN BODY, and the lines immediately after it are the NEXT step's
+       comment block — which, here, quotes package.json while executing
+       nothing. Taking the chunk to its end made the tool-check step
+       look like a writer and ran `test -d node_modules/esbuild` in a
+       throwaway directory. */
+    let body;
+    if (block !== undefined) {
+      const all = block.split("\n");
+      const ends = all.findIndex((l) => /^ {0,9}\S/.test(l));
+      body = ends === -1 ? all : all.slice(0, ends);
+    }
+    const inline = block === undefined ? (chunk.match(/\n        run: (?!\|)(.+)/) || [])[1] : undefined;
+    steps.push({
+      name,
+      script: body ? body.map((l) => l.replace(/^ {10}/, "")).join("\n") : inline,
+    });
+    if (name === CHECK) break;
+  }
+  assert.equal(steps[steps.length - 1]?.name, CHECK, "the version-check step is gone, or is no longer in the build job");
+
+  const writers = steps.filter((s) => s.script && s.script.includes("package.json"));
+  /* NON-VACUITY: an empty or mis-parsed list would run nothing and
+     satisfy the passing worlds below by doing nothing at all. */
+  assert.ok(writers.length >= 1, "no step touching package.json was extracted — the parse is wrong");
+  assert.equal(writers[writers.length - 1].name, CHECK, "the check is not the last thing to touch package.json before the build");
+  const dedented = writers.map((s) => s.script).join("\n");
+  assert.match(dedented, /GITHUB_REF_TYPE/, "the extracted scripts never look at whether this is a tag build");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ver-"));
   try {
     fs.mkdirSync(path.join(dir, "desktop"));
     fs.mkdirSync(path.join(dir, "mobile"));
-    for (const f of ["package.json", "desktop/package.json", "mobile/package.json"]) {
-      fs.writeFileSync(path.join(dir, f), JSON.stringify({ name: "x", version: "0.0.1" }, null, 2) + "\n");
-    }
     const sh = path.join(dir, "step.sh");
     fs.writeFileSync(sh, dedented);
 
-    const TAG = "v9.8.7";
-    execFileSync("bash", [sh], {
-      cwd: dir,
-      encoding: "utf8",
-      env: { ...process.env, GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: TAG },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const expected = TAG.slice(1);
-    for (const f of ["package.json", "desktop/package.json", "mobile/package.json"]) {
-      const got = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")).version;
-      assert.equal(got, expected, `on tag ${TAG}, ${f} came out at ${got} rather than ${expected}`);
-    }
+    const FILES = ["package.json", "desktop/package.json", "mobile/package.json"];
+    const seed = (versions) => {
+      FILES.forEach((f, i) => {
+        const v = Array.isArray(versions) ? versions[i] : versions;
+        fs.writeFileSync(path.join(dir, f), JSON.stringify({ name: "x", version: v }, null, 2) + "\n");
+      });
+    };
+    const versionsNow = () => FILES.map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")).version);
+    const run = (env) => {
+      const r = spawnSync("bash", [sh], {
+        cwd: dir,
+        encoding: "utf8",
+        env: { ...process.env, ...env },
+      });
+      return { status: r.status, out: `${r.stdout}${r.stderr}` };
+    };
 
-    /* THE CONTROL: a manual dispatch has no tag, so it must leave the
-       committed version alone. Without this, a step that rewrote the
-       files unconditionally would satisfy everything above. */
-    for (const f of ["package.json", "desktop/package.json", "mobile/package.json"]) {
-      fs.writeFileSync(path.join(dir, f), JSON.stringify({ name: "x", version: "0.0.1" }, null, 2) + "\n");
-    }
-    execFileSync("bash", [sh], {
-      cwd: dir,
-      encoding: "utf8",
-      env: { ...process.env, GITHUB_REF_TYPE: "branch", GITHUB_REF_NAME: "main" },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    assert.equal(
-      JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).version,
-      "0.0.1",
-      "a manual dispatch rewrote the version, so the tag branch is not what is being measured"
+    const TAG = "v9.8.7";
+    const TAGGED = { GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: TAG };
+    const V = TAG.slice(1);
+
+    /* 1. THE AGREEING WORLD, which is the non-vacuity control for
+          every refusal below: a step that refused everything would
+          satisfy them all and make the workflow unable to release. */
+    seed(V);
+    const ok = run(TAGGED);
+    assert.equal(ok.status, 0, `a tag matching the committed version was refused:\n${ok.out}`);
+
+    /* AND IT WROTE NOTHING. The repair this replaces was invisible
+       precisely because it succeeded, so "did not refuse" is only half
+       the claim — the other half is that the three files are still
+       whatever the commit carried. */
+    assert.deepEqual(versionsNow(), [V, V, V], "the check rewrote the version files; it is meant only to read them");
+
+    /* 2. THE CASE THIS EXISTS FOR: v1.1.8 on a commit carrying 1.1.6.
+          The old step would have rewritten all three to 1.1.8 and
+          built happily. */
+    seed("1.1.6");
+    const stale = run(TAGGED);
+    assert.notEqual(stale.status, 0, `a tag on a commit carrying an older version was accepted:\n${stale.out}`);
+    assert.match(stale.out, new RegExp(TAG.replace(/\./g, "\\.")), "the refusal does not name the tag");
+    assert.match(stale.out, /1\.1\.6/, "the refusal does not name the version the commit actually carries");
+    assert.deepEqual(
+      versionsNow(),
+      ["1.1.6", "1.1.6", "1.1.6"],
+      "the step repaired the version on its way to refusing, which is the behaviour being removed"
     );
+
+    /* 3. THE CONTROL FOR THE TAG BRANCH: a manual dispatch has no tag
+          to compare with, so any sane committed version is fine.
+          Without this a step gated on nothing would pass world 1 and
+          fail world 2 for the wrong reason. */
+    seed("0.0.1");
+    const dispatch = run({ GITHUB_REF_TYPE: "branch", GITHUB_REF_NAME: "main" });
+    assert.equal(dispatch.status, 0, `a manual dispatch was refused over its committed version:\n${dispatch.out}`);
+    assert.deepEqual(versionsNow(), ["0.0.1", "0.0.1", "0.0.1"], "a manual dispatch rewrote the version files");
+
+    /* 4. THE THREE FILES MUST AGREE WITH EACH OTHER, tag or no tag —
+          stamp-native.mjs writes the root version into the other two,
+          so a disagreement means that propagation did not run. */
+    seed([V, V, "1.1.6"]);
+    const split = run(TAGGED);
+    assert.notEqual(split.status, 0, `mobile/package.json disagreeing with the root was accepted:\n${split.out}`);
+
+    /* 5. A TAG THAT IS NOT A VERSION gets its own sentence rather than
+          a confusing mismatch: `${GITHUB_REF_NAME#v}` on `vbeta` is
+          "beta", which would otherwise be reported as the version the
+          release was meant to carry. */
+    seed(V);
+    const junk = run({ GITHUB_REF_TYPE: "tag", GITHUB_REF_NAME: "vbeta" });
+    assert.notEqual(junk.status, 0, `the tag 'vbeta' was accepted as a release version:\n${junk.out}`);
+    assert.match(junk.out, /v<major>\.<minor>\.<patch>/, "a malformed tag is not refused on its own terms");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
-  /* AND THE READBACK EXISTS, before the twenty-minute package step: a
-     derivation that silently did not take is the same bug again. */
-  assert.match(wf, /building tag .* but the version is/, "nothing refuses a tag build whose version does not match the tag");
-
-  /* THE COMMITTED VERSION MUST STILL BE SANE, because a manual
-     dispatch has no tag and falls back to it. Compared ACROSS the
-     three files rather than pinned to a number, so a bump needs no
-     test edit. */
+  /* THE COMMITTED VERSION MUST STILL BE SANE, and it is now what a tag
+     is checked against rather than something a tag overwrites.
+     Compared ACROSS the three files rather than pinned to a number, so
+     a bump needs no test edit. */
   const v = (f) => JSON.parse(fs.readFileSync(path.join(rootDir, f), "utf8")).version;
   assert.equal(v("desktop/package.json"), v("package.json"), "desktop/package.json disagrees with the root version");
   assert.equal(v("mobile/package.json"), v("package.json"), "mobile/package.json disagrees with the root version");
