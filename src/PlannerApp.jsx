@@ -148,6 +148,7 @@ import {
   deleteArchive,
   foldLateEditsIntoArchive,
 } from "./semesterArchive.js";
+import { clearedData } from "./clearEverything.js";
 import { ARCHIVE_COPY } from "./archiveCopy.js";
 import { ConsentGate } from "./aiNotesConsent.jsx";
 import { recordConsentState } from "./aiConsentState.js";
@@ -5713,10 +5714,67 @@ export default function PlannerApp() {
       return { ...s, settings: [...(s.settings || []), { id: uid(), ...patch, updatedAt: stamp }] };
     });
 
-  const reset = () => {
-    setData({ ...DEFAULT, semesters: { "Semester 1": makeSemester(), "Semester 2": makeSemester() } });
-    store.del(STORAGE_KEY);
-    setConfirmReset(false);
+  /* CLEARING IS A TOMBSTONE PASS, NOT A WIPE. src/clearEverything.js
+     carries the reasoning; the short version is that the old
+     `setData(empty) + store.del()` left no record of the deletion, so
+     the debounced sync pulled the server copy four seconds later,
+     merged it over the empty blob and put everything back. Union-by-id
+     merge cannot represent an absence — only a tombstone.
+
+     ORDER: the archive ROWS first, then the blob. That is the
+     aiNotesStore deletion rule (row first, then the stub) and it is
+     what keeps the failure on the safe side: an interruption leaves
+     archives gone and the planner still there, which a retry finishes,
+     rather than a planner cleared while last year's semesters sit on
+     the server under a button that said "everything".
+
+     A FAILED ARCHIVE DELETE ABORTS THE WHOLE THING. Clearing the blob
+     anyway would tell the student everything is gone while the
+     archives remain — the same false promise this bug was, one table
+     over. Refusing costs them a retry; proceeding costs them the
+     truth. `fetchArchive`'s three-outcome rule, applied to a delete. */
+  const [clearError, setClearError] = useState("");
+  const [clearing, setClearing] = useState(false);
+
+  const reset = async () => {
+    const at = nowISO();
+    setClearError("");
+    setClearing(true);
+    try {
+      if (session && supabase) {
+        const listed = await listArchives({ supabaseClient: supabase, userId: session.user.id });
+        if (listed.failed) {
+          /* We do not know whether there are archives, so we cannot say
+             they are gone. UNKNOWN is not NONE — the same refusal the
+             archive panel makes when its own list fails. */
+          setClearError("Couldn't reach your archived semesters, so nothing was cleared. Try again when you're back online.");
+          return;
+        }
+        for (const a of listed.archives || []) {
+          const { ok } = await deleteArchive({ supabaseClient: supabase, id: a.id });
+          if (!ok) {
+            setClearError("Couldn't delete an archived semester, so nothing else was cleared. Please try again.");
+            return;
+          }
+        }
+      }
+
+      const cleared = clearedData(dataRef.current, { at });
+      dataRef.current = cleared;
+      setData(cleared);
+      await persist(cleared);
+
+      /* The AI stubs are tombstones now, so `reconcile` at the end of
+         the sync deletes their `ai_notes` rows. The cache is this
+         account's copy of that same content and goes with it. */
+      await noteCache.purgeAll();
+      if (session) await runSync(session);
+      setConfirmReset(false);
+    } catch (e) {
+      setClearError(e.message || "Couldn't clear everything. Please try again.");
+    } finally {
+      setClearing(false);
+    }
   };
 
   const deleteFolder = (folderId) =>
@@ -6251,12 +6309,23 @@ export default function PlannerApp() {
 
         <div className="mt-6 flex justify-center">
           {confirmReset ? (
-            <div className="flex items-center gap-2 rounded-xl border border-stone-200 bg-surface px-3 py-2">
-              <span className="text-xs text-stone-500">Clear everything? This can't be undone.</span>
-              <button className={btnGhost} onClick={() => setConfirmReset(false)}>Cancel</button>
-              <button className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 u-focus" onClick={reset}>
-                <Trash2 size={13} /> Clear
-              </button>
+            <div className="max-w-md rounded-xl border border-stone-200 bg-surface px-3 py-2">
+              <p className="text-xs text-stone-600">
+                <b>Clear everything?</b> This deletes your courses, assignments, notes and study cards
+                on <b>every device you're signed in on</b>, and it includes your{" "}
+                <b>archived semesters</b>. It can't be undone.
+              </p>
+              {clearError && <p className="mt-1.5 text-xs text-rose-600">{clearError}</p>}
+              <div className="mt-2 flex items-center justify-end gap-2">
+                <button className={btnGhost} onClick={() => setConfirmReset(false)} disabled={clearing}>Cancel</button>
+                <button
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-60 u-focus"
+                  onClick={reset}
+                  disabled={clearing}
+                >
+                  <Trash2 size={13} /> {clearing ? "Clearing…" : "Clear everything"}
+                </button>
+              </div>
             </div>
           ) : (
             <button onClick={() => setConfirmReset(true)} className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-stone-400 hover:text-rose-600">

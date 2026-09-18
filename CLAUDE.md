@@ -869,6 +869,89 @@ free: archived lectures stay readable (their content was never in the
 blob), listed in the archive panel and opened through the ordinary
 notes deep link.
 
+**AND "CLEAR EVERYTHING" IS THAT RULE EXACTLY INVERTED — read both
+before touching either.** `src/clearEverything.js`, `clearTransform`.
+Archiving must never tombstone an AI stub because `reconcilePlan`
+deletes the row for any tombstoned stub, and an archive exists to keep
+that lecture. Clearing wants precisely that deletion: the student asked
+for everything to go, and a lecture summary sitting on our server after
+they pressed "Clear everything" is the same false promise the blob half
+of the bug already made. So clearing DOES tombstone stubs, the rows go
+on the next `reconcile`, and `noteCache` is purged beside them.
+
+The two are not in tension — archiving keeps content the student is
+keeping, clearing removes content the student is removing — but they
+read as a contradiction, and the failure mode is somebody "tidying"
+the clear path to match the archive rule and silently restoring the
+original bug for AI notes alone. Both sites carry the comment; this
+paragraph is the third copy on purpose.
+
+**A CLEARED STUB KEEPS `aiMeta`, and that is the subtle half.**
+`isAiNote` is `!!(page && page.aiMeta)` and `reconcilePlan` filters on
+it, so stripping a tombstoned stub bare with the ordinary
+`stripTombstone` makes it INVISIBLE to reconciliation — the row stays
+on the server with nothing pointing at it, for ever. That is the same
+leak the archive rule guards from the other direction, reached by the
+opposite mistake. A cleared stub carries `aiMeta: {}`: truthy, so it is
+still recognised; empty, so previews and translations still go. The
+mutation that swaps it for `stripTombstone` reddens two tests by name.
+
+### The bug that produced all of this: an absence is not a deletion
+
+Found on production, 18 September 2026, and confirmed by Jared on the
+Account tab before a line was written. `reset` was:
+
+```js
+setData({ ...DEFAULT, semesters: { "Semester 1": makeSemester(), … } });
+store.del(STORAGE_KEY);
+```
+
+Local only, by hard removal, touching no server row — `push` is an
+upsert and `pull` a select, and there is no delete path for
+`planner_data` outside account deletion. **Every other delete in the
+app already wrote a tombstone** (`tombstone()`, `deleteFolder()`,
+thirty lines below in the same file); `reset` was the single path that
+removed instead of recording, and union-by-id merge cannot represent an
+absence.
+
+**THE FOUR SECONDS ARE THE PART WORTH KEEPING.** It was reported as
+"press the AI tab and the data comes back", and nothing in the AI tab,
+the consent gate or sign-in touches sync — `grep` finds no `runSync` in
+any of them. The trigger is the debounced push: `reset` spread
+`DEFAULT`, whose `meta.updatedAt` is `nowISO()` evaluated ONCE AT MODULE
+LOAD, so the stamp always differed from `lastPushed` and the 4-second
+timer always armed. It pulled, merged, restored — and then PUSHED the
+restored data back up, cementing it. **The screen somebody is looking at
+when a timer fires is not the cause**, and the cheapest way to tell
+those apart was to stay on the Account tab and watch it happen there.
+
+That stale module-load stamp is its own small finding: every clear was
+stamped older than almost any real edit, so it lost merges it should
+have won even where it had something to say.
+
+**The fix costs nothing structural.** No migration, no schema change,
+no new collection — tombstones are the existing shape and old builds on
+other devices already understand them. The blob carries the tombstones
+for the 60-day purge window; the archive work already measured a full
+semester of stripped tombstones at `ARCHIVE_TRANSITIONAL_RESIDUE_BYTES`
+(120 KB), decaying to zero.
+
+**A FAILED ARCHIVE DELETE ABORTS THE WHOLE CLEAR**, deliberately.
+Archives are rows, so clearing them can fail; clearing the blob anyway
+would tell the student everything was gone while last year's semesters
+sat on the server, which is this bug again one table over. `listArchives`
+returning `{failed:true}` is UNKNOWN and not NONE — the `fetchNote`
+three-outcome rule, applied to a delete — so it refuses and says so.
+Refusing costs a retry; proceeding costs the truth.
+
+**`scripts/test-clear-everything.mjs` RUNS THE OLD BEHAVIOUR AND
+REQUIRES THE DATA TO COME BACK.** Without that section, "the planner is
+empty after a sync" passes for any number of reasons unrelated to the
+fix — an empty fixture, a merge that never ran, a backend returning
+nothing. It is the `THE LOST UPDATE, demonstrated` shape, and it is why
+the file opens by asserting the fixture really is populated and really
+reaches the server.
+
 **Ordering is the aiNotesStore table, extended.** Archiving: row
 FIRST, then strip — an interruption leaves the semester in both
 places, resolved by retry. The archive id is parked on the device
