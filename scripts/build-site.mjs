@@ -87,6 +87,15 @@ for (const f of modules) fs.copyFileSync(path.join("site", f), path.join(OUT, "s
    release, no recovery forwarding. It looked fine. */
 fs.copyFileSync(path.join("public", "site", "site.js"), path.join(OUT, "site", "site.js"));
 
+/* THE SCREENSHOTS, READ FROM THE FOLDER rather than listed — the same
+   reason the modules above are. The page references them as bare
+   filenames, so they land beside index.html at the root; a list here
+   would drift the moment somebody added a shot, and the link check
+   below would fail naming a file that is sitting in public/site/ the
+   whole time. */
+const shots = fs.readdirSync(path.join("public", "site")).filter((f) => f.endsWith(".png"));
+for (const f of shots) fs.copyFileSync(path.join("public", "site", f), path.join(OUT, f));
+
 /* Icons and fonts the page and the documents reference. */
 for (const f of ["icon-192.png", "icon-512.png", "apple-touch-icon.png"]) {
   const from = path.join("public", f);

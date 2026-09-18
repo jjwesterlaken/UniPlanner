@@ -4,10 +4,20 @@ Everything Jared and Grace have to produce before the marketing page can
 go live. Read the whole thing before picking up a phone — the setup
 notes at the bottom save more time than the shot list does.
 
-**Device: moto g05.** 1600 × 720, 20:9, ~269 ppi. That is the phone the
-Android build is verified on (14 August 2026), and shooting on the real
-device is the point — a browser's device-emulation screenshot has the
-wrong font rendering and the wrong status bar, and both are visible.
+**SHOT, 18 September 2026: iPhone 16 Pro Max simulator, 1320 × 2868**
+(ratio 0.4603). The moto g05 was the original plan because the Android
+build is verified on it; the website is the target rather than Play, and
+the shots were taken on the simulator that was to hand.
+
+**What matters for the page is that every phone shot has the SAME
+RATIO**, because the slots are a fixed aspect box and `object-fit:
+cover` crops whatever does not match. All six do — checked, not assumed.
+The device is otherwise interchangeable.
+
+The original reasoning, kept because it still applies the day these are
+reshot for a store listing: shooting on a real device is the point
+there, since a browser's device emulation has the wrong font rendering
+and the wrong status bar, and both are visible.
 
 ---
 
@@ -15,8 +25,8 @@ wrong font rendering and the wrong status bar, and both are visible.
 
 | | Count |
 |---|---|
-| Phone screenshots (moto g05, 1600 × 720 portrait) | **6** |
-| Desktop screenshots (1440 × 900 window) | **2** |
+| Phone screenshots (iPhone 16 Pro Max, 1320 × 2868 portrait) | **6** |
+| Desktop screenshots (1920 × 1032 browser, cropped to 1896 × 900) | **2** |
 | Hero image | **1** — a re-crop of phone shot 1, no separate shoot |
 | **Total to shoot** | **8** |
 
@@ -50,7 +60,11 @@ empty:
 - **One AI lecture note**, saved, with a real-looking summary. Record
   something read aloud for three or four minutes rather than a real
   lecture; the note only has to look plausible at screenshot size.
-- **Light mode**, unless a shot is specifically listed as dark.
+- **DARK MODE is the main set and light is the variant** — the reverse
+  of what this document originally specified. Decided by looking at the
+  shots: the app's dark ground photographs better against the page's
+  own light ground, and the teal accents carry. Shoot in dark unless a
+  shot is specifically listed as light.
 
 **Turn on Do Not Disturb** and **hide the notification shade** before the
 first shot. A carrier name and a battery icon are fine and make it look
@@ -70,11 +84,18 @@ device's native 1600 × 720.
 | **3** | **Study — review in progress** | A card mid-review with the four rating buttons, and the "due today" count | The daily-use screen. Show the ANSWER side, not the question side — the question side is a screenshot of one sentence. |
 | **4** | **Readings — a summary open** | A reading row expanded with its summary panel showing | The newest feature and the one nobody expects. The collapsed row plus the open panel in one frame shows how it attaches. |
 | **5** | **Grades — a course with a required mark** | The assessments entered, and the "you need 80% for a Distinction" line | The feature Grace bounced off. The required-mark line is the payoff and the only part worth a screenshot. |
-| **6** | **Dark mode — whichever of 1 or 3 looks best** | Same content, `--mode` set to dark | One dark shot is enough to say "it does dark mode". Two is a waste of a slot. |
+| **6** | **Light mode — the same screen as shot 1** | Same content, `--mode` set to light | One light shot is enough to say "it does both". Two is a waste of a slot. The main set is dark, so this is the variant. |
 
-**Aspect ratio for the site: 20:9 (0.45), used as-is.** No device frame
-in the source image — the page adds the frame in CSS so it can be
-adjusted without a reshoot.
+**Aspect ratio for the site: whatever the device gives, used as-is —
+but the SAME one for all six.** The shipped set is 1320 × 2868 (0.4603).
+No device frame in the source image — the page adds the frame in CSS so
+it can be adjusted without a reshoot.
+
+**The slots are `aspect-ratio: 9/16` (0.5625), so a 0.4603 shot is
+cropped top and bottom by about 9% each end.** Frame accordingly: what
+is at the very top or very bottom of a shot may not survive. The hero is
+the exception and has its own ratio in CSS, because it is a 60% crop of
+shot 1 and cropping it again would take ~13% off each side.
 
 ## The two desktop shots
 
@@ -107,10 +128,16 @@ drift out of step with shot 1.
 - **PNG, unmodified, straight off the device.** No annotation, no
   arrows, no drop shadows, no phone frames — all of that is CSS and all
   of it should stay changeable.
-- Name them exactly: `phone-1-home.png` … `phone-6-dark.png`,
-  `desktop-1-wide.png`, `desktop-2-recording.png`, `hero.png`.
-- Drop them in `public/site/` — the build copies `public/` wholesale, so
-  no build change is needed.
+- Name them exactly: `phone-1-home.png`, `phone-2-ai-note.png`,
+  `phone-3-study.png`, `phone-4-readings.png`, `phone-5-grades.png`,
+  `phone-6-light.png`, `desktop-1-wide.png`, `desktop-2-recording.png`,
+  `hero.png`.
+- Drop them in `public/site/`. **`build-site.mjs` copies every `.png` it
+  finds there to the site root, read from the folder rather than listed**
+  — the claim that "the build copies `public/` wholesale, so no build
+  change is needed" was wrong and cost a failed build: the site build
+  copies named icons and fonts, and the link checker then refused the
+  page for referencing files sitting in `public/site/` the whole time.
 - **They are optimised at build time, not by hand.** Ship the originals;
   hand-compressed screenshots are how a re-crop becomes a reshoot.
 
