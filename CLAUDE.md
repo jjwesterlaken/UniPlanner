@@ -4827,6 +4827,80 @@ reaching for `git checkout` on the one file whose work was not yet
 committed. Never revert a mutation with a command that reads from git
 unless the file's real state is already IN git.
 
+### AND IT IS A MECHANISM NOW, because it had already been remembered twice
+
+`.claude/hooks/guard-dirty-checkout.mjs` is a PreToolUse hook that
+refuses `git checkout` and `git restore` against a path with
+uncommitted changes, and `.claude/settings.json` wires it. The rule
+above was written down after the first time it cost work and the
+second time happened anyway — during mutation-checking, which is
+exactly when the rule applies and exactly when attention is somewhere
+else. **A rule that has to be remembered at the one moment attention is
+elsewhere is not a rule, it is a hope.**
+
+**NOTHING IN `npm test` COULD HAVE CAUGHT IT, and that is why it is a
+hook rather than a suite.** The damage is to the WORKING TREE, before
+any test runs; afterwards the file either still builds (so nothing
+fails) or does not (so the failure names a syntax error rather than a
+lost hour). Git has no `pre-checkout` hook for a pathspec checkout
+either, so the version-control layer cannot veto it. The tool boundary
+is the only layer that sees the command before it runs.
+
+**IT EXPLAINS RATHER THAN VETOES**, and the remedy it names is the
+point: `git stash push -- <file>` has the same effect and is
+RECOVERABLE, so there is always a correct thing to do instead. A block
+with no way through is one that gets deleted the first time it is
+inconvenient, and the refusal says where to switch it off.
+
+**IT FAILS OPEN, deliberately.** Git missing, a shape it cannot parse,
+a path outside the repository, a `cd` into a variable — every internal
+error ALLOWS. This is a safety net against a known reflex, not a
+security boundary: anything that can run `git checkout` can run a
+hundred other destructive things, and a guard that breaks and blocks
+everything is a guard somebody switches off. What it does not cover is
+named in its own header rather than implied by a pass — a path reached
+through a variable or a glob, and every other destructive command
+(`git reset --hard`, `git clean -fd`, `sed -i` over the wrong file).
+
+**THE `if` FILTER WAS THE HOLE, and it is asserted gone.** The first
+draft carried `if: "Bash(git *)"`, which is a PREFIX match — so
+`cd somewhere && git checkout x` never reached the guard at all, and
+that is precisely the shape these commands take. A guard that is green
+over the state it forbids, in one line of configuration. The cost of
+dropping it is that the hook runs on every Bash call, which is a few
+milliseconds of `git status`.
+
+**`.claude/` WAS IGNORED AS A DIRECTORY, which makes every negation
+inside it inert.** Git cannot re-include a file whose parent is
+excluded, so the entry had to become `.claude/*` before
+`!.claude/hooks/` could do anything — an entry that looks right and
+does not bite, the keystore lesson one directory over. The guard asks
+`git check-ignore` rather than reading `.gitignore`, for that reason.
+`settings.local.json` stays ignored: personal overrides are personal.
+
+**`scripts/test-checkout-guard.mjs` tests it in two layers**, because a
+battery over exported functions says nothing about whether the shipped
+script reads stdin, finds the repository, or emits JSON anybody
+honours. A shape table drives `decide()` over a fake repository — the
+`audioSources.js` arrangement, and the only way to cover `--ours`
+during a merge without staging a conflict for real — and then the REAL
+script is spawned against a REAL git repository with a REAL dirty file,
+fed the REAL payload. Both halves carry their control: "nothing is
+allowed" satisfies every must-block row and "nothing is blocked"
+satisfies every must-allow one, so the real-script section runs the
+same command shape against a CLEAN file and requires it through.
+
+**INSTALLING IT IS PULLING IT, with one caveat that costs a session if
+nobody says it.** Both files are tracked now, so `git pull` is the
+install. But Claude Code's settings watcher only watches directories
+that held a settings file when the session STARTED — so in a session
+that began before `.claude/settings.json` existed, the hook is on disk
+and not loaded. Opening `/hooks` once reloads the configuration, and a
+new session picks it up on its own. The way to know it is live is to
+try the thing it forbids: dirty a tracked file and ask for a
+`git checkout` of it, and the tool call comes back refused with the
+explanation rather than running.
+
 ## Branch from `main`, verified — and a mirror test cannot see a decision
 
 Two failures from one mistake, both worth keeping.
