@@ -155,7 +155,7 @@ export const CONSENT_TEXT = {
      planner, timetable, grades, notes, readings and study cards all
      work with no account at all. */
   declineNote:
-    "You don't have to agree. Everything else in University Planner — timetable, assessments, grades, notes, readings and study cards — works exactly the same. Only the AI features need this.",
+    "You don't have to agree. Everything else in UniPlanner — timetable, assessments, grades, notes, readings and study cards — works exactly the same. Only the AI features need this.",
   /* THE COMPACT FORM, for a panel rather than a tab.
      The four text features render on tabs a student arrives at for
      other reasons, so the full screen cannot be thrown over them on

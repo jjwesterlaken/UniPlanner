@@ -1,4 +1,4 @@
-# Compiling University Planner to a phone or tablet
+# Compiling UniPlanner to a phone or tablet
 
 **Android has been compiled and run on real hardware** (moto g05,
 August 2026 — recording verified end to end, API 36 confirmed on the

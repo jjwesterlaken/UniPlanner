@@ -59,9 +59,9 @@ bottom, to **Artifacts**:
 
 | Artifact | Contains |
 |---|---|
-| `University-Planner-Mac` | `.dmg` — works on all Macs |
-| `University-Planner-Windows` | `Setup .exe` (installer) and `Portable .exe` |
-| `University-Planner-Linux` | `.AppImage` |
+| `UniPlanner-Desktop-Mac` | `.dmg` — works on all Macs |
+| `UniPlanner-Desktop-Windows` | `Setup .exe` (installer) and `Portable .exe` |
+| `UniPlanner-Desktop-Linux` | `.AppImage` |
 
 Download whichever you need.
 

@@ -1,6 +1,6 @@
 {
-  "name": "University Planner",
-  "short_name": "Planner",
+  "name": "UniPlanner",
+  "short_name": "UniPlanner",
   "description": "Plan courses, assignments, readings and study cards.",
   "start_url": ".",
   "scope": ".",

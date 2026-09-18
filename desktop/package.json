@@ -1,10 +1,10 @@
 {
   "name": "university-planner",
-  "productName": "University Planner",
-  "version": "1.1.6",
+  "productName": "UniPlanner",
+  "version": "1.1.8",
   "description": "Plan courses, assignments, readings and study cards.",
   "main": "main.js",
-  "author": "University Planner",
+  "author": "UniPlanner",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -22,7 +22,7 @@
   },
   "build": {
     "appId": "com.uniplannerapp.planner",
-    "productName": "University Planner",
+    "productName": "UniPlanner",
     "files": [
       "main.js",
       "www/**/*"
@@ -36,7 +36,7 @@
         "dmg",
         "zip"
       ],
-      "artifactName": "University-Planner.${ext}",
+      "artifactName": "UniPlanner.${ext}",
       "category": "public.app-category.education",
       "icon": "build/icon.png",
       "hardenedRuntime": true,
@@ -44,12 +44,12 @@
       "entitlements": "build/entitlements.mac.plist",
       "notarize": true,
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "University Planner uses your microphone to record lectures so it can generate an AI summary and study cards. Your recording is sent to Groq for transcription and is deleted the moment it's transcribed."
+        "NSMicrophoneUsageDescription": "UniPlanner uses your microphone to record lectures so it can generate an AI summary and study cards. Your recording is sent to Groq for transcription and is deleted the moment it's transcribed."
       }
     },
     "dmg": {
-      "title": "University Planner",
-      "artifactName": "University-Planner.${ext}"
+      "title": "UniPlanner",
+      "artifactName": "UniPlanner.${ext}"
     },
     "win": {
       "target": [
@@ -64,11 +64,11 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "University Planner",
-      "artifactName": "University-Planner-Setup.${ext}"
+      "shortcutName": "UniPlanner",
+      "artifactName": "UniPlanner-Setup.${ext}"
     },
     "portable": {
-      "artifactName": "University-Planner-Portable.${ext}"
+      "artifactName": "UniPlanner-Portable.${ext}"
     },
     "linux": {
       "target": [
@@ -76,7 +76,7 @@
       ],
       "icon": "build/icon.png",
       "category": "Education",
-      "artifactName": "University-Planner.${ext}"
+      "artifactName": "UniPlanner.${ext}"
     }
   }
 }

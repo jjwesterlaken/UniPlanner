@@ -300,6 +300,10 @@ ever flags a mismatch between them, that is the seam to look at.
   (`MOBILE-BUILD.md` 13b). This build records Opus at the measured
   51 kbps, under the 86 MB ceiling to 3 h 45 m — the duration cap
   binds before the size cap, which is the right way round.
-- **"University Planner" vs "UniPlanner" in-app.** Deferred by ruling.
+- **The name split is CLOSED.** It read '"University Planner" vs
+  "UniPlanner" in-app, deferred by ruling' until 18 September 2026; the
+  product is "UniPlanner" everywhere now. iOS decided it rather than
+  taste — a home-screen label truncates at ~12 characters, so the long
+  form was never available as the single name.
   The home-screen name is already "UniPlanner" (`stamp-native.mjs`,
   `DISPLAY_NAME`), matching the store record where it is visible.

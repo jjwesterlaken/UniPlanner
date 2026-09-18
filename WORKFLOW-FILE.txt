@@ -79,7 +79,7 @@ jobs:
       - name: Collect the finished files
         uses: actions/upload-artifact@v4
         with:
-          name: University-Planner-${{ matrix.label }}
+          name: UniPlanner-${{ matrix.label }}
           path: ${{ matrix.artifacts }}
           if-no-files-found: error
           retention-days: 30
@@ -105,7 +105,7 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "University Planner ${GITHUB_REF_NAME}" \
+            --title "UniPlanner ${GITHUB_REF_NAME}" \
             --notes "Download the file for your device and open it. On first launch your computer may warn that the app is from an unidentified developer - see the README for the one-time steps to allow it." \
             --generate-notes=false \
             $(find artifacts -type f) \

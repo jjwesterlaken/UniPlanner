@@ -183,12 +183,26 @@ The `artifactName` templates carry no spaces now, which makes the three
 agree by construction:
 
 ```
-University-Planner-Setup.exe
-University-Planner-Portable.exe
-University-Planner.AppImage
-University-Planner.dmg
-University-Planner.zip      (new — see below)
+UniPlanner-Setup.exe
+UniPlanner-Portable.exe
+UniPlanner.AppImage
+UniPlanner.dmg
+UniPlanner.zip      (new — see below)
 ```
+
+**AND THE PRODUCT WAS RENAMED ON 18 SEPTEMBER 2026**, which moved these
+names one more time: `${productName}` is now **"UniPlanner"**, matching
+the App Store record and the home-screen label. The tables higher up
+this section still say "University Planner" and are left alone on
+purpose — they are a record of a real bug and its three spellings, and
+rewriting the name inside them would make the record describe something
+that never happened.
+
+The rename changes nothing about the mechanism: the templates still
+carry no spaces, so the three spellings still agree by construction.
+What it does do is reset the 404 window — **the buttons 404 against
+v1.1.7 and everything before it**, for the same reason and with the same
+remedy as every paragraph above.
 
 **So the download buttons 404 against v1.1.5 and everything before it.**
 Cut a release before promoting the site, exactly as the paragraph above

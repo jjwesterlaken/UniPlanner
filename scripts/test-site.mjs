@@ -87,7 +87,7 @@ const ASSETS = {
      and is the shape the agreement test above now forbids — a fixture
      that keeps a defect alive after the code has dropped it is the
      stand-in-weaker-than-production pattern in its cheapest form. */
-  macDmg: "University-Planner.dmg",
+  macDmg: "UniPlanner.dmg",
 };
 
 /* ---------- downloads: the URLs ---------- */
@@ -234,8 +234,8 @@ test("a release carries the desktop builds and nothing else", () => {
 
      TWO HALVES, AND THEY ARE NOT REDUNDANT. The download PATTERN is the
      mechanism, and it works by SHAPE — the desktop artifacts are
-     `University-Planner-Desktop-<label>` and the web bundle is
-     `University-Planner-Web`, which cannot match. The step in the job
+     `UniPlanner-Desktop-<label>` and the web bundle is
+     `UniPlanner-Web`, which cannot match. The step in the job
      is the CHECK, because a pattern that silently stops matching
      produces a release that looks exactly like a tidy one. This test is
      what ties the check's allow-list to the build config, so a new

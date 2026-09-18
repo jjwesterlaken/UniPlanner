@@ -1,4 +1,4 @@
-# Working on University Planner
+# Working on UniPlanner
 
 Notes for anyone — human or AI — picking this codebase up. These are the
 things that have actually bitten, not general advice.
@@ -3109,12 +3109,20 @@ uploaded by the Linux job for hosting. Nothing failed; a student
 picking a download met a list in which the four files meant for them
 were a seventh of what was offered. The download step takes a
 `pattern` now, and the two categories are separated by SHAPE
-(`University-Planner-Desktop-<label>` against `University-Planner-Web`)
+(`UniPlanner-Desktop-<label>` against `UniPlanner-Web`)
 rather than by a list somebody keeps in step.
 
 **AND THE NAME OF EVERY INSTALLER WAS SPELLED THREE WAYS.**
 `${productName}` is "University Planner", **with a space**, and three
 different things resolved that space differently:
+
+**THE PRODUCT HAS SINCE BEEN RENAMED to "UniPlanner" (18 September
+2026), so `${productName}` no longer contains a space at all and this
+whole class is closed by construction rather than by the templates
+alone. The table below, and the Gatekeeper and `stapler` output quoted
+further down this section, KEEP the old name deliberately — they record
+what happened and what a real run printed. A rename that edits the
+evidence leaves a document describing a bug nobody could have had.**
 
 | who | spelling |
 |---|---|

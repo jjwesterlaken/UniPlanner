@@ -109,7 +109,7 @@ SMTP and enter:
 | Username | `resend` |
 | Password | the API key from step 1.4 |
 | Sender email | `noreply@send.uniplannerapp.com` (must be on the domain you verified) |
-| Sender name | `University Planner` |
+| Sender name | `UniPlanner` |
 
 Port 465 is implicit TLS. If Supabase rejects it, try `587`, which is
 STARTTLS — both are supported.
@@ -129,7 +129,7 @@ the sending domain.
 Worth doing anyway, once, because these are the first thing a new student
 sees and the defaults say "Supabase":
 
-- Change the subject lines to mention University Planner.
+- Change the subject lines to mention UniPlanner.
 - Confirm signup, Reset password, and Magic Link are the three that
   matter. Leave `{{ .ConfirmationURL }}` exactly as it is — that is the
   link.
@@ -169,7 +169,7 @@ with this app before**, on the live site.
 2. The email arrives within a minute or two — **check spam** and report
    if it was there, since that means DNS is incomplete rather than
    working.
-3. The sender reads as University Planner, not Supabase.
+3. The sender reads as UniPlanner, not Supabase.
 4. Click the link. It confirms the address server-side and lands you on
    `www.uniplannerapp.com`.
 5. Sign in with the password you chose. **The account works.**
