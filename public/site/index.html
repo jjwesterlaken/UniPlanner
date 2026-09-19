@@ -78,9 +78,20 @@ font-size:12.5px;color:var(--soft);line-height:1.25}
 
 .shot{background:var(--card);border:1px solid var(--line);border-radius:16px;
 aspect-ratio:9/16;max-height:520px;display:grid;place-items:center;text-align:center;
-padding:24px;box-shadow:0 18px 44px -28px rgba(0,0,0,.3);overflow:hidden}
+padding:24px;box-shadow:0 18px 44px -28px rgba(0,0,0,.3);overflow:hidden;position:relative}
 .shot span{font-size:13px;color:#a8a8a0;line-height:1.5}
-.shot img{width:100%;height:100%;object-fit:cover;border-radius:15px}
+/* THE CAPTION IS THE FALLBACK. The image is laid OVER it rather than
+   beside it, so a shot that never loads leaves readable text in the box
+   instead of an empty panel — and the caption stays in the markup for
+   the same reason the alt text does. Its own background stops the
+   caption showing through a loaded image. */
+.shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+border-radius:15px;background:var(--card)}
+/* THE HERO KEEPS THE IMAGE'S OWN RATIO. hero.png is the top 60% of the
+   phone shot (1320x1720), and object-fit:cover inside the 9/16 box the
+   other slots use would scale it to the box height and crop ~13% off
+   EACH SIDE — the one slot where the whole width is the point. */
+.shot.heroshot{aspect-ratio:1320/1720;max-height:560px}
 
 .strip{background:var(--teal);color:#fff;padding:26px 0}
 .stripin{display:flex;flex-wrap:wrap;gap:34px;justify-content:center;text-align:center;
@@ -237,7 +248,7 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
       <div class="storebadges" data-store-badges></div>
       <p class="freeline">Free to use. No ads, ever. Your data stays in Australia.</p>
     </div>
-    <div class="shot"><span>SCREENSHOT<br>App on a phone, showing the Plan tab<br>with a week of deadlines</span></div>
+    <div class="shot heroshot"><span>UniPlanner on a phone — the Plan tab, with the weeks ahead and what each one is worth.</span><img src="hero.png" alt="UniPlanner on a phone, showing the Plan tab: a What&#39;s coming list with Week 2, Week 3 and Week 6, each naming the assessments due and what share of the grade lands that week." decoding="async" fetchpriority="high"></div>
   </div>
 </div>
 
@@ -265,7 +276,7 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
         <li><b>Your recording is deleted</b> as soon as it is transcribed, and never kept</li>
       </ul>
     </div>
-    <div class="shot"><span>SCREENSHOT<br>AI note result screen with<br>overview, key points and study cards</span></div>
+    <div class="shot"><span>An AI lecture note — the overview and key points, written from a recording.</span><img src="phone-2-ai-note.png" alt="An AI lecture note on a phone: an overview paragraph followed by key points, each several sentences long, written from a recorded lecture." decoding="async" loading="lazy"></div>
   </div>
 
   <div class="feat rev">
@@ -279,7 +290,7 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
         <li><b>Rounding rule</b> setting, because half a mark decides a grade</li>
       </ul>
     </div>
-    <div class="shot"><span>SCREENSHOT<br>Grades screen showing<br>"you need 80% for a Distinction"</span></div>
+    <div class="shot"><span>Courses, semester dates and the rounding rule — everything Grades works from.</span><img src="phone-5-grades.png" alt="The Courses tab on a phone: three course tags, the semester start date and the rounding rule, with the Grades section beneath them." decoding="async" loading="lazy"></div>
   </div>
 
   <div class="feat">
@@ -293,7 +304,7 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
         <li><b>Explain it back</b> in your own words and get told what you missed</li>
       </ul>
     </div>
-    <div class="shot"><span>SCREENSHOT<br>Study card review screen<br>with Again / Good / Easy</span></div>
+    <div class="shot"><span>A card under review, with Explain it back open and Again / Good / Easy below.</span><img src="phone-3-study.png" alt="A study card under review on a phone, with an Explain it back box open beneath it and the Again, Good and Easy buttons below." decoding="async" loading="lazy"></div>
   </div>
 
   <div class="feat rev">
@@ -307,7 +318,7 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
         <li><b>Crunch weeks</b> flagged before they arrive</li>
       </ul>
     </div>
-    <div class="shot"><span>SCREENSHOT<br>Planner with assignments,<br>week labels and the workload warning</span></div>
+    <div class="shot"><span>Deadlines by teaching week, with the busy weeks flagged before they arrive.</span><img src="phone-1-home.png" alt="The Plan tab on a phone: What&#39;s coming lists Week 2, Week 3 and Week 6 with a busy-week warning, and the weekly reading planner sits below it." decoding="async" loading="lazy"></div>
   </div>
 </div></section>
 
