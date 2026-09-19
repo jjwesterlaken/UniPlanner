@@ -487,6 +487,165 @@ async function run() {
     assert.equal(item.overdue, true);
   });
 
+  /* ---------- finished work is not "coming" ---------- */
+
+  await test("A MARKED ASSESSMENT PAST ITS DUE DATE IS DONE, NOT OVERDUE", () => {
+    /* The bug as reported: "What's coming labels a marked assessment as
+       overdue". `overdue` was `due < today` and nothing else, so
+       finished work sat in a forward-looking section flagged as the
+       thing most needing attention. */
+    const weeks = forecastWorkload({
+      assessments: [
+        { id: "q", title: "Quiz", w: 10, due: "2026-08-20", mark: 72 },
+        { id: "r", title: "Report", w: 25, due: "2026-08-21" },
+      ],
+      today: "2026-09-01",
+    });
+    const items = weeks.flatMap((w) => w.items);
+    const quiz = items.find((i) => i.id === "q");
+    const report = items.find((i) => i.id === "r");
+    assert.ok(quiz && report, "both are still listed — finished work is shown, not dropped");
+    assert.equal(quiz.finished, true);
+    assert.equal(quiz.overdue, false, "a marked assessment is not overdue");
+    assert.equal(report.finished, false);
+    assert.equal(report.overdue, true, "and an unmarked one still is — otherwise this proves nothing");
+  });
+
+  await test("a mark of 0 is marked, because that is what isMarked already decided", () => {
+    /* Derived rather than restated: the zero edge is grades.js's and is
+       not re-implemented here. A second definition is how the two come
+       to disagree. */
+    const weeks = forecastWorkload({
+      assessments: [
+        { id: "z", title: "Missed it", w: 10, due: "2026-08-20", mark: 0 },
+        /* A SIBLING, so the week survives to be inspected. Without it
+           the week empties and drops, and this test cannot tell a
+           zero-mark read as finished from one read as absent. */
+        { id: "u", title: "Still to do", w: 10, due: "2026-08-21" },
+      ],
+      today: "2026-09-01",
+    });
+    const item = weeks.flatMap((w) => w.items).find((i) => i.id === "z");
+    assert.equal(item.finished, true);
+    assert.equal(item.overdue, false);
+    const absent = weeks.flatMap((w) => w.items).find((i) => i.id === "u");
+    assert.equal(absent.finished, false, "an absent mark is not a mark of 0");
+  });
+
+  await test("A PAST WEEK WITH EVERYTHING FINISHED IS GONE IN NOVEMBER", () => {
+    /* THE MISSING LOWER BOUND, which is the larger bug. forecastWorkload
+       keeps every item with `due <= horizon` and has no floor at all, so
+       a deadline entered in week 2 stayed in "what's coming" for the
+       rest of the year. The rule that empties it without hiding real
+       overdue work is: a PAST week goes when nothing in it is
+       outstanding. */
+    const args = {
+      assessments: [
+        { id: "q", title: "Quiz", w: 10, due: "2026-08-04", mark: 72 },
+        { id: "e", title: "Essay", w: 25, due: "2026-08-11", mark: 65 },
+        { id: "r", title: "Report", w: 25, due: "2026-08-12" },
+        { id: "f", kind: "exam", title: "Final exam", w: 40, due: "2026-11-20" },
+      ],
+      today: "2026-11-02",
+      weeks: 6,
+    };
+    const weeks = forecastWorkload(args);
+    const starts = weeks.map((w) => w.weekStart);
+
+    assert.ok(!starts.includes("2026-08-03"), "the week whose only item is marked is gone");
+    assert.ok(
+      starts.includes("2026-08-10"),
+      "the week holding an UNMARKED overdue item stays — hiding past weeks outright would take the overdue work with them"
+    );
+    const kept = weeks.find((w) => w.weekStart === "2026-08-10");
+    assert.deepEqual(kept.items.map((i) => i.id).sort(), ["e", "r"], "and it still SHOWS the finished one beside it");
+    assert.equal(kept.outstandingCount, 1, "while counting only what is still to come");
+    assert.equal(kept.outstandingWeight, 25);
+
+    /* NON-VACUITY: the same data BEFORE November still has the first
+       week, so the assertion above is about the lower bound and not
+       about a fixture that never contained it. */
+    const earlier = forecastWorkload({ ...args, today: "2026-08-03" });
+    assert.ok(
+      earlier.map((w) => w.weekStart).includes("2026-08-03"),
+      "that week is absent in November because it is finished, not because it was never there"
+    );
+  });
+
+  await test("a finished week stops being a crunch, and an unfinished one does not", () => {
+    /* The crunch flag is a warning about work ahead. Three marked
+       things in one week is not a week to start early on. */
+    const week = (mark) =>
+      forecastWorkload({
+        assessments: [
+          { id: "1", title: "A", w: 20, due: "2026-08-10", ...(mark ? { mark: 70 } : {}) },
+          { id: "2", title: "B", w: 20, due: "2026-08-11", ...(mark ? { mark: 70 } : {}) },
+          { id: "3", title: "C", w: 20, due: "2026-08-12" },
+        ],
+        today: "2026-09-01",
+      }).find((w) => w.weekStart === "2026-08-10");
+    assert.equal(week(false).crunch, true, "three outstanding things in a week is a crunch");
+    assert.equal(week(true).crunch, false, "two of them marked and it is not");
+    assert.equal(week(true).totalWeight, 60, "the week is still recorded as having been worth 60%");
+    assert.equal(week(true).outstandingWeight, 20, "while 20% is what is left");
+  });
+
+  await test("A FUTURE ITEM KEEPS ITS DATE WHATEVER ITS MARK SAYS", () => {
+    /* `finished` is consulted only for items already past. A mark on a
+       future assessment need not mean the work is done — a student
+       modelling a grade can enter one — and hiding a real upcoming
+       deadline on that evidence is the worse failure. */
+    const weeks = forecastWorkload({
+      assessments: [{ id: "f", title: "Later", w: 30, due: "2026-09-20", mark: 88 }],
+      today: "2026-09-01",
+    });
+    const item = weeks.flatMap((w) => w.items).find((i) => i.id === "f");
+    assert.ok(item, "a future assessment is not dropped because it carries a mark");
+    assert.equal(item.past, false);
+    assert.equal(item.overdue, false);
+    assert.equal(weeks.find((w) => w.items.some((i) => i.id === "f")).outstandingCount, 1);
+  });
+
+  await test("a marked assessment carries its finish onto the assignment it is linked to", () => {
+    /* The linked pair is one real deadline, and the mark is the only
+       finished signal either half carries — an assignment has no `done`
+       field and no control that would set one. */
+    const weeks = forecastWorkload({
+      assignments: [{ id: "as1", title: "Essay", due: "2026-08-20" }],
+      assessments: [
+        { id: "x1", title: "Essay", w: 30, due: "2026-08-20", assignmentId: "as1", mark: 68 },
+        /* Keeps the week alive, as above. */
+        { id: "u", title: "Still to do", w: 10, due: "2026-08-21" },
+      ],
+      today: "2026-09-01",
+    });
+    const all = weeks.flatMap((w) => w.items);
+    const merged = all.find((i) => i.id === "as1");
+    assert.equal(all.length, 2, "the linked pair is still one deadline, beside the sibling");
+    assert.ok(merged, "the assignment is the item that survives the merge");
+    assert.equal(merged.weight, 30, "the weight comes across");
+    assert.equal(merged.finished, true);
+    assert.equal(merged.overdue, false);
+  });
+
+  await test("A BARE ASSIGNMENT CAN NEVER BE FINISHED, and that is a gap rather than a decision", () => {
+    /* Recorded as a test so the limit is visible rather than implied.
+       An assignment's fields are course, title, due, requirements and
+       notes: there is no `done` and nothing sets one. So an overdue
+       assignment with no linked assessment stays overdue for ever, and
+       its week never empties. Closing that needs a field and a control
+       on an existing screen. */
+    const weeks = forecastWorkload({
+      assignments: [{ id: "a1", title: "Reading response", due: "2026-08-20" }],
+      today: "2026-11-02",
+      weeks: 6,
+    });
+    const item = weeks.flatMap((w) => w.items).find((i) => i.id === "a1");
+    assert.ok(item, "still listed in November, because nothing can say it is done");
+    assert.equal(item.finished, false);
+    assert.equal(item.overdue, true);
+  });
+
   await test("the forecast is empty, not broken, with nothing to forecast", () => {
     assert.deepEqual(forecastWorkload({ today: "2026-09-01" }), []);
     assert.deepEqual(forecastWorkload({ assignments: [{ id: "1", title: "No date" }], today: "2026-09-01" }), []);
