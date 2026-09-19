@@ -294,7 +294,7 @@ them).
 supabase secrets set ERROR_DIGEST_SECRET=<the same string as error_digest_secret>
 supabase secrets set RESEND_API_KEY=<the restricted key from 3d>
 supabase secrets set ERROR_DIGEST_TO=support@uniplannerapp.com
-supabase secrets set ERROR_DIGEST_FROM="University Planner <alerts@send.uniplannerapp.com>"
+supabase secrets set ERROR_DIGEST_FROM="UniPlanner <alerts@send.uniplannerapp.com>"
 ```
 
 `ERROR_DIGEST_SECRET` is the only one that is required: without it the
