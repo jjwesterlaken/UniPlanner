@@ -209,6 +209,184 @@ it does fail below 3 hours, lower `MAX_REQUEST_SECONDS`/`MAX_BODY_BYTES`
 in `config.ts` to match what actually works, or plan for chunking long
 recordings client-side instead.
 
+## 3. Scheduled jobs: the retention sweep and the error digest
+
+Two pg_cron jobs, both of the same shape — pg_cron calling pg_net
+calling an Edge Function — and they share one set of prerequisites.
+Neither is created by the migration that schedules it unless the
+prerequisites are in place; the migration raises a **notice** naming
+what is missing and applies cleanly anyway, so a project without them
+is not broken, it is unscheduled.
+
+**Until the sweep is scheduled, the retention periods in the privacy
+policy are aspirational rather than enforced** — `ai-notes` sweeps
+opportunistically, after a request, so a quiet month sweeps nothing.
+Until the digest is scheduled, nothing tells you a function is failing
+except reading the logs.
+
+### 3a. Enable the two extensions
+
+Supabase dashboard → **Database → Extensions**, enable both:
+
+- **`pg_cron`** — the scheduler.
+- **`pg_net`** — outbound HTTP from SQL. The jobs call Edge Functions
+  rather than running as pure SQL, because deleting the staged audio
+  needs the Storage API and sending an email needs a provider.
+
+They are enabled per project in the dashboard, not by SQL, which is why
+no migration can do it.
+
+### 3b. The four Vault secrets
+
+Dashboard → **Project Settings → Vault**. Names are lower case and
+exact; the migrations look them up by name.
+
+| Vault secret | Value | Read by |
+|---|---|---|
+| `ai_notes_function_url` | `https://<project-ref>.supabase.co/functions/v1/ai-notes` | 0004, at schedule time |
+| `ai_notes_sweep_secret` | a long random string you invent | 0004's job, at run time |
+| `error_digest_function_url` | `https://<project-ref>.supabase.co/functions/v1/error-digest` | 0022, at schedule time |
+| `error_digest_secret` | a long random string you invent | 0022's job, at run time |
+
+**The URL is read when the migration is applied; the secret is read
+when the job runs.** That is deliberate and worth understanding before
+changing either migration: the credential is never written into
+`cron.job`'s stored command text, only the lookup that fetches it.
+
+> **The retention sweep's job will not work as 0004 writes it, and this
+> was found while building the digest.** 0004 sends the sweep secret as
+> `Authorization: Bearer <secret>` to `ai-notes` — and `ai-notes` is
+> deployed **with** JWT verification, because it identifies a signed-in
+> student from that same header. So the platform refuses the delivery
+> before our code runs, `ai-notes` never sees the secret it would have
+> compared, and the symptom is a cron job whose run always "succeeds"
+> (pg_net got a response) while nothing is ever swept.
+>
+> `error-digest` is not affected: it reads no user from a token, so it
+> is deployed without JWT verification and its own secret check is the
+> whole of its authentication — which is the property the deploy guard
+> now derives rather than taking from a naming convention.
+>
+> **Not fixed here**, because the remedy touches the function that
+> spends money: either `ai-notes` reads the sweep secret from a header
+> of its own (so the platform's JWT check can stay on), or the sweep
+> moves to its own endpoint. Worth deciding before enabling pg_cron,
+> since enabling it otherwise creates a job that reports success and
+> does nothing.
+
+**Neither job authenticates with the service role key, and it must
+stay that way.** pg_net stores every outbound request — headers
+included — in `net.http_request_queue` until its TTL expires, so
+whatever authenticates a job sits at rest in a database table for hours
+at a time. A sweep secret only lets its holder trigger a sweep the
+system does hourly anyway; a digest secret only lets its holder trigger
+an email to an address the function reads from its own environment. The
+service role key there would be a full-database credential in a queue
+table.
+
+### 3c. The digest's own secrets
+
+The same two random strings go in two places: the Vault (so the job can
+send them) and the function's environment (so the function can check
+them).
+
+```bash
+supabase secrets set ERROR_DIGEST_SECRET=<the same string as error_digest_secret>
+supabase secrets set RESEND_API_KEY=<the restricted key from 3d>
+supabase secrets set ERROR_DIGEST_TO=support@uniplannerapp.com
+supabase secrets set ERROR_DIGEST_FROM="UniPlanner <alerts@send.uniplannerapp.com>"
+```
+
+`ERROR_DIGEST_SECRET` is the only one that is required: without it the
+function refuses every request with `digest_disabled`, because there
+would be nothing to authenticate the caller with and it reads a table
+no client may read. Without the other three the digest is still built
+and the table is still purged, and the response says
+`mail_not_configured` rather than `ok` — a cron run reporting success
+over an unconfigured mailer is how a digest is believed to be arriving
+for a month.
+
+### 3d. The Resend key, restricted to the sending subdomain
+
+Resend → **API Keys → Create API Key**:
+
+- **Permission: Sending access** (not Full access). This key only ever
+  posts to `/emails`.
+- **Domain: `send.uniplannerapp.com`** — the subdomain already verified
+  for transactional mail. Restricting the key to it means a leaked key
+  cannot send as the root domain, which is where Jared's actual mail
+  lives.
+
+`ERROR_DIGEST_FROM` must be an address **on that subdomain**, or Resend
+refuses the send with a 403 and the reason in the body — which the
+function logs, because an unverified domain and a bad key are the same
+status with different messages and guessing between them costs a
+morning.
+
+**Do not touch the DNS for this.** `send.uniplannerapp.com` is already
+verified (EMAIL-SETUP.md), and the SPF conflict that section warns
+about is the reason a subdomain was used in the first place: the root
+domain carries a Google Workspace SPF record, a domain may have exactly
+one, and publishing a second invalidates both.
+
+### 3e. The order, and why re-running the migration is a step
+
+For the digest, the first apply of 0022 deliberately does **not**
+schedule anything:
+
+1. **Apply `0022_function_errors.sql`.** It WIDENS — it creates the
+   table the functions write — so it goes **before** the deploy. With
+   no Vault secret yet it raises a notice about skipping the schedule
+   and applies cleanly. Its self-check verifies the table, the revoked
+   grants, the absence of an account column and the column bounds; an
+   apply cannot report success while any of that is untrue.
+2. **Deploy the functions.** `deploy-functions.yml` globs every
+   function, so `error-digest` ships with the rest and nothing needs
+   adding to a list.
+3. **Set the secrets** (3c) and add the **Vault secrets** (3b).
+4. **Re-apply `0022_function_errors.sql`.** Now the Vault lookups
+   succeed and the cron job is created. It is idempotent —
+   `cron.unschedule` runs first — so re-applying is the intended way to
+   (re)create the schedule.
+
+Verify it exists:
+
+```sql
+select jobname, schedule, active from cron.job order by jobname;
+```
+
+and, after it has run once:
+
+```sql
+select jobname, status, start_time, return_message
+  from cron.job_run_details
+ order by start_time desc limit 5;
+```
+
+**A morning with no email is the healthy signal, not a broken job** —
+the digest sends nothing on a day with no failures, because a daily "0
+errors" message is one that gets filtered, and a filtered digest is not
+read on the morning it matters. `cron.job_run_details` is what
+distinguishes "nothing to report" from "never ran", which is why
+silence is safe here and would not be otherwise.
+
+To force one for a test, write a row and trigger the function by hand:
+
+```sql
+insert into public.function_errors (fn, stage, name, message)
+  values ('ai-notes', 'summarise', 'Error', 'a test row, delete me');
+```
+
+```bash
+curl -s -X POST https://<project-ref>.supabase.co/functions/v1/error-digest \
+  -H "Authorization: Bearer <ERROR_DIGEST_SECRET>" \
+  -H "content-type: application/json" -d '{"digest":true}'
+```
+
+`{"ok":true,"outcome":"sent"}` means the email went. Then remove the
+row, or leave it — the digest purges anything older than 30 days on
+every run.
+
 ## Provider limits this design was built around
 
 Researched while designing this feature, in case you change providers

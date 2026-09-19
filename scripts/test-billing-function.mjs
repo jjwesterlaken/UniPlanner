@@ -177,6 +177,16 @@ function makeWorld({ profiles = {}, events = {}, entitlements = {}, subscribers 
         trace.push(`db:${name}.insert`);
         const row = Array.isArray(v) ? v[0] : v;
         writes.push({ table: name, op: "insert", values: row, filters: [] });
+        /* ONE TABLE PER STORE, and it had to be said out loud. This
+           model used to put EVERY insert into `events` regardless of
+           table, which was harmless while `billing_events` was the only
+           thing inserted — and the moment `recordFailure` started
+           writing `function_errors`, a recorded failure counted as a
+           recorded EVENT and "nothing was recorded" failed on a
+           function that had recorded nothing of the kind. A fake that
+           does not model table identity is a fake that answers a
+           question about one table with another's rows. */
+        if (name !== "billing_events") return Promise.resolve({ data: row, error: null });
         if (Object.prototype.hasOwnProperty.call(events, row.id)) {
           return Promise.resolve({ data: null, error: { code: "23505", message: "duplicate key" } });
         }
@@ -504,6 +514,24 @@ function seedAccount(db, id, { tier = "free", source = null } = {}) {
   }
 }
 
+/* WRITES THAT CHANGE A STUDENT'S STANDING — everything except the
+   diagnostics table.
+
+   `recordFailure` writes a `function_errors` row on any failure AFTER
+   the signature verified, so an unscoped "it wrote nothing" would
+   forbid the daily digest from ever seeing the refusal the test is
+   about. The claim these tests make is that nothing about the
+   student's plan moved, so that is what they assert.
+
+   IT IS NOT A HOLE, because the exclusion is paired: every test that
+   uses this also asserts POSITIVELY that the failure WAS recorded. And
+   the two pre-authentication tests deliberately keep using `w.writes`
+   unfiltered, because there the claim really is that nothing at all
+   was written — an endpoint with no JWT verification must not let an
+   unauthenticated caller insert a row per request. */
+const standingWrites = (w) => w.writes.filter((x) => x.table !== "function_errors");
+const recordedFailures = (w) => w.writes.filter((x) => x.table === "function_errors");
+
 async function run() {
   /* ---------- 1. the pure rules ---------- */
 
@@ -687,7 +715,8 @@ async function run() {
       w.restore();
       assert.ok(res.status >= 500, `${world.label}: answered ${res.status}, so RevenueCat will not retry`);
       assert.equal(w.profiles[USER_A].tier, "ai", `${world.label}: a paying student lost their tier because a request failed`);
-      assert.deepEqual(w.writes, [], `${world.label}: something was written on an unknown read`);
+      assert.deepEqual(standingWrites(w), [], `${world.label}: something was written on an unknown read`);
+      assert.ok(recordedFailures(w).length > 0, `${world.label}: the failure was not recorded, so the digest would never see it`);
     }
   });
 
@@ -863,7 +892,8 @@ async function run() {
     const res = await deliver(w, EVENT({ id: undefined }));
     w.restore();
     assert.equal(res.status, 400);
-    assert.deepEqual(w.writes, []);
+    assert.deepEqual(standingWrites(w), []);
+    assert.ok(recordedFailures(w).length > 0, "an unusable event was refused without being recorded, so the digest would never see it");
     assert.deepEqual(w.fetches, [], "it asked RevenueCat about a user before checking the event was usable");
   });
 

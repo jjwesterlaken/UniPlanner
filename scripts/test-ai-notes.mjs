@@ -2904,7 +2904,7 @@ async function run() {
     }
   });
 
-  await test("the WEBHOOKS are deployed without jwt verification, and nothing else is", () => {
+  await test("A FUNCTION THAT IDENTIFIES ITS CALLER FROM A JWT IS DEPLOYED WITH VERIFICATION — and nothing else is", () => {
     /* THE FLAG THAT DECIDES WHETHER SUBSCRIPTIONS WORK AT ALL. A
        payment provider cannot mint a Supabase JWT, so with verify_jwt
        on, every delivery is refused by the platform before our code
@@ -2918,13 +2918,23 @@ async function run() {
        portal.
 
        IT USED TO ASSERT "EXACTLY ONCE", which was right while there was
-       one webhook and became wrong the moment there were two. The
-       replacement is not a bigger number — that would drift the same
-       way — but the SET: the functions whose directory name ends in
-       `-webhook` are exactly the ones deployed with the flag, derived
-       from the directory on one side and the workflow on the other. A
-       third webhook is covered without anybody editing this; a
-       non-webhook that acquires the flag goes red. */
+       one webhook and became wrong the moment there were two. It was
+       then derived from the NAME — the functions whose directory ends
+       in `-webhook` — and that broke on a correct change too, when
+       `error-digest` needed the flag: it is called by pg_net from
+       inside the database, which sends a shared secret and cannot mint
+       a JWT either, so with verification on every scheduled digest
+       401s at the platform. And the symptom is silence, which is that
+       function's HEALTHY signal, so it would never have been noticed.
+
+       A NAMING CONVENTION WAS A PROXY FOR THE CLAIM. The claim is about
+       where a function gets the IDENTITY it acts on: a function that
+       calls `getUser` is acting as a signed-in student and the platform
+       must have checked that token; a function that never calls it
+       authenticates its one caller itself, with an HMAC or a shared
+       secret. That is derived on both sides — from each function's
+       source and from the workflow — so the next function decides which
+       side it is on by what it does rather than by what it is called. */
     const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/deploy-functions.yml"), "utf8");
     const fnDir = path.join(rootDir, "supabase/functions");
     const functions = fs
@@ -2933,20 +2943,37 @@ async function run() {
       .sort();
     assert.ok(functions.length >= 3, `expected the Edge Functions, found ${functions.length} — this guard is reading the wrong directory`);
 
-    const webhooks = functions.filter((f) => f.endsWith("-webhook"));
-    const others = functions.filter((f) => !f.endsWith("-webhook"));
-    assert.ok(webhooks.length >= 1, "no function is named as a webhook, so this guard would pass over nothing");
-    assert.ok(others.length >= 1, "every function is a webhook, so the 'and nothing else' half proves nothing");
+    const source = (fn) => fs.readFileSync(path.join(fnDir, fn, "index.ts"), "utf8");
+    /* Comments stripped, so a function explaining in prose why it does
+       not read a user is not counted as reading one. */
+    const code = (fn) => source(fn).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+
+    const jwtCallers = functions.filter((f) => /getUser\(/.test(code(f)));
+    const selfAuth = functions.filter((f) => !/getUser\(/.test(code(f)));
+    assert.ok(jwtCallers.length >= 1, "no function identifies its caller from a JWT, so the 'and nothing else' half proves nothing");
+    assert.ok(selfAuth.length >= 1, "every function identifies its caller from a JWT, so this guard would pass over nothing");
+
+    /* EACH SELF-AUTHENTICATING FUNCTION MUST REALLY AUTHENTICATE. The
+       flag is only safe because these compare a secret of their own;
+       a function that read no JWT and checked nothing would be an open
+       endpoint that this guard would otherwise wave through. */
+    for (const fn of selfAuth) {
+      assert.match(
+        code(fn),
+        /timingSafeEqual|=== secret|!== secret/,
+        `${fn} is deployed without JWT verification and compares no secret of its own, so it is an open endpoint`
+      );
+    }
 
     /* The branch that carries the flag, read out of the case label
-       rather than assumed to name one function. */
-    const m = /\n\s*([a-z0-9|-]*-webhook[a-z0-9|-]*)\)\n/.exec(workflow);
-    assert.ok(m, "the deploy workflow has no webhook branch in its case statement");
+       rather than assumed to name any particular function. */
+    const m = /\n\s*([a-z0-9|-]+)\)\n\s*echo "--- \$fn \(no JWT verification/.exec(workflow);
+    assert.ok(m, "the deploy workflow has no no-JWT branch in its case statement");
     const labelled = m[1].split("|").sort();
-    assert.deepEqual(labelled, webhooks, "the workflow's no-jwt branch does not name exactly the webhook functions");
+    assert.deepEqual(labelled, selfAuth, "the workflow's no-jwt branch does not name exactly the functions that authenticate themselves");
 
     const branch = workflow.slice(workflow.indexOf(`${m[1]})`), workflow.indexOf(";;", workflow.indexOf(`${m[1]})`)));
-    assert.match(branch, /--no-verify-jwt/, "the webhook branch deploys WITH jwt verification, so every delivery will 401");
+    assert.match(branch, /--no-verify-jwt/, "the no-JWT branch deploys WITH jwt verification, so every delivery will 401");
 
     /* And exactly once in the file, so the flag cannot also sit on the
        default arm of the case — which is what would put it on every
@@ -2956,10 +2983,10 @@ async function run() {
       1,
       "--no-verify-jwt appears more than once; a function that spends money must not be reachable without a session"
     );
-    for (const fn of others) {
+    for (const fn of jwtCallers) {
       assert.ok(
         !new RegExp(`\\n\\s*${fn}\\)`).test(workflow),
-        `${fn} has its own branch in the deploy case — the only branch there may be is the webhooks'`
+        `${fn} has its own branch in the deploy case — the only branch there may be is the self-authenticating one`
       );
     }
   });
