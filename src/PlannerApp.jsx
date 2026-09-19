@@ -4679,7 +4679,32 @@ function WorkloadForecast({ assignments, assessments, calendar }) {
               {w.items.map((i) => (
                 <li key={i.id} className="flex items-center gap-2 text-sm">
                   <CourseChip name={i.course} />
-                  <span className={`flex-1 truncate ${i.overdue ? "text-stone-500 line-through" : "text-stone-700"}`}>{i.title}</span>
+                  {/* STRIKETHROUGH MEANS DONE — Grace's call, its own
+                      commit so it can be reverted alone.
+
+                      It meant OVERDUE here, which is the visual
+                      language for "completed" applied to the one thing
+                      most needing attention: an overdue item was
+                      struck out and greyed, reading as crossed off. The
+                      To-do list twenty lines away already strikes on
+                      `done` and greys to stone-400, so this is one
+                      screen being brought to the app's own convention
+                      rather than a new style being invented.
+
+                      Overdue loses the de-emphasis and takes weight
+                      instead; the label beside it already says the
+                      word. */}
+                  <span
+                    className={`flex-1 truncate ${
+                      i.past && i.finished
+                        ? "text-stone-400 line-through"
+                        : i.overdue
+                          ? "font-medium text-stone-800"
+                          : "text-stone-700"
+                    }`}
+                  >
+                    {i.title}
+                  </span>
                   <span className="shrink-0 text-xs text-stone-400">
                     {/* THREE STATES, NOT TWO. A marked assessment past
                         its due date was reported as "overdue" — the one
