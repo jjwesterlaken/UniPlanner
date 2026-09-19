@@ -613,6 +613,115 @@ async function run() {
 
   /* ---------- 6. the deploy names it ---------- */
 
+  /* ---------- must-report codes ---------- */
+
+  await test("A CONFIGURATION FAILURE IS NOT BURIED UNDER A NOISY TRANSIENT ONE", () => {
+    /* THE ORDERING IS THE WHOLE PROBLEM. The digest is sorted loudest
+       first, which is right for the usual case and exactly wrong for
+       these two: one `stripe_permission_denied` sinks below forty
+       upstream 500s, and it is the single line that means somebody has
+       to go and change a setting. */
+    const noisy = Array.from({ length: 40 }, () =>
+      row({ fn: "ai-text", stage: "provider", name: "Error", detail: { status: 500 } })
+    );
+    const one = row({
+      fn: "stripe-webhook",
+      stage: "refund_charge_read",
+      name: "Error",
+      detail: { id: "evt_1", code: "stripe_permission_denied", status: 403 },
+    });
+    const d = digest.buildDigest([...noisy, one], { total: 41, windowHours: 24 });
+
+    assert.equal(d.groups.length, 2);
+    assert.equal(d.groups[0].mustReport, "stripe_permission_denied", "the 1x group is first, above the 40x one");
+    assert.equal(d.groups[0].count, 1);
+    assert.equal(d.groups[1].count, 40, "and the noisy group is still there, not displaced");
+
+    /* THE CONTROL: without the code, count alone decides — otherwise
+       this test cannot tell the new ordering from the old one. */
+    const plain = digest.buildDigest([...noisy, row({ fn: "stripe-webhook", stage: "refund_charge_read" })], { total: 41 });
+    assert.equal(plain.groups[0].count, 40, "with no must-report code the loudest group leads");
+  });
+
+  await test("the code is read from detail, never from the message text", () => {
+    /* A message quotes ids, statuses and timestamps, so a substring
+       match on it would be a guess that fires on a provider echoing the
+       words back. Both fields the endpoints really use are read — `code`
+       and `reason` — and nothing else is. */
+    assert.equal(digest.mustReportCode({ detail: { code: "stripe_permission_denied" } }), "stripe_permission_denied");
+    assert.equal(digest.mustReportCode({ detail: { reason: "not_an_invoice" } }), "not_an_invoice");
+    assert.equal(digest.mustReportCode({ detail: { code: "upstream_unavailable" } }), "", "an ordinary code is not flagged");
+    assert.equal(
+      digest.mustReportCode({ message: "stripe_permission_denied", detail: null }),
+      "",
+      "the message is not searched"
+    );
+    assert.equal(digest.mustReportCode({ detail: "stripe_permission_denied" }), "", "a detail that is not an object has none");
+    assert.equal(digest.mustReportCode({}), "");
+  });
+
+  await test("ANY row in a group carrying one is enough to flag the group", () => {
+    /* A group is (fn, stage, name), and the same stage can fail for a
+       transient reason forty times and a configuration reason once. The
+       once is the one that matters, and the rows arrive newest-first so
+       it can be anywhere in the group. */
+    const rows = [
+      ...Array.from({ length: 5 }, () => row({ stage: "refund_charge_read", detail: { status: 500 } })),
+      row({ stage: "refund_charge_read", detail: { code: "stripe_permission_denied" } }),
+    ];
+    const d = digest.buildDigest(rows, { total: 6 });
+    assert.equal(d.groups.length, 1, "same key, so one group");
+    assert.equal(d.groups[0].mustReport, "stripe_permission_denied");
+  });
+
+  await test("the subject names it, and the body says it will not clear itself", () => {
+    const d = digest.buildDigest([row({ detail: { reason: "not_an_invoice" } })], { total: 1, windowHours: 24 });
+    assert.match(digest.digestSubject(d), /not_an_invoice/, "the subject is what gets read without opening anything");
+    const text = digest.digestText(d);
+    assert.match(text, /!!/, "the group is marked in the body");
+    assert.match(text, /setting to change, not a failure that will clear itself/);
+
+    /* AND A QUIET DIGEST SAYS NONE OF IT, so the marker means something
+       when it appears. */
+    const quiet = digest.buildDigest([row({ detail: { status: 500 } })], { total: 1, windowHours: 24 });
+    assert.doesNotMatch(digest.digestSubject(quiet), /not_an_invoice|stripe_permission_denied/);
+    assert.doesNotMatch(digest.digestText(quiet), /setting to change/);
+  });
+
+  await test("EVERY MUST-REPORT CODE IS ONE THE FUNCTIONS REALLY PRODUCE", () => {
+    /* DERIVED, so the list cannot drift into a vocabulary nothing
+       emits. A code nobody returns is a flag that can never fire, which
+       is the vacuous-pass shape wearing a constant. */
+    const sources = ["_shared/stripe.ts", "stripe-webhook/index.ts", "billing-checkout/index.ts", "billing-portal/index.ts"]
+      .map((f) => path.join(rootDir, "supabase/functions", f))
+      .filter((f) => fs.existsSync(f))
+      .map((f) => fs.readFileSync(f, "utf8"))
+      .join("\n");
+    assert.ok(sources.length > 0, "no function sources were read — this guard checked nothing");
+    for (const code of digest.MUST_REPORT_CODES) {
+      assert.ok(sources.includes(`"${code}"`), `${code} is flagged but no function produces it`);
+    }
+  });
+
+  await test("STRIPE'S CODE REACHES THE TABLE, not only the HTTP response", () => {
+    /* It did not. `stripeFailureCode(X)` was computed for the response
+       body and the matching `logFailure` recorded the raw error, so
+       `stripe_permission_denied` never entered function_errors and the
+       flag above could never have fired on it. Paired rather than
+       counted: every response that carries the code must have a logged
+       twin over the SAME variable. */
+    const src = fs.readFileSync(path.join(rootDir, "supabase/functions/stripe-webhook/index.ts"), "utf8");
+    const answered = [...src.matchAll(/jsonResponse\(\{ ok: false, code: stripeFailureCode\((\w+)\)/g)].map((m) => m[1]);
+    assert.ok(answered.length > 0, "no stripeFailureCode response was found — this guard is reading the wrong file");
+    const logged = new Set([...src.matchAll(/logFailure\([^;]*?code: stripeFailureCode\((\w+)\)/g)].map((m) => m[1]));
+    const missing = answered.filter((v) => !logged.has(v));
+    assert.deepEqual(
+      missing,
+      [],
+      `these answer with a stripe failure code that never reaches function_errors: ${missing.join(", ")}`
+    );
+  });
+
   await test("THE DEPLOY IS DERIVED, so a new function is deployed without anybody adding it", () => {
     /* `deploy-functions.yml` finds every function's index.ts rather
        than naming functions, which is what makes this new one ship.

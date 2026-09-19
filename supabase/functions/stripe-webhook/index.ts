@@ -281,7 +281,7 @@ export async function handle(req: Request): Promise<Response> {
       }
       const chargeRead = await stripeRequest(`/charges/${encodeURIComponent(chargeId)}`, { secretKey });
       if (!chargeRead.ok) {
-        logFailure(stage, chargeRead.error, { id: eventId, missing: !!chargeRead.missing, status: chargeRead.status });
+        logFailure(stage, chargeRead.error, { id: eventId, code: stripeFailureCode(chargeRead), missing: !!chargeRead.missing, status: chargeRead.status });
         return jsonResponse({ ok: false, code: stripeFailureCode(chargeRead) }, 503);
       }
 
@@ -303,7 +303,7 @@ export async function handle(req: Request): Promise<Response> {
         if (!invoiceIdForCharge(chargeRead.data, null).invoiceId && paymentIntentId) {
           const paymentsRead = await stripeRequest(invoicePaymentsQuery(paymentIntentId), { secretKey });
           if (!paymentsRead.ok) {
-            logFailure(stage, paymentsRead.error, { id: eventId, missing: !!paymentsRead.missing, status: paymentsRead.status });
+            logFailure(stage, paymentsRead.error, { id: eventId, code: stripeFailureCode(paymentsRead), missing: !!paymentsRead.missing, status: paymentsRead.status });
             return jsonResponse({ ok: false, code: stripeFailureCode(paymentsRead) }, 503);
           }
           payments = paymentsRead.data;
@@ -316,7 +316,7 @@ export async function handle(req: Request): Promise<Response> {
           stage = "refund_invoice_read";
           const invoiceRead = await stripeRequest(`/invoices/${encodeURIComponent(invoiceId)}`, { secretKey });
           if (!invoiceRead.ok) {
-            logFailure(stage, invoiceRead.error, { id: eventId, missing: !!invoiceRead.missing, status: invoiceRead.status });
+            logFailure(stage, invoiceRead.error, { id: eventId, code: stripeFailureCode(invoiceRead), missing: !!invoiceRead.missing, status: invoiceRead.status });
             return jsonResponse({ ok: false, code: stripeFailureCode(invoiceRead) }, 503);
           }
           invoice = invoiceRead.data;
@@ -393,7 +393,7 @@ export async function handle(req: Request): Promise<Response> {
          is not a reason to strip a tier, because the id came out of a
          delivery rather than out of our own records. 5xx so Stripe
          retries. */
-      logFailure(stage, fetched.error, { id: eventId, missing: !!fetched.missing, status: fetched.status });
+      logFailure(stage, fetched.error, { id: eventId, code: stripeFailureCode(fetched), missing: !!fetched.missing, status: fetched.status });
       return jsonResponse({ ok: false, code: stripeFailureCode(fetched) }, 503);
     }
     let subscription = fetched.data;
@@ -497,7 +497,7 @@ export async function handle(req: Request): Promise<Response> {
              until a retry succeeds — the right direction, because the
              alternative is taking the plan away while Stripe carries on
              billing for it. */
-          logFailure(stage, cancelled.error, { id: eventId, missing: !!cancelled.missing, status: cancelled.status });
+          logFailure(stage, cancelled.error, { id: eventId, code: stripeFailureCode(cancelled), missing: !!cancelled.missing, status: cancelled.status });
           return jsonResponse({ ok: false, code: stripeFailureCode(cancelled) }, 503);
         }
         /* THE CANCELLATION RESPONSE IS THE PROVIDER RECORD. It is
