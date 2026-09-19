@@ -13,6 +13,7 @@
    ================================================================== */
 
 import { localDay, addDays, daysBetween } from "./srs.js";
+import { isMarked } from "./grades.js";
 
 /* ---------- weeks ----------
 
@@ -112,6 +113,30 @@ export const CRUNCH_WEIGHT = 40; // ...or a lot of the grade landing at once
  * `weeks` limits how far ahead to look. Past-due items are kept and
  * marked rather than hidden — an overdue assignment is the most
  * important thing on the page.
+ *
+ * WHAT "OVERDUE" MEANS, and it used to mean only the date. `overdue`
+ * was `item.due < today` and nothing else, so an assessment the
+ * student had a MARK for went on being reported as overdue for ever:
+ * finished work, in a section headed "what's coming", flagged as the
+ * thing most needing attention. It is past due AND not finished now.
+ *
+ * FINISHED IS DERIVED FROM THE MARK, never restated. `isMarked` in
+ * grades.js already answers it and already handles the edge that a
+ * mark of 0 is marked while an absent one is not.
+ *
+ * AND IT IS CONSULTED ONLY FOR ITEMS ALREADY PAST. A mark on a future
+ * assessment need not mean the work is done — a student modelling a
+ * grade can enter one — so a future item keeps its date whatever its
+ * mark says, and nothing about the forecast changes for it.
+ *
+ * AN ASSIGNMENT HAS NO FINISHED SIGNAL OF ITS OWN. Its fields are
+ * course, title, due, requirements and notes — there is no `done` and
+ * no control that would set one (`todos` is a different collection
+ * with a different shape). So an assignment is finished only when a
+ * linked assessment carries a mark, and a bare assignment can never
+ * be anything but overdue. That is a gap rather than a decision; it
+ * needs a field and a control, which is a change to an existing
+ * screen.
  */
 export function forecastWorkload({ assignments = [], assessments = [], today = localDay(), weeks = 6 } = {}) {
   const horizon = addDays(weekStart(today), weeks * 7 - 1);
@@ -126,6 +151,9 @@ export function forecastWorkload({ assignments = [], assessments = [], today = l
       course: a.course || "",
       due: a.due,
       weight: null,
+      /* An assignment has nothing to derive this from on its own; a
+         linked assessment below is the only thing that can set it. */
+      finished: false,
     });
   }
   for (const a of assessments) {
@@ -134,7 +162,12 @@ export function forecastWorkload({ assignments = [], assessments = [], today = l
     // counting both would double every deadline the student tracks properly.
     if (a.assignmentId && assignments.some((x) => x && x.id === a.assignmentId && !x.deletedAt)) {
       const existing = items.find((i) => i.id === a.assignmentId);
-      if (existing) existing.weight = Number(a.w) || null;
+      if (existing) {
+        existing.weight = Number(a.w) || null;
+        /* The mark is the only finished signal either half of this
+           pair carries, so it is what the merged item reads. */
+        existing.finished = isMarked(a);
+      }
       continue;
     }
     items.push({
@@ -144,6 +177,7 @@ export function forecastWorkload({ assignments = [], assessments = [], today = l
       course: a.course || "",
       due: a.due,
       weight: Number(a.w) || null,
+      finished: isMarked(a),
     });
   }
 
@@ -152,20 +186,42 @@ export function forecastWorkload({ assignments = [], assessments = [], today = l
     if (item.due > horizon) continue;
     const start = weekStart(item.due);
     if (!byWeek.has(start)) byWeek.set(start, []);
-    byWeek.get(start).push({ ...item, overdue: item.due < today });
+    /* PAST AND NOT FINISHED. `finished` is deliberately not consulted
+       for a future item — see the header. */
+    const past = item.due < today;
+    byWeek.get(start).push({ ...item, past, overdue: past && !item.finished });
   }
 
   const out = [];
   for (const [start, weekItems] of [...byWeek.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    const isPast = start < weekStart(today);
+
+    /* THE MISSING LOWER BOUND, which is the real bug here. Items are
+       kept while `due <= horizon` and there is NO floor, so every
+       deadline a student has ever entered stays in "what's coming" for
+       ever — week 2 is still on the screen in November. Hiding past
+       weeks outright would take the overdue work with them, which the
+       comment above refuses for good reason. So the rule is the one
+       that discriminates: a past week leaves the list when there is
+       nothing left OUTSTANDING in it. */
+    const outstanding = weekItems.filter((i) => !(i.past && i.finished));
+    if (isPast && outstanding.length === 0) continue;
+
     const totalWeight = weekItems.reduce((sum, i) => sum + (i.weight || 0), 0);
+    const outstandingWeight = outstanding.reduce((sum, i) => sum + (i.weight || 0), 0);
     out.push({
       weekStart: start,
       items: weekItems.sort((a, b) => (a.due < b.due ? -1 : 1)),
       totalWeight,
+      /* What is still to come, which is what the summary line and the
+         crunch warning are both about. A week whose 50% is already
+         marked is not a crunch week any more. */
+      outstandingCount: outstanding.length,
+      outstandingWeight,
       // Either measure alone misses a real crunch: three small things in
       // one week hurts, and so does one 50% exam next to a 20% report.
-      crunch: weekItems.length >= CRUNCH_ITEM_COUNT || totalWeight >= CRUNCH_WEIGHT,
-      isPast: start < weekStart(today),
+      crunch: outstanding.length >= CRUNCH_ITEM_COUNT || outstandingWeight >= CRUNCH_WEIGHT,
+      isPast,
     });
   }
   return out;
