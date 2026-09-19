@@ -5420,6 +5420,54 @@ anything in `npm test`. For those the artifact check is a hardware or
 dashboard step, and it belongs on `MOBILE-BUILD.md`'s list rather than
 being approximated by a source grep that would pass either way.
 
+### `main` IS NOT THE REPOSITORY, AND A BRANCH IS AN ARTIFACT TOO
+
+Recorded 19 September 2026, on Jared's instruction, because it is the
+artifact rule arriving through a door nothing above anticipated: not a
+stale build, not the wrong layer, but **the wrong line of development.**
+
+His brief read *"Build it on a branch as you scoped: the
+`function_errors` table written by `logFailure`, the daily email to
+support@, no personal data, `stripe_permission_denied` and
+`not_an_invoice` as must-report codes."* I had lost context to a
+compaction, read the working tree — which was `main` — and reported
+back in four places that the brief did not match the code: that there
+was no `function_errors` table, that `logFailure` only wrote to the
+platform log viewer, that the Resend and shared-secret design he was
+describing did not exist.
+
+**Three of those four were wrong, and all three already existed, in
+full, on open pull request #114.** The branch was `claude/error-digest`
+and it was the thing his sentence was pointing at. I read *"on a
+branch"* as a figure of speech about how to work rather than as a
+reference to a branch that was already there, and then confirmed my
+reading against a tree where it was true.
+
+**THE CHECK IS ONE COMMAND AND IT IS NOT A FILE READ.** Before
+reporting that something does not exist, list the open work —
+`git branch -r`, or the open pull requests — because "not in this
+working tree" and "not in this repository" are different claims and
+only one of them was being made. Every source grep I ran was accurate;
+each answered a question about `main`, and the claim was about a
+branch. That is *reading an artifact that is not the one your claim is
+about*, one section up, with a ref instead of a build id.
+
+**A COMPACTION IS THE MOMENT THIS CLASS IS MOST AVAILABLE**, which is
+why it is worth a heading rather than a line. What survives a
+compaction is the prose; what does not is *which checkout the prose was
+about*. The file tree is then the most reachable thing in the room and
+it silently answers for the whole repository. The cheapest way back is
+the list of open work, not `ls`.
+
+**AND A PARTIALLY CORRECT REPORT IS THE EXPENSIVE KIND.** Two of my
+four points stood — the two must-report codes really were unwired, and
+the digest as written really would not have caught the Capacitor bug —
+and it is precisely the correct half that made the wrong half
+credible. Had it been acted on, Jared would have been told to rebuild
+something he had already reviewed. **A finding that is half right does
+not get half the scrutiny; it gets less, because the half you can check
+checks out.**
+
 ### A MIGRATION THAT CAN SKIP SILENTLY IS NOT IDEMPOTENT — IT IS UNOBSERVABLE
 
 `public.delete_my_account()` **did not exist in production** and in-app
