@@ -230,9 +230,25 @@ export const AI_NOTES_COPY = {
     /* Why an option is greyed out rather than missing. A student in
        Firefox who sees only "Microphone" learns nothing; one who sees
        "This computer's audio — needs Chrome or Edge" knows what to do. */
+    /* AND EACH ONE NAMES WHAT DOES WORK. Grace's ruling: "phones can
+       only record through the microphone" tells a student what they
+       cannot do and leaves them believing the feature does not exist.
+       The desktop app records this computer's audio on every platform,
+       including the two these sentences are about, and a refusal that
+       withholds the remedy is the dead end `noAudioCaptured` was
+       already written to avoid.
+
+       BOTH get the clause, not just the phone one, because the gap is
+       the same: a student in Safari on a Mac is told to change browser
+       and not told there is an app that needs no browser at all. The
+       two sentences still DIFFER in their first half, which is the
+       property test-rendered-tabs asserts — a Safari Mac must not read
+       as a phone. */
     unavailable: {
-      "unsupported-browser": "Needs Chrome or Edge — Firefox and Safari can't record this computer's audio.",
-      "mobile-platform": "Phones and tablets can only record through the microphone.",
+      "unsupported-browser":
+        "Needs Chrome or Edge — Firefox and Safari can't record this computer's audio. The desktop app can.",
+      "mobile-platform":
+        "Phones and tablets can only record through the microphone. The desktop app can record this computer's audio.",
     },
 
     /* Said BEFORE the share dialog opens on a Mac, not after it goes
