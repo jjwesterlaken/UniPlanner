@@ -170,8 +170,19 @@ async function reopen(browser, { stored, refresh }) {
   );
 
   let refreshAttempts = 0;
+  /* EVERY EDGE FUNCTION CALL WITH THE HEADER IT CARRIED. "It called the
+     function" and "it called the function as somebody" are different
+     claims, and the stale-token half of this bug sits between them. */
+  const fnCalls = [];
   await page.route(`${SUPABASE_URL}/**`, async (route) => {
     const url = route.request().url();
+    if (url.includes("/functions/v1/")) {
+      fnCalls.push({
+        fn: url.split("/functions/v1/")[1].split(/[?#]/)[0],
+        auth: route.request().headers()["authorization"] || "",
+      });
+      return route.fulfill(json({ ok: true, url: "https://checkout.stripe.test/c/session_probe" }));
+    }
     if (url.includes("/auth/v1/token")) {
       refreshAttempts += 1;
       /* ABORT, NOT A 5xx. auth-js tells a dropped connection from a
@@ -202,17 +213,31 @@ async function reopen(browser, { stored, refresh }) {
 
   await page.goto("file://" + path.join(OUT, "index.html"));
   await page.waitForSelector("main", { timeout: 15000 });
-  /* The boot read is a promise and the refresh is a network round trip,
-     so the signed-out shell can be the FIRST frame legitimately. What is
-     asserted is where it SETTLES. */
-  await page.waitForTimeout(1500);
+  /* WHERE IT SETTLES, NOT WHAT IT FIRST PAINTS: the boot read is a
+     promise and the refresh is a network round trip, so a signed-out
+     frame early on is legitimate.
 
-  const html = await page.locator("main").innerHTML();
-  const passwordInputs = await page.locator('main input[type="password"]').count();
-  const storedAfter = await page.evaluate((k) => localStorage.getItem(k), AUTH_KEY);
+     THE WINDOW MUST OUTLAST THE FIRST RETRY, which cost a mutation to
+     learn. The startup ladder re-reads at 2s, and collapsing `failed`
+     back into "signed out" only does its damage on that second read —
+     so a 1.5s window was green over the exact branch this file exists
+     to hold. Anything under 2s measures the app before it has had the
+     chance to get it wrong. */
+  await page.waitForTimeout(3500);
 
-  await ctx.close();
-  return { html, passwordInputs, storedAfter, refreshAttempts, errors };
+  const read = async () => ({
+    html: await page.locator("main").innerHTML(),
+    passwordInputs: await page.locator('main input[type="password"]').count(),
+    storedAfter: await page.evaluate((k) => localStorage.getItem(k), AUTH_KEY),
+    refreshAttempts,
+    fnCalls: [...fnCalls],
+    errors,
+  });
+
+  /* The page is handed back rather than closed, because a cold mount
+     cannot exercise anything that only exists after an interaction --
+     and the token a button sends is exactly that. */
+  return { ...(await read()), page, read, close: () => ctx.close() };
 }
 
 /* A password field on the Account tab is the sign-in form, which is the
@@ -245,6 +270,7 @@ async function main() {
 
   await test("WITH NO STORED SESSION THE APP IS SIGNED OUT — the other end of the claim", async () => {
     const r = await reopen(browser, { stored: null, refresh: "ok" });
+    await r.close();
     assert.equal(r.errors.length, 0, `the page threw: ${r.errors[0]}`);
     assert.ok(
       signedOut(r),
@@ -254,6 +280,7 @@ async function main() {
 
   await test("a live session survives a reopen", async () => {
     const r = await reopen(browser, { stored: storedSession(3600), refresh: "ok" });
+    await r.close();
     assert.equal(r.errors.length, 0, `the page threw: ${r.errors[0]}`);
     assert.ok(signedIn(r), `an unexpired session did not render signed in — nothing below is about expiry. Got: ${r.html.slice(0, 300)}`);
   });
@@ -264,6 +291,7 @@ async function main() {
 
   await test("an expired access token is refreshed on reopen, and the student stays in", async () => {
     const r = await reopen(browser, { stored: storedSession(-60), refresh: "ok" });
+    await r.close();
     assert.equal(r.errors.length, 0, `the page threw: ${r.errors[0]}`);
     assert.ok(r.refreshAttempts > 0, "no refresh was attempted, so the seeded expiry is not reaching auth-js and the offline case below proves nothing");
     assert.ok(signedIn(r), "an expired token with a working network did not refresh into a signed-in app");
@@ -271,6 +299,7 @@ async function main() {
 
   await test("THE CONTROL: A REFRESH THAT COULD NOT REACH THE SERVER IS NOT A SIGN-OUT", async () => {
     const r = await reopen(browser, { stored: storedSession(-60), refresh: "offline" });
+    await r.close();
     assert.equal(r.errors.length, 0, `the page threw: ${r.errors[0]}`);
     assert.ok(r.refreshAttempts > 0, "no refresh was attempted, so this test is not exercising the failure it names");
 
@@ -288,14 +317,136 @@ async function main() {
     );
   });
 
+  await test("AND IT IS STILL NOT A SIGN-OUT ONCE auth-js GIVES UP — the slow one, deliberately", async () => {
+    /* THE BRANCH A SHORT WINDOW CANNOT SEE, and it took two mutations
+       to find. `supabase.auth.getSession()` does not resolve while the
+       refresh is being retried, and every later caller queues behind
+       the same in-flight attempt — so for the first half-minute there
+       is no answer to misread, and collapsing `failed` back into
+       "signed out" is green over its own bug.
+
+       MEASURED rather than guessed. auth-js backs off 0.1 / 0.3 / 0.7 /
+       1.5 / 3.1 / 6.3 / 12.7 / 25.5 seconds and then gives up, at which
+       point `getSession` finally answers `{ session: null, error }`.
+       With `failed` read as a sign-out the form appears at 26.3s; with
+       it read as "we do not know" the app is still signed in at 50s.
+
+       SO THIS TEST IS SLOW ON THE HAPPY PATH AND FAST WHEN BROKEN,
+       which is the right way round: it polls and fails the instant the
+       form appears, and only pays the full window when there is nothing
+       to report. Thirty-five seconds of `npm test` for the branch that
+       decides whether a student on a train is signed out is a trade
+       worth making, and it is the only test here that costs anything. */
+    const r = await reopen(browser, { stored: storedSession(-60), refresh: "offline" });
+    try {
+      assert.equal(r.errors.length, 0, `the page threw: ${r.errors[0]}`);
+      assert.ok(signedIn(r), "not signed in even at the start, so the wait below proves nothing");
+
+      const deadline = Date.now() + 35_000;
+      while (Date.now() < deadline) {
+        const pw = await r.page.locator('main input[type="password"]').count();
+        assert.equal(
+          pw,
+          0,
+          "the sign-in form appeared once auth-js stopped retrying — `failed` is being read as " +
+            "\"definitively signed out\" again, which is the whole bug on a half-minute delay"
+        );
+        await r.page.waitForTimeout(1000);
+      }
+
+      const after = await r.read();
+      assert.ok(
+        after.refreshAttempts >= 5,
+        `only ${after.refreshAttempts} refresh attempts in 35s — auth-js is not retrying the way this test assumes, ` +
+          "so the window may no longer outlast its backoff"
+      );
+      assert.ok(signedIn(after), "the app stopped showing a signed-in account without ever showing the sign-in form");
+    } finally {
+      await r.close();
+    }
+  });
+
   await test("a REVOKED refresh token really does sign the student out", async () => {
     const r = await reopen(browser, { stored: storedSession(-60), refresh: "revoked" });
+    await r.close();
     assert.equal(r.errors.length, 0, `the page threw: ${r.errors[0]}`);
     assert.ok(r.refreshAttempts > 0, "no refresh was attempted");
     assert.ok(
       signedOut(r),
       "a definitively rejected refresh token left the app looking signed in — 'keep what we had' must not become 'never sign anybody out'"
     );
+  });
+
+  await test("A REFRESH AN HOUR IN REACHES THE APP, not just auth-js", async () => {
+    /* THE SECOND HALF OF THE SAME ROOT, and it has nothing to do with
+       being shown a sign-in form. `shapeSession` stores the ACCESS
+       token, and five call sites read it: aiNotes.jsx (record,
+       re-summarise, save), aiText.jsx and plans.jsx. The auth listener
+       handled only PASSWORD_RECOVERY, so a refresh partway through a
+       session updated auth-js and NOT the app -- every one of those
+       screens rendered perfectly and every request was refused.
+
+       THE SCENARIO HAS TO BE A REFRESH AFTER BOOT HAS SETTLED, which
+       cost a run to learn: the obvious version seeds an expired session
+       and lets the boot read refresh it, and that passes with the
+       listener deleted, because the boot read returns the new session
+       itself. What the listener alone covers is the app that has been
+       OPEN for an hour -- the startup read is long finished and its
+       retry ladder has stopped, so auth-js's own refresh is the only
+       thing left that knows.
+
+       So: open with a valid session, age it, and hand the tab back the
+       way a phone does. auth-js re-runs recovery on hidden -> visible,
+       finds the token expired, refreshes, and emits. Nothing else in
+       the app is listening at that point. */
+    const r = await reopen(browser, { stored: storedSession(3600), refresh: "ok" });
+    try {
+      assert.equal(r.errors.length, 0, `the page threw: ${r.errors[0]}`);
+      assert.ok(signedIn(r), "not signed in, so no plan button exists to press");
+      assert.equal(r.refreshAttempts, 0, "a refresh already happened at startup, so this test would be measuring the boot read again");
+
+      await r.page.evaluate((key) => {
+        const raw = JSON.parse(localStorage.getItem(key));
+        raw.expires_at = Math.floor(Date.now() / 1000) - 60;
+        raw.expires_in = -60;
+        localStorage.setItem(key, JSON.stringify(raw));
+        const set = (state) => {
+          Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+          document.dispatchEvent(new Event("visibilitychange"));
+        };
+        set("hidden");
+        set("visible");
+      }, AUTH_KEY);
+      await r.page.waitForTimeout(1200);
+
+      const mid = await r.read();
+      assert.ok(
+        mid.refreshAttempts > 0,
+        "coming back to the tab did not make auth-js refresh, so this test is not exercising what it names"
+      );
+
+      const button = r.page.locator('[data-web-plan="ai-monthly"]');
+      assert.equal(await button.count(), 1, "no plan button to press, so this test reads nothing");
+      await button.click();
+      await r.page.waitForTimeout(800);
+
+      const after = await r.read();
+      const checkout = after.fnCalls.filter((c) => c.fn === "billing-checkout");
+      assert.equal(
+        checkout.length,
+        1,
+        `pressing a plan made ${checkout.length} calls to billing-checkout — the page called: ` +
+          `${after.fnCalls.map((c) => c.fn).join(", ") || "(no Edge Function at all)"}`
+      );
+      assert.equal(
+        checkout[0].auth,
+        "Bearer refreshed-access-token",
+        `the request carried "${checkout[0].auth}" — the app is still sending the token it opened with, ` +
+          "so every Edge Function call is refused from the moment the first refresh lands"
+      );
+    } finally {
+      await r.close();
+    }
   });
 
   await browser.close();

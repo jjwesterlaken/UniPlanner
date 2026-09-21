@@ -108,6 +108,23 @@ export function buildSeed() {
   };
 }
 
+/* THIS IS THE HARNESS'S CLIENT, NOT THE APP'S, and the distinction is
+   worth a paragraph because it was got wrong once.
+
+   `persistSession: false` here reads like a fixture asserting the
+   opposite of production — the app ships `persistSession: true` — and
+   it is not. This client runs in NODE and only ever talks to the
+   database directly: it seeds, resets and polls. The app's session is
+   the browser's, created by `sync.js` and reached in these journeys by
+   filling in the real sign-in form, so nothing about this object is a
+   stand-in for it. In Node auth-js has no localStorage to persist to
+   in the first place, so the flag is inert; what it does buy is that
+   two harness sign-ins in one process cannot leak into each other.
+
+   The gap that DID matter was a different thing entirely: no journey
+   had ever closed and reopened the app while signed in. That is now a
+   step in journey 1, and it is the assertion a flag here could never
+   have made. */
 export function anonClient() {
   return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },

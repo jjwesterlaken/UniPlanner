@@ -5021,7 +5021,26 @@ export default function PlannerApp() {
   const [themeOpen, setThemeOpen] = useState(false);
   const [focusedCourse, setFocusedCourse] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
-  const [session, setSession] = useState(null);
+  /* THE APP OPENS WITH WHAT IS ON THE DEVICE, not with "signed out".
+
+     `supabase.auth.getSession()` does not resolve while a refresh keeps
+     failing -- auth-js retries with backoff for the length of an
+     auto-refresh tick -- so an offline reopen leaves that promise
+     outstanding for most of thirty seconds. Starting at null meant the
+     app rendered a definitive sign-in form for all of it, which is the
+     bug as reported: a phone, off the network for a moment, showing a
+     sign-in form to somebody who was still signed in.
+
+     A stored session IS the credential; every request made with it is
+     authorised server-side anyway, and if it is dead auth-js tears it
+     down and emits SIGNED_OUT below within the same second. */
+  const [session, setSession] = useState(() => {
+    try {
+      return backend.storedSession ? backend.storedSession() : null;
+    } catch (e) {
+      return null;
+    }
+  });
 
   /* Error reporting into our own client_errors table — see
      errorReport.js for the rules (six fields, capped, deduped, fire
@@ -5130,17 +5149,65 @@ export default function PlannerApp() {
     dataRef.current = data;
   }, [data]);
 
-  // Restore an existing sign-in on startup
+  /* Restore an existing sign-in on startup.
+
+     THREE OUTCOMES, AND ONLY ONE OF THEM RENDERS A SIGN-IN FORM. This
+     read used to be `setSession(s)` over a value that was null for
+     three different reasons, one of which was "we could not reach the
+     server to refresh". A phone reopened more than an hour after last
+     use, before its radio is up, hits exactly that -- and auth-js keeps
+     the session in storage throughout, so the student was being asked
+     to sign in to an account they were still signed in to.
+
+     `failed` therefore keeps what the app had: the preserved session
+     auth-js declined to throw away. Its access token is expired, so
+     requests made with it are refused until a refresh succeeds -- which
+     is the state an offline planner is in anyway, and is the one the
+     app already has words for. What it is NOT is signed out.
+
+     THE RETRY IS BOUNDED AND IS THE BACKSTOP, not the mechanism. The
+     recovery that matters is the auth state listener below: auth-js
+     re-runs recovery on hidden -> visible and on its own 30s tick, and
+     emits SIGNED_IN / TOKEN_REFRESHED when it works. The ladder is here
+     for the case where neither fires, and it steps past auth-js's 60s
+     refresh-failure cooldown rather than hammering a cached failure. */
   useEffect(() => {
     let cancelled = false;
-    backend
-      .getSession()
-      .then((s) => {
-        if (!cancelled) setSession(s);
-      })
-      .catch(() => {});
+    let timer = null;
+    const ladder = [2000, 10000, 30000, 70000];
+    let attempt = 0;
+
+    const read = async () => {
+      let r;
+      try {
+        r = await backend.getSession();
+      } catch (e) {
+        r = { failed: true };
+      }
+      if (cancelled) return;
+
+      if (r && r.session) {
+        setSession(r.session);
+        return;
+      }
+      if (r && r.missing) {
+        setSession(null);
+        return;
+      }
+
+      /* failed: we do not know. Keep what we had -- and at startup what
+         the app "had" is whatever survived in storage. */
+      if (r && r.stale) setSession((prev) => prev || r.stale);
+      if (attempt < ladder.length) {
+        timer = setTimeout(read, ladder[attempt]);
+        attempt += 1;
+      }
+    };
+
+    read();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, []);
 
@@ -5314,7 +5381,36 @@ export default function PlannerApp() {
            restated `shapeSession`'s body, and agreed with it -- which
            is how the provider's field names leak out of sync.js. */
         if (s) setSession(shapeSession(s));
+        return;
       }
+
+      /* THE EVENTS WE WERE ALREADY BEING SENT AND IGNORING.
+
+         auth-js re-runs session recovery when the tab goes hidden ->
+         visible, and refreshes on its own ticker; both emit here. This
+         subscription handled PASSWORD_RECOVERY and nothing else, so a
+         recovery that SUCCEEDED changed nothing on screen -- which is
+         why a phone that lost its session on reopen never got it back
+         within that run of the app, rather than fixing itself a second
+         later.
+
+         TOKEN_REFRESHED matters for a second reason. `shapeSession`
+         stores the ACCESS token, and five call sites read it --
+         aiNotes.jsx (record, re-summarise, save), aiText.jsx and
+         plans.jsx. Ignoring the refresh left every one of them carrying
+         a token that expired an hour into the session, so the screens
+         rendered perfectly and the requests were refused. */
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        if (s) setSession(shapeSession(s));
+        return;
+      }
+
+      /* A REMOVAL IS DEFINITIVE AND IS THE ONE THING THAT MAY SIGN
+         SOMEBODY OUT HERE. auth-js emits this only when it has torn the
+         session down -- a revoked refresh token, or our own signOut --
+         never for a dropped connection. Without it, keeping a stale
+         session on `failed` would have no way back to signed-out. */
+      if (event === "SIGNED_OUT") setSession(null);
     });
     return () => data && data.subscription && data.subscription.unsubscribe();
   }, []);
@@ -5326,7 +5422,7 @@ export default function PlannerApp() {
     /* Sync straight away: the recovery session is a real one, and a
        student who has just proved they own the account should have their
        planner rather than an empty app behind the confirmation. */
-    const s = await backend.getSession();
+    const { session: s } = await backend.getSession();
     if (s) {
       setSession(s);
       await runSync(s);
