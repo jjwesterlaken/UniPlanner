@@ -243,6 +243,61 @@ async function run() {
     }
   });
 
+  await test("A MISSING CLIENT IS ONE LINE, and a database that answers is still explained in full", async () => {
+    /* THE NOISE THIS REMOVES, and why it is worth a test rather than a
+       tidy-up. With the platform stubbed, `getSupabaseAdmin()` hands
+       back nothing usable and the old code found that out by reading
+       `.from` off it — a TypeError, caught, and printed with its whole
+       stack. `npm test` carried pages of them, all saying the same
+       thing about a fake environment.
+
+       A wall of identical stacks is not harmless: it is how the one
+       line that IS worth reading gets scrolled past, which is the
+       failure the digest exists to prevent, arriving in the terminal
+       instead of the inbox.
+
+       BOTH HALVES, because quietening the wrong one would be worse
+       than the noise. An absent client is a one-line fact; a database
+       that answered and REFUSED is a real event and keeps everything
+       it had. The two are asserted to differ before either is checked
+       on its own. */
+    const readLines = async (opts) => {
+      const w = makeWorld(opts);
+      const { recordFailure } = await freshRecorder();
+      const cap = captureConsole();
+      try {
+        recordFailure("ai-text", "provider", new Error("upstream 500"), { task: "explain" });
+        await settle();
+      } finally {
+        cap.restore();
+        w.restore();
+      }
+      return cap.lines;
+    };
+
+    const absent = (await readLines({ noDeno: true })).filter((l) => l.includes("function_errors_insert"));
+    const refused = (await readLines({ insert: "refuse" })).filter((l) => l.includes("function_errors_insert"));
+
+    assert.equal(absent.length, 1, `an absent client printed ${absent.length} recorder lines: ${absent.join(" | ")}`);
+    assert.equal(refused.length, 1, `a refusing database printed ${refused.length} recorder lines`);
+    assert.notEqual(
+      absent[0],
+      refused[0],
+      "an absent client and a refusing database print the same line, so neither tells you which happened"
+    );
+
+    /* THE ONE-LINER CARRIES NO STACK. Matched on the frame marker
+       rather than on a length, because a long provider message is not
+       the thing being complained about. */
+    assert.doesNotMatch(absent[0], /\n\s+at /, `the absent-client line still carries a stack: ${absent[0]}`);
+    assert.match(absent[0], /recorder unavailable/, "the absent-client line does not say what happened");
+    assert.match(absent[0], /^ai-text FAILURE /, "the greppable prefix is gone, so one grep no longer finds every missing row");
+
+    /* AND THE INFORMATIVE ONE IS UNTOUCHED: a real refusal still names
+       the postgres code, which is the thing somebody would act on. */
+    assert.match(refused[0], /42P01/, "a refused insert no longer reports what the database said");
+  });
+
   await test("`EdgeRuntime.waitUntil` IS USED, AND IS GUARDED — a free variable here would be the worst place for one", () => {
     /* A floating promise in an Edge Function is not a promise that
        completes: the worker may be torn down the moment the response
