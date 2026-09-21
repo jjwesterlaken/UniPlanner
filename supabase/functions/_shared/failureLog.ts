@@ -115,6 +115,23 @@ function keepAlive(work: Promise<unknown>): void {
   }
 }
 
+/* The service-role client, or null if there is not a usable one.
+   Answers the question WITHOUT throwing and without assuming
+   `getSupabaseAdmin` throws rather than returning something unusable --
+   a stub that hands back `undefined` produces a TypeError one property
+   access later, which is how a missing client used to arrive as a
+   stack trace. */
+// deno-lint-ignore no-explicit-any
+function usableAdmin(): any {
+  try {
+    const admin = getSupabaseAdmin();
+    // deno-lint-ignore no-explicit-any
+    return admin && typeof (admin as any).from === "function" ? admin : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Print the failure line, then record it. Drop-in for the `logFailure`
  * each function already defines — same arguments, same bytes on the
@@ -123,9 +140,29 @@ function keepAlive(work: Promise<unknown>): void {
 export function recordFailure(fn: string, stage: string, err: unknown, extra: Record<string, unknown> = {}): void {
   console.error(failureLine(stage, err, extra, fn));
 
+  /* NO CLIENT AT ALL IS A ONE-LINE FACT, NOT A STACK, and the reason
+     is that it is not a failure of anything -- it is the recorder
+     saying it is not configured here. It happens in every bundled test
+     with a stubbed platform, and it would happen in production only if
+     the service-role key were unset, which is static and which a stack
+     trace tells nobody anything about.
+
+     Printed all the same, and still carrying `function_errors_insert`
+     so one grep finds every reason a row is missing: a recorder that
+     says nothing turns an empty digest into evidence that nothing is
+     wrong. What changed is the volume, and the reason that matters is
+     that pages of identical stacks are how a line that IS worth
+     reading gets scrolled past. */
+  const admin = usableAdmin();
+  if (!admin) {
+    console.error(
+      `${fn} FAILURE function_errors_insert recorder unavailable: no database client, so ${stage} was logged and not recorded`
+    );
+    return;
+  }
+
   const work = (async () => {
     try {
-      const admin = getSupabaseAdmin();
       const { error } = await admin.from("function_errors").insert(failureRow(fn, stage, err, extra));
       /* PRINTED, NEVER RAISED — and printed rather than swallowed,
          because a recorder that fails silently turns an empty digest
