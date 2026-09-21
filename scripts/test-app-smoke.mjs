@@ -932,6 +932,15 @@ for (const [tabName, phrases] of [
       "macOS is warned about tab-only capture BEFORE the share dialog opens",
       macText.slice(0, 200)
     );
+    /* READ WHAT THE READER RENDERS. The claim is a pure-module one and
+       is asserted there too; this is the half that proves the sentence
+       reaches a mounted picker rather than sitting in a copy object
+       nothing selects. */
+    check(
+      /audio|sound/i.test(macText),
+      "the picker never mentions the audio control while a share source is selected",
+      macText.slice(0, 200)
+    );
 
     const ffText = ffHost.textContent || "";
     check(
