@@ -4663,7 +4663,11 @@ function WorkloadForecast({ assignments, assessments, calendar }) {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-medium text-stone-800">{weekLabel(w.weekStart, calendar, formatAU)}</span>
               <span className="text-xs text-stone-500">
-                {w.items.length} due{w.totalWeight > 0 && ` · ${w.totalWeight}% of your grade`}
+                {/* WHAT IS STILL TO COME, not what the week once held.
+                    This read `w.items.length` and the week's whole
+                    weight, so a past week with everything marked said
+                    "2 due · 50% of your grade" about finished work. */}
+                {w.outstandingCount} due{w.outstandingWeight > 0 && ` · ${w.outstandingWeight}% of your grade`}
               </span>
             </div>
             {w.crunch && (
@@ -4675,9 +4679,38 @@ function WorkloadForecast({ assignments, assessments, calendar }) {
               {w.items.map((i) => (
                 <li key={i.id} className="flex items-center gap-2 text-sm">
                   <CourseChip name={i.course} />
-                  <span className={`flex-1 truncate ${i.overdue ? "text-stone-500 line-through" : "text-stone-700"}`}>{i.title}</span>
+                  {/* STRIKETHROUGH MEANS DONE — Grace's call, its own
+                      commit so it can be reverted alone.
+
+                      It meant OVERDUE here, which is the visual
+                      language for "completed" applied to the one thing
+                      most needing attention: an overdue item was
+                      struck out and greyed, reading as crossed off. The
+                      To-do list twenty lines away already strikes on
+                      `done` and greys to stone-400, so this is one
+                      screen being brought to the app's own convention
+                      rather than a new style being invented.
+
+                      Overdue loses the de-emphasis and takes weight
+                      instead; the label beside it already says the
+                      word. */}
+                  <span
+                    className={`flex-1 truncate ${
+                      i.past && i.finished
+                        ? "text-stone-400 line-through"
+                        : i.overdue
+                          ? "font-medium text-stone-800"
+                          : "text-stone-700"
+                    }`}
+                  >
+                    {i.title}
+                  </span>
                   <span className="shrink-0 text-xs text-stone-400">
-                    {i.overdue ? "overdue" : formatAU(i.due)}
+                    {/* THREE STATES, NOT TWO. A marked assessment past
+                        its due date was reported as "overdue" — the one
+                        label that means the opposite of what had
+                        happened. */}
+                    {i.past && i.finished ? "done" : i.overdue ? "overdue" : formatAU(i.due)}
                     {i.weight ? ` · ${i.weight}%` : ""}
                   </span>
                 </li>
