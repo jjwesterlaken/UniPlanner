@@ -215,6 +215,24 @@ jobs:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-focus-zoom.mjs
 
+      - name: A sign-in survives a reopen, including the offline one
+        # Reported from a phone: reopening signed the student out. The
+        # cause was that `getSession()` does not RESOLVE while a refresh
+        # is being retried — auth-js backs off for ~25s — so the app sat
+        # at its initial null and rendered a definitive sign-in form
+        # while it still did not know. Five reopen states are driven
+        # against the built bundle with the real auth-js and only the
+        # network faked, plus the stale-token half: a refresh partway
+        # through a session has to reach the app, or every Edge Function
+        # call carries a token that expired an hour ago.
+        #
+        # One test here waits out auth-js's whole backoff window and so
+        # takes ~35 seconds on the happy path. It polls, so it fails in
+        # about 26 when there is something to report.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-session-persistence.mjs
+
       - name: Consent is shown before the first AI action, and declining sends nothing
         # App Store guidelines 5.1.1(i) and 5.1.2(i), which rejected build
         # 3514249: the screen must name the third parties that receive a

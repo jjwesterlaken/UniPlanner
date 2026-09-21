@@ -108,6 +108,30 @@ test("journey 1: create a note, and it survives a completely fresh device", asyn
     }
   });
 
+  await test.step("closing and reopening the app does NOT ask for a sign-in", async () => {
+    /* THE REOPEN, AGAINST THE REAL BACKEND, and it is what this file
+       was missing rather than a flag in helpers.mjs.
+
+       A phone-shaped bug was reported — reopening signed the student
+       out — and nothing in `e2e/` had ever closed and reopened while
+       signed in. `scripts/test-session-persistence.mjs` covers the
+       states that need a faked network; this covers the ordinary one
+       with nothing faked at all, which is the case a mock cannot
+       vouch for: a real session, a real refresh token, a real
+       project.
+
+       A NEW PAGE IN THE SAME CONTEXT is the reopen. A new CONTEXT is
+       a new device and is already the step below — the two look alike
+       and answer opposite questions, which is why they sit next to
+       each other. */
+    const reopened = await page.context().newPage();
+    await reopened.goto("/");
+    await reopened.getByRole("button", { name: "Settings" }).click();
+    await expect(reopened.getByRole("button", { name: "Sign out" })).toBeVisible({ timeout: 20_000 });
+    await expect(reopened.locator('input[type="password"]')).toHaveCount(0);
+    await reopened.close();
+  });
+
   await test.step("a fresh device (new context, empty storage) sees the note", async () => {
     const context = await browser.newContext();
     const fresh = await context.newPage();

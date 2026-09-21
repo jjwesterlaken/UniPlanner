@@ -560,6 +560,36 @@ from Safari → Develop → [device] → the app, in the console:
 4. **Cache survives a restart.** Open several notes, force-quit, reopen,
    and confirm they are all still readable offline.
 
+4a. **DOES THE SIGN-IN SURVIVE AN APP UPDATE? UNVERIFIED, and it is the
+   one storage question no build machine can answer.** A phone bug was
+   reported — reopening signed the student out — and the cause found in
+   the code was that `getSession()` does not resolve while a refresh is
+   being retried, so the app rendered a sign-in form while it still did
+   not know. That is fixed and guarded
+   (`scripts/test-session-persistence.mjs`).
+
+   What that fix cannot speak for is whether **WKWebView keeps
+   `localStorage` for `capacitor://localhost` across an app update**, or
+   across a long period with the app unopened. If iOS evicts it, the
+   session is genuinely gone, the student genuinely has to sign in, and
+   no amount of care in our code changes that — the remedy would be a
+   different one entirely (the Keychain, via a Capacitor storage
+   plugin), and it would need its own decision because it moves a
+   credential somewhere new.
+
+   **They are told apart by the symptom, which is why this is worth
+   writing down before anyone tests it:**
+   - *Signed out only sometimes, after some hours, and a second reopen
+     with signal is fine* — that was the code, and it is fixed.
+   - *Signed out on EVERY reopen after an update, immediately, with
+     signal* — that is eviction, and it is this item.
+
+   **How to test it:** sign in, force-quit, confirm still signed in.
+   Then install a build with a higher `CFBundleVersion` over the top
+   (not a delete-and-reinstall, which clears everything by design and
+   proves nothing), open it, and check the Account tab still shows the
+   email. Repeat after leaving the app unopened for a week if you can.
+
 ### Sync
 
 5. **Delete on the phone, gone on the laptop.** Sign in on both. Delete

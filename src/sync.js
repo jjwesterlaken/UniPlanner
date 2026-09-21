@@ -271,8 +271,27 @@ export const demoBackend = {
     }
   },
 
+  /* Synchronous, device-only, no network -- see `storedSessionRaw`.
+     Demo mode's session was always device-only, so this is what
+     `getSession` already did, minus the promise. */
+  storedSession() {
+    try {
+      return readJSON(DEMO_SESSION_KEY, null);
+    } catch (e) {
+      return null;
+    }
+  },
+
+  /* The same three outcomes, so no caller has to know which backend it
+     is talking to. Demo mode reads a device store rather than a server,
+     so `failed` is only reachable if that store throws. */
   async getSession() {
-    return readJSON(DEMO_SESSION_KEY, null);
+    try {
+      const session = readJSON(DEMO_SESSION_KEY, null);
+      return session ? { session } : { missing: true };
+    } catch (e) {
+      return { failed: true, stale: null };
+    }
   },
 
   /* Demo mode has no email and no server, so a reset is a no-op that
@@ -360,6 +379,139 @@ const urlCanCarryASession = () => {
   }
 };
 
+/* ------------------------------------------------------------------
+   THE STORAGE AUTH-JS WRITES THROUGH, SO WE CAN READ WHAT IT KEPT.
+
+   `getSession()` answers `{ session: null, error }` when the access
+   token has expired and the refresh could not be completed -- while
+   auth-js DELIBERATELY leaves the session in storage, because a dropped
+   connection is not a revocation. That is correct of the library and
+   useless to a caller: the credential is right there and the only
+   public read path has already flattened it to null.
+
+   There is no supported API for "what did you keep". `INITIAL_SESSION`
+   is no help -- it goes through the same `__loadSession` and emits
+   `null` on the same branch.
+
+   So we hand auth-js the storage, and read back through it. This is a
+   DERIVATION rather than a restatement: nothing here names auth-js's
+   storage key, invents its shape, or assumes where it lives. Whatever
+   it wrote is what we hand back, and the day it changes any of that,
+   this follows instead of going stale.
+
+   EVERY METHOD SWALLOWS ITS OWN FAILURE, the noteCache rule: storage
+   can throw outright (Safari private browsing) or be full, and an auth
+   client that cannot construct is worse than one that cannot persist.
+   ------------------------------------------------------------------ */
+const observed = new Map();
+
+const observedStorage = {
+  getItem(key) {
+    try {
+      const value = window.localStorage.getItem(key);
+      if (value === null) observed.delete(key);
+      else observed.set(key, value);
+      return value;
+    } catch (e) {
+      return null;
+    }
+  },
+  setItem(key, value) {
+    observed.set(key, value);
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (e) {
+      /* not persisted; the session still works for this run */
+    }
+  },
+  removeItem(key) {
+    /* A REMOVAL IS THE ONE UNAMBIGUOUS SIGNAL. auth-js removes the
+       session when it is genuinely dead -- a revoked refresh token, a
+       sign-out -- and preserves it for everything else. So forgetting it
+       here is what stops `failed` from resurrecting a session the
+       student really has ended. */
+    observed.delete(key);
+    try {
+      window.localStorage.removeItem(key);
+    } catch (e) {
+      /* ignore */
+    }
+  },
+};
+
+/* KEYED BY SHAPE, NOT BY NAME, and the first version was not -- which
+   is worth keeping because it failed in a way that looked like the fix
+   not working at all.
+
+   auth-js reads more than one key through this adapter: besides the
+   session it probes a `<key>-user` sidecar, which is usually absent. A
+   single `lastStored` variable was therefore overwritten with null by a
+   read of a DIFFERENT key moments after the session had been read
+   correctly, so the preserved session was always gone by the time
+   anybody asked for it.
+
+   Identifying the session by the fields it must have avoids naming any
+   key at all, which is the property that made this adapter worth
+   building in the first place. The sidecar carries `user` and no
+   tokens, so it cannot be mistaken for one. */
+function preservedSession() {
+  for (const raw of observed.values()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.user && parsed.access_token && parsed.refresh_token) return parsed;
+    } catch (e) {
+      /* not a session */
+    }
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------
+   THE SESSION ON THIS DEVICE, READ WITHOUT ASKING THE NETWORK.
+
+   `supabase.auth.getSession()` is not merely slow when the network is
+   down -- it does not RESOLVE. A failed refresh is retried with backoff
+   for the length of an auto-refresh tick, so on an offline reopen the
+   promise is outstanding for the better part of thirty seconds.
+
+   That is what made this bug look like a sign-out rather than a delay:
+   the app's session state starts as null, so for those thirty seconds
+   it renders a definitive sign-in form WHILE IT STILL DOES NOT KNOW.
+   Answering the question asynchronously was never going to fix a screen
+   that has already committed to an answer.
+
+   So startup reads the device instead. This is not a guess and not a
+   cache: a session in storage IS the credential, every request made
+   with it is authorised server-side regardless, and if it turns out to
+   be dead auth-js tears it down and emits SIGNED_OUT within the same
+   second. What it buys is that a student who is signed in sees a
+   signed-in app immediately, offline or not.
+
+   IT SCANS BY SHAPE rather than naming a key, the reason the observing
+   adapter exists: nothing here knows or assumes where auth-js keeps its
+   session. A session is the value carrying a user AND both tokens --
+   the `-user` sidecar has no tokens, and the demo session has no
+   `access_token`, so neither can be mistaken for one.
+   ------------------------------------------------------------------ */
+function storedSessionRaw() {
+  const observedOne = preservedSession();
+  if (observedOne) return observedOne;
+  try {
+    const ls = window.localStorage;
+    for (let i = 0; i < ls.length; i += 1) {
+      const key = ls.key(i);
+      if (!key) continue;
+      const raw = ls.getItem(key);
+      if (!raw || raw[0] !== "{") continue;
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.user && parsed.access_token && parsed.refresh_token) return parsed;
+    }
+  } catch (e) {
+    /* no storage, or nothing readable in it */
+  }
+  return null;
+}
+
 let supabase = null;
 if (isConfigured) {
   supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -367,6 +519,7 @@ if (isConfigured) {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: urlCanCarryASession(),
+      storage: typeof window !== "undefined" && window.localStorage ? observedStorage : undefined,
     },
   });
 }
@@ -449,12 +602,45 @@ export const supabaseBackend = {
     }
   },
 
+  /* Synchronous, device-only, no network. What the app opens with, so a
+     signed-in student is never shown a sign-in form while the network
+     is being asked a question it may take thirty seconds to answer. */
+  storedSession() {
+    return shapeSession(storedSessionRaw());
+  },
+
+  /* THREE OUTCOMES, NOT TWO -- the `fetchNote` rule, applied to the one
+     object the whole app is gated on.
+
+       { session }        a live session
+       { missing: true }  the query ran and there is definitively none
+       { failed: true }   we could not find out
+
+     This used to read `data.session` and throw `error` away, so all
+     three arrived as null. The cost was a reported bug: reopen a phone
+     more than an hour after last use, before the radio is up, and
+     auth-js answers `{ session: null, error }` -- having DELIBERATELY
+     kept the session in storage, because a dropped connection is not a
+     revocation. The student was shown a sign-in form over an account
+     they were still signed in to, and signed in again.
+
+     `stale` carries the session auth-js kept, so a caller can go on
+     treating the student as signed in while saying sync is not working.
+     It is NOT a session: its access token is past its expiry and every
+     request made with it will be refused. It is evidence that somebody
+     is signed in, which is a different claim and the one the screen
+     needs. */
   async getSession() {
     try {
-      const { data } = await supabase.auth.getSession();
-      return shapeSession(data.session);
+      const { data, error } = await supabase.auth.getSession();
+      if (data && data.session) return { session: shapeSession(data.session) };
+      if (error) return { failed: true, stale: shapeSession(preservedSession()) };
+      /* No session and no error is the definitive answer: auth-js looked
+         and there is nothing. A preserved session cannot exist here --
+         `removeItem` clears the cache on every genuine teardown. */
+      return { missing: true };
     } catch (e) {
-      return null;
+      return { failed: true, stale: shapeSession(preservedSession()) };
     }
   },
 
