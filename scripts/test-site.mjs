@@ -1784,6 +1784,61 @@ test("the store badges lead with the visitor's store, and still name the other",
   assert.notDeepEqual(onIos, onAndroid, "the badge order does not follow the platform at all");
 });
 
+test("THE DESKTOP-ONLY FACT SURVIVES WITH EVERY IMAGE REMOVED", () => {
+  /* GRACE'S RULING, made mechanical. The two desktop screenshots are
+     illustration; the thing a visitor has to learn is that recording
+     this computer's audio needs the desktop app. A phone visitor never
+     sees those shots, and neither does anybody on a slow connection or
+     with images off — so a fact that lives in a picture, a caption
+     under a picture, or an alt attribute is a fact most of the people
+     who need it will not get.
+
+     STRIPPING IS THE TEST. Every <img> goes, every alt with it, and the
+     claim has to still be in the prose. A sentence that only survives
+     because it was quoted in alt text is exactly the failure this
+     forbids.
+
+     ASSERTED AS A CO-OCCURRENCE, not as a phrase. Every wording pin in
+     this repository has eventually gone red on somebody improving the
+     writing, so what is required is that the page names the desktop app
+     and names what it records, in text, in the same breath. */
+  const raw = fs.readFileSync(path.join(rootDir, "public/site/index.html"), "utf8");
+  const noComments = raw.replace(/<!--[\s\S]*?-->/g, " ");
+
+  /* NON-VACUITY FIRST: there really are images to strip, and they
+     really are the desktop ones. Without this the assertion below
+     passes on a page that never had the section at all. */
+  assert.match(noComments, /<img[^>]+desktop-1-wide\.png/, "the wide desktop shot is not on the page");
+  assert.match(noComments, /<img[^>]+desktop-2-recording\.png/, "the recording desktop shot is not on the page");
+
+  const textOnly = noComments.replace(/<img\b[^>]*>/gi, " ");
+  assert.doesNotMatch(textOnly, /alt=/i, "an alt attribute survived the strip, so the check below could be reading one");
+
+  /* STYLE AND SCRIPT GO TOO, AND THIS CAUGHT ITSELF. The first version
+     stripped HTML comments and stopped there — and passed a mutation
+     that removed BOTH the heading and the paragraph, because the CSS
+     comment explaining this very rule sits inside <style> and says the
+     words it is looking for. A <!-- --> strip does not reach a CSS
+     comment, and neither is prose a visitor reads. Sixth instance of
+     the ledger's oldest entry, and the first where the guard was
+     satisfied by its own justification. */
+  const prose = textOnly
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&#39;|&rsquo;/g, "'")
+    .replace(/\s+/g, " ");
+  const sentences = prose.split(/(?<=[.!?])\s+/);
+  const stated = sentences.some(
+    (line) => /desktop app/i.test(line) && /this computer'?s audio|computer'?s own audio/i.test(line)
+  );
+  assert.ok(
+    stated,
+    "no sentence in the page's TEXT says that the desktop app is what records this computer's audio — " +
+      "a visitor who never loads the screenshots cannot learn it"
+  );
+});
+
 test("no note survives the flag it describes — the box note comes off the cards", () => {
   /* THE DEFECT, IN PROSE: "Mac: a desktop build exists but is not
      signed by Apple yet. Use the web app in the meantime." was written

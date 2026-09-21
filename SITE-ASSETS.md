@@ -82,12 +82,11 @@ device's native 1600 × 720.
 | **1** | **Home / Today** | The three courses, the next deadline with its countdown, the week number | The hero. It has to answer "what is this?" in one glance, and the week number is what says "this knows my semester". |
 | **2** | **AI lecture notes — a finished note** | The summary's overview and 2–3 key points, the course folder it filed into | The thing being sold. Scroll so the overview and the first key points are both in frame; a screenshot of a heading with nothing under it sells nothing. |
 | **3** | **Study — review in progress** | A card mid-review with the four rating buttons, and the "due today" count | The daily-use screen. Show the ANSWER side, not the question side — the question side is a screenshot of one sentence. |
-| **4** | **Readings — a summary open** | A reading row expanded with its summary panel showing | The newest feature and the one nobody expects. The collapsed row plus the open panel in one frame shows how it attaches. |
-| **5** | **Grades — a course with a required mark** | The assessments entered, and the "you need 80% for a Distinction" line | The feature Grace bounced off. The required-mark line is the payoff and the only part worth a screenshot. |
-| **6** | **Light mode — the same screen as shot 1** | Same content, `--mode` set to light | One light shot is enough to say "it does both". Two is a waste of a slot. The main set is dark, so this is the variant. |
+| **4** | **Grades — a course with a required mark** | The assessments entered, and the "you need 80% for a Distinction" line | The feature Grace bounced off. The required-mark line is the payoff and the only part worth a screenshot. |
 
 **Aspect ratio for the site: whatever the device gives, used as-is —
-but the SAME one for all six.** The shipped set is 1320 × 2868 (0.4603).
+but the SAME one for every phone shot.** The shipped set is
+1320 × 2868 (0.4603).
 No device frame in the source image — the page adds the frame in CSS so
 it can be adjusted without a reshoot.
 
@@ -129,9 +128,22 @@ drift out of step with shot 1.
   arrows, no drop shadows, no phone frames — all of that is CSS and all
   of it should stay changeable.
 - Name them exactly: `phone-1-home.png`, `phone-2-ai-note.png`,
-  `phone-3-study.png`, `phone-4-readings.png`, `phone-5-grades.png`,
-  `phone-6-light.png`, `desktop-1-wide.png`, `desktop-2-recording.png`,
-  `hero.png`.
+  `phone-3-study.png`, `phone-5-grades.png`, `desktop-1-wide.png`,
+  `desktop-2-recording.png`, `hero.png`.
+
+  **THE NUMBERING HAS A GAP AND IT STAYS.** `phone-4-readings` and
+  `phone-6-light` were shot, delivered and then cut (Jared, 21
+  September 2026): the readings shot because the section it belonged
+  to no longer advertises readings, the light one because one variant
+  shot was never worth a slot. `phone-5-grades` keeps its name rather
+  than being renumbered, because the file on disk, the `<img>` on the
+  page and this list all have to agree and a rename buys nothing.
+
+  The two cut files are DELETED rather than left in place:
+  `build-site.mjs` copies every `.png` in `public/site/` to the site
+  root, so an unreferenced shot is 1.3MB deployed to every visitor's
+  origin for nothing. They are in git history if either is ever wanted
+  back.
 - Drop them in `public/site/`. **`build-site.mjs` copies every `.png` it
   finds there to the site root, read from the folder rather than listed**
   — the claim that "the build copies `public/` wholesale, so no build

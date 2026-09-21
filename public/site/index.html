@@ -93,6 +93,20 @@ border-radius:15px;background:var(--card)}
    EACH SIDE — the one slot where the whole width is the point. */
 .shot.heroshot{aspect-ratio:1320/1720;max-height:560px}
 
+/* THE DESKTOP SHOTS ARE ILLUSTRATION, NOT THE MESSAGE. Grace's ruling:
+   a visitor who never sees these — a phone, a slow connection, images
+   off — still has to learn that recording this computer's audio needs
+   the desktop app. So the sentence is prose above them and a test
+   strips every <img> and every alt and requires the claim to survive.
+   1896x900 is the cropped browser shot's own ratio. */
+.dshots{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:38px}
+.dshot{background:var(--card);border:1px solid var(--line);border-radius:14px;
+aspect-ratio:1896/900;overflow:hidden;position:relative;display:grid;place-items:center;
+padding:20px;text-align:center;box-shadow:0 18px 44px -28px rgba(0,0,0,.3)}
+.dshot span{font-size:13px;color:#a8a8a0;line-height:1.5}
+.dshot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+border-radius:13px;background:var(--card)}
+
 .strip{background:var(--teal);color:#fff;padding:26px 0}
 .stripin{display:flex;flex-wrap:wrap;gap:34px;justify-content:center;text-align:center;
 font-size:15px}
@@ -176,6 +190,7 @@ footer{padding:52px 0 40px;border-top:1px solid var(--line);margin-top:20px}
 padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
 
 @media(max-width:900px){
+.dshots{grid-template-columns:1fr}
  .herogrid,.feat{grid-template-columns:1fr;gap:34px}
  .feat.rev .txt{order:0}
  .steps,.mini,.trustgrid,.prices,.dlbox{grid-template-columns:1fr}
@@ -361,6 +376,23 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
   <div><h4>Your data stays in Australia</h4><p>Stored in Sydney. Not sold, not shared, and not used to train anything.</p></div>
   <div><h4>No ads, no tracking</h4><p>There are no advertisements in UniPlanner and no third-party trackers in the app.</p></div>
   <div><h4>Delete everything, instantly</h4><p>One tap in the app removes your account and every piece of data with it.</p></div>
+</div></section>
+
+<section id="desktop"><div class="w">
+  <div class="shead" style="margin-left:auto;margin-right:auto;text-align:center">
+    <h2>Recording this computer's audio needs the desktop app</h2>
+    <!-- THE SENTENCE STANDS ON ITS OWN. Grace's ruling, and it is the
+         point of this whole section: a phone visitor never sees the two
+         shots below, so the fact cannot live in them. Everything a
+         reader needs is in this paragraph — what it does, where it
+         works, and what the alternatives cannot do. -->
+    <p>An online class, a recorded lecture, anything playing through your speakers — the desktop app for Windows and Mac records it directly. Phones and tablets can only record through the microphone, and a browser will only offer it alongside a screen share.</p>
+  </div>
+  <div class="dshots">
+    <div class="dshot"><span>UniPlanner on a laptop — the planner, with the week ahead.</span><img src="desktop-1-wide.png" alt="UniPlanner running in a desktop browser window, showing the planner with the weeks ahead." decoding="async" loading="lazy"></div>
+    <div class="dshot"><span>Recording an online class straight from the computer's own audio.</span><img src="desktop-2-recording.png" alt="UniPlanner on a laptop recording a lecture from the computer's own audio, with the recording indicator and timer running." decoding="async" loading="lazy"></div>
+  </div>
+  <p style="text-align:center;margin-top:26px;font-size:15px"><a href="#download">Download UniPlanner for Windows or Mac</a></p>
 </div></section>
 
 <section id="download" class="dl"><div class="w">
