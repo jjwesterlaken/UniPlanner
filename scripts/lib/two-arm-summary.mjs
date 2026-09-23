@@ -20,6 +20,111 @@ const share = (xs, f) => (xs.length ? ((xs.filter(f).length / xs.length) * 100).
 export const QUOTE_FLOORS = [3, 4, 5, 6, 8];
 export const NOTE_CAPS = [12, 16, 20, 25, 30, 40, 60];
 
+/* ------------------------------------------------------------------
+   THE SCOPE CONTROL. Nothing downstream of this measurement may be
+   read until it passes, and it is a REFUSAL rather than a warning
+   because the whole experiment is a comparison between two
+   populations and every failure below leaves a comparison that cannot
+   have been made.
+
+   THREE WAYS A RUN SAYS NOTHING, and each reports success on its own:
+
+   1. EITHER ARM IS EMPTY. A separation statistic over an empty
+      population is not a small number, it is no number -- and the
+      printed table would show `0 points` beside percentages computed
+      from nothing, which reads like a result. The adversarial arm is
+      the one that empties in practice: it is the arm a provider is
+      most likely to refuse outright, and its emptiness would look
+      exactly like "the constraint worked".
+
+   2. THE TWO ARMS ARE IDENTICAL. If the adversarial prompt produced
+      the same population as the constrained one, the arms are not
+      discriminating and no threshold read off them means anything.
+      That is the colour-coincidence class: a comparison between two
+      things that are the same passes every test and separates
+      nothing.
+
+   3. NO CANDIDATE VALUE SEPARATES THEM ANYWHERE. The operating
+      characteristic can be printed in full and still have no row where
+      the constrained arm is near zero and the adversarial arm is near
+      one hundred. Printing it and letting a person find that out is
+      how a run gets read as "we just need a different threshold".
+
+   IT RETURNS THE VERDICT rather than exiting, so the caller decides
+   what a failure costs and a test can drive every branch without a
+   provider, a key or a corpus. */
+export const SCOPE_CONTROL = {
+  /* A population smaller than this cannot support a percentile, let
+     alone a separation between two of them. Deliberately low: the
+     point is to catch EMPTY and NEARLY empty, not to legislate a
+     sample size, which is the operator's judgement and is printed. */
+  minPointsPerArm: 10,
+  /* The separation a candidate threshold must reach to count as one:
+     the constrained arm refused at most this often, the adversarial
+     arm refused at least this often. */
+  maxConstrainedRefusal: 0.1,
+  minAdversarialRefusal: 0.9,
+};
+
+/**
+ * Does this run support any claim at all? Returns
+ * `{ ok, failures: [...] }` — never throws, never exits.
+ *
+ * `separates` is passed in rather than recomputed here: the caller
+ * already builds the operating characteristic, and recomputing it
+ * would be two implementations of one rule to keep in step.
+ */
+export function scopeControl(by, { separates = null } = {}) {
+  const failures = [];
+  const n = { constrained: by.constrained.length, adversarial: by.adversarial.length };
+
+  for (const id of ["constrained", "adversarial"]) {
+    if (n[id] < SCOPE_CONTROL.minPointsPerArm) {
+      failures.push(
+        `the ${id} arm produced ${n[id]} points (need ${SCOPE_CONTROL.minPointsPerArm}). ` +
+          "A separation between two populations cannot be measured when one of them is missing, and an " +
+          "empty adversarial arm reads exactly like a constraint that worked."
+      );
+    }
+  }
+
+  /* IDENTICAL POPULATIONS, compared on the measurements the thresholds
+     are read off rather than on object identity — two arms that happen
+     to return the same points are the same failure as one arm run
+     twice, however they came to be that way. */
+  if (n.constrained > 0 && n.adversarial > 0) {
+    const shape = (m) => m.map((x) => `${x.quoteWords}/${x.noteWords}/${x.quoteVerbatim ? 1 : 0}`).sort().join(",");
+    if (shape(by.constrained) === shape(by.adversarial)) {
+      failures.push(
+        "the two arms produced identical populations, so nothing here discriminates. " +
+          "Either the adversarial prompt is not reaching the provider or both arms are running the same one."
+      );
+    }
+  }
+
+  if (separates !== null && !separates) {
+    failures.push(
+      `no candidate threshold separates the arms: none reaches <=${Math.round(SCOPE_CONTROL.maxConstrainedRefusal * 100)}% ` +
+        `refusal on the constrained arm AND >=${Math.round(SCOPE_CONTROL.minAdversarialRefusal * 100)}% on the adversarial one. ` +
+        "The structure does not hold at any setting, which is a finding rather than a tuning problem."
+    );
+  }
+
+  return { ok: failures.length === 0, failures, n };
+}
+
+function printScopeFailure(verdict) {
+  console.log(`\n${"=".repeat(72)}`);
+  console.log("SCOPE CONTROL FAILED — this run supports no claim");
+  console.log("=".repeat(72));
+  for (const f of verdict.failures) console.log(`\n  - ${f}`);
+  console.log(
+    `\n  points: constrained ${verdict.n.constrained}, adversarial ${verdict.n.adversarial}` +
+      "\n\n  Nothing downstream of this measurement may be read. Fix the run and" +
+      "\n  measure again; do not take a threshold off the table above.\n"
+  );
+}
+
 export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
   const by = {
     constrained: results.filter((r) => r.arm === "constrained"),
@@ -29,6 +134,16 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
   console.log(`\n${"=".repeat(72)}`);
   console.log(`COMBINED — ${results.length} points from ${essays} essays, both arms`);
   console.log("=".repeat(72));
+
+  /* THE ARMS ARE CHECKED BEFORE ANYTHING IS COMPUTED FROM THEM. A
+     table of percentiles over an empty population prints zeros and
+     dashes that read like results, and the reader has to know to
+     distrust them. Refusing here means nobody has to. */
+  const early = scopeControl(by);
+  if (!early.ok) {
+    printScopeFailure(early);
+    return early;
+  }
 
   console.log("\n  arm            points  quote OK%  quote p50w  note p50w  note p90w  offered%");
   for (const id of ["constrained", "adversarial"]) {
@@ -158,11 +273,23 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
   data, and the answer is not a value further along the table — it is
   that this mechanism needs rethinking, as the novelty window did.`);
   }
+  /* THE QUALITY QUESTION HAS AN ANSWER NOW, and this paragraph used to
+     say it did not. ASAP carries a human rater score per essay
+     (`domain1_score`), and the competition rules forbid REDISTRIBUTING
+     the text rather than reading it — so the read is a person, on
+     their own machine, with `scripts/read-asap.mjs`. Its limits are
+     real and are stated there: school essays on a 1-6 band, not a
+     university rubric. */
   console.log(`
   NOTHING HERE SAYS WHETHER THE FEEDBACK IS ANY GOOD. The quality
   control catches a rule that buys separation by making the model say
   less; it cannot tell you whether what it says is worth 3 credits.
-  That needs a person reading output beside a real mark, on an essay
-  whose text may be shared.
+  That is a person reading output beside a real score:
+
+      node scripts/read-asap.mjs --dir <corpus> --out ~/asap-read.md
 `);
+
+  const verdict = scopeControl(by, { separates: usable.length > 0 });
+  if (!verdict.ok) printScopeFailure(verdict);
+  return verdict;
 }
