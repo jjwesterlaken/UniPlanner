@@ -60,3 +60,35 @@ export const PRIVACY_POLICY_PATH = "/privacy";
 export const ACCOUNT_DELETION_PATH = "/delete-account";
 
 export const LIMITS = { name: 30, short: 80, full: 4000 };
+
+/* ---------- where the listings live ----------
+
+   THE APPLE ID IS THE ONLY NUMBER, and the URL is derived from it.
+   Apple's own listing links carry both a slug and an id
+   (/app/uniplanner/id6804411181) and resolve on the id alone, so the
+   slug is decoration that can go stale when the listing name changes —
+   which is the restatement pattern in a URL. One number, one
+   derivation.
+
+   `/au/` is the storefront the listing was published in. It is not a
+   restriction: the App Store redirects a visitor to their own
+   storefront, so a student in another country lands on their version
+   of the same listing rather than on nothing.
+
+   PLAY HAS NO URL YET because the listing does not exist — the closed
+   test has to run first. That absence is the reason `storeUrl()`
+   refuses rather than assuming: a badge with a flag on and no URL is
+   the exact state site/flags.js spent a release describing. */
+
+export const APPLE_APP_ID = "6804411181";
+export const APP_STORE_URL = `https://apps.apple.com/au/app/id${APPLE_APP_ID}`;
+export const PLAY_STORE_URL = null;
+
+/** The listing URL for a badge id, or null when there is no listing.
+    Null is what makes the renderer fall back to "Coming soon" rather
+    than publishing a link to nowhere. */
+export function storeUrl(id) {
+  if (id === "ios") return APP_STORE_URL;
+  if (id === "android") return PLAY_STORE_URL;
+  return null;
+}

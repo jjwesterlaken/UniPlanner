@@ -16,6 +16,7 @@
 import { repoSlug, assetName, detectPlatform, downloadsFor } from "./downloads.js";
 import { TIERS, PERIODS, allowanceLine, priceLabel } from "./pricing.js";
 import { FLAGS } from "./flags.js";
+import { storeUrl } from "./store-listing.js";
 import { REPOSITORY_URL, PRODUCT_NAME, ARTIFACT_NAMES, APP_URL } from "./build-facts.js";
 
 /* ---------- the service worker that used to own this path ----------
@@ -213,9 +214,19 @@ function fillStoreBadges() {
   const box = document.querySelector("[data-store-badges]");
   if (!box) return;
   const badges = [
-    { id: "android", flag: FLAGS.playBadge, name: "Google Play", href: null },
-    { id: "ios", flag: FLAGS.appStoreBadge, name: "App Store", href: null },
-  ];
+    { id: "android", flag: FLAGS.playBadge, name: "Google Play" },
+    { id: "ios", flag: FLAGS.appStoreBadge, name: "App Store" },
+  ].map((b) => {
+    const href = storeUrl(b.id);
+    /* THE FLAG AND THE LINK CANNOT DISAGREE, and the direction is
+       fail-closed. A flag turned on before the URL exists produces
+       "Coming soon" — which is merely early — where the alternative is
+       a badge reading "Get it now" over nothing, which is the state
+       site/flags.js spent a release describing as worse than being
+       off. Both halves are required, so neither can be the whole
+       decision. */
+    return { ...b, href, live: Boolean(b.flag && href) };
+  });
   /* ORDERED BY THE VISITOR'S PLATFORM, NOT FILTERED BY IT — the same
      rule `downloadsFor` states for the cards, and for the same reason:
      the person choosing is often not on the machine they are choosing
@@ -229,9 +240,21 @@ function fillStoreBadges() {
     /* THE SLOT EXISTS AND IS HIDDEN, rather than being absent. Turning
        a listing on is then a boolean in site/flags.js, on the day it
        goes live, instead of a layout change under time pressure. */
-    const span = el("span", b.flag ? "badge" : "badge soon");
-    span.innerHTML = `<b>${esc(b.name)}</b>${b.flag ? "Get it now" : "Coming soon"}`;
-    box.appendChild(span);
+    /* AN ANCHOR WHEN IT LEADS SOMEWHERE, A SPAN WHEN IT DOES NOT.
+       A badge that looks clickable and is not is the complaint people
+       report as the site being broken, so the element type carries the
+       difference rather than a class name that only looks different. */
+    const node = el(b.live ? "a" : "span", b.live ? "badge" : "badge soon");
+    if (b.live) {
+      node.setAttribute("href", b.href);
+      /* It leaves this origin, so it opens away from the page rather
+         than replacing it — and `noopener` because a named target
+         hands the opened page a handle on this one. */
+      node.setAttribute("target", "_blank");
+      node.setAttribute("rel", "noopener");
+    }
+    node.innerHTML = `<b>${esc(b.name)}</b>${b.live ? "Get it now" : "Coming soon"}`;
+    box.appendChild(node);
   }
 }
 
