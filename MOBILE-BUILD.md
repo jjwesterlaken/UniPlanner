@@ -959,6 +959,47 @@ on), with a Play **license tester** account and the app on an
     visible change on this handset — flag it to Grace with a screenshot
     rather than letting her find it.
 
+### Essay feedback — 1.3.0, on Grace's iPhone
+
+Five steps, and the order matters: the disclosure has to be seen before
+the feature, because that is the order a student meets them in.
+
+11. **The opt-in screen, read as a student reads it.** It must say that
+    we check this against real marks and will ask how we did when theirs
+    comes back — that sentence is the deal the whole mark-comparison
+    loop rests on, and a screen that omits it makes the later prompt a
+    surprise. It must also carry the line that the essay is sent AS
+    WRITTEN, identifiers included, and that they can remove their name
+    and student ID first because we do not remove it for them.
+    Screenshot it.
+12. **One real run, with comments.** Paste something real, paste real
+    criteria, and read what comes back on the phone rather than on a
+    laptop. The question is not whether it renders — it is whether the
+    comments point at things a marker would care about, which is the
+    same question Grace's ASAP sheet asks and the first time it is
+    being asked of a phone-sized screen.
+13. **One example rewrite — the refusal, not the feature.** Ask it for
+    something that would require rewriting a sentence. It must refuse,
+    and the refusal must say what it is doing instead. This is the one
+    step that checks a guarantee rather than a screen, and a run that
+    quietly complies is a release blocker rather than a note.
+14. **The disclosure record.** After the run, confirm the consent
+    version recorded on the account is v8 and that re-opening the
+    feature does NOT re-prompt. A screen that re-asks every time trains
+    people to click through, which is the cost this project has written
+    down twice.
+15. **The feedback form.** Rate the run, pick reasons, submit — then
+    check a `delivered` row and an `on_mark`-less state in
+    `assessment_feedback`. **And the nudge must NOT appear**, because
+    nothing has been marked yet; if it does, the trigger is reading
+    something other than `isMarked`.
+
+    Then enter a mark on that assessment and confirm the prompt appears
+    **once**: answer it with the share tick OFF and confirm the row has
+    `mark` and `band` null; dismiss it on a second assessment and
+    confirm it never returns, including after the app is force-quit and
+    reopened and after a sync to a second device.
+
 **The one that is easy to skip and expensive to miss:** kill the network
 mid-purchase and reopen the app. The store completes the transaction
 later, RevenueCat delivers the webhook, and the tier must appear without
