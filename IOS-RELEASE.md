@@ -277,6 +277,116 @@ ever flags a mismatch between them, that is the seam to look at.
 
 ---
 
+## 3a. What 1.2.0 changes, and it is ONE ROW — but not the one expected
+
+Essay feedback, its quality capture, and the mark comparison
+(ESSAY-FEEDBACK.md). The answers to enter:
+
+### The essay text needs NO change, and the precedent settles it
+
+An essay is supplied text, relayed to a provider and stored nowhere —
+`ai-text` has no storage client and `test-readings.mjs` pins that. So
+on the strict reading it is not "collected" at all, and on the
+conservative reading it is **already covered by the existing
+`User Content -> Other User Content` row**, which is declared Yes.
+Either way there is no new row and no new type.
+
+That is the **Photos ruling applied unchanged**: the relay-not-retained
+argument is defensible, declaring costs nothing extra here because the
+row already exists, and omitting risks a reviewer reading the
+definition the other way. Do not open it again.
+
+### The rating, the reasons and the quality log — same row, NEW PURPOSE
+
+A student rating our feedback, and the reasons they pick, are **supplied
+by the student**, so they are User Content rather than telemetry. They
+go under the existing `Other User Content` row too.
+
+**What changes is the PURPOSE.** Every row in the table above is
+`App Functionality`. Evaluating whether our feedback matched a real
+marker is not making the app work for that student — it is
+**Analytics**, in Apple's own words *"using data to evaluate user
+behavior, including to understand the effectiveness of existing product
+features"*, which is this exactly.
+
+| Apple type | Collected | Linked | Tracking | Purpose |
+|---|---|---|---|---|
+| User Content -> **Other User Content** | Yes | Yes | No | App Functionality **+ Analytics** |
+
+### The shared mark and band — the same row again, and the tick is the story
+
+Opt-in, per assessment, and refusable without losing the rest of the
+prompt. Still `Other User Content`, still linked (it is keyed to the
+account like everything else), still not tracking, and it is the second
+thing under the new `Analytics` purpose.
+
+**Apple has no "optional" column**, so a data type collected sometimes
+is declared collected. Declaring it is the honest answer and matches
+what the student is told at the tick.
+
+It is **not** `Sensitive Info` — Apple's list there is race, religion,
+sexual orientation, pregnancy, disability, biometrics, union
+membership and political opinion. An academic mark is none of them.
+
+### AND ONE SENTENCE IN THIS DOCUMENT BECOMES FALSE
+
+Section 3 says: *"**Usage Data** (there is no analytics of any kind)"*.
+
+The TYPE is still not collected — we have no product-interaction
+telemetry, no SDK, and `test-local-only.mjs` still proves zero
+third-party calls. **But the parenthetical is a stronger claim than the
+declaration, and from 1.2.0 it is untrue.** A purpose named `Analytics`
+beside a document saying there is no analytics of any kind is exactly
+the seam a reviewer probes, and it is the restatement pattern one
+document over: a reassuring aside that outlives the fact it described.
+
+The replacement says the thing that is actually true, which is
+narrower and stronger:
+
+> **Usage Data: not collected.** There is no product analytics, no
+> SDK, and nothing that records what a student taps or looks at.
+> Where `Analytics` appears as a *purpose* on User Content, it is one
+> thing: a mark a student chose to share so we can check our feedback
+> against a real marker.
+
+**Play's data-safety form takes the same edit.** ANDROID-RELEASE.md
+section 2 is the other half, and the two labels must agree or they can
+be played against each other — which is the reason Photos was declared
+on both.
+
+### The review account can run it
+
+The credit table in section 7 gains a row. At the derived cost in
+ESSAY-FEEDBACK.md section 2, essay feedback is **3 credits**, and the
+free tier's 60 trial credits cover a reviewer running it several times
+over alongside everything else on that list. No tier change, no seeded
+subscription.
+
+### The reviewer note — DRAFTED HERE, not carried over
+
+**There was no essay reviewer note in this repository before now**; the
+earlier one existed only in a conversation and is not evidence of
+anything. This is a fresh draft for Jared to approve, and it is short
+on purpose — App Review Notes are read quickly and a long note invites
+questions.
+
+> UniPlanner's essay feedback gives a student written comments on
+> their own draft against their own marking criteria. It never
+> rewrites the essay and never predicts a grade; both are enforced in
+> the product, not just in the prompt.
+>
+> To try it: sign in with the account above, open **Assessments**,
+> pick any assessment, and use **Get feedback**. Paste any text you
+> like into the essay box and anything into the criteria box. The
+> account has free trial credits; one run costs 3.
+>
+> The essay is sent to our server, relayed to our AI provider for the
+> single request, and stored nowhere. Students are told this on the
+> consent screen before the first use, which you will see on that
+> first run.
+
+---
+
 ## 4. Items that bite at submission but were not on your list
 
 | Item | State | Evidence |

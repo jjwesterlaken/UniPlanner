@@ -119,8 +119,17 @@ Three specific consequences:
   An essay is relayed and not stored, exactly like a pasted reading —
   which is the strongest thing we can say and must not be blurred (the
   "not in your planner, not on our server" location clause).
-- **No new table**, so the derived table sweep in `test-legal.mjs` stays
-  green on its own.
+- **No new table** *for the essay feature itself*, so the derived table
+  sweep in `test-legal.mjs` stays green on its own.
+
+  **THIS STOPPED BEING TRUE ON 24 SEPTEMBER**, and the line is kept
+  rather than rewritten because the reasoning is still right about the
+  essay half. The mark-comparison loop (§"THE MARK COMPARISON") adds
+  `assessment_feedback` in migration 0023, and that sweep matches
+  `create table public.X` across the migrations and requires a declared
+  phrase in BOTH published documents — so it goes red until the policy
+  and the deletion page say what the table holds. The essay text still
+  reaches no table; a mark does.
 
 ### Work items
 
@@ -492,6 +501,20 @@ transcription minutes where this costs a fifth of a cent.
 | **3** | Consent v8 + policy (§1) | Must precede any deploy that can send an essay |
 | **4** | The endpoint task + caps (§2) | 24,000 / 2,000 / 3 credits |
 | **5** | The panel on the assessment row (§5) | Grace's, for layout and wording |
+| **6** | The mark-comparison loop (§"THE MARK COMPARISON") | Migration 0023 WIDENS, so it is applied before the client that reads it |
+
+**STEP 3 IS THE CONSENT BUMP, NOT STEP 5.** Worth stating plainly
+because the two are easy to swap when reading the table quickly: v8 is
+bumped by the ESSAY as a new material type (§1), which must precede any
+deploy that can send one. Step 5 is the panel, and a panel changes no
+promise — it inherits the gate through `AiActionFrame` with no new
+wiring, which is what that component was built for.
+
+**And step 6 bumps nothing.** A mark never reaches a provider, and
+consent governs what happens to content we send away. What the mark
+needs is a declaration, a table the documents name, and its own tick at
+the point of use — three different mechanisms, none of them the consent
+version.
 
 **Two things must be measured before they are built on**, and both are
 the same lesson this project keeps relearning:
@@ -647,3 +670,259 @@ design, which a fixture we wrote is allowed to make.
   posture rests on the same design facts the readings feature rests on —
   student-initiated, paste-only, never stored, never writes — but that
   is our reading, and the university's may differ.
+
+---
+
+## THE MARK COMPARISON — the other route, built into the feature (Jared, 24 September 2026)
+
+The section above ends: *"IT DOES NOT RETIRE THE OTHER ROUTE. One real
+essay a student submitted, with its criteria and its mark, remains the
+stronger answer and is still worth getting."*
+
+**This is that route, made systematic instead of anecdotal.** We have no
+way to compare our feedback to a real marker, so the students are the
+comparison — and the only moment the comparison is available is the one
+where a mark comes back. That moment already exists in this app: it is
+somebody typing a number into Grades.
+
+**IT IS THE REASON THE FEATURE EXISTS, so it is designed in rather than
+bolted on.** A feature that claims to point at what a marker cares about
+and has no mechanism for finding out whether it does is a claim with no
+instrument behind it. ASAP answers two questions at school level with a
+holistic band (§"The limits"); this answers the third, at university
+level, against criteria, with a real mark: **does a deficiency we raised
+track a mark a marker gave?**
+
+### The ask, and the three rules that keep it from becoming a nag
+
+Rendered on the assessment row, not as a modal. Three conditions, all
+required:
+
+```
+showMarkCompare(a) =
+     isMarked(a)              // grades.js already decides this, and
+                              // treats a mark of 0 as marked
+  && !!a.essayFeedbackAt      // WE GAVE FEEDBACK ON THIS ASSESSMENT
+  && !a.markCompareAsked      // once, ever
+```
+
+**IT IS A RENDER CONDITION, NEVER AN onChange HOOK**, and that decides
+two things at once. A hook on the mark input fires on the keystroke
+after `8` on the way to `85`, so the prompt appears under somebody's
+fingers mid-typing; and a hook only covers the order *mark last*, while
+a student can perfectly well be marked before the feedback is run. A
+condition evaluated on the row covers both orders and cannot fire
+mid-keystroke, provided it is read from the COMMITTED item rather than
+from the input's live value — which it is, because the row renders from
+`a.mark` and the field commits on blur like every other numeric field in
+this app.
+
+**`essayFeedbackAt` IS A TIMESTAMP, NOT A NOTE ID**, and the reason is
+`sourceReadingId`'s rule pointing the other way. The feedback files
+itself into the per-course folder as an ordinary note, and that note is
+the student's — they may bin it. The *fact* that we gave feedback on
+this assessment stays true after they do, and it is the fact the nudge
+and the denominator both need. A note id would make deleting a note
+silently retire the question.
+
+**ONCE MEANS ONCE, INCLUDING AFTER A CORRECTED MARK.** A student who
+fixes a typo in their mark must not be asked again. `markCompareAsked`
+is set when the prompt is ANSWERED **or DISMISSED** — dismissal is an
+answer to the question of whether they want to be asked — and it is one
+ISO string on an existing item, so it rides the ordinary per-item merge
+and needs no `COLLECTIONS` change. `assessments` is already in that
+whitelist. Bump `updatedAt` on the write or the dismissal will not
+propagate and the second device will ask again.
+
+Size: two fields on assessments that have feedback, nowhere else.
+`essayFeedbackAt` + `markCompareAsked` is ~70 bytes on an item that only
+exists once per assessment per semester — call it 2 KB for a heavy
+student who runs the feature on everything, against a 1 MB budget.
+
+### What is stored, and what the tick decides
+
+`assessment_feedback`, **migration 0023**, one row per occasion:
+
+| occasion | written when | carries |
+|---|---|---|
+| `delivered` | a run succeeds, by the CLIENT | the deficiency codes we raised |
+| `on_mark` | the student answers the prompt | rating, reasons, and — only with the tick — mark and band |
+
+**TWO ROWS, NOT ONE, AND THE FIRST ONE IS THE DENOMINATOR.** A table
+holding only the answers can say "essays we flagged for a weak thesis
+averaged 62" and cannot say how many essays we flagged and never heard
+about. That is the vacuous-pass shape arriving in a research
+instrument: every number it prints is true and the population it is
+true of is unknown. The `delivered` row costs one insert and makes the
+response rate a fact.
+
+**THE CLIENT WRITES BOTH, AND IT HAS TO BE THE CLIENT.** `ai-text`
+carries a source-level invariant that no `.from(...)` may name a table
+other than `profiles` and `ai_usage`, which is what lets that endpoint
+skip the whole "exists but isn't yours" class. Having it write this
+table would break the invariant to save a round trip. The cost is
+named: a client that dies between the response and the insert records
+no `delivered` row, so the denominator undercounts. That is the safe
+direction — it under-reports our coverage rather than over-reporting
+our accuracy — and it is the same trade as the row orphaned by a crash
+in `aiNotesStore`.
+
+**INSERT-ONLY, THREE POLICIES, THE `ai_notes` SHAPE.** Select, insert,
+delete; no update policy and therefore no client update path to get
+wrong. Once-ness is a database fact rather than a client habit:
+
+```sql
+unique (user_id, assessment_id, occasion)
+```
+
+so a double-tap is refused with 23505, which the client reads as
+already-answered — the `migrateNote` pattern, and the reason that
+pattern exists is that a definitive code may be acted on.
+
+**`assessment_id` IS `text`.** It is the planner's own `uid()`, base36,
+and this is the boundary 0009 cost weeks on: a client-minted id crossing
+into a typed column. `uuid` here would reject every insert with 22P02,
+PostgREST would answer 400, and the table would sit empty on every
+account while nothing anywhere errored. The id-column guard enumerates
+every id column from the database and requires each to be mapped to a
+named client generator or excused in writing, so **this column fails the
+suite until it is mapped** — which is the guard doing its job and is a
+work item rather than a surprise.
+
+**THE TICK IS THE ONLY THING THAT MOVES A MARK.** Unticked, the row is
+written with `mark` and `band` null and the rating and reasons intact:
+the student's verdict on us is not their academic record, and the two
+are separable because we ask for them in one place, not because they
+are the same thing. The copy says so in the plainest available form —
+*nothing about the mark leaves your planner* — and the mark stays in the
+blob where it already was.
+
+**The band is `bandFor(mark)` on the assessment's own mark**, computed
+with the semester's rounding rule, because that is the only band
+vocabulary this app has. It is deliberately NOT the unit's final band,
+which is unknown when one assessment comes back and would leak the rest
+of the student's results into a row about one essay.
+
+### The opt-in copy says why, because that is the deal
+
+The feature's opt-in screen states the arrangement up front: **we are
+checking this against real marks, and we will ask how we did when yours
+comes back.** A student who learns at the prompt that we intended to ask
+all along has been surprised by something we knew; a student told at the
+start is being asked to take part in something.
+
+This is also what makes the later prompt read as a question rather than
+as data collection, and it is the only honest framing available given
+§4's rule that the feedback is never a prediction — we are not
+validating a score we gave, we are asking whether we pointed at the
+right things.
+
+### The query
+
+Two of them, and the second is the one that answers the question.
+
+```sql
+-- Answered essays, with the codes we raised on them.
+create or replace view essay_marks as
+  select a.user_id, a.assessment_id, a.mark, a.band,
+         a.rating, a.reasons, d.deficiency_codes
+    from assessment_feedback a
+    join assessment_feedback d
+      on  d.user_id       = a.user_id
+      and d.assessment_id = a.assessment_id
+      and d.occasion      = 'delivered'
+   where a.occasion = 'on_mark'
+     and a.mark is not null;
+```
+
+**1. What did essays with this deficiency score?** Spread first, because
+a mean over four essays is not a finding — the rule the bitrate harness
+established (*let the spread decide whether extrapolation is
+available*), applied to a research query rather than to a measurement.
+
+```sql
+select code,
+       count(*)                                          as n,
+       round(avg(mark)::numeric, 1)                      as avg_mark,
+       round(stddev_samp(mark)::numeric, 1)              as sd,
+       min(mark) as lo, max(mark) as hi,
+       percentile_cont(0.5) within group (order by mark) as median
+  from essay_marks, unnest(deficiency_codes) as code
+ group by code
+ order by avg_mark;
+```
+
+**2. THE CONTROL, and without it the first query says nothing.**
+"Essays we flagged for a weak thesis averaged 62" is not a finding until
+you know what the ones we did *not* flag averaged. This is the same
+shape as the photo-prompt A/B refusing to run one arm, and as
+`test-consent.mjs` requiring an accepted run beside the declined one.
+
+```sql
+select c.code,
+       count(*) filter (where c.code = any(m.deficiency_codes))        as n_flagged,
+       round(avg(m.mark) filter (where c.code = any(m.deficiency_codes))::numeric, 1)
+                                                                      as avg_flagged,
+       count(*) filter (where not (c.code = any(m.deficiency_codes)))  as n_clear,
+       round(avg(m.mark) filter (where not (c.code = any(m.deficiency_codes)))::numeric, 1)
+                                                                      as avg_clear,
+       round((avg(m.mark) filter (where not (c.code = any(m.deficiency_codes)))
+            - avg(m.mark) filter (where     c.code = any(m.deficiency_codes)))::numeric, 1)
+                                                                      as gap
+  from essay_marks m
+ cross join (select distinct unnest(deficiency_codes) as code from essay_marks) c
+ group by c.code
+ order by gap desc nulls last;
+```
+
+A positive `gap` is the claim the feature makes, in the only form that
+can be checked: essays we flagged for `code` scored that many marks
+below the ones we did not. **Read `n_flagged` and `n_clear` before
+reading `gap`** — a gap computed from three essays is a number, not
+evidence.
+
+**And the response rate, which is what the `delivered` rows are for:**
+
+```sql
+select count(*) filter (where occasion = 'delivered')                    as ran,
+       count(*) filter (where occasion = 'on_mark')                      as answered,
+       count(*) filter (where occasion = 'on_mark' and mark is not null) as shared_mark
+  from assessment_feedback;
+```
+
+### What this changes elsewhere, and one of them is a document that is now wrong
+
+- **§1's "What does NOT change" says "No new table, so the derived table
+  sweep in `test-legal.mjs` stays green on its own."** That is FALSE from
+  0023. The sweep matches `create table public.X` across the migrations
+  and requires a declared phrase in BOTH published documents, so the
+  privacy policy and the deletion page must say what this table holds
+  before the suite is green. Corrected in place above.
+- **`delete_my_account_data()` gains the table**, and the body is copied
+  from **0020** — the latest migration that defines it — never from an
+  older one. That exact mistake has been made once and was caught by two
+  guards; the migration suite's derived sweep enumerates every table with
+  a `user_id` column and asserts the function empties all of them, so a
+  miss goes red naming the table.
+- **The policy's overseas enumeration is untouched by this**, because
+  nothing here leaves the country: the mark goes to our own database in
+  our own region and never to a provider. That is the distinction §1
+  draws and it holds.
+- **App Privacy**: the purpose list on one row changes. See IOS-RELEASE.md
+  §3a.
+
+### It could ship in 1.2.1 at no cost, and that is worth knowing before the date is defended
+
+The nudge cannot fire until a student has (1) had an essay read, (2)
+submitted it, and (3) been marked. That is weeks after the feature
+ships, on anyone's timetable. **So the mark loop in 1.2.0 buys being
+there when the first mark lands, and nothing else** — no student is
+worse off if it arrives a fortnight later, because no student can
+answer it yet.
+
+It is not a reason to cut it: 0023 widens, so it wants to be applied
+before the client that needs it, and doing that once is cheaper than
+twice. It IS the thing to cut if the submission date comes under
+pressure, and cutting it costs a two-week delay on an instrument whose
+first data point is two weeks out regardless. Recorded so the decision
+is available rather than rediscovered at midnight.
