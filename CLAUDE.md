@@ -3028,6 +3028,43 @@ after adding a type would be to edit the v7 line, exactly as cheap as
 bumping and leaving no trace that a disclosure changed under students
 who had already agreed.
 
+**AND THE ROUTE GUARD CLOSES THE HOLE ONE LEVEL UP — 24 September
+2026.** Everything above stops you adding a material TYPE without a
+bump. Nothing stopped you adding a FEATURE without adding a type, and
+**nobody sets out to add a material type** — they set out to add a
+feature, and the type is what they are supposed to remember. Adding an
+`essay` task to `ai-text` left the fingerprint unchanged (no new
+company), the ledger matching v7 (no new type) and all three floors
+green, while the screen went on describing six kinds of material out of
+seven.
+
+`MATERIAL_ROUTES` maps every route by which material reaches a provider
+to what goes out along it, and `test-legal.mjs` **derives the route
+list from the endpoints**: `ai-text`'s from `SYSTEM`'s own keys
+(exported as `TASKS` — `buildMessages` throws on anything else, so
+those keys ARE the set), `ai-notes`'s from the three adapters' method
+names. Both directions are checked, so a row left behind by a deleted
+feature is caught too. The chain is **route -> material -> fingerprint
+-> version**, and every arrow but the second is automatic; the second
+is the judgement the guard exists to force.
+
+**THE UNIT IS THE PROMPT, NOT THE FEATURE.** "Summarise a note" and
+"summarise a reading" are two screens and one `summarise` task, so that
+row names two types; and `summariseImages` is not a client task at all
+— it is chosen inside `summarise` when the body carries photographs,
+and it is the row every photographed page leaves through. A list keyed
+on features splits one prompt in two; a list keyed on client tasks has
+no row for the photos.
+
+**There is no "sends nothing" option.** A route working on our own
+output maps to the material that output was derived from (`merge` ->
+`pasted-reading`). An escape hatch is the row everybody reaches for and
+the first place somebody would put an essay.
+
+It says what it cannot see: it knows a route EXISTS, never what a
+request puts in the body, so a new FIELD on an existing call is
+invisible to it.
+
 **Nothing reads it at runtime, deliberately.** Folding the material set
 into `providerFingerprint()` would re-prompt EVERY student on deploy —
 their recorded fingerprint is providers-only and would stop matching —

@@ -99,7 +99,7 @@ the rest of it real.
 So step 3 (consent v8) is now three edits that the suite will not let
 you make two of.
 
-### AND THE HOLE ONE LEVEL UP, WHICH C1 DOES NOT CLOSE — found 24 September, not built
+### AND THE HOLE ONE LEVEL UP — found 24 September, BUILT the same day
 
 C1 stops you **adding a material type without bumping**. Nothing stops
 you **adding a feature without adding a type**.
@@ -130,26 +130,69 @@ with a reason. Adding `essay` then fails until somebody declares what
 it sends, which changes the fingerprint, which forces the bump — task
 -> type -> fingerprint -> version, with no remembering anywhere in it.
 
-**Two things make it more than a one-liner, which is why it is recorded
-rather than done:**
+**JARED'S RULING, 24 September 2026: build it before step 3, cover both
+endpoints, and export what is needed rather than grepping prose.** Done
+the same day — `MATERIAL_ROUTES` in `src/aiMaterialTypes.js`, `TASKS`
+exported from `ai-text/prompts.js`, and the derivation in
+`test-legal.mjs`. **Essay feedback is the first feature it covers**,
+which is the whole reason it went before step 3 rather than after
+1.3.0: a guard whose first customer is the feature that motivated it
+has been tested by something real.
 
-- `SYSTEM` is **not exported** from `prompts.js`. Deriving the task
-  list needs either a new export from a deployed Edge Function file, or
-  a source grep — and a grep over a file whose prompts contain prose
-  about summarising is the comment-stripping trap waiting to happen.
-- The list spans **two endpoints**. `ai-notes` sends audio and a
-  transcript; `ai-text` sends the rest. A guard covering only the one
-  where the essay happens to land is a guard scoped to a file rather
-  than to the claim, which is its own ledger entry.
+**The routes are DERIVED from both endpoints.** `ai-text`'s are
+`SYSTEM`'s own keys — exported as `TASKS`, not restated beside them,
+since `buildMessages` throws on a task `SYSTEM` has no entry for, so
+those keys ARE the set. `ai-notes`'s are the adapter METHODS, read off
+the three adapter objects. A grep was refused for the reason recorded
+above: `prompts.js` is a file of prose *about* summarising readings and
+photographs, so a pattern hunting task names in it is the
+comment-stripping trap with extra steps.
 
-**It does not block essay feedback**, and that is worth saying plainly
-so it is not used as one: step 3 adds the type by hand, and from that
-moment C1 forces the bump exactly as designed. The hole bites only if
-somebody forgets the type — which is what guards are for, and is also
-why this is worth doing eventually rather than urgently.
+**THE UNIT IS THE PROMPT, NOT THE FEATURE, and one row proves why.**
+"Summarise a note I wrote" and "summarise a reading I pasted" are two
+features on two screens and **one** `summarise` task, so
+`ai-text:summarise` maps to two material types. A list keyed on
+features would have split a single outbound prompt in two; a list keyed
+on client task names would have had no row at all for
+`summariseImages`, which is not a task the client can ask for — it is
+selected inside `summarise` when the body carries photographs, and it
+is the row through which every photographed page leaves the device.
 
-**Jared's ruling wanted**: build it before step 3 (so essay feedback is
-the first feature it covers), after 1.3.0, or not at all.
+**No "sends nothing" option exists**, deliberately. A route working on
+output we generated maps to the material that output was DERIVED from —
+`ai-text:merge` sends section summaries of a pasted reading, to the same
+company, under the same promise, so it maps to `pasted-reading`. An
+escape hatch would be the one row everybody reaches for, and the first
+thing somebody would put an essay behind.
+
+**Verified by five mutations, and the second is the one that matters:**
+
+| mutation | what went red |
+|---|---|
+| add an `essay` task, change nothing else | `ai-text:essay` — *nothing says what it sends* |
+| then map it to a new `essay-draft` type | the ledger AND the both-documents check — **the bump is now compulsory** |
+| add an adapter method on the ai-notes side | `ai-notes:groq.diarise` |
+| delete a task, leave its row | `MATERIAL_ROUTES names routes that no longer exist` |
+| map a route to a type that does not exist | named the route and the bad id |
+
+The second row is the claim: satisfying the new guard the obvious way
+lands you on the old one, which then requires the version bump and the
+screen wording. Four links, one judgement — *what does this actually
+send?* — and no step that depends on remembering.
+
+**WHAT IT CANNOT SEE, stated in the test rather than implied by a
+pass:** it knows a route EXISTS, never what a given request puts in the
+body. Adding a field to an existing call — a course name onto a
+summarise request — is invisible to it and is caught only by somebody
+reading the diff. The unit is the route because that is the unit a
+feature adds.
+
+**One false positive was fixed by moving, not by loosening.** The
+filesystem-path sweep in `test-vacuous-guards.mjs` flagged
+`import(file)` in the new test, because it cannot tell a relative
+specifier held in a variable from a path held in one. It is guarding a
+real Windows failure, so the argument became a literal in each call
+rather than the check becoming laxer.
 
 ---
 

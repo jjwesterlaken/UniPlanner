@@ -30,6 +30,7 @@ import {
   RETENTION_CATEGORIES,
   CONSENT_MATERIAL_LEDGER,
   materialFingerprint,
+  MATERIAL_ROUTES,
 } from "../src/aiMaterialTypes.js";
 import { AUDIO_DELETION_PROMISE } from "../src/aiNotesLogic.js";
 import { TIERS, allowanceForTier } from "../src/aiTextLimits.js";
@@ -1464,6 +1465,132 @@ async function run() {
           "fact about the past and cannot be rewritten. A material list that has changed needs a NEW entry at a higher version."
       );
     }
+  });
+
+  await test("EVERY ROUTE THAT SENDS MATERIAL IS MAPPED, and the route list is DERIVED from the endpoints", async () => {
+    /* THE HOLE THE LEDGER ABOVE DOES NOT CLOSE, and it is one step
+       earlier in the sequence somebody actually performs.
+
+       The ledger stops you adding a material TYPE without bumping the
+       consent version. It cannot stop you adding a FEATURE without
+       adding a type — and nobody sets out to add a material type. They
+       set out to add a feature. Adding `essay` to ai-text's prompt set
+       leaves the provider fingerprint unchanged (no new company), the
+       ledger matching v7 (no new type) and all three floors green,
+       while the consent screen goes on describing six kinds of
+       material out of seven.
+
+       So the routes are DERIVED from the endpoints themselves and each
+       must be mapped in `MATERIAL_ROUTES`. A new route has no mapping
+       and this goes red naming it; mapping it to a type that does not
+       exist goes red; adding the type moves the fingerprint, which the
+       ledger test then requires a version bump for. Four links, one
+       judgement, no remembering.
+
+       WHY IMPORTS AND NOT A GREP: prompts.js is a file of prose ABOUT
+       summarising readings and photographs, so a pattern looking for
+       task names in it is the comment-stripping trap with extra steps.
+       `SYSTEM`'s own keys are exported as `TASKS` instead, and
+       `buildMessages` throws on anything not in `SYSTEM` — so those
+       keys ARE the set, rather than a list beside it.
+
+       WHAT THIS CANNOT SEE, stated rather than implied: it knows a
+       route EXISTS, never what a given request actually puts in the
+       body. Adding a field to an existing call — a course name onto a
+       summarise request, say — is invisible here and is caught only by
+       somebody reading the diff. The unit is the route because that is
+       the unit a feature adds. */
+
+    const prompts = await import("../supabase/functions/ai-text/prompts.js");
+    const textRoutes = prompts.TASKS.map((t) => `ai-text:${t}`);
+    assert.ok(
+      textRoutes.length > 0,
+      "ai-text exports no TASKS, so every assertion below would pass over nothing"
+    );
+
+    /* The ai-notes adapters, whose METHODS are its routes. groq and
+       deepgram are plain JS; openai is TypeScript, which plain Node
+       imports only under type stripping (unflagged from 22.18, and
+       .nvmrc says 22). It FAILS rather than skips if that is
+       unavailable — a guard that switches itself off on an old
+       toolchain is worse than one that says which toolchain it needs,
+       and this one would go quiet about the summariser specifically. */
+    /* EACH `import()` TAKES A LITERAL, not a loop variable. The
+       filesystem-path sweep in test-vacuous-guards.mjs cannot tell a
+       relative specifier in a variable from a path in one and flags it
+       — correctly, since it is guarding a real Windows failure — so
+       the fix is to hand it something it can read rather than to
+       loosen a check about `ERR_UNSUPPORTED_ESM_URL_SCHEME`. */
+    const load = async (label, importer, exp) => {
+      let mod;
+      try {
+        mod = await importer();
+      } catch (e) {
+        assert.fail(
+          `could not import ${label} (${e.code || e.message}). ` +
+            "A .ts adapter needs Node >= 22.18 for type stripping; .nvmrc says 22. " +
+            "This test FAILS rather than skips, because a skip here would quietly stop " +
+            "covering whichever adapter could not be loaded."
+        );
+      }
+      const adapter = mod[exp];
+      assert.ok(adapter && adapter.name, `${label} no longer exports ${exp} with a name`);
+      return adapter;
+    };
+    const adapters = [
+      await load("ai-notes/groq.js", () => import("../supabase/functions/ai-notes/groq.js"), "groqAdapter"),
+      await load("ai-notes/deepgram.js", () => import("../supabase/functions/ai-notes/deepgram.js"), "deepgramAdapter"),
+      await load("ai-notes/openai.ts", () => import("../supabase/functions/ai-notes/openai.ts"), "openaiAdapter"),
+    ];
+    const notesRoutes = adapters.flatMap((a) =>
+      Object.keys(a)
+        .filter((k) => typeof a[k] === "function")
+        .map((k) => `ai-notes:${a.name}.${k}`)
+    );
+    assert.ok(
+      notesRoutes.length >= adapters.length,
+      `${notesRoutes.length} routes across ${adapters.length} adapters — an adapter contributed none, so it is uncovered`
+    );
+
+    const derived = [...textRoutes, ...notesRoutes].sort();
+    const mapped = Object.keys(MATERIAL_ROUTES).sort();
+
+    /* BOTH DIRECTIONS. A route with no mapping is the bug this exists
+       for; a mapping with no route is a row left behind by a deleted
+       feature, which rots quietly and makes the union check below
+       lie. */
+    const unmapped = derived.filter((r) => !mapped.includes(r));
+    assert.deepEqual(
+      unmapped,
+      [],
+      `these routes send material and nothing says what: ${unmapped.join(", ")}. ` +
+        "Add each to MATERIAL_ROUTES in src/aiMaterialTypes.js with the kinds of material it sends. " +
+        "If that is a kind not already in AI_MATERIAL_TYPES, it is a new disclosure: add the type, " +
+        "add a CONSENT_MATERIAL_LEDGER entry at the next version, and bump AI_CONSENT_VERSION."
+    );
+    const stale = mapped.filter((r) => !derived.includes(r));
+    assert.deepEqual(stale, [], `MATERIAL_ROUTES names routes that no longer exist: ${stale.join(", ")}`);
+
+    const known = new Set(AI_MATERIAL_TYPES.map((t) => t.id));
+    const sent = new Set();
+    for (const [route, ids] of Object.entries(MATERIAL_ROUTES)) {
+      assert.ok(
+        Array.isArray(ids) && ids.length > 0,
+        `${route} is mapped to nothing. There is no "sends nothing" option: a route working on ` +
+          "output we generated maps to the material that output was DERIVED from, which is what " +
+          "the student agreed to when they supplied it."
+      );
+      for (const id of ids) {
+        assert.ok(known.has(id), `${route} claims to send "${id}", which is not a type in AI_MATERIAL_TYPES`);
+        sent.add(id);
+      }
+    }
+
+    /* AND THE OTHER WAY: a disclosed type nothing sends. Harmless to a
+       student and a sign the map has drifted from the code, which is
+       the state in which the checks above stop meaning what they say. */
+    const unsent = [...known].filter((id) => !sent.has(id));
+    assert.deepEqual(unsent, [], `disclosed but sent by no route: ${unsent.join(", ")}`);
   });
 
   /* ---------- the named third parties (Apple 5.1.1(i) / 5.1.2(i)) ---------- */

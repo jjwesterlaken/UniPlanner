@@ -159,6 +159,31 @@ const SYSTEM = {
  * message — see the note above about why it is never interpolated into
  * the system prompt.
  */
+/**
+ * EVERY DISTINCT PROMPT THIS ENDPOINT CAN SEND MATERIAL UNDER.
+ *
+ * Exported so the consent guard can DERIVE the list rather than
+ * restate it: `scripts/test-legal.mjs` requires every route here to be
+ * mapped to the kinds of material it sends in `MATERIAL_ROUTES`, and a
+ * task with no mapping goes red naming itself. That chain is what ties
+ * adding a FEATURE to bumping the consent version — task -> material
+ * type -> fingerprint -> `AI_CONSENT_VERSION` — with no step in it that
+ * depends on somebody remembering.
+ *
+ * IT IS `SYSTEM`'s OWN KEYS AND NOT A SECOND LIST. `buildMessages`
+ * throws on a task `SYSTEM` has no entry for, so these keys ARE the set
+ * of things this endpoint can be asked to do; a hand-written copy
+ * beside them would be the restatement the guard exists to prevent.
+ *
+ * NOTE `summariseImages` IS HERE AND IS NOT A CLIENT TASK — it is
+ * selected inside `summarise` when the body carries photographs. That
+ * is exactly why the unit is the PROMPT rather than the task name: the
+ * photographs are a different kind of material going out under a
+ * different prompt, and a list keyed on what the client may ask for
+ * would not have a row for them.
+ */
+export const TASKS = Object.freeze(Object.keys(SYSTEM));
+
 export function buildMessages(task, body) {
   const system = SYSTEM[task];
   if (!system) throw new Error(`no prompt for task: ${task}`);

@@ -191,3 +191,82 @@ export function materialFingerprint(types = AI_MATERIAL_TYPES) {
 export const CONSENT_MATERIAL_LEDGER = {
   7: "course-name:relayed-not-stored,lecture-audio:deleted-on-transcription,lecture-transcript:kept-server-side,own-notes-and-cards:relayed-not-stored,page-photos:relayed-not-stored,pasted-reading:relayed-not-stored",
 };
+
+/**
+ * EVERY ROUTE BY WHICH A STUDENT'S MATERIAL REACHES A PROVIDER, and
+ * which kinds of material go out along it.
+ *
+ * WHY THIS EXISTS, and it is the hole the ledger above does NOT close.
+ * `CONSENT_MATERIAL_LEDGER` stops you adding a material TYPE without
+ * bumping the consent version. Nothing stopped you adding a FEATURE
+ * without adding a type — and nobody sets out to add a material type,
+ * they set out to add a feature, and the type is the thing they were
+ * supposed to remember. Adding `essay` to `ai-text`'s prompt set left
+ * the fingerprint unchanged (no new provider), the ledger matching v7
+ * (no new type) and all three floors green, while the screen went on
+ * describing six kinds of material out of seven.
+ *
+ * So the chain is closed end to end:
+ *
+ *     a route         (DERIVED from the endpoints, in test-legal.mjs)
+ *  -> its materials   (declared here, and a new route has none)
+ *  -> the fingerprint (DERIVED from AI_MATERIAL_TYPES)
+ *  -> the version     (pinned by CONSENT_MATERIAL_LEDGER)
+ *
+ * Every arrow but the second is automatic. The second is a judgement —
+ * what does this actually send? — and the guard's whole job is to force
+ * it to be made, in writing, at the moment the route appears.
+ *
+ * IT IS DATA AND IT IMPORTS NOTHING, which is load-bearing rather than
+ * tidy. `test-legal.mjs` loads `origin/main`'s copy of THIS FILE
+ * standing alone to ratchet the ledger, and a single import would make
+ * a historical copy unloadable — which the catch would read as "no
+ * baseline" and skip, a guard switching itself off at exactly the
+ * moment somebody was rewriting history. So the route NAMES are
+ * written here and the route LIST is derived in the test.
+ *
+ * KEYS ARE `<endpoint>:<route>`. The endpoint prefix is not decoration:
+ * `summarise` exists on one side and `summarize` on the other, and a
+ * flat namespace would make those two collide on a typo.
+ *
+ * EVERY ROUTE MAPS TO AT LEAST ONE TYPE. There is deliberately no
+ * "sends nothing" escape hatch: a route that operates on output we
+ * generated maps to the material that output was DERIVED from, which is
+ * what a student agreed to when they supplied it. `merge` is that case
+ * and it is why the rule is stated rather than assumed.
+ */
+export const MATERIAL_ROUTES = {
+  /* ---- ai-text: one entry per SYSTEM prompt ---- */
+
+  // The student's own typed explanation of a concept.
+  "ai-text:explain": ["own-notes-and-cards"],
+  // The terms they keep forgetting, out of their own study cards.
+  "ai-text:weakspots": ["own-notes-and-cards"],
+  // Their study cards, turned into questions.
+  "ai-text:practice": ["own-notes-and-cards"],
+  /* ONE PROMPT, TWO KINDS OF MATERIAL, and this is the row that would
+     be wrong if the unit were the feature rather than the prompt:
+     "summarise a note I wrote" and "summarise a reading I pasted" are
+     two features on two screens and one `summarise` task. */
+  "ai-text:summarise": ["own-notes-and-cards", "pasted-reading"],
+  // Photographs of pages, selected inside `summarise` by the body.
+  "ai-text:summariseImages": ["page-photos"],
+  /* DERIVED, NOT NEW. `merge` sends the section summaries this endpoint
+     produced from a pasted reading — so what goes out is the reading's
+     content in our words, to the same company, under the same promise.
+     Mapping it to the source is more truthful than excusing it, and it
+     is why no "sends nothing" option exists above. */
+  "ai-text:merge": ["pasted-reading"],
+
+  /* ---- ai-notes: one entry per adapter method ---- */
+
+  /* THE COURSE NAME RIDES WITH THE AUDIO and is easy to miss, which is
+     the argument for listing materials per route rather than per
+     endpoint. Whisper takes it as a vocabulary `prompt` and Deepgram as
+     `keywords`; either way the student's course name leaves the device
+     on the same request as the recording. */
+  "ai-notes:groq.transcribe": ["lecture-audio", "course-name"],
+  "ai-notes:deepgram.transcribe": ["lecture-audio", "course-name"],
+  // The transcript, and the translation is of the same transcript.
+  "ai-notes:openai.summarize": ["lecture-transcript"],
+};
