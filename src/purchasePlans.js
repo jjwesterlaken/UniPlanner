@@ -111,7 +111,17 @@ export function introStatusFrom(raw) {
  *
  * Returns `{ price, intro }` where `price` is always the string to
  * show as the headline, and `intro` is `null` or
- * `{ priceString, cycles, periodUnit, then }`.
+ * `{ priceString, cycles, periodUnit, periodNumberOfUnits, then }`.
+ *
+ * THE DURATION IS TWO FIELDS MULTIPLIED, NOT `cycles` ALONE.
+ * `cycles` is how many discounted BILLING PERIODS the offer runs for;
+ * `periodNumberOfUnits` is how long ONE of those periods is, in
+ * `periodUnit`. On a monthly product they agree by coincidence — one
+ * period IS one month — which is exactly why reading `cycles` alone
+ * looks correct and is wrong the moment the product is not monthly.
+ * One introductory period on the six-month plan is `cycles: 1`,
+ * `periodUnit: "MONTH"`, `periodNumberOfUnits: 6`: six months, which
+ * `cycles` alone renders as "1 month" and undersells by five.
  *
  * `reason` is carried for the tests and for anybody debugging why an
  * offer is not on screen, which is the question somebody will ask.
@@ -139,6 +149,9 @@ export function displayPriceFor({ product, store, eligibility } = {}) {
       priceString: intro.priceString,
       cycles: Number.isFinite(intro.cycles) ? intro.cycles : null,
       periodUnit: typeof intro.periodUnit === "string" ? intro.periodUnit : null,
+      periodNumberOfUnits: Number.isFinite(intro.periodNumberOfUnits)
+        ? intro.periodNumberOfUnits
+        : null,
       then: full,
     },
     reason: "offer",

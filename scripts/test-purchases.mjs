@@ -854,7 +854,19 @@ async function run() {
   const product = (over = {}) => ({
     identifier: "uniplanner.studyai.monthly",
     priceString: "A$8.99",
-    introPrice: { priceString: "A$4.49", cycles: 3, period: "P1M", periodUnit: "MONTH" },
+    /* `periodNumberOfUnits` IS IN THE DEFAULT because RevenueCat's type
+       declares it non-optional, and a fixture that omits a field
+       production always sends is the whole file quietly asserting it is
+       absent. On this monthly product it is 1, which is exactly why
+       reading `cycles` alone looked right for as long as the fixtures
+       were monthly. */
+    introPrice: {
+      priceString: "A$4.49",
+      cycles: 3,
+      period: "P1M",
+      periodUnit: "MONTH",
+      periodNumberOfUnits: 1,
+    },
     ...over,
   });
 
@@ -925,8 +937,9 @@ async function run() {
   });
 
   await test("the after-line names the period when it can, and always names the price after", () => {
-    assert.equal(copy.introLine({ then: "A$8.99", cycles: 3, periodUnit: "MONTH" }), "for 3 months, then A$8.99");
-    assert.equal(copy.introLine({ then: "A$8.99", cycles: 1, periodUnit: "MONTH" }), "for 1 month, then A$8.99");
+    const m = (over) => ({ then: "A$8.99", periodUnit: "MONTH", periodNumberOfUnits: 1, ...over });
+    assert.equal(copy.introLine(m({ cycles: 3 })), "for 3 months, then A$8.99");
+    assert.equal(copy.introLine(m({ cycles: 1 })), "for 1 month, then A$8.99");
     /* An unreadable period still says THEN WHAT — the price after is
        the part somebody is surprised by, and dropping the whole line
        because we could not name the duration drops the important
@@ -934,6 +947,79 @@ async function run() {
     assert.equal(copy.introLine({ then: "A$8.99", cycles: null, periodUnit: "AEON" }), "then A$8.99");
     assert.equal(copy.introLine(null), "");
     assert.equal(copy.introLine({ then: "" }), "");
+  });
+
+  await test("ONE INTRODUCTORY PERIOD ON THE SIX-MONTH PLAN IS SIX MONTHS, NOT ONE", () => {
+    /* THE BUG THIS TEST EXISTS FOR, found by Jared asking whether the
+       wording derives from App Store Connect: it does, and it was
+       reading ONE of the two fields that decide the duration.
+
+       `cycles` counts discounted billing PERIODS. `periodNumberOfUnits`
+       is how long one period is. On a MONTHLY product they agree — one
+       period is one month — so every fixture and every screenshot of
+       the monthly plan looked correct while the six-month plan was
+       five months short. A price sentence, on the screen somebody pays
+       from, understated in the direction that becomes a refund.
+
+       App Store Connect's "1 period" on the six-month product arrives
+       as cycles 1, MONTH, 6. */
+    const sixMonth = {
+      identifier: "uniplanner.studyai.sixmonth",
+      priceString: "A$44.99",
+      introPrice: {
+        priceString: "A$22.49",
+        cycles: 1,
+        period: "P6M",
+        periodUnit: "MONTH",
+        periodNumberOfUnits: 6,
+      },
+    };
+    const r = plans.displayPriceFor({ product: sixMonth, store: IOS, eligibility: plans.INTRO_ELIGIBLE });
+    assert.equal(r.price, "A$22.49");
+    assert.equal(r.intro.periodNumberOfUnits, 6, "the second factor never reached the copy");
+    assert.equal(
+      copy.introLine(r.intro),
+      "for 6 months, then A$44.99",
+      "one introductory period on a six-month plan was not rendered as six months"
+    );
+  });
+
+  await test("and one period on the annual plan is a year — the whole path, not just the copy helper", () => {
+    /* END TO END on purpose: `displayPriceFor` drops fields it does not
+       name, so a helper that multiplies correctly over a hand-built
+       object proves nothing about what the panel receives. */
+    const annual = {
+      identifier: "uniplanner.studyai.annual",
+      priceString: "A$79.99",
+      introPrice: {
+        priceString: "A$39.99",
+        cycles: 1,
+        period: "P1Y",
+        periodUnit: "YEAR",
+        periodNumberOfUnits: 1,
+      },
+    };
+    const r = plans.displayPriceFor({ product: annual, store: IOS, eligibility: plans.INTRO_ELIGIBLE });
+    assert.equal(copy.introLine(r.intro), "for 1 year, then A$79.99");
+  });
+
+  await test("A FACTOR WE CANNOT READ DROPS THE DURATION RATHER THAN GUESSING AT IT", () => {
+    /* The `fetchNote` rule in a sentence. If `periodNumberOfUnits` ever
+       stops arriving, "for 1 month" is a claim with no evidence behind
+       it and is wrong by five months on the plan it matters for, while
+       "then A$8.99" is true with or without the duration. Understate
+       the promise, never the price. */
+    const missing = { then: "A$8.99", cycles: 1, periodUnit: "MONTH" };
+    assert.equal(copy.introLine(missing), "then A$8.99");
+    assert.equal(copy.introLine({ ...missing, periodNumberOfUnits: 0 }), "then A$8.99");
+    assert.equal(copy.introLine({ ...missing, periodNumberOfUnits: null }), "then A$8.99");
+    /* AND THE CONTROL: with both factors present it names the duration,
+       or every assertion above is satisfied by a line that never
+       names one. */
+    assert.equal(
+      copy.introLine({ ...missing, periodNumberOfUnits: 1 }),
+      "for 1 month, then A$8.99"
+    );
   });
 
   await test("NOTHING OUTSIDE sync.js READS THE PROVIDER'S SESSION FIELD NAMES", async () => {

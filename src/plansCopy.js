@@ -272,12 +272,34 @@ const INTRO_UNITS = {
  *
  * Returns "" when there is no offer, so the caller renders nothing
  * rather than an empty element.
+ *
+ * THE DURATION IS `cycles` x `periodNumberOfUnits`, AND READING EITHER
+ * ONE ALONE IS WRONG ON EVERY PRODUCT THAT IS NOT MONTHLY. `cycles`
+ * counts discounted billing PERIODS; `periodNumberOfUnits` is how long
+ * one period is, in `periodUnit`. One introductory period at 50% on
+ * the six-month plan is `1 x 6 MONTH` = six months, and `cycles` alone
+ * renders that as "for 1 month" — a sentence about a price, five
+ * months short, on a screen somebody is about to pay from.
+ *
+ * A MISSING FACTOR DROPS THE DURATION RATHER THAN GUESSING AT IT. The
+ * `fetchNote` rule applied to a sentence: "then A$8.99" is true with
+ * no duration in it, while "for 1 month" on an offer we could not
+ * measure is a claim we have no evidence for, in the direction that
+ * costs the student.
  */
 export const introLine = (intro) => {
   if (!intro || !intro.then) return "";
   const unit = INTRO_UNITS[String(intro.periodUnit || "").toUpperCase()];
-  const n = intro.cycles;
-  if (unit && Number.isFinite(n) && n > 0) {
+  const cycles = intro.cycles;
+  const per = intro.periodNumberOfUnits;
+  if (
+    unit &&
+    Number.isFinite(cycles) &&
+    cycles > 0 &&
+    Number.isFinite(per) &&
+    per > 0
+  ) {
+    const n = cycles * per;
     return `for ${n} ${n === 1 ? unit[0] : unit[1]}, then ${intro.then}`;
   }
   return `then ${intro.then}`;
