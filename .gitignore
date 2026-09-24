@@ -8,7 +8,21 @@ mobile/www/
 mobile/ios/
 mobile/android/
 .ai-notes-test-tmp/
-.claude/
+# CLAUDE CODE'S DIRECTORY IS IGNORED BY CONTENTS, NOT AS A DIRECTORY, so
+# two things in it can be shared. Git cannot re-include a file whose
+# PARENT is excluded, so `.claude/` would make every negation below
+# inert -- `.claude/*` is what leaves the directory itself visible.
+#
+# What is shared: the PreToolUse hook that refuses `git checkout` against
+# a dirty path, and the settings file that wires it. Those are a rule in
+# CLAUDE.md turned into a mechanism, so they belong to the project rather
+# than to whoever happened to write them.
+#
+# What stays ignored: settings.local.json (personal overrides, by
+# design), and everything else Claude Code writes here per machine.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 
 # Release signing secrets. The keystore must live OUTSIDE the repo; these
 # entries are the backstop for the day someone creates one inside it and
