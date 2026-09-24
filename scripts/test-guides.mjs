@@ -382,6 +382,103 @@ async function run() {
     assert.match(code, /readdirSync\(guideSrc\)/, "the build enumerates the guides by hand");
   });
 
+  /* ================================================================
+     THE SITEMAP — the only thing standing between a guide and nobody
+
+     Nothing on the marketing page links to a guide (that link is
+     Grace's) and there is no other route in, so the sitemap IS the
+     publication. A guide missing from it is a page that exists and is
+     not published, which is exactly the state these tests would
+     otherwise report as healthy.
+     ================================================================ */
+
+  await test("EVERY BUILT GUIDE IS IN THE SITEMAP, and the list is derived from what was built", () => {
+    const xml = fs.readFileSync(path.join(OUT, "sitemap.xml"), "utf8");
+    const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+    assert.ok(locs.length > 0, "the sitemap lists no URLs at all, so every check below would pass over nothing");
+
+    /* The claim, in the direction that matters: a page that was built
+       and not listed is unreachable. `pages` is read from the build
+       output, so a third guide is covered by existing. */
+    const missing = pages.filter((f) => {
+      const canonical = /<link rel="canonical" href="([^"]+)"/.exec(html(f))[1];
+      return !locs.includes(canonical);
+    });
+    assert.deepEqual(missing, [], `built but absent from the sitemap: ${missing.join(", ")}`);
+
+    /* And the other direction: a URL in the sitemap that no page
+       claims is a 404 offered to a crawler. */
+    const canonicals = pages.map((f) => /<link rel="canonical" href="([^"]+)"/.exec(html(f))[1]);
+    const stray = locs.filter((u) => u !== `${links.SITE_URL}/` && !canonicals.includes(u));
+    assert.deepEqual(stray, [], `listed in the sitemap but no page declares it: ${stray.join(", ")}`);
+  });
+
+  await test("THE SITEMAP AND THE CANONICAL NEVER NAME DIFFERENT URLS FOR ONE PAGE", () => {
+    /* The one mistake a sitemap can make that is worse than not
+       existing. Pages 301s `/x.html` to `/x`, so the served URL is
+       extensionless while the file is not — and the sitemap READS the
+       canonical rather than rebuilding the path from the filename,
+       which is what makes the two incapable of disagreeing. This
+       asserts the property that arrangement buys. */
+    const xml = fs.readFileSync(path.join(OUT, "sitemap.xml"), "utf8");
+    for (const f of pages) {
+      const canonical = /<link rel="canonical" href="([^"]+)"/.exec(html(f))[1];
+      assert.ok(xml.includes(`<loc>${canonical}</loc>`), `${f} declares ${canonical}, which the sitemap does not list`);
+      assert.ok(!canonical.endsWith(".html"), `${f}'s canonical keeps the .html Pages redirects away from: ${canonical}`);
+    }
+  });
+
+  await test("EVERY SITEMAP URL RESOLVES TO SOMETHING THE BUILD SERVES", () => {
+    /* A sitemap is a list of promises about what is at the other end.
+       Checked against dist-site rather than against the sources,
+       because the built tree is what Pages uploads — and the
+       extensionless form has to be mapped back to the file that
+       answers it, which is the redirect this project already relies on
+       for the legal documents. */
+    const xml = fs.readFileSync(path.join(OUT, "sitemap.xml"), "utf8");
+    const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+    assert.ok(locs.length > 0, "no URLs to resolve");
+    for (const u of locs) {
+      assert.ok(u.startsWith(`${links.SITE_URL}/`), `${u} is not on this origin`);
+      const rel = u.slice(links.SITE_URL.length + 1);
+      const candidates = rel === "" ? ["index.html"] : [rel, `${rel}.html`, path.join(rel, "index.html")];
+      const hit = candidates.find((c) => fs.existsSync(path.join(OUT, c)));
+      assert.ok(hit, `${u} is in the sitemap and nothing in dist-site answers it (tried ${candidates.join(", ")})`);
+    }
+  });
+
+  await test("THE APP IS NOT IN THE SITEMAP, and that is a decision rather than an oversight", () => {
+    /* `/app/` is a JavaScript shell whose indexed form is a blank
+       mount, and offering it to a crawler as content competes with the
+       page written to be the answer. Asserted so that "add every URL"
+       is a change somebody has to make on purpose. */
+    const xml = fs.readFileSync(path.join(OUT, "sitemap.xml"), "utf8");
+    assert.ok(!xml.includes(links.APP_URL), `the app (${links.APP_URL}) is offered to crawlers as content`);
+  });
+
+  await test("NO lastmod, because the only date available would be a false one", () => {
+    /* The honest value is when the CONTENT changed; the only value
+       this build has is when the BUILD ran, which moves on every
+       deploy whether or not a word changed. A lastmod that always says
+       today is not a weaker signal than none, it is a false one. */
+    const xml = fs.readFileSync(path.join(OUT, "sitemap.xml"), "utf8");
+    assert.ok(!/lastmod/i.test(xml), "the sitemap carries a lastmod, which can only be the build date");
+    assert.match(xml, /xmlns="http:\/\/www\.sitemaps\.org\/schemas\/sitemap\/0\.9"/, "the sitemap has no sitemaps.org namespace, so it is not a sitemap");
+  });
+
+  await test("ROBOTS.TXT POINTS AT THE SITEMAP, at a URL the build really serves", () => {
+    const robots = fs.readFileSync(path.join(OUT, "robots.txt"), "utf8");
+    const line = /^Sitemap:\s*(\S+)\s*$/m.exec(robots);
+    assert.ok(line, "robots.txt has no Sitemap line, so the guides are discoverable only by knowing the URL");
+    assert.equal(line[1], `${links.SITE_URL}/sitemap.xml`, "robots.txt points somewhere other than this origin's sitemap");
+    assert.ok(fs.existsSync(path.join(OUT, "sitemap.xml")), "robots.txt names a sitemap the build does not produce");
+    /* NO Disallow: blocking the app from indexing is a real decision
+       nobody asked for, and the mechanism for it would be a noindex
+       meta in the app shell rather than a line here. Asserted so that
+       adding one is deliberate. */
+    assert.ok(!/^Disallow:\s*\S/m.test(robots), "robots.txt blocks a path — that is a decision, not a tidy-up");
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
   if (passed === 0) {

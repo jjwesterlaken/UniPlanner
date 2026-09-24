@@ -158,6 +158,9 @@ if (!fs.existsSync(guideSrc)) throw new Error(`public/${GUIDE_DIR}/ is missing �
 const guides = fs.readdirSync(guideSrc).filter((f) => f.endsWith(".html"));
 if (guides.length === 0) throw new Error(`public/${GUIDE_DIR}/ has no pages — an empty guides directory ships a folder nothing serves`);
 fs.mkdirSync(path.join(OUT, GUIDE_DIR), { recursive: true });
+/* Each guide's own canonical, collected as they are written. See the
+   sitemap block below for why it is READ rather than rebuilt. */
+const guideUrls = [];
 for (const f of fs.readdirSync(guideSrc)) {
   const from = path.join(guideSrc, f);
   if (!f.endsWith(".html")) {
@@ -177,8 +180,76 @@ for (const f of fs.readdirSync(guideSrc)) {
   if (!page.includes(`${SITE_URL}${APP_PATH}`)) {
     throw new Error(`public/${GUIDE_DIR}/${f} has no link into the app — a guide with no call to action is an article written for nobody`);
   }
+  /* THE CANONICAL IS THE PAGE'S OWN STATEMENT OF ITS URL, and the
+     sitemap takes it from here rather than rebuilding it from the
+     filename. Cloudflare Pages 301s `/x.html` to `/x`, so the served
+     URL is extensionless while the file is not — rebuilding the path
+     means encoding that redirect in a second place and getting to
+     disagree with the page about which URL is canonical. A sitemap and
+     a canonical that name different URLs for one page is the one
+     mistake a sitemap can make that is worse than having none. */
+  const canonical = /<link rel="canonical" href="([^"]+)"/.exec(page);
+  if (!canonical) {
+    throw new Error(`public/site/${GUIDE_DIR}/${f} has no canonical link — the sitemap would have to guess its URL`);
+  }
+  if (!canonical[1].startsWith(`${SITE_URL}/`)) {
+    throw new Error(`public/site/${GUIDE_DIR}/${f} declares a canonical outside ${SITE_URL}: ${canonical[1]}`);
+  }
+  guideUrls.push(canonical[1]);
   fs.writeFileSync(path.join(OUT, GUIDE_DIR, f), page);
 }
+
+/* ---------- the sitemap, and the robots line that points at it ----------
+
+   WHY THIS EXISTS AT ALL: nothing on the marketing page links to a
+   guide. That link is Grace's call and is not made here, so without a
+   sitemap the two pages are reachable only by knowing the URL — which
+   is the same as not being published. `test-guides.mjs` already says
+   in its header that nothing in `npm test` can answer whether a search
+   engine found a page; this is the one thing we can do about it that
+   is not a design change to somebody else's page.
+
+   DERIVED FROM WHAT WAS BUILT. A third guide appears in the sitemap by
+   existing, exactly as it appears in the build by existing. A typed
+   list here would be the restatement pattern in the one file whose
+   whole job is to be a list.
+
+   WHAT IS IN IT: the marketing page and the guides — the pages we want
+   found. Deliberately NOT the app: `/app/` is a JavaScript shell whose
+   indexed form is a blank mount, and offering it to a crawler as
+   content competes with the page written to be the answer. Also not
+   the legal documents: they are reachable and indexable either way
+   (nothing here blocks anything), but a sitemap says "these are the
+   pages I want ranked", and ranking a privacy policy is not a goal.
+
+   NO `lastmod`, DELIBERATELY. The honest value would be when the
+   CONTENT changed, and the only value available here is when the BUILD
+   ran — which moves on every deploy whether or not a word changed. A
+   lastmod that always says "today" is not a weaker signal than none,
+   it is a false one, and crawlers discount a feed that cries wolf. */
+const xmlEscape = (u) =>
+  u.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const sitemapUrls = [`${SITE_URL}/`, ...guideUrls];
+if (sitemapUrls.length < 2) throw new Error("the sitemap would list only the home page — no guide contributed a URL");
+fs.writeFileSync(
+  path.join(OUT, "sitemap.xml"),
+  `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+    sitemapUrls.map((u) => `  <url><loc>${xmlEscape(u)}</loc></url>\n`).join("") +
+    `</urlset>\n`
+);
+/* ONE `Sitemap:` LINE AND NOTHING ELSE. An absent robots.txt already
+   means "crawl everything", so `User-agent: * / Allow: /` restates the
+   default and exists only to make the file well-formed for the crawlers
+   that expect a group. NO `Disallow` is written: blocking `/app/` from
+   indexing is a real decision with a real effect, nobody asked for it,
+   and the correct mechanism for it would be a noindex meta in the app
+   shell rather than a line here. Recorded in the pull request instead
+   of taken quietly. */
+fs.writeFileSync(
+  path.join(OUT, "robots.txt"),
+  `User-agent: *\nAllow: /\n\nSitemap: ${SITE_URL}/sitemap.xml\n`
+);
 
 /* ---------- the app, verbatim, one level down ---------- */
 fs.cpSync(APP_BUILD, path.join(OUT, APP_DIR), { recursive: true });
@@ -363,5 +434,5 @@ for (const page of ["index.html", ...DOC_PATHS.map((p) => `${p.replace(/^\//, ""
 }
 
 console.log(
-  `site build OK -> ${OUT}/ (${modules.length} modules, ${DOC_PATHS.length} documents, ${guides.length} guides, app at ${APP_PATH}/, ${moved.length} moved paths)`
+  `site build OK -> ${OUT}/ (${modules.length} modules, ${DOC_PATHS.length} documents, ${guides.length} guides, sitemap ${sitemapUrls.length} urls, app at ${APP_PATH}/, ${moved.length} moved paths)`
 );
