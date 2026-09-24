@@ -83,3 +83,13 @@ e2e/test-results/
 # catastrophic one. They are pure build output: the gate reads the
 # `text` reporter's stdout, not these files.
 coverage/
+
+# THE LOCAL READ — scripts/read-asap.mjs writes ASAP essay text in full,
+# and it is the only unredacted output anywhere in this project. The
+# script REFUSES a path inside the repository, so this is the second
+# line rather than the first: it covers the operator who passes --out
+# and lands somewhere the fence allows but a later `git add -A` would
+# still reach. Reading the corpus is permitted; redistributing it is
+# not, and a commit is redistribution that cannot be taken back.
+asap-read.md
+*asap-read*.md

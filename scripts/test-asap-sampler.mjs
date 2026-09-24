@@ -28,6 +28,12 @@ const rootDir = path.join(__dirname, "..");
 const read = (p) => fs.readFileSync(path.join(rootDir, p), "utf8");
 const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 
+/* EVERY FILE ON THE SAMPLER'S CORPUS PATH. The claims below are about
+   what the sampler DOES, and part of what it does now lives in a module
+   two scripts share. Listed here so a grep follows the code instead of
+   going stale the next time something moves. */
+const CORPUS_PATH = ["scripts/sample-asap.mjs", "scripts/read-asap.mjs", "scripts/lib/asap-corpus.mjs"];
+
 let passed = 0;
 let failed = 0;
 function test(name, fn) {
@@ -323,19 +329,166 @@ test("it spawns process.execPath, never npx and never a .bin shim", () => {
   /* On Windows the .bin shim is a .cmd and modern Node refuses to
      execute it — the trap this repo has hit fourteen times, and this
      script is the one MEANT to run on somebody else's laptop. */
-  const src = strip(read("scripts/sample-asap.mjs"));
+  const src = CORPUS_PATH.map((f) => strip(read(f))).join("\n");
   assert.match(src, /execFileSync\(\s*process\.execPath/);
   assert.doesNotMatch(src, /npx |node_modules[\\/]\.bin/);
 });
 
 test("every path is joined rather than concatenated with a separator", () => {
-  const src = strip(read("scripts/sample-asap.mjs"));
+  const src = CORPUS_PATH.map((f) => strip(read(f))).join("\n");
   assert.doesNotMatch(src, /["'`][^"'`]*\/scripts\//, "a hardcoded posix path will not resolve on Windows");
 });
 
 test("the TSV is read as latin1 — it is Windows-1252 and reading it as UTF-8 corrupts words", () => {
-  const src = strip(read("scripts/sample-asap.mjs"));
+  /* SCOPED TO THE CLAIM, NOT TO A FILE, and it had to be: the corpus
+     reading moved into `lib/asap-corpus.mjs` when `read-asap.mjs`
+     needed the same four things, and this grep went red on a correct
+     extraction while the property it guards was never in danger. That
+     is the file-scoped-guard entry in the ledger, arriving in the one
+     place it is most annoying — a guard that has to be edited to let a
+     refactor through is a guard people learn to edit.
+
+     What is asserted now is that WHEREVER the corpus is read, it is
+     read as latin1, and that the sampler really reaches that code. */
+  const src = CORPUS_PATH.map((f) => strip(read(f))).join("\n");
   assert.match(src, /readFileSync\(tsvPath, "latin1"\)/);
+  assert.equal(
+    (src.match(/readFileSync\(\s*tsvPath/g) || []).length,
+    1,
+    "the TSV is read in more than one place, so one of them can drift to UTF-8"
+  );
+});
+
+test("the sampler and the reader share ONE corpus module", () => {
+  /* The extraction is the point: a second copy of the TSV parsing, the
+     anonymisation strip, the rubric lookup or the stratified draw would
+     be the restatement pattern with a corpus attached. Both scripts are
+     required to import it, and neither to re-read the TSV itself. */
+  for (const f of ["scripts/sample-asap.mjs", "scripts/read-asap.mjs"]) {
+    const src = strip(read(f));
+    assert.match(src, /from "\.\/lib\/asap-corpus\.mjs"/, `${f} does not use the shared corpus module`);
+    /* SCOPED TO READING IT, not to naming it: both scripts legitimately
+       mention the filename in their usage text, which is the sentence
+       that tells an operator what `--dir` should point at. What neither
+       may do is parse it. */
+    assert.doesNotMatch(
+      src,
+      /readFileSync\([^)]*training_set_rel3|readFileSync\(\s*tsvPath/,
+      `${f} reads the TSV itself rather than going through the module`
+    );
+  }
+});
+
+/* ==================================================================
+   THE LOCAL READ — the one script that writes essay text, and the
+   fence that decides where.
+
+   Everything else in this project withholds by default and is tested
+   for it. `read-asap.mjs` writes in full, because it cannot do its
+   job otherwise, so what is tested here is the WHERE: reading the
+   corpus is permitted and redistributing it is not, and a file inside
+   a working tree is one `git add -A` from being redistributed
+   permanently.
+   ================================================================== */
+
+const runReader = (args, env = {}) => {
+  try {
+    return {
+      code: 0,
+      out: execFileSync(process.execPath, [path.join(rootDir, "scripts", "read-asap.mjs"), ...args], {
+        encoding: "utf8",
+        env: { ...process.env, ...env },
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    };
+  } catch (e) {
+    return { code: e.status ?? 1, out: `${e.stdout || ""}${e.stderr || ""}` };
+  }
+};
+
+test("THE FENCE REFUSES A PATH INSIDE THE REPOSITORY, and says why", () => {
+  const dir = fixture();
+  try {
+    const r = runReader(["--dir", dir, "--out", path.join(rootDir, "asap-read.md"), "--dry-run"]);
+    assert.equal(r.code, 1, "a path inside the repo was accepted");
+    assert.match(r.out, /REFUSED/);
+    assert.match(r.out, /redistribut/i, "the refusal does not say what the rule actually is");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the fence resolves `..`, so it cannot be walked around", () => {
+  const dir = fixture();
+  try {
+    /* A path that LOOKS outside and resolves inside. Comparing the
+       strings as given would accept this; comparing resolved real
+       paths is what makes the check a check. */
+    const sneaky = path.join(rootDir, "scripts", "..", "asap-read.md");
+    const r = runReader(["--dir", dir, "--out", sneaky, "--dry-run"]);
+    assert.equal(r.code, 1, "a `..` path that resolves inside the repo was accepted");
+    assert.match(r.out, /REFUSED/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AND IT ACCEPTS A PATH OUTSIDE — the control, or the fence could be refusing everything", () => {
+  const dir = fixture();
+  const out = path.join(os.tmpdir(), `asap-read-control-${Date.now()}.md`);
+  try {
+    const r = runReader(["--dir", dir, "--out", out, "--dry-run"]);
+    assert.equal(r.code, 0, `a path outside the repo was refused:\n${r.out}`);
+    assert.match(r.out, /--dry-run: nothing was called/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(out, { force: true });
+  }
+});
+
+test("A SINGLE SCORE BAND IS REFUSED — the sheet's second question cannot be answered inside one", () => {
+  /* The read exists to ask whether a lower-scored essay draws more
+     comment than a higher-scored one. Six essays that all scored the
+     same cannot answer it, and a file that looks complete is worse
+     than one that was never written. */
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "asap-flat-"));
+  try {
+    fs.mkdirSync(path.join(dir, "Essay_Set_Descriptions"));
+    const rows = [["essay_id", "essay_set", "essay", "domain1_score"].join("\t")];
+    for (let i = 0; i < 8; i++) {
+      /* OVER THE 50-WORD FLOOR, or `loadCorpus` drops every row and the
+         refusal under test is never reached — the first version of this
+         fixture failed for that reason and looked like the band check
+         not working. */
+      rows.push([i + 1, 1, "Computers help people in many different ways every single day and this essay explains exactly why that is so for families and for schools everywhere. You can learn new things, talk to relatives who live a long way away, and find information for your school work without ever going to a library building.", 3].join("\t"));
+    }
+    fs.writeFileSync(path.join(dir, "training_set_rel3.tsv"), Buffer.from(rows.join("\n"), "latin1"));
+    fs.writeFileSync(path.join(dir, "Essay_Set_Descriptions", "set1.txt"), "Prompt and scoring guide for set 1.");
+
+    const out = path.join(os.tmpdir(), `asap-read-flat-${Date.now()}.md`);
+    const r = runReader(["--dir", dir, "--out", out, "--sets", "1", "--dry-run"]);
+    assert.equal(r.code, 1, "a single-band selection was accepted");
+    assert.match(r.out, /same human score/i);
+    assert.ok(!fs.existsSync(out), "it wrote a file it had already refused to produce");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the read is GITIGNORED as well as fenced — two lines, because they cover different people", () => {
+  const ignore = read(".gitignore");
+  assert.match(ignore, /asap-read/, "nothing in .gitignore covers the read file");
+});
+
+test("NO ESSAY TEXT IS PRINTED — the file is the only place it goes", () => {
+  /* A terminal is pasteable and scrollback outlives the run. The
+     script's own summary must name counts and ids and nothing else. */
+  const src = strip(read("scripts/read-asap.mjs"));
+  const printed = [...src.matchAll(/console\.(log|error)\(([^\n]*)/g)].map((m) => m[2]).join("\n");
+  assert.doesNotMatch(printed, /row\.essay|o\.row\.essay|\.essay\b/, "the script prints essay text to the terminal");
+  /* Non-vacuity: it really does write the essay SOMEWHERE, or this
+     guard is about a script that does nothing. */
+  assert.match(src, /sheet\.push\(o\.row\.essay\)/, "the read never writes the essay at all");
 });
 
 test("npm test runs this file", () => {

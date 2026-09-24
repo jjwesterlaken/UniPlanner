@@ -504,19 +504,87 @@ the same lesson this project keeps relearning:
   the way the summariser's depth was (+189% words per key point with the
   ceiling untouched) — and only then the ceiling.
 
-## OPEN, AND IT STAYS OPEN — the quality judgement (Jared, 17 September 2026)
+## THE QUALITY JUDGEMENT — ANSWERABLE, and it always was (Jared, 23 September 2026)
 
 > **Is the feedback any good?** Nothing measured so far answers that,
 > and nothing measured so far was trying to.
 
-**THE SEARCH FOR AN EXEMPLAR FAILED AND THE WORK PROCEEDS ANYWAY.**
-No annotated Australian university essay with its mark and its
-criteria could be found — UC's study-help material carries none, and
-public sources came up empty. That is a blocker for the QUALITY
-question and for nothing else, so the mechanism work is unblocked with
-a synthetic pair (`fixtures/essay-feedback/`) and this question is
-recorded rather than quietly folded into the numbers that ARE
-available.
+**THE EXEMPLAR WAS IN THE CORPUS THE WHOLE TIME.** This section used to
+say the search had failed: no annotated Australian university essay
+with its mark and its criteria could be found, UC's study-help material
+carries none, and public sources came up empty. All of that is true and
+none of it was the question. **ASAP carries a human rater score for
+every essay** — `domain1_score` in `training_set_rel3.tsv`, which
+`sample-asap.mjs` has been reading since it was written, to stratify
+the sample it draws.
+
+**AND THE LICENCE FORBIDS REDISTRIBUTING THE TEXT, NOT READING IT.**
+That is the distinction the old wording collapsed. Every instrument
+here runs redacted because an unredacted run would put essay text into
+a summary, a JSON file or a terminal somebody could paste — and from
+"the text cannot leave" it does not follow that nobody may look at it.
+A person reading feedback beside a real score, on their own machine,
+breaks no rule.
+
+So the blocker was never the corpus. It was that nothing had been built
+to put an essay, its score and the feedback on one page.
+`scripts/read-asap.mjs` is that, and §"The local read" below is how it
+is run and what it refuses to do.
+
+### The limits, stated, because this is not a university rubric
+
+The read is worth having and it is not worth more than it is:
+
+- **School essays, not university ones.** ASAP sets 1, 2, 7 and 8 are
+  150–650 words by 7th–10th graders. A first-year essay is longer,
+  makes a sustained argument, and is marked on criteria these prompts
+  do not have.
+- **A 1–6 band, not a mark against criteria.** `domain1_score` is a
+  holistic rater score. It says an essay was better than another
+  essay; it does not say *which criterion* it fell down on, which is
+  exactly what the feedback claims to do. So the read can tell you the
+  feedback is pointing at real problems and whether it is harder on the
+  weaker essay — it cannot tell you the feedback agrees with a marker
+  criterion by criterion, because no such marking exists here.
+- **The rubric is a prompt-and-scoring guide, not a marking rubric.**
+  What goes to the model as `criteria` is ASAP's own set description.
+  It is closer to an assignment brief than to the criteria sheet a
+  student is handed.
+
+**What it therefore CAN answer**, and this is the whole of it: does the
+feedback point at things a marker would care about, and does a
+lower-scored essay draw more substantive comment than a higher-scored
+one. If the answer to either is no, the feature is not ready whatever
+the operating characteristic says. If the answer to both is yes, the
+feature is worth showing to a real student — and a real marked
+university essay, when one turns up, is still the better evidence.
+
+**IT DOES NOT RETIRE THE OTHER ROUTE.** One real essay a student
+submitted, with its criteria and its mark, remains the stronger
+answer and is still worth getting. This is the read that is available
+today rather than the read that would be best.
+
+### The local read
+
+`scripts/read-asap.mjs`, and everything about it is shaped by the one
+rule above:
+
+- it writes **one file, outside the repository** (`~/asap-read.md` by
+  default) and **refuses** to write anywhere inside it;
+- that file is the **only** unredacted output anywhere in this project.
+  Every other instrument keeps its redaction, unchanged;
+- the path pattern is in `.gitignore`, so an operator who points it
+  somewhere odd still cannot commit it by accident;
+- it opens with a **scoring sheet** to fill in while reading, because a
+  judgement made after reading six essays is a memory of a judgement.
+
+It runs **after** the scope control and the two-arm measurement, on the
+same key: reading the prose of a mechanism that has not been shown to
+hold is reading a draft, which is the reasoning the next section has
+always given and which has not changed.
+
+**THE SYNTHETIC PAIR IS STILL NOT A SUBSTITUTE** for either, and its
+own README says why in its first paragraph.
 
 **THE TWO QUESTIONS HAVE DIFFERENT EVIDENCE AND DIFFERENT DEADLINES**,
 and keeping them apart is the whole point of writing this down:
@@ -524,7 +592,7 @@ and keeping them apart is the whole point of writing this down:
 | | answered by | due |
 |---|---|---|
 | Does the structure stop ghostwriting? | the two-arm run over the 32 ASAP essays | before the endpoint is built |
-| Is the feedback worth 3 credits? | a person reading output beside a real mark | **before it ships to students** |
+| Is the feedback worth 3 credits? | a person reading the feedback beside a real ASAP score, via `read-asap.mjs` | **before it ships to students** |
 
 **WHY NOT BEFORE THE MECHANISM IS MEASURED.** A quality judgement made
 against a mechanism that does not hold is a judgement about output
@@ -562,12 +630,16 @@ design, which a fixture we wrote is allowed to make.
 
 ## What this document cannot answer
 
-- **Whether the model can grade against a rubric well enough to be worth
-  3 credits.** Nothing here has called a provider. That needs a real
-  essay, a real rubric, and Jared or Grace reading the output beside a
-  mark the essay actually got. **STILL OPEN as of 17 September 2026** —
-  no exemplar found; see the section directly above for what would
-  answer it and when it is due.
+- **Whether the model can grade against a UNIVERSITY rubric well enough
+  to be worth 3 credits.** Narrowed on 23 September 2026 rather than
+  closed. `read-asap.mjs` answers the weaker question — does the
+  feedback point at real problems, and is it harder on a weaker essay —
+  against ASAP's human rater scores, and the limits of that are in the
+  quality section above. What it still cannot answer is agreement with
+  a marker criterion by criterion, because a 1–6 holistic band is not
+  a criterion-by-criterion mark and ASAP has no such marking in it.
+  A real marked university essay remains the better evidence and is
+  still worth getting.
 - **Whether the no-writing constraint holds in practice.** The mechanism
   is sound; the window is not measured, and a model that evades it in
   some way nobody predicted is exactly what a first run would show.

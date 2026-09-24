@@ -69,7 +69,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readDocxText } from "./lib/docx-text.mjs";
+import { loadCorpus, stratify } from "./lib/asap-corpus.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -116,120 +116,23 @@ if (!dryRun && !process.env.OPENAI_API_KEY) {
   process.exit(1);
 }
 
-/* ---------- the corpus ---------- */
+/* ---------- the corpus, the rubrics and the sample ---------- */
 
-const tsvPath = path.join(dir, "training_set_rel3.tsv");
-if (!fs.existsSync(tsvPath)) {
-  console.error(`not found: ${tsvPath}\n\nPoint --dir at the folder you extracted the Kaggle download into.`);
+/* ALL FOUR READ FROM ONE PLACE (`lib/asap-corpus.mjs`): the TSV as
+   Windows-1252, the anonymisation stripped, the rubric found by SET
+   NUMBER, and the deterministic stratified draw. `read-asap.mjs` needs
+   exactly the same four, and a second copy of any of them would be the
+   restatement pattern with a corpus attached. */
+let corpus;
+try {
+  corpus = loadCorpus({ dir, sets: SETS, minWords });
+} catch (e) {
+  console.error(e.message);
   process.exit(1);
 }
+const { rows, rubricFor, rubricNote, tsvPath, tooShort } = corpus;
 
-/* LATIN-1, NOT UTF-8. training_set_rel3.tsv is Windows-1252 and
-   contains smart quotes; reading it as UTF-8 produces replacement
-   characters mid-word, which would read as novel text later. */
-const tsv = fs.readFileSync(tsvPath, "latin1");
-const lines = tsv.split(/\r?\n/).filter((l) => l.length > 0);
-const header = lines[0].split("\t").map((h) => h.trim());
-const col = (name) => {
-  const i = header.indexOf(name);
-  if (i < 0) throw new Error(`the TSV has no "${name}" column; found: ${header.slice(0, 8).join(", ")}`);
-  return i;
-};
-const iSet = col("essay_set");
-const iId = col("essay_id");
-const iEssay = col("essay");
-const iScore = col("domain1_score");
-
-/* @CAPS1, @PERSON2, @LOCATION1, @NUM1, @ORGANIZATION1, @DATE1 … the
-   whole family, including the bare forms. One pattern rather than a
-   list, because a list is a restatement of somebody else's scheme. */
-const ANON = /@[A-Z]+\d*/g;
-const stripAnon = (s) => s.replace(ANON, " ").replace(/\s{2,}/g, " ").trim();
-
-const rows = [];
-let tooShort = 0;
-for (const line of lines.slice(1)) {
-  const f = line.split("\t");
-  const set = Number(f[iSet]);
-  if (!SETS.includes(set)) continue;
-  const essay = stripAnon(f[iEssay] || "");
-  if (!essay) continue;
-  const words = essay.split(/\s+/).filter(Boolean).length;
-  if (words < minWords) {
-    tooShort++;
-    continue;
-  }
-  rows.push({ id: f[iId], set, score: Number(f[iScore]), essay, words });
-}
-if (rows.length === 0) {
-  console.error("no rows matched the requested sets — is this the right TSV?");
-  process.exit(1);
-}
-
-/* ---------- the rubrics ---------- */
-
-const descDir = fs.readdirSync(dir).find((d) => /essay[_ ]?set[_ ]?descriptions?/i.test(d));
-const rubricFor = new Map();
-const rubricNote = [];
-for (const set of SETS) {
-  if (!descDir) break;
-  const full = path.join(dir, descDir);
-  /* Matched by set NUMBER rather than by a filename anybody typed —
-     the download has been repackaged more than once and the names
-     differ between copies. A .txt of the same set wins, so an
-     operator whose .docx cannot be read has a way through. */
-  const files = fs.readdirSync(full).filter((f) => new RegExp(`(^|[^0-9])${set}([^0-9]|$)`).test(f));
-  const txt = files.find((f) => f.toLowerCase().endsWith(".txt"));
-  const docx = files.find((f) => f.toLowerCase().endsWith(".docx"));
-  try {
-    if (txt) {
-      rubricFor.set(set, fs.readFileSync(path.join(full, txt), "utf8"));
-      rubricNote.push(`set ${set}: ${txt}`);
-    } else if (docx) {
-      rubricFor.set(set, readDocxText(path.join(full, docx)));
-      rubricNote.push(`set ${set}: ${docx}`);
-    }
-  } catch (e) {
-    rubricNote.push(`set ${set}: COULD NOT READ (${e.message})`);
-  }
-}
-
-const missing = SETS.filter((s) => !(rubricFor.get(s) || "").trim());
-if (missing.length) {
-  console.error(`\nNo rubric for set(s) ${missing.join(", ")}.\n`);
-  console.error(
-    "WHAT TO SAVE AS .txt, if the .docx will not read:\n" +
-      `  In ${path.join(dir, descDir || "Essay_Set_Descriptions")}, open each set's description\n` +
-      "  and save it as plain text next to the .docx, named so the SET NUMBER is in the\n" +
-      `  filename — e.g. "set8.txt". Save the PROMPT and the RUBRIC / scoring guide\n` +
-      "  (the trait descriptions and what each score point means). Leave out the sample\n" +
-      "  essays if the file has any: they are other students' text and are not criteria.\n"
-  );
-  process.exit(1);
-}
-
-/* ---------- a deterministic, stratified sample ---------- */
-
-let s = seed >>> 0;
-const rand = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
-
-const chosen = [];
-for (const set of SETS) {
-  const inSet = rows.filter((r) => r.set === set);
-  /* Stratify across the score range: the file is ordered, so taking
-     the first n is the top of a list rather than a sample. */
-  const byScore = new Map();
-  for (const r of inSet) {
-    if (!byScore.has(r.score)) byScore.set(r.score, []);
-    byScore.get(r.score).push(r);
-  }
-  const buckets = [...byScore.keys()].sort((a, b) => a - b);
-  const want = Math.min(perSet, inSet.length);
-  for (let i = 0; i < want; i++) {
-    const bucket = byScore.get(buckets[i % buckets.length]);
-    chosen.push(bucket[Math.floor(rand() * bucket.length)]);
-  }
-}
+const chosen = stratify({ rows, sets: SETS, perSet, seed });
 
 const wordCounts = chosen.map((c) => c.words).sort((a, b) => a - b);
 const pct = (xs, p) => xs[Math.min(xs.length - 1, Math.floor((p / 100) * xs.length))];
@@ -316,8 +219,12 @@ if (results.length === 0) {
 
 if (mode === "two-arm") {
   const { summariseTwoArm } = await import(pathToFileURL(path.join(ROOT, "scripts", "lib", "two-arm-summary.mjs")).href);
-  summariseTwoArm(results, { sets: SETS, essays: chosen.length });
-  process.exit(0);
+  /* THE SCOPE CONTROL DECIDES THE EXIT CODE. It is the gate: a run
+     that supports no claim must not be reported as a successful
+     measurement, because the next thing that happens is somebody
+     reading a threshold off it. */
+  const verdict = summariseTwoArm(results, { sets: SETS, essays: chosen.length });
+  process.exit(verdict && verdict.ok === false ? 1 : 0);
 }
 
 const MATCH_UNITS = [3, 4, 5, 6];

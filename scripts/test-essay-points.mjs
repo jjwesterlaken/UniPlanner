@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import { DEFICIENCIES, measurePoint, refusePoint, quoteVariety } from "../src/essayPoints.js";
 import { ARMS, userMessage } from "./lib/essay-arms.mjs";
+import { SCOPE_CONTROL, scopeControl } from "./lib/two-arm-summary.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -267,18 +268,161 @@ test("the fixture's essay and rubric exist and are long enough to measure", () =
   assert.ok(!/["\u201C]present at its own making/.test(essay), "the unattributed borrowing was turned into a quotation, removing the planted fault");
 });
 
-test("THE QUALITY JUDGEMENT IS RECORDED AS OPEN, with what would answer it", () => {
-  /* It is the one question none of the measurement touches, and the
-     failure mode is it quietly getting folded into the numbers that
-     ARE available. */
+test("THE QUALITY JUDGEMENT HAS A ROUTE NOW, and its limits are stated with it", () => {
+  /* THIS TEST USED TO PIN THE QUESTION AS OPEN, and it was right to
+     until 23 September 2026. The exemplar search had failed and the
+     document said so; what nobody had checked was that ASAP itself
+     carries a human rater score per essay (`domain1_score`), and that
+     the competition rules forbid REDISTRIBUTING the text rather than
+     reading it. So the read was available the whole time.
+
+     The pin moves with the fact rather than being deleted: what is
+     required now is that the document names the route AND its limits,
+     because a school essay on a 1-6 band is not a university rubric
+     and a route recorded without that reads as more than it is. */
   const doc = read("ESSAY-FEEDBACK.md");
-  assert.match(doc, /OPEN, AND IT STAYS OPEN/);
-  assert.match(doc, /before it ships to students/i);
-  assert.match(doc, /STILL OPEN as of/);
-  /* And the two questions are kept apart, with different evidence and
+  assert.match(doc, /domain1_score/, "the document does not name the column the scores come from");
+  assert.match(doc, /read-asap\.mjs/, "the document does not name the script that produces the read");
+  assert.match(doc, /before it ships to students/i, "the deadline for the quality judgement is gone");
+
+  /* THE LIMITS, each asserted, because this is the half that gets
+     dropped when somebody summarises the good news. */
+  assert.match(doc, /1\s*[-–—]\s*6/, "the 1-6 band is not stated as a limit");
+  assert.match(doc, /not a university rubric|not a uni rubric/i, "the document does not say this is not a university rubric");
+  assert.match(doc, /school/i, "the document does not say these are school essays");
+
+  /* AND THE RULE IT RESTS ON, stated rather than assumed: reading is
+     permitted and redistributing is not, which is what makes the
+     output file local-only rather than a repo artefact. */
+  assert.match(doc, /forbid[s]? (redistribut|shar)/i, "the document does not state what the corpus licence actually forbids");
+
+  /* The two questions are still kept apart — different evidence,
      different deadlines. */
   assert.match(doc, /Does the structure stop ghostwriting/i);
   assert.match(doc, /before the endpoint is built/i);
+});
+
+/* ==================================================================
+   THE SCOPE CONTROL — the gate on the whole two-arm measurement.
+
+   Three ways a run says nothing while reporting success, and each is
+   a shape this project has already been bitten by:
+
+     - an EMPTY arm, which is the vacuous-pass class: every universal
+       claim about an empty population is true, and the printed table
+       shows "0 points" beside percentages computed from nothing;
+     - IDENTICAL arms, which is the colour-coincidence class: a
+       comparison between two things that are the same discriminates
+       nothing while passing everything;
+     - NO SEPARATION anywhere, which is the one a person is most
+       likely to read as "try a different threshold".
+
+   Driven over synthetic populations, so every branch runs with no
+   key, no corpus and no provider — the photo-prompt refusal's
+   arrangement, and for the same reason.
+   ================================================================== */
+
+const point = (overrides = {}) => ({
+  quoteWords: 6,
+  quoteVerbatim: true,
+  quotePosition: 0.5,
+  noteWords: 14,
+  deficiency: "claim-without-evidence",
+  deficiencyKnown: true,
+  offeredSpans: [],
+  ...overrides,
+});
+const population = (n, overrides = {}) =>
+  Array.from({ length: n }, (_, i) => point({ quotePosition: i / n, ...overrides }));
+
+await test("A HEALTHY RUN PASSES — without this, every refusal below is satisfied by refusing everything", () => {
+  const by = {
+    constrained: population(20),
+    adversarial: population(20, { noteWords: 60, offeredSpans: [9] }),
+  };
+  const v = scopeControl(by, { separates: true });
+  assert.ok(v.ok, `a healthy run was refused: ${v.failures.join(" | ")}`);
+  assert.deepEqual(v.failures, []);
+});
+
+await test("AN EMPTY ADVERSARIAL ARM IS REFUSED — it reads exactly like a constraint that worked", () => {
+  const v = scopeControl({ constrained: population(20), adversarial: [] }, { separates: true });
+  assert.equal(v.ok, false, "a run with no ghostwriting population to separate from was accepted");
+  assert.ok(
+    v.failures.some((f) => /adversarial arm produced 0 points/.test(f)),
+    `the refusal does not name the empty arm: ${v.failures.join(" | ")}`
+  );
+});
+
+await test("an empty CONSTRAINED arm is refused too, so the check is not one-sided", () => {
+  const v = scopeControl({ constrained: [], adversarial: population(20) }, { separates: true });
+  assert.equal(v.ok, false);
+  assert.ok(v.failures.some((f) => /constrained arm produced 0 points/.test(f)));
+});
+
+await test("a nearly-empty arm is refused at the stated floor, not only at zero", () => {
+  const n = SCOPE_CONTROL.minPointsPerArm;
+  const under = scopeControl({ constrained: population(20), adversarial: population(n - 1) }, { separates: true });
+  const at = scopeControl({ constrained: population(20), adversarial: population(n, { noteWords: 60 }) }, { separates: true });
+  assert.equal(under.ok, false, `${n - 1} points was accepted, so the floor does not bite`);
+  assert.equal(at.ok, true, `${n} points was refused, so the floor is not where it says it is`);
+});
+
+await test("IDENTICAL ARMS ARE REFUSED — two populations that are the same discriminate nothing", () => {
+  const same = population(20);
+  const v = scopeControl({ constrained: same, adversarial: same.map((x) => ({ ...x })) }, { separates: true });
+  assert.equal(v.ok, false, "two identical populations were accepted as a comparison");
+  assert.ok(
+    v.failures.some((f) => /identical populations/.test(f)),
+    `the refusal does not say the arms are identical: ${v.failures.join(" | ")}`
+  );
+});
+
+await test("arms that differ ONLY in the measurements a threshold reads are told apart", () => {
+  /* The comparison is over quote length, note length and whether the
+     quote was found — the three things `refusePoint` acts on. A run
+     whose arms differ in some field no threshold reads is a run whose
+     arms are the same for every purpose this measurement has. */
+  const a = population(20);
+  const b = population(20).map((x) => ({ ...x, deficiency: "repetition" }));
+  const v = scopeControl({ constrained: a, adversarial: b }, { separates: true });
+  assert.equal(v.ok, false, "arms differing only in a field no threshold reads were accepted as distinct");
+});
+
+await test("NO SEPARATION IS A FINDING, and it is refused rather than printed", () => {
+  const v = scopeControl(
+    { constrained: population(20), adversarial: population(20, { noteWords: 60 }) },
+    { separates: false }
+  );
+  assert.equal(v.ok, false, "a run where no threshold separates the arms was reported as usable");
+  assert.ok(
+    v.failures.some((f) => /no candidate threshold separates/.test(f)),
+    `the refusal does not name the missing separation: ${v.failures.join(" | ")}`
+  );
+});
+
+await test("the separation check is SKIPPED when the caller has not computed one", () => {
+  /* The early call — before the table exists — passes no `separates`,
+     and must not invent a failure it has no evidence for. That is the
+     three-outcomes rule inside the gate itself: not-yet-known is not
+     the same as no. */
+  const v = scopeControl({ constrained: population(20), adversarial: population(20, { noteWords: 60 }) });
+  assert.ok(v.ok, `the early check invented a separation failure: ${v.failures.join(" | ")}`);
+});
+
+await test("THE SAMPLER'S EXIT CODE IS THE GATE, not a line in its output", () => {
+  /* A refusal nobody can act on programmatically is a warning, and
+     the next step in the sequence is a person running the read mode
+     on the same key. `summariseTwoArm` returns the verdict and the
+     sampler exits on it. */
+  const sampler = fs.readFileSync(path.join(rootDir, "scripts/sample-asap.mjs"), "utf8");
+  const body = sampler.replace(/\/\*[\s\S]*?\*\//g, " ");
+  assert.match(
+    body,
+    /const\s+verdict\s*=\s*summariseTwoArm\(/,
+    "the sampler discards summariseTwoArm's verdict, so a failed scope control cannot stop anything"
+  );
+  assert.match(body, /process\.exit\([^)]*verdict/, "the sampler's exit code does not depend on the verdict");
 });
 
 test("npm test runs this file", () => {
