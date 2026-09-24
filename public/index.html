@@ -6,6 +6,23 @@
     <title>UniPlanner</title>
     <meta name="description" content="Plan courses, assignments, readings and study cards." />
 
+    <!-- NOT FOR SEARCH RESULTS. This file is the APP SHELL: a crawler
+         that indexes it gets a blank JavaScript mount with no content,
+         offered as an answer in competition with the marketing page and
+         the guides, which are written to BE the answer. The sitemap
+         already leaves /app/ out; this is the half that covers a
+         crawler arriving by a link rather than by the sitemap, which is
+         the route a sitemap cannot govern.
+
+         `noindex` ALONE, NOT `nofollow`. Following the links out of the
+         app costs nothing and they go to the legal documents, which are
+         meant to be reachable; nofollow would only make those harder to
+         find for no gain.
+
+         Harmless in the native shells, which get this same file: no
+         crawler ever reaches capacitor://localhost or a file:// URL. -->
+    <meta name="robots" content="noindex" />
+
     <!-- Replaced at build time with a hash of app.js + app.css. Read by
          the app and shown in Settings, so "which build is this user on"
          has an answer without guessing. -->
