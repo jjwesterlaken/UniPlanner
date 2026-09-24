@@ -567,7 +567,13 @@ const SUBSTITUTION_PATTERNS = [
    anything the sweep finds is something somebody just wrote and should
    look at. Adding an entry is a decision, which is the point. */
 const DECLARED_SUBSTITUTION_LINES = {
-  // "we never rewrite your essay": "the promise itself, not an offer",
+  /* `src/essayScope.js` is the module that DETECTS a rewrite leaving
+     its span, so the word is unavoidable in its own vocabulary. These
+     are a violation CODE and its diagnostic detail — the convention
+     this project uses everywhere: the code travels, and the sentence a
+     student reads lives in a copy module. Neither reaches a screen. */
+  "empty-rewrite": "a violation code in essayScope.js, not copy — the student-facing sentence lives in the panel's copy module",
+  "the rewrite has no words": "the diagnostic detail beside that code, read by a log and a test rather than by a student",
 };
 
 test("NO USER-FACING COPY OFFERS TO WRITE, REWRITE OR FIX AN ESSAY", () => {
@@ -609,14 +615,43 @@ test("NO USER-FACING COPY OFFERS TO WRITE, REWRITE OR FIX AN ESSAY", () => {
     );
   }
 
+  /* AND THE EXTRACTION IS ITSELF A CONTROL, because scoping to strings
+     is exactly how this guard could quietly stop reading anything. An
+     offer IN A STRING must still be seen; the same words as an
+     identifier must not. */
+  const extract = (text) => (text.match(/"[^"]*"|'[^']*'|`[^`]*`/g) || []).join(" ");
+  assert.ok(
+    SUBSTITUTION_PATTERNS.some((p) => p.test(extract('const BLURB = "We polish your draft.";'))),
+    "the string extraction drops copy, so this guard now reads nothing"
+  );
+  assert.ok(
+    !SUBSTITUTION_PATTERNS.some((p) => p.test(extract('function checkScope({ rewrite }) {}'))),
+    "an identifier named rewrite still reads as an offer"
+  );
+
   const offenders = [];
   for (const file of files) {
     /* Comments stripped first — six instances in the ledger, and this
        file will carry prose explaining the rule. */
-    const src = fs
+    /* STRING LITERALS ONLY, and this is a correction made within hours
+       of the guard landing. The claim is about user-facing COPY; the
+       first version swept every line of `src/`, so it fired on
+       `src/essayScope.js`'s PARAMETER NAMED `rewrite` — in the module
+       whose entire job is detecting rewrites. An identifier is not
+       something a student reads.
+
+       Eighth instance of the guard meeting its own subject, and the
+       fix is the ledger's usual one: scope it to the claim. Copy is
+       quoted; code is not. Comments still go first, because a comment
+       can contain a quoted example. */
+    const stripped = fs
       .readFileSync(file, "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, " ")
       .replace(/^\s*\/\/.*$/gm, " ");
+    const src = stripped
+      .split("\n")
+      .map((line) => (line.match(/"[^"]*"|'[^']*'|`[^`]*`/g) || []).join(" "))
+      .join("\n");
     src.split("\n").forEach((line, n) => {
       for (const pattern of SUBSTITUTION_PATTERNS) {
         if (!pattern.test(line)) continue;
