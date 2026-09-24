@@ -959,7 +959,7 @@ on), with a Play **license tester** account and the app on an
     visible change on this handset — flag it to Grace with a screenshot
     rather than letting her find it.
 
-### Essay feedback — 1.2.0, on Grace's iPhone
+### Essay feedback — 1.3.0, on Grace's iPhone
 
 Five steps, and the order matters: the disclosure has to be seen before
 the feature, because that is the order a student meets them in.

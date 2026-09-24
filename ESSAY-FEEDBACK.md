@@ -1,4 +1,4 @@
-# Essay feedback — discovery, for 1.2
+# Essay feedback — discovery, for 1.3
 
 **Status: DISCOVERY AND PLAN ONLY.** No code, no endpoint, no screens.
 Nothing here merges to `main` until 1.1.0 is approved.
@@ -68,6 +68,37 @@ That is a change to the consent machinery and it is **independent of
 essay feedback**. It should land first, on its own, whatever happens to
 this feature.
 
+### AND IT ALREADY DID — 16 September 2026, verified by mutation, not by reading
+
+**This section went on calling C1 "the first work item" for eight days
+after it shipped.** `src/aiMaterialTypes.js` is the guard described
+above: material types as facts, `materialFingerprint()` over
+`id:retention`, and `CONSENT_MATERIAL_LEDGER` pinning the hash beside
+the version. The paragraph is kept rather than deleted because the
+reasoning is what justifies the guard, and a work item nobody struck
+off is the third stale line this project has found in a fortnight —
+worth leaving visible.
+
+**Settled by running it, since a guard that is present and a guard that
+bites are different claims.** Adding an `essay-draft` type without a
+bump reddens two tests by name:
+
+```
+FAIL - every kind of material the AI features send is named on BOTH documents
+FAIL - THE MATERIAL LIST IS TIED TO THE CONSENT VERSION: a new kind of
+       material cannot ship without a bump
+```
+
+and the failure prints the remedy — add a ledger entry at the next
+version, bump `AI_CONSENT_VERSION`, say on the screen what the material
+is. **The cheap fix is refused too**: editing v7's ledger entry instead
+of bumping reddens *"the material ledger is APPEND ONLY: an accepted
+version's record may never be edited"*, which is the half that makes
+the rest of it real.
+
+So step 3 (consent v8) is now three edits that the suite will not let
+you make two of.
+
 ---
 
 ## 1. Data and consent
@@ -135,7 +166,7 @@ Three specific consequences:
 
 | | |
 |---|---|
-| **C1** | Tie `AI_CONSENT_VERSION` to the material-type list by a derived guard. **Independent of this feature; land it first.** |
+| **C1** | ~~Tie `AI_CONSENT_VERSION` to the material-type list by a derived guard.~~ **DONE — `src/aiMaterialTypes.js`, 16 September 2026.** See the note below. |
 | **C2** | Bump to v8 with an essay bullet naming identifiers, plus the "you can remove your name first, we don't" line. |
 | **C3** | Policy: add the essay to the supplied-material enumeration in `AI features` and in `Sending things overseas`, and derive that enumeration from one constant so the next type cannot drift. |
 | **C4** | A `test-legal.mjs` assertion that the essay bullet and the policy sentence name the same material. |
@@ -146,7 +177,7 @@ Three specific consequences:
 
 ### RULED, and it is no longer a recommendation — Jared, 16 September 2026
 
-> **Essay feedback is text-only and paste-only, for 1.2 and the
+> **Essay feedback is text-only and paste-only, for 1.3 and the
 > foreseeable future: no photographs, no screenshots, no file upload,
 > and no artistic, design or performance work. Those are a different
 > feature with a different risk and are not on the roadmap.**
@@ -208,7 +239,7 @@ Three reasons, in order of weight:
 3. Paste-only is the shape that makes the readings feature defensible,
    and it is the same argument here.
 
-**Recommendation: paste only for 1.2. Revisit upload with the readings
+**Recommendation: paste only for 1.3. Revisit upload with the readings
 file-upload work, as one dependency serving two features.**
 
 ### A 3,000-word essay already fits, and that is the finding
@@ -502,6 +533,15 @@ transcription minutes where this costs a fifth of a cent.
 | **4** | The endpoint task + caps (§2) | 24,000 / 2,000 / 3 credits |
 | **5** | The panel on the assessment row (§5) | Grace's, for layout and wording |
 | **6** | The mark-comparison loop (§"THE MARK COMPARISON") | Migration 0023 WIDENS, so it is applied before the client that reads it |
+
+**IT SHIPS AS 1.3.0, NOT 1.2.0** (Jared, 24 September 2026). 1.2.0 was
+already tagged for desktop off a commit that predates this work, and
+the iOS 1.2.0 build comes off a later `main` again — so one number was
+about to name three code states, and `build-apps.yml`'s version check
+cannot catch that: it asserts the tag's commit CARRIES the version, not
+that it carries the work. The bump to 1.3.0 in the three `package.json`
+files lands **with step 4**, not before, so the tree never advertises a
+version whose feature is not in it.
 
 **STEP 3 IS THE CONSENT BUMP, NOT STEP 5.** Worth stating plainly
 because the two are easy to swap when reading the table quickly: v8 is
@@ -915,10 +955,13 @@ select count(*) filter (where occasion = 'delivered')                    as ran,
 
 The nudge cannot fire until a student has (1) had an essay read, (2)
 submitted it, and (3) been marked. That is weeks after the feature
-ships, on anyone's timetable. **So the mark loop in 1.2.0 buys being
+ships, on anyone's timetable. **So the mark loop in 1.3.0 buys being
 there when the first mark lands, and nothing else** — no student is
 worse off if it arrives a fortnight later, because no student can
 answer it yet.
+
+**RULED IN, Jared, 24 September 2026** — cut it only if Gate B
+(Grace's Mac) or Gate C (App Review) squeezes the date.
 
 It is not a reason to cut it: 0023 widens, so it wants to be applied
 before the client that needs it, and doing that once is cheaper than
@@ -926,3 +969,64 @@ twice. It IS the thing to cut if the submission date comes under
 pressure, and cutting it costs a two-week delay on an instrument whose
 first data point is two weeks out regardless. Recorded so the decision
 is available rather than rediscovered at midnight.
+
+---
+
+## The schedule, and the three gates (24 September 2026)
+
+**Target: 16 October, as 1.3.0.** Written down rather than left in a
+conversation, because the last fortnight lost a schedule to a document
+nobody updated and a plan nobody wrote down.
+
+**Step 1 is done** (§0), which takes the front off the plan: the only
+thing between today and step 2 is Grace's sheet.
+
+| | | gated by |
+|---|---|---|
+| **~26–27 Sep** | **Gate A — Grace's ASAP sheet** | if it reads badly, step 2 becomes prompt work and everything slips |
+| **27 Sep → 3 Oct** | Steps 2, 3, 4. Step 2 decides whether the feature is defensible at all; step 3 is the v8 bump; step 4 carries the `package.json` bump to 1.3.0 | |
+| **4 Oct → 9 Oct** | Step 5 (the panel — **Grace's**), step 6 (mark loop, 0023) | 0023 WIDENS, so it is applied before the client that reads it |
+| **~10 Oct** | Deploy both functions, promote, verify | |
+| **~11–12 Oct** | **Gate B — Grace's Mac session**, then device checklist items 11–15 in MOBILE-BUILD.md | her calendar |
+| **~12 Oct** | Submit | |
+| **+~2 days** | **Gate C — App Review** | see below |
+| **14–16 Oct** | Live | |
+
+### Gate C is planned on a RECOLLECTION, and that is said out loud
+
+**The brief asked for 1.1.0's submitted and Ready-for-Sale dates and
+the placeholders came through empty** — `[date]`, `[date]`, `[N]`. What
+is planned on instead is Jared's own figure: *"each upload took roughly
+2 days to get a response maybe less. Depends if there is an issue."*
+
+That is a usable number and it is not the record. **App Store Connect →
+App Store → Version History** has the two dates, and reading them costs
+one click. It is worth doing only if the date comes under pressure —
+the difference between "about two days" and the real figure changes
+nothing at two days of slack, and changes the Mac session's date if the
+real figure is four.
+
+**The buffer is therefore ~2 days, not the ~3 first planned**, and the
+plan is one day EARLIER at the front rather than one day later at the
+back, because slack in front of Gate B is slack somebody can use and
+slack behind Gate C is slack Apple owns.
+
+### What the web half does NOT wait for
+
+Promoting on ~10 Oct puts essay feedback in front of real students
+**five or six days before the iOS release**, because the web deploys on
+a promote and owes Apple nothing. So `delivered` rows — and therefore
+the first real marks — start accumulating from the promote rather than
+from the App Store release. If the date slips at Gate B or Gate C, the
+instrument is still running.
+
+### The only two things that move the date
+
+Neither is engineering:
+
+1. **Grace is on the path three times** — the sheet, the panel wording,
+   the Mac. That is the real critical path and it is a person's
+   calendar.
+2. **Gate C is Apple's queue.** Two days is the estimate; an issue is
+   what makes it longer, and the device checklist exists to find the
+   issues before Apple does.

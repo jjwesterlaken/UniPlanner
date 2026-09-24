@@ -277,10 +277,17 @@ ever flags a mismatch between them, that is the seam to look at.
 
 ---
 
-## 3a. What 1.2.0 changes, and it is ONE ROW — but not the one expected
+## 3a. What 1.3.0 changes, and it is ONE ROW — but not the one expected
 
 Essay feedback, its quality capture, and the mark comparison
 (ESSAY-FEEDBACK.md). The answers to enter:
+
+**THE VERSION STRING IN APP STORE CONNECT IS `1.3.0`** — not 1.2.0,
+which is the desktop tag and the iOS build that precede this work. ASC
+refuses a version string that does not increase, so entering it wrong
+is caught; entering 1.2.0 for a build that contains essay feedback is
+NOT caught by anything, and would leave two different binaries
+submitted under one number.
 
 ### The essay text needs NO change, and the precedent settles it
 
@@ -335,7 +342,7 @@ Section 3 says: *"**Usage Data** (there is no analytics of any kind)"*.
 The TYPE is still not collected — we have no product-interaction
 telemetry, no SDK, and `test-local-only.mjs` still proves zero
 third-party calls. **But the parenthetical is a stronger claim than the
-declaration, and from 1.2.0 it is untrue.** A purpose named `Analytics`
+declaration, and from 1.3.0 it is untrue.** A purpose named `Analytics`
 beside a document saying there is no analytics of any kind is exactly
 the seam a reviewer probes, and it is the restatement pattern one
 document over: a reassuring aside that outlives the fact it described.
