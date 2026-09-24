@@ -1200,6 +1200,31 @@ const PAGE_JS = stripBlockComments(source("public/site/site.js"));
 /* One check needs the page WITH its comments — see the slot test. */
 const PAGE_RAW = source("public/site/index.html");
 
+test("THE APP IS noindex AND THE PAGES THAT SELL IT ARE NOT", () => {
+  /* The other half of leaving /app/ out of the sitemap. A sitemap
+     governs what a crawler is OFFERED; it cannot govern what a crawler
+     FINDS by following a link, and every guide ends with one into the
+     app. So the shell says no for itself.
+
+     THE CONTROL IS THE WHOLE TEST. The failure mode of this change is
+     not forgetting the app — it is putting the tag on the wrong page,
+     and a noindex on the marketing page or a guide would delist
+     precisely the thing the guides exist to get found. That is silent,
+     slow, and discovered by a drop in traffic nobody attributes. So
+     both directions are asserted and the app half alone would not
+     satisfy it. */
+  const noindex = (f) => /<meta\s+name="robots"\s+content="[^"]*noindex/i.test(fs.readFileSync(path.join(rootDir, "dist-site", f), "utf8"));
+
+  assert.ok(noindex("app/index.html"), "the app shell is offered to crawlers as content");
+
+  assert.ok(!noindex("index.html"), "the MARKETING page is noindex — that delists the page the whole site is for");
+  const guides = fs.readdirSync(path.join(rootDir, "dist-site/guides")).filter((f) => f.endsWith(".html"));
+  assert.ok(guides.length > 0, "no guides were built, so the sweep below asserts nothing");
+  for (const g of guides) {
+    assert.ok(!noindex(`guides/${g}`), `${g} is noindex — a guide nobody can find is an article written for nobody`);
+  }
+});
+
 test("THE PAGE MAKES NO THIRD-PARTY REQUEST — no host but this origin appears", () => {
   /* The claim the privacy policy makes is about this ORIGIN, so a
      marketing page pulling two fonts from Google would make it untrue
