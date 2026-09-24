@@ -57,6 +57,7 @@ const plans = await import(pathToFileURL(path.join(rootDir, "src/purchasePlans.j
 const flags = await import(pathToFileURL(path.join(rootDir, "src/billingFlags.js")).href);
 const prices = await import(pathToFileURL(path.join(rootDir, "src/webPrices.js")).href);
 const copy = await import(pathToFileURL(path.join(rootDir, "src/plansCopy.js")).href);
+const digest = await import(pathToFileURL(path.join(rootDir, "supabase/functions/error-digest/digest.js")).href);
 const links = await import(pathToFileURL(path.join(rootDir, "src/legalLinks.js")).href);
 
 /* ---------- the handlers, bundled with the platform stubbed ---------- */
@@ -2048,6 +2049,373 @@ async function run() {
       assert.ok(new RegExp(`tier_source in \\([^)]*'${source}'`).test(sql), `0017's CHECK does not allow tier_source = '${source}'`);
     }
     assert.ok(/store in \([^)]*'stripe'/.test(sql), "0017's CHECK does not allow store = 'stripe'");
+  });
+
+  /* ---------- 10. the portal's dropdown, observed ---------- */
+
+  await test("THE HELPER IS NOT REDUNDANT: a cancelled subscription is where the tier function stops reading", () => {
+    /* THE NON-VACUITY ASSERTION FOR THE WHOLE SECTION. If
+       `tierFromStripeSubscription` could answer the period of a
+       cancelled subscription, `cancellationShapeOf` would be a second
+       reader of one fact and the right fix would be to delete it.
+
+       It cannot: a cancelled subscription fails the status check and
+       returns before a period is ever read. So the period a
+       cancellation must be measured against comes from here or from
+       nowhere. */
+    const dead = subscription({ status: "canceled" });
+    assert.equal(stripe.tierFromStripeSubscription(dead).expiresAt, null, "the tier function now answers a cancelled subscription's period — this helper may be redundant");
+    assert.equal(stripe.cancellationShapeOf(dead).periodEnd, DEFAULT_PERIOD_END, "cancellationShapeOf did not read the period off the item");
+  });
+
+  await test("THE PERIOD IS READ FROM THE ITEM, which is the shape the live API sends", () => {
+    /* The confirmed live location (17 September 2026), so this is the
+       production path and not a defensive extra. The
+       subscription-level form is the fallback and is opted into by
+       name, exactly as periodEndOf's own tests do it. */
+    const onItem = stripe.cancellationShapeOf(subscription({ status: "canceled" }));
+    assert.equal(onItem.periodEnd, DEFAULT_PERIOD_END);
+
+    const onSub = stripe.cancellationShapeOf(subscription({ status: "canceled", ...periodOnSubscriptionOnly(DEFAULT_PERIOD_END) }));
+    assert.equal(onSub.periodEnd, DEFAULT_PERIOD_END, "the subscription-level fallback was not read");
+
+    const nowhere = stripe.cancellationShapeOf(subscription({ status: "canceled", ...periodNowhere() }));
+    assert.equal(nowhere.periodEnd, null, "a missing period was guessed at rather than reported");
+  });
+
+  await test("THE CANCELLATION TABLE: one anomaly, five exclusions, and the healthy reading", () => {
+    /* WHAT THE PROMISE IS. Terms §5 and the panel's autoRenew
+       disclosure both say a cancelled plan runs to the end of the paid
+       period, and on the web that rests entirely on Stripe's portal
+       configuration — a dropdown nothing in this repository can read.
+
+       `scheduled` is the shape Jared observed by hand on 17 September
+       2026 and is the healthy one. `immediate` is the dropdown having
+       moved. Everything else must be excluded BY NAME, because "not
+       the anomaly" and "not looked at" must not read the same. */
+    const paidPeriodEnd = Math.floor(Date.now() / 1000) + 29 * 86400;
+    const shape = (over = {}) => ({
+      status: "canceled",
+      cancelAtPeriodEnd: false,
+      canceledAt: Math.floor(Date.now() / 1000),
+      endedAt: Math.floor(Date.now() / 1000),
+      periodEnd: paidPeriodEnd,
+      reason: "cancellation_requested",
+      ...over,
+    });
+    const base = { endsOnRefund: false, tierBefore: "ai" };
+
+    const cases = [
+      {
+        name: "the portal SCHEDULED it — the promise being kept",
+        input: { ...base, shape: shape({ status: "active", cancelAtPeriodEnd: true }) },
+        kind: "scheduled",
+      },
+      {
+        name: "a scheduled cancellation that has since COMPLETED is still scheduled",
+        /* THE BRANCH-ORDER CLAIM, corrected by the mutation that was
+           supposed to confirm it. A completed scheduled cancellation is
+           `canceled` with the flag STILL TRUE, so the flag is the only
+           field that reads both states of a kept promise the same way.
+
+           What deleting the flag check actually does is go QUIET, not
+           cry wolf: this row falls to `ran_to_period_end` and the row
+           above it to `not_a_cancellation`. Both are exclusions, so an
+           anomaly-only guard would have stayed green over the loss of
+           the healthy reading — which is the whole point of logging
+           `scheduled`, and is why both rows are asserted by kind
+           rather than by `anomaly`. */
+        input: { ...base, shape: shape({ cancelAtPeriodEnd: true, endedAt: paidPeriodEnd }) },
+        kind: "scheduled",
+      },
+      {
+        name: "an ordinary renewal is not a cancellation at all",
+        input: { ...base, shape: shape({ status: "active" }) },
+        kind: "not_a_cancellation",
+      },
+      {
+        name: "Stripe's own cancellation for a failed card is not the dropdown",
+        input: { ...base, shape: shape({ reason: "payment_failed" }) },
+        kind: "dunning",
+      },
+      {
+        name: "a disputed payment is not the dropdown either",
+        input: { ...base, shape: shape({ reason: "payment_disputed" }) },
+        kind: "dunning",
+      },
+      {
+        name: "OUR OWN refund cancellation, in the delivery that made it",
+        input: { ...base, shape: shape(), endsOnRefund: true },
+        kind: "our_refund",
+      },
+      {
+        name: "our refund's FOLLOW-ON deletion, where the tier is already free",
+        /* The only attribution available without a new Stripe write:
+           `cancellation_details.reason` reads `cancellation_requested`
+           for the portal AND for an API cancel. Our refund path writes
+           `free` seconds earlier, so its follow-on deletion arrives on
+           an account that has nothing left to lose. */
+        input: { ...base, shape: shape(), tierBefore: "free" },
+        kind: "already_free",
+      },
+      {
+        name: "an account with no profile row reads as already free rather than as an anomaly",
+        input: { ...base, shape: shape(), tierBefore: undefined },
+        kind: "already_free",
+      },
+      {
+        name: "a GIFTED tier says nothing about the dropdown",
+        input: { ...base, shape: shape(), manualGrant: true },
+        kind: "manual_grant",
+      },
+      {
+        name: "a cancel_at that landed ON its period end took nothing away",
+        input: { ...base, shape: shape({ endedAt: paidPeriodEnd }) },
+        kind: "ran_to_period_end",
+      },
+      {
+        name: "with no readable period end the loss CANNOT be computed, and is not guessed",
+        input: { ...base, shape: shape({ periodEnd: null }) },
+        kind: "period_unknown",
+      },
+      {
+        name: "THE ANOMALY: a paid period ended early, by nobody we can account for",
+        input: { ...base, shape: shape() },
+        kind: "immediate",
+        anomaly: true,
+      },
+    ];
+
+    for (const c of cases) {
+      const got = stripe.cancellationKind(c.input);
+      assert.equal(got.kind, c.kind, `${c.name}: read as ${got.kind}`);
+      assert.equal(got.anomaly, c.anomaly === true, `${c.name}: anomaly is ${got.anomaly}`);
+    }
+
+    /* THE TABLE MUST DISCRIMINATE. A function returning
+       `{anomaly:false}` for everything satisfies eleven of twelve rows,
+       and one returning true for everything satisfies the twelfth —
+       so both directions are required to be present. */
+    const verdicts = cases.map((c) => stripe.cancellationKind(c.input).anomaly);
+    assert.ok(verdicts.includes(true), "no row in the table is an anomaly, so an always-false helper would pass");
+    assert.ok(verdicts.includes(false), "every row is an anomaly, so an always-true helper would pass");
+    assert.equal(verdicts.filter(Boolean).length, 1, "more than one kind is raised as an anomaly");
+  });
+
+  await test("`secondsLost` is a NUMBER and the tolerance is its boundary", () => {
+    /* WHAT MAKES THIS CHECKABLE RATHER THAN ARGUABLE. "Ended 29 days
+       early" and "ended three seconds early" are the same boolean and
+       different facts, and the second is clock skew between two
+       timestamps Stripe wrote at different moments. */
+    const periodEnd = Math.floor(Date.now() / 1000) + 30 * 86400;
+    const at = (endedAt) =>
+      stripe.cancellationKind({
+        shape: { status: "canceled", cancelAtPeriodEnd: false, canceledAt: null, endedAt, periodEnd, reason: null },
+        endsOnRefund: false,
+        tierBefore: "ai",
+      });
+
+    const tol = stripe.IMMEDIATE_CANCELLATION_TOLERANCE_S;
+    assert.ok(tol > 0, "the tolerance is not positive, so nothing is tolerated");
+
+    const inside = at(periodEnd - tol);
+    assert.equal(inside.kind, "ran_to_period_end", "a difference at exactly the tolerance was raised");
+    assert.equal(inside.secondsLost, tol, "the loss is not reported as a number");
+
+    const outside = at(periodEnd - tol - 1);
+    assert.equal(outside.kind, "immediate", "one second past the tolerance was tolerated");
+    assert.equal(outside.secondsLost, tol + 1);
+
+    /* A MONTH, which is the case a support conversation is about. */
+    const month = at(periodEnd - 29 * 86400);
+    assert.equal(month.secondsLost, 29 * 86400);
+
+    /* `ended_at` NOT YET SET. A cancellation read within seconds of
+       itself may not carry it, and `canceled` is already the truth —
+       so NOW is the fallback rather than treating the absence as "no
+       loss", which would silence the anomaly on the fastest deliveries. */
+    const noEndedAt = stripe.cancellationKind({
+      shape: { status: "canceled", cancelAtPeriodEnd: false, canceledAt: null, endedAt: null, periodEnd, reason: null },
+      endsOnRefund: false,
+      tierBefore: "ai",
+      now: Date.now(),
+    });
+    assert.equal(noEndedAt.kind, "immediate", "a cancellation with no ended_at was read as having taken nothing");
+  });
+
+  await test("A PORTAL SET TO CANCEL IMMEDIATELY IS RAISED, and the delivery still succeeds", async () => {
+    /* END TO END, because the claim is about a line appearing in a log
+       from a real delivery and the pure table cannot make it.
+
+       AND THE SECOND HALF MATTERS AS MUCH: this is a log line about a
+       CONFIGURATION, not a fault in the delivery. Raising it must not
+       change the response, or Stripe retries an event that applied
+       correctly and the anomaly becomes an outage. */
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe" }) },
+      stripeRoutes: {
+        "/subscriptions/sub_1": subscription({
+          status: "canceled",
+          cancel_at_period_end: false,
+          canceled_at: Math.floor(Date.now() / 1000),
+          ended_at: Math.floor(Date.now() / 1000),
+          cancellation_details: { reason: "cancellation_requested" },
+        }),
+      },
+    });
+    try {
+      const res = await deliver(event({ id: "evt_portal_immediate", type: "customer.subscription.deleted", subscription: { status: "canceled" } }));
+      assert.equal(res.status, 200, "the anomaly changed the response");
+      assert.equal(res.body.outcome, "applied", "the tier was not applied");
+      assert.equal(w.profiles[USER].tier, "free", "a cancelled subscription did not drop the tier");
+
+      const raised = w.logs.filter((l) => l.includes("portal_configuration"));
+      assert.equal(raised.length, 1, `expected one portal_configuration line, got ${raised.length}`);
+      assert.match(raised[0], /"kind":"immediate"/, "the raised line does not name the kind");
+      assert.match(raised[0], /"seconds_lost":\d+/, "the raised line does not carry how much paid time was lost");
+      assert.match(raised[0], /"cancel_at_period_end":false/, "the raised line does not carry the field the dropdown decides");
+
+      /* AND THE DIGEST REALLY RAISES IT — the webhook's own line, run
+         through the digest's own matcher. `mustReportCode` reads
+         `detail.code` and `detail.reason` and NEVER the stage name, so
+         listing "portal_configuration" in MUST_REPORT_CODES without the
+         webhook setting `code` would have been must-report on paper and
+         silent in the email. The line spreads its detail at the top
+         level; the ROW nests it under `detail` (failureLog.ts
+         `failureRow`), which is the shape the digest reads — so the four
+         line-only fields are taken off and the rest becomes the row's
+         detail. */
+      const toRowDetail = (line) => {
+        const { stage, name, message, stack, ...detail } = JSON.parse(line.slice(line.indexOf("{")));
+        return detail;
+      };
+      assert.equal(
+        digest.mustReportCode({ detail: toRowDetail(raised[0]) }),
+        "portal_configuration",
+        "the anomaly is listed as must-report and the digest would never raise it"
+      );
+      /* THE CONTROL, which is the trap itself: the same detail WITHOUT
+         `code` is not flagged — Stripe's own `reason` is in it and is
+         not ours to match. Without this half, a matcher that flagged
+         every row would satisfy the line above. */
+      const { code, ...withoutCode } = toRowDetail(raised[0]);
+      assert.equal(code, "portal_configuration");
+      assert.equal(digest.mustReportCode({ detail: withoutCode }), "", "the digest flags a row with no code — the matcher is not discriminating");
+    } finally {
+      w.restore();
+    }
+  });
+
+  await test("A PORTAL SET TO CANCEL AT PERIOD END IS LOGGED AND NOT RAISED", async () => {
+    /* THE HEALTHY READING, logged on every apply. A promise nobody can
+       see being kept is a promise nobody notices being broken — and
+       this is the shape Jared read by hand out of the
+       subscription.deleted payload, turned into a line that appears
+       without anybody looking. */
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe" }) },
+      stripeRoutes: {
+        "/subscriptions/sub_1": subscription({ status: "active", cancel_at_period_end: true, canceled_at: Math.floor(Date.now() / 1000) }),
+      },
+    });
+    try {
+      const res = await deliver(event({ id: "evt_portal_scheduled", type: "customer.subscription.updated" }));
+      assert.equal(res.status, 200);
+      assert.equal(w.profiles[USER].tier, "ai", "a scheduled cancellation took the plan away early");
+
+      assert.equal(w.logs.filter((l) => l.includes("portal_configuration")).length, 0, "a kept promise was raised as an anomaly");
+      const logged = w.logs.filter((l) => l.includes('"stage":"cancellation"'));
+      assert.equal(logged.length, 1, "the healthy reading was not logged at all, so nobody can see the promise being kept");
+      assert.match(logged[0], /"kind":"scheduled"/);
+      assert.match(logged[0], /"cancel_at_period_end":true/);
+    } finally {
+      w.restore();
+    }
+  });
+
+  await test("OUR OWN REFUND CANCELLATION IS NOT RAISED, in either of its two deliveries", async () => {
+    /* The refund path cancels in Stripe and then applies, so it
+       produces the immediate shape by design. It must not report
+       itself — a digest whose only entries are our own correct
+       behaviour is one nobody reads.
+
+       BOTH DELIVERIES, because they are excluded by different rules:
+       the charge.refunded one by `endsOnRefund`, and the
+       customer.subscription.deleted that our own DELETE triggers by
+       the tier already being free. */
+    const cancelled = subscription({
+      status: "canceled",
+      cancel_at_period_end: false,
+      ended_at: Math.floor(Date.now() / 1000),
+      cancellation_details: { reason: "cancellation_requested" },
+    });
+
+    const first = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_1" }) },
+      stripeRoutes: {
+        "/charges/ch_1": charge(),
+        "/invoice_payments": invoicePayments(),
+        "/invoices/in_1": invoice(),
+        /* The GET answers live, the DELETE answers cancelled — the
+           cancellation response IS the provider record the tier is
+           then derived from. */
+        "/subscriptions/sub_1": (init) => (init && init.method === "DELETE" ? cancelled : subscription()),
+      },
+    });
+    try {
+      const res = await deliver(refundEvent({ id: "evt_our_refund" }));
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.equal(first.profiles[USER].tier, "free", "the refund did not end the plan");
+      assert.equal(first.logs.filter((l) => l.includes("portal_configuration")).length, 0, "our own refund cancellation raised the anomaly");
+      const logged = first.logs.filter((l) => l.includes('"stage":"cancellation"'));
+      assert.equal(logged.length, 1, "the refund's cancellation was not logged at all");
+      assert.match(logged[0], /"kind":"our_refund"/);
+    } finally {
+      first.restore();
+    }
+
+    const second = makeWorld({
+      profiles: { [USER]: profile({ tier: "free", tier_source: "stripe", store: "stripe" }) },
+      stripeRoutes: { "/subscriptions/sub_1": cancelled },
+    });
+    try {
+      const res = await deliver(event({ id: "evt_our_refund_followon", type: "customer.subscription.deleted", subscription: { status: "canceled" } }));
+      assert.equal(res.status, 200);
+      assert.equal(second.logs.filter((l) => l.includes("portal_configuration")).length, 0, "the follow-on deletion of our own cancellation raised the anomaly");
+      assert.match(second.logs.find((l) => l.includes('"stage":"cancellation"')) ?? "", /"kind":"already_free"/);
+    } finally {
+      second.restore();
+    }
+  });
+
+  await test("THE LOG CANNOT FAIL A DELIVERY THAT APPLIED, demonstrated by making it throw", async () => {
+    /* Behavioural, not a grep for `try`. A malformed `items` — a
+       string where the array goes — makes the shape reader throw,
+       which is the whole reason the block has its own catch: this
+       runs AFTER the tier has been decided and the money accounted
+       for, and a thrown log would turn a correct delivery into a 500
+       that Stripe retries against an event already recorded.
+
+       `status: canceled` is what gets past the tier function, which
+       returns on the status before it reads an item. */
+    const w = makeWorld({
+      profiles: { [USER]: profile({ tier: "ai", tier_source: "stripe", store: "stripe" }) },
+      stripeRoutes: { "/subscriptions/sub_1": { ...subscription({ status: "canceled" }), items: { data: "not an array" } } },
+    });
+    try {
+      const res = await deliver(event({ id: "evt_log_throws", type: "customer.subscription.deleted", subscription: { status: "canceled" } }));
+      assert.equal(res.status, 200, "a throw in the anomaly log failed the delivery");
+      assert.equal(res.body.outcome, "applied", "a throw in the anomaly log stopped the apply being reported");
+      assert.equal(w.profiles[USER].tier, "free", "the tier was not written");
+      /* AND IT IS NOT SWALLOWED. A catch that says nothing is how this
+         stops working without anybody knowing. */
+      assert.ok(
+        w.logs.some((l) => l.includes('"stage":"cancellation"') && /error|not a function/i.test(l)),
+        "the failed log was swallowed silently"
+      );
+    } finally {
+      w.restore();
+    }
   });
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
