@@ -1165,7 +1165,13 @@ test("one currency, stated, and three periods with no quarterly", () => {
 
 test("every store badge is behind a flag, and every flag names its condition", () => {
   assert.equal(FLAGS.playBadge, false, "the Play badge is showing and the listing is not live");
-  assert.equal(FLAGS.appStoreBadge, false, "the App Store badge is showing and iOS has never been compiled");
+  /* THE REASON MOVED, THE ASSERTION DID NOT. iOS 1.1.0 is live, so
+     "iOS has never been compiled" stopped being why this is false —
+     and a guard whose stated reason is untrue is one somebody deletes
+     on the grounds that the reason is untrue. What keeps it off is
+     that `fillStoreBadges` renders every badge with `href: null`, so
+     an enabled badge says "Get it now" and links nowhere. */
+  assert.equal(FLAGS.appStoreBadge, false, "the App Store badge is on, but a badge still links nowhere — give it an href first");
   /* Comments stripped before the grep: this file explains at length
      WHAT turns each flag on, and a check that trips over its own
      explanation is measuring the prose. */

@@ -17,8 +17,17 @@ export const FLAGS = {
       further week for production access. */
   playBadge: false,
 
-  /** App Store badge. ON when the listing is live. iOS has never been
-      compiled to a device, so this is further out than Play. */
+  /** App Store badge. ON when the listing is live.
+
+      THE CONDITION IS NOW MET AND THE FLAG IS STILL OFF, deliberately.
+      iOS 1.1.0 is approved and live (build 3523413), so the sentence
+      above is satisfied — but `fillStoreBadges` renders every badge
+      with `href: null`, so flipping this alone produces a badge that
+      says "Get it now" and links nowhere, which is worse than "Coming
+      soon". Turning it on needs the listing URL and the anchor, which
+      is a small piece of work and a decision about the page.
+
+      This comment used to say iOS had never been compiled. It had. */
   appStoreBadge: false,
 
   /** The macOS download. ON since Developer ID signing and notarisation
