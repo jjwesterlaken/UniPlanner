@@ -35,7 +35,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { buildConsentPatch } from "../src/aiNotesLogic.js";
-import { SUPPORT_URL } from "../src/legalLinks.js";
+import { SUPPORT_URL, SUPPORT_EMAIL } from "../src/legalLinks.js";
+import { FEEDBACK_COPY, platformName } from "../src/feedbackLink.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = path.join(rootDir, "dist-web");
@@ -447,7 +448,8 @@ async function run() {
           html.includes(`href="${SUPPORT_URL}"`),
           `the Account tab offers no way to get in touch at ${SUPPORT_URL}`
         );
-        assert.match(html, /Something not working\?/, "the link is there with nothing saying what it is for");
+        assert.ok(html.includes(FEEDBACK_COPY.prompt), "the link is there with nothing saying what it is for");
+        assert.match(html, /data-feedback-link="page"/, "the web build is not using the support-page route");
         /* AND IT ASKS FOR THE VERSION. "Which build is this user on" is
            the first question after any caching or rendering bug, and a
            report without it costs a round trip. */
@@ -492,7 +494,12 @@ async function run() {
      the real plugin and the real src/purchases.js both run and only the
      last hop is faked. */
   const bridgeScript = ({ native, packages, customerInfo = { managementURL: null }, rejectSdk = false }) => `
-    if (${native}) window.androidBridge = { postMessage() {} };
+    /* \`native\` is true (Android, the default native shell here) or
+       "ios". Each is faked at the global Capacitor's getPlatformId()
+       reads: androidBridge for Android, webkit.messageHandlers.bridge
+       for iOS. */
+    if (${JSON.stringify(native)} === "ios") window.webkit = { messageHandlers: { bridge: { postMessage() {} } } };
+    else if (${JSON.stringify(!!native)}) window.androidBridge = { postMessage() {} };
     window.__RC_CALLS__ = [];
     window.Capacitor = {
       PluginHeaders: [{
@@ -643,6 +650,52 @@ async function run() {
        customerInfo test below passed while proving nothing. */
     return { ...first, errors, page, read, close: () => ctx.close() };
   }
+
+  /* THE FEEDBACK LINK PER SHELL, read off the RENDERED Account tab.
+     iOS gets a pre-filled mailto; Android gets the support page, like
+     web. Both run from the same keyed bundle, with only the faked
+     platform differing, so the two results are a comparison. Without
+     the Android run, a build that sent every shell to mail would pass
+     the iOS half. */
+  const feedbackOf = (html) => {
+    const m = html.match(/<p[^>]*data-feedback-link="(mail|page)"[^>]*>([\s\S]*?)<\/p>/);
+    if (!m) return null;
+    const href = (m[2].match(/href="([^"]*)"/) || [])[1] || "";
+    return { kind: m[1], href: href.replace(/&amp;/g, "&"), text: m[2] };
+  };
+
+  await test("ON iOS the feedback link is a mailto with the build id and the platform already in it", async () => {
+    const { html, errors, close } = await mountAccount({ native: "ios" });
+    await close();
+    assert.deepEqual(errors, [], `the Account tab threw on iOS:\n        ${errors.join("\n        ")}`);
+    const fb = feedbackOf(html);
+    assert.ok(fb, "no feedback line on the iOS Account tab at all");
+    assert.equal(fb.kind, "mail", "iOS is not using the mail route");
+    const build = (html.match(/Version <span class="font-mono">([^<]+)<\/span>/) || [])[1];
+    assert.ok(build && build !== "development", `no stamped build id rendered to compare against: ${build}`);
+    const url = new URL(fb.href);
+    assert.equal(url.protocol, "mailto:");
+    assert.equal(url.pathname, SUPPORT_EMAIL, "the mail goes somewhere other than the support address");
+    const subject = url.searchParams.get("subject") || "";
+    const body = url.searchParams.get("body") || "";
+    for (const [field, value] of [["subject", subject], ["body", body]]) {
+      assert.ok(value.includes(build), `the ${field} does not carry the build id ${build}: ${JSON.stringify(value)}`);
+      assert.ok(value.includes(platformName("ios")), `the ${field} does not name the platform: ${JSON.stringify(value)}`);
+    }
+    assert.ok(!fb.text.includes(FEEDBACK_COPY.quoteVersion), "iOS still asks the student to type in a version the mail already carries");
+    assert.ok(!/target="_blank"/.test(fb.text), "a mailto should not open a new tab");
+  });
+
+  await test("ON ANDROID the feedback link stays on the support page, and asks for the version", async () => {
+    const { html, errors, close } = await mountAccount({ native: true });
+    await close();
+    assert.deepEqual(errors, [], errors.join("\n        "));
+    const fb = feedbackOf(html);
+    assert.ok(fb, "no feedback line on the Android Account tab at all");
+    assert.equal(fb.kind, "page");
+    assert.equal(fb.href, SUPPORT_URL);
+    assert.ok(fb.text.includes(FEEDBACK_COPY.quoteVersion), "the page route does not ask for the version");
+  });
 
   await test("ON A NATIVE SHELL the panel shows all six packages, their prices and Restore", async () => {
     const { html, calls, errors, close } = await mountAccount({ native: true });
