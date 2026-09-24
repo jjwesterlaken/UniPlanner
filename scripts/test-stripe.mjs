@@ -57,6 +57,7 @@ const plans = await import(pathToFileURL(path.join(rootDir, "src/purchasePlans.j
 const flags = await import(pathToFileURL(path.join(rootDir, "src/billingFlags.js")).href);
 const prices = await import(pathToFileURL(path.join(rootDir, "src/webPrices.js")).href);
 const copy = await import(pathToFileURL(path.join(rootDir, "src/plansCopy.js")).href);
+const digest = await import(pathToFileURL(path.join(rootDir, "supabase/functions/error-digest/digest.js")).href);
 const links = await import(pathToFileURL(path.join(rootDir, "src/legalLinks.js")).href);
 
 /* ---------- the handlers, bundled with the platform stubbed ---------- */
@@ -2273,6 +2274,33 @@ async function run() {
       assert.match(raised[0], /"kind":"immediate"/, "the raised line does not name the kind");
       assert.match(raised[0], /"seconds_lost":\d+/, "the raised line does not carry how much paid time was lost");
       assert.match(raised[0], /"cancel_at_period_end":false/, "the raised line does not carry the field the dropdown decides");
+
+      /* AND THE DIGEST REALLY RAISES IT — the webhook's own line, run
+         through the digest's own matcher. `mustReportCode` reads
+         `detail.code` and `detail.reason` and NEVER the stage name, so
+         listing "portal_configuration" in MUST_REPORT_CODES without the
+         webhook setting `code` would have been must-report on paper and
+         silent in the email. The line spreads its detail at the top
+         level; the ROW nests it under `detail` (failureLog.ts
+         `failureRow`), which is the shape the digest reads — so the four
+         line-only fields are taken off and the rest becomes the row's
+         detail. */
+      const toRowDetail = (line) => {
+        const { stage, name, message, stack, ...detail } = JSON.parse(line.slice(line.indexOf("{")));
+        return detail;
+      };
+      assert.equal(
+        digest.mustReportCode({ detail: toRowDetail(raised[0]) }),
+        "portal_configuration",
+        "the anomaly is listed as must-report and the digest would never raise it"
+      );
+      /* THE CONTROL, which is the trap itself: the same detail WITHOUT
+         `code` is not flagged — Stripe's own `reason` is in it and is
+         not ours to match. Without this half, a matcher that flagged
+         every row would satisfy the line above. */
+      const { code, ...withoutCode } = toRowDetail(raised[0]);
+      assert.equal(code, "portal_configuration");
+      assert.equal(digest.mustReportCode({ detail: withoutCode }), "", "the digest flags a row with no code — the matcher is not discriminating");
     } finally {
       w.restore();
     }

@@ -623,7 +623,20 @@ export async function handle(req: Request): Promise<Response> {
         /* A FAILURE LINE, so it reaches the digest. Nothing is wrong
            with this delivery — it is the CONFIGURATION that is wrong,
            and this is the only place it becomes visible. */
-        logFailure("portal_configuration", new Error("a cancellation ended a paid period early"), detail);
+        /* `code` IN THE DETAIL, which is where the digest looks. The
+           stage name is NOT read by `mustReportCode` — it matches
+           `detail.code` and `detail.reason` only, the convention every
+           other logFailure here follows — and `detail.reason` already
+           holds Stripe's own cancellation reason. Listing the code in
+           MUST_REPORT_CODES without this line would have made it
+           must-report on paper and never raised: a guard that cannot
+           fire, which is the one shape a list of codes is most prone
+           to. Only the ANOMALY carries it; the healthy `scheduled`
+           reading below must not be flagged. */
+        logFailure("portal_configuration", new Error("a cancellation ended a paid period early"), {
+          ...detail,
+          code: "portal_configuration",
+        });
       } else {
         logStage("cancellation", detail);
       }

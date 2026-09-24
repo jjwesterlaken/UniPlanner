@@ -46,7 +46,11 @@ export const MESSAGE_EXCERPT_CHARS = 300;
    invents a vocabulary. They are matched on `detail`, never on the
    message text, because a message quotes ids and timestamps and a
    substring match on it would be a guess. */
-export const MUST_REPORT_CODES = ["stripe_permission_denied", "not_an_invoice"];
+/* `portal_configuration` (Jared, 24 September 2026): a cancellation
+   ended a paid period early, so a student lost time they paid for.
+   Raised by stripe-webhook with `code` set in the detail — see the
+   test named for why the stage name alone would never have matched. */
+export const MUST_REPORT_CODES = ["stripe_permission_denied", "not_an_invoice", "portal_configuration"];
 
 /**
  * The must-report code a row carries, or "".
