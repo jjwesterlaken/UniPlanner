@@ -64,7 +64,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadCorpus, stratify, DEFAULT_SETS } from "./lib/asap-corpus.mjs";
+import { loadCorpus, selectForRead, DEFAULT_SETS, MIN_ESSAY_WORDS, BANDS } from "./lib/asap-corpus.mjs";
+import { essayFeedbackSchema, severityOf, SEVERITY_LEVELS } from "../src/essayPoints.js";
 import { ARMS, userMessage } from "./lib/essay-arms.mjs";
 import { callVision } from "./lib/photo-calls.mjs";
 import { productionModel } from "./lib/production-model.mjs";
@@ -141,25 +142,22 @@ try {
   process.exit(1);
 }
 
-/* SPREAD ACROSS THE SCORE BANDS, which is the whole design of the
-   read: the second question on the sheet is whether a lower-scored
-   essay draws more substantive comment than a higher-scored one, and
-   six essays from the same band cannot answer it.
+/* SPREAD ACROSS NORMALISED BANDS, which is the whole design of the
+   read: the sheet asks whether a weaker essay draws more substantive
+   comment than a stronger one, and that needs essays from different
+   bands.
 
-   The stratified draw already spreads within each set, so taking one
-   per set and then filling up gives both spreads at n=6. */
-const perSet = Math.max(1, Math.ceil(n / sets.length));
-const pool = stratify({ rows: corpus.rows, sets, perSet, seed });
-const chosen = pool
-  .slice()
-  .sort((a, b) => a.score - b.score || a.set - b.set)
-  .filter((_, i, all) => {
-    const step = Math.max(1, Math.floor(all.length / n));
-    return i % step === 0;
-  })
-  .slice(0, n);
-
-const bands = [...new Set(chosen.map((c) => c.score))].sort((a, b) => a - b);
+   THE FIRST VERSION SORTED RAW SCORES ACROSS SETS, and ASAP scores each
+   set on its own range — so a set-7 essay at 5/30 ranked as a "score 5"
+   and sat at the top of the sheet as the strong essay while being a weak
+   one. Found by Jared reading the file, 24 September 2026. The selection
+   now lives in `selectForRead`, where it is tested without a corpus. */
+const { chosen, ranges, bandsCovered } = selectForRead({
+  rows: corpus.rows,
+  allScores: corpus.allScores,
+  n,
+  seed,
+});
 
 console.log("=".repeat(72));
 console.log("ASAP READ — essay, human score and feedback, for a person");
@@ -167,17 +165,32 @@ console.log("=".repeat(72));
 console.log(`corpus       ${corpus.tsvPath}`);
 console.log(`sets         ${sets.join(", ")}`);
 console.log(`essays       ${chosen.length} (asked for ${n}), seed ${seed}`);
-console.log(`score bands  ${bands.join(", ")}   <- the sheet's second question needs a spread here`);
+console.log(`bands        ${bandsCovered.join(", ")}   <- normalised within each set; the sheet needs a spread here`);
+console.log(`word floor   ${corpus.minWords}`);
+console.log("");
+console.log("  set  range   source     essays >= floor / all");
+for (const set of sets) {
+  const r = ranges[set];
+  const a = corpus.perSet[set] || { total: 0, clear: 0 };
+  const range = r ? `${r.min}-${r.max}`.padEnd(7) : "-      ";
+  const src = r ? r.source.padEnd(10) : "-         ";
+  /* A SHORTFALL IS SAID, not hidden. Set 7 is short narratives and was
+     predicted to fall short of the floor; this line is where that
+     prediction becomes a number. */
+  const warn = a.clear < 3 ? "   <- too few to read at this floor" : "";
+  console.log(`  ${String(set).padEnd(4)} ${range} ${src} ${String(a.clear).padStart(5)} / ${a.total}${warn}`);
+}
+console.log("");
 console.log(`ids          ${chosen.map((c) => `${c.set}:${c.id}`).join(" ")}`);
 console.log(`model        ${model}`);
 console.log(`out          ${outPath}`);
 console.log(`text         WRITTEN IN FULL to that file, and nowhere else. Delete it when read.`);
 
-if (bands.length < 2) {
+if (bandsCovered.length < 2) {
   console.error(
-    "\nREFUSED: every chosen essay has the same human score.\n" +
-      "The sheet asks whether a lower-scored essay draws more comment than a higher-scored one,\n" +
-      "and that question cannot be answered inside one band. Raise --n or change --seed.\n"
+    "\nREFUSED: every chosen essay falls in the same normalised band.\n" +
+      "The sheet asks whether a weaker essay draws more substantive comment than a stronger one,\n" +
+      "and that cannot be answered inside one band. Raise --n, change --seed, or add a set.\n"
   );
   process.exit(1);
 }
@@ -197,7 +210,7 @@ const arm = ARMS.constrained;
 const out = [];
 
 for (const [i, row] of chosen.entries()) {
-  process.stderr.write(`[${i + 1}/${chosen.length}] set ${row.set} essay ${row.id} (score ${row.score})…\n`);
+  process.stderr.write(`[${i + 1}/${chosen.length}] set ${row.set} essay ${row.id} (${row.score}/${ranges[row.set].max}, ${row.band})…\n`);
   const { json, error } = await callVision({
     apiKey: process.env.OPENAI_API_KEY,
     model,
@@ -206,6 +219,9 @@ for (const [i, row] of chosen.entries()) {
       { role: "user", content: userMessage({ essay: row.essay, criteria: corpus.rubricFor.get(row.set) }) },
     ],
     maxTokens: 2000,
+    /* THE STRICT SCHEMA, so the deficiency enum is enforced by the
+       decoder rather than requested in the prose. See essaySchema.js. */
+    jsonSchema: essayFeedbackSchema(),
   });
 
   let points = null;
@@ -228,63 +244,144 @@ for (const [i, row] of chosen.entries()) {
 
 /* ---------- the file ---------- */
 
+/* THE NUMBERS ARE PRINTED, NOT FILLED IN. Point count and the
+   severity mix are facts about the output, computed the same way for
+   every essay, so a reader does not have to count and cannot miscount.
+   What stays for a person is the judgement the numbers cannot make. */
+const sevCount = (points) => {
+  const c = { fundamental: 0, minor: 0, unrated: 0, unknown: 0 };
+  for (const p of points || []) c[severityOf(p.deficiency)] += 1;
+  return c;
+};
+const measured = out.map((o) => ({ ...o, count: (o.points || []).length, sev: sevCount(o.points) }));
+
+const byBand = BANDS.map((band) => {
+  const inBand = measured.filter((m) => m.row.band === band && !m.failure);
+  const sum = (k) => inBand.reduce((a, m) => a + m.sev[k], 0);
+  const pts = inBand.reduce((a, m) => a + m.count, 0);
+  return { band, essays: inBand.length, pts, fundamental: sum("fundamental"), minor: sum("minor"), unrated: sum("unrated") };
+});
+const unknownTotal = measured.reduce((a, m) => a + m.sev.unknown, 0);
+const narrativeSets = [7, 8].filter((x) => sets.includes(x));
+
 const sheet = [
   "# ASAP read — does the feedback point at anything a marker cares about?",
   "",
-  `Generated ${new Date().toISOString().slice(0, 16).replace("T", " ")} · model \`${model}\` · seed ${seed}`,
+  `Generated ${new Date().toISOString().slice(0, 16).replace("T", " ")} · model \`${model}\` · seed ${seed} · word floor ${corpus.minWords}`,
   "",
   "**This file contains ASAP essay text in full. Do not commit it, paste it or send it.**",
   "Reading it is permitted; redistributing it is not. Delete it when you have finished.",
   "",
   "## What this can and cannot tell you",
   "",
-  "These are school essays of 150–650 words, scored by human raters on a **1–6 holistic",
-  "band** — not a university essay marked against criteria. So a score says one essay was",
-  "better than another; it does not say which criterion it fell down on. Judge whether the",
-  "feedback is pointing at real problems and whether it is harder on the weaker essays.",
-  "Do not expect it to agree with a marker criterion by criterion: there is no such",
-  "marking here to agree with.",
+  "These are school essays scored by human raters, and **each ASAP set is scored on its own",
+  "range** — so a raw score means nothing across sets. Every essay below is placed in a",
+  "**band** by its position within its own set's range (low / middle / high thirds), and it",
+  "is the BAND, not the raw number, that you compare across essays.",
   "",
+  "| set | range | from | essays at or above the word floor |",
+  "|---|---|---|---|",
+  ...sets.map((x) => {
+    const r = ranges[x];
+    const a = corpus.perSet[x] || { total: 0, clear: 0 };
+    return `| ${x} | ${r ? `${r.min}–${r.max}` : "—"} | ${r ? r.source : "—"} | ${a.clear} of ${a.total} |`;
+  }),
+  "",
+  "*declared* ranges are the rubric's; an *observed* one is the lowest and highest score in",
+  "the corpus, which is narrower than the rubric if no essay reached an extreme.",
+  "",
+  "A score still says one essay was better than another, not which criterion it fell down",
+  "on — there is no criterion-by-criterion marking here to agree with.",
+  "",
+  "## The numbers — computed, not for filling in",
+  "",
+  "**Point count against band.** If volume tracked quality, weaker essays would draw more",
+  "points. It need not — a strong essay can have six small things worth saying — which is",
+  "why the severity mix beside it is the number that matters more.",
+  "",
+  "| band | essays | points | per essay | fundamental | minor | unrated |",
+  "|---|---|---|---|---|---|---|",
+  ...byBand.map((b) =>
+    `| ${b.band} | ${b.essays} | ${b.pts} | ${b.essays ? (b.pts / b.essays).toFixed(1) : "—"} | ${b.fundamental} | ${b.minor} | ${b.unrated} |`
+  ),
+  "",
+  `**Codes outside the closed set: ${unknownTotal}.** Under the strict schema this run sends,`,
+  "that is zero by construction. A non-zero here means the schema did not reach the model,",
+  "and every severity number above is computed over points with holes in them.",
+  "",
+  "*unrated* is `evidence-without-claim` and `off-criterion`, whose severity has not been",
+  "ruled on; they are counted apart rather than folded into either column.",
+  "",
+  ...(narrativeSets.length
+    ? [
+        `**A KNOWN DEFECT TO READ AROUND:** sets ${narrativeSets.join(" and ")} are NARRATIVE. The prompt does`,
+        "not yet take the genre from the rubric, so it applies argument codes — `claim-without-evidence`",
+        "on a story's closing line — where they do not belong, and those count as *fundamental*.",
+        "A fundamental point on a narrative essay is suspect until that is fixed. **Answer the",
+        "severity question on the argument sets (1 and 2) first.**",
+        "",
+      ]
+    : []),
   "## The sheet — fill this in as you read",
   "",
-  "| # | set | score | Points at things a marker would care about? | Notes |",
-  "|---|---|---|---|---|",
-  ...out.map((o, i) => `| ${i + 1} | ${o.row.set} | ${o.row.score} | yes / partly / no | |`),
+  "| # | set | score | band | points | fund. | minor | Points at things a marker would care about? | Notes |",
+  "|---|---|---|---|---|---|---|---|---|",
+  ...measured.map(
+    (m, i) =>
+      `| ${i + 1} | ${m.row.set} | ${m.row.score}/${ranges[m.row.set].max} | ${m.row.band} | ${m.failure ? "—" : m.count} | ${m.failure ? "—" : m.sev.fundamental} | ${m.failure ? "—" : m.sev.minor} | yes / partly / no | |`
+  ),
   "",
-  "**And the one question the table cannot hold:**",
+  "**Two questions the table cannot hold:**",
   "",
-  "> Does the LOWER-scored essay get more substantive comment than the higher-scored one?",
-  ">",
-  "> Compare the lowest-scored essay below against the highest-scored one, and answer",
-  "> **yes / partly / no**, with a sentence on why:",
+  "> **1. Does the WEAKER essay get more substantive comment than the stronger one?**",
+  "> Compare a low-band essay against a high-band one and answer **yes / partly / no**, with",
+  "> a sentence on why:",
   ">",
   "> `                                                                        `",
   "",
-  "If that answer is *no*, the feature is not ready whatever the operating characteristic",
-  "says — feedback that treats a weak essay and a strong one alike is not reading either.",
+  "> **2. Does the SUBSTANCE track the band?** On the high-band essays, are the points",
+  "> mostly MINOR — wording, tightening, signposting? On the low-band essays, are they",
+  "> mostly FUNDAMENTAL — no evidence, no argument, contradicting itself? Judge what the",
+  "> points SAY, not the label beside them: the label is the model's choice of code, and",
+  "> whether it chose well is part of the question. **yes / partly / no**, and why:",
+  ">",
+  "> `                                                                        `",
+  "",
+  "**What the answers decide.** If 2 is *yes*, the feedback discriminates and the fix is",
+  "presentation: order points by severity, and open with a sentence saying whether the essay",
+  "broadly meets the criteria, so six small points on a good essay do not read as six",
+  "failures. If 2 is *no*, the prompt is not discriminating, and that is a prompt problem",
+  "to solve before any screen is built.",
   "",
   "---",
   "",
 ];
 
-for (const [i, o] of out.entries()) {
-  sheet.push(`## ${i + 1}. Set ${o.row.set}, essay ${o.row.id} — human score ${o.row.score}  (${o.row.words} words)`);
+for (const [i, m] of measured.entries()) {
+  const r = ranges[m.row.set];
+  sheet.push(
+    `## ${i + 1}. Set ${m.row.set}, essay ${m.row.id} — ${m.row.score}/${r.max} (${m.row.band} band) · ${m.row.words} words`
+  );
   sheet.push("");
   sheet.push("### The essay");
   sheet.push("");
   sheet.push("```");
-  sheet.push(o.row.essay);
+  sheet.push(m.row.essay);
   sheet.push("```");
   sheet.push("");
   sheet.push("### The feedback");
   sheet.push("");
-  if (o.failure) {
-    sheet.push(`**Nothing came back.** ${o.failure}`);
-  } else if (!o.points.length) {
+  /* IN THE MODEL'S ORDER, with severity LABELLED rather than sorted by.
+     Sorting would show the proposed presentation before the read has
+     decided whether that presentation is the right fix — and a sheet
+     that already looks tidy is a sheet that answers its own question. */
+  if (m.failure) {
+    sheet.push(`**Nothing came back.** ${m.failure}`);
+  } else if (!m.count) {
     sheet.push("**No points at all.** The model read the essay and raised nothing — worth noting on the sheet.");
   } else {
-    for (const p of o.points) {
-      sheet.push(`- **${p.deficiency || "(no deficiency)"}**`);
+    for (const p of m.points) {
+      sheet.push(`- **${p.deficiency || "(no deficiency)"}** · _${severityOf(p.deficiency)}_`);
       sheet.push(`  - quotes: \`${String(p.quote || "").replace(/`/g, "'")}\``);
       sheet.push(`  - says: ${p.note || "(nothing)"}`);
     }

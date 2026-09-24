@@ -61,7 +61,7 @@ import path from "node:path";
 import { ROOT, callVision } from "./lib/photo-calls.mjs";
 import { productionModel } from "./lib/production-model.mjs";
 import { ARMS, userMessage } from "./lib/essay-arms.mjs";
-import { DEFICIENCIES, measurePoint, refusePoint, quoteVariety } from "../src/essayPoints.js";
+import { DEFICIENCIES, measurePoint, refusePoint, quoteVariety, essayFeedbackSchema } from "../src/essayPoints.js";
 
 const argv = process.argv.slice(2);
 const opt = (n, d = null) => {
@@ -137,6 +137,13 @@ for (const arm of Object.values(ARMS)) {
         { role: "user", content: userMessage({ essay, criteria }) },
       ],
       maxTokens: 2000,
+      /* THE STRICT SCHEMA, for both arms. `deficiency-unknown` was 84 of
+         318 constrained refusals on 24 September — a quarter of the
+         operating characteristic measuring the model's paraphrasing
+         rather than the no-writing constraint. Under the schema it is
+         zero by construction, so the table measures the thing it is for.
+         THIS MOVES THE TABLE: runs before and after are not comparable. */
+      jsonSchema: essayFeedbackSchema(),
     });
     if (error) {
       console.error(`  ${arm.id} run ${run} failed: ${error}`);
