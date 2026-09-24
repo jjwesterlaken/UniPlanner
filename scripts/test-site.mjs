@@ -18,7 +18,7 @@
      marker, guarded the way the UNMEASURED billing marker is */
 
 import assert from "node:assert/strict";
-import { STORE_NAME, SHORT_DESCRIPTION, FULL_DESCRIPTION, PRIVACY_POLICY_PATH, ACCOUNT_DELETION_PATH, LIMITS } from "../site/store-listing.js";
+import { STORE_NAME, SHORT_DESCRIPTION, FULL_DESCRIPTION, PRIVACY_POLICY_PATH, ACCOUNT_DELETION_PATH, LIMITS, APP_STORE_URL, APPLE_APP_ID, storeUrl } from "../site/store-listing.js";
 import { SITE_URL, PRIVACY_URL, DELETE_ACCOUNT_URL, APP_URL } from "../src/legalLinks.js";
 import * as links from "../src/legalLinks.js";
 import fs from "node:fs";
@@ -1165,13 +1165,13 @@ test("one currency, stated, and three periods with no quarterly", () => {
 
 test("every store badge is behind a flag, and every flag names its condition", () => {
   assert.equal(FLAGS.playBadge, false, "the Play badge is showing and the listing is not live");
-  /* THE REASON MOVED, THE ASSERTION DID NOT. iOS 1.1.0 is live, so
-     "iOS has never been compiled" stopped being why this is false —
-     and a guard whose stated reason is untrue is one somebody deletes
-     on the grounds that the reason is untrue. What keeps it off is
-     that `fillStoreBadges` renders every badge with `href: null`, so
-     an enabled badge says "Get it now" and links nowhere. */
-  assert.equal(FLAGS.appStoreBadge, false, "the App Store badge is on, but a badge still links nowhere — give it an href first");
+  /* ON since 24 September 2026, and the reason it could be turned on
+     is that the hazard the previous version of this comment described
+     — an enabled badge linking nowhere — is now unreachable rather
+     than remembered. `fillStoreBadges` requires the flag AND a URL,
+     which the two tests named for that property drive in both
+     directions. */
+  assert.equal(FLAGS.appStoreBadge, true, "the App Store listing is live and the badge is off");
   /* Comments stripped before the grep: this file explains at length
      WHAT turns each flag on, and a check that trips over its own
      explanation is measuring the prose. */
@@ -1210,10 +1210,54 @@ test("THE PAGE MAKES NO THIRD-PARTY REQUEST — no host but this origin appears"
      waved at, the same arrangement test-local-only.mjs uses: github.com
      is a download HREF (no request until a click), and a mailto is not
      a request at all. */
-  const allowed = [/^https:\/\/github\.com\//, /^mailto:/];
-  const urls = [...`${PAGE}\n${PAGE_JS}`.matchAll(/(?:https?:)?\/\/[^\s"'()<>]+/g)].map((m) => m[0]);
+  const allowed = [
+    /* THIS ORIGIN, derived from legalLinks.js rather than typed — the
+       check is named "no host but this origin", and widening the sweep
+       to the data modules is what first brought a literal of our own
+       host into it (build-facts.js's APP_URL). */
+    new RegExp(`^${SITE_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(/|$)`),
+    /^https:\/\/github\.com\//,
+    /^mailto:/,
+    /* THE TWO STORE LISTINGS. Same reason as github.com and it is the
+       reason, not the host, that is being allowed: a badge is an
+       <a href> and an href costs nothing until somebody clicks it. A
+       store BADGE IMAGE served from Apple or Google would be a
+       request and is not allowed by this line — the badges are
+       styled text on this page precisely so that question never
+       arises. */
+    /^https:\/\/apps\.apple\.com\//,
+    /^https:\/\/play\.google\.com\//,
+  ];
+  /* EVERY MODULE THE PAGE LOADS, not the two files this check used to
+     read. The claim is about the PAGE, and the page's script imports
+     the data modules — so scoping the sweep to `site.js` meant a URL
+     moving one import away left the guard green while the page it is
+     about had changed. That is the file-scoped-guard entry in
+     CLAUDE.md's ledger, and the store listing URL is exactly such a
+     move: it lives in site/store-listing.js and reaches the page
+     through an import. */
+  const modules = fs
+    .readdirSync(path.join(rootDir, "site"))
+    .filter((f) => f.endsWith(".js"))
+    .map((f) => stripBlockComments(source(`site/${f}`)));
+  assert.ok(modules.length >= 4, `the sweep found ${modules.length} data modules, so it is reading almost nothing`);
+  const swept = [PAGE, PAGE_JS, ...modules].join("\n");
+  const urls = [...swept.matchAll(/(?:https?:)?\/\/[^\s"'()<>]+/g)].map((m) => m[0]);
   const external = urls.filter((u) => !allowed.some((re) => re.test(u)));
   assert.deepEqual(external, [], `the page references external hosts: ${external.join(", ")}`);
+  /* NON-VACUITY: the sweep really reaches the data modules, or an
+     empty `external` says only that it read nothing. The store URL is
+     the one it was widened for. */
+  assert.ok(
+    swept.includes("https://apps.apple.com/"),
+    "the sweep does not reach site/store-listing.js"
+  );
+  /* Asserted on the HOST and not on APP_STORE_URL, because the source
+     carries `.../id${APPLE_APP_ID}` and the resolved value appears
+     nowhere in it. This assertion caught that itself on its first run,
+     which is the whole argument for writing the non-vacuity half: a
+     check comparing against the wrong string would otherwise have
+     looked like a sweep that found nothing. */
   for (const host of ["fonts.googleapis.com", "fonts.gstatic.com", "api.github.com", "googletagmanager", "analytics"]) {
     assert.ok(!PAGE.includes(host), `the page still reaches ${host}`);
   }
@@ -1714,6 +1758,43 @@ function renderSiteAs(userAgent, { maxTouchPoints = 0 } = {}) {
   return w.document;
 }
 
+/**
+ * The built page rendered with one or more of its data modules
+ * textually patched — for the claims that are about a CONFIGURATION we
+ * do not ship, which cannot be asserted by rendering the page we do.
+ *
+ * It copies `dist-site/site/` aside and bundles from the copy, so
+ * nothing under `dist-site` is mutated and a failing test cannot leave
+ * a patched module behind for the next one. The imports inside those
+ * modules are relative, so a directory copy is all it takes.
+ */
+function renderSitePatched(patches = {}) {
+  const out = path.join(rootDir, "dist-site");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "site-patch-"));
+  fs.cpSync(path.join(out, "site"), dir, { recursive: true });
+  for (const [name, fn] of Object.entries(patches)) {
+    const file = path.join(dir, name);
+    const before = fs.readFileSync(file, "utf8");
+    const after = fn(before);
+    assert.notEqual(after, before, `the patch for ${name} matched nothing, so this test would assert about the unpatched page`);
+    fs.writeFileSync(file, after);
+  }
+  const bundle = path.join(dir, "bundle.js");
+  buildSync({ entryPoints: [path.join(dir, "site.js")], bundle: true, format: "iife", outfile: bundle, logLevel: "silent" });
+  const dom = new JSDOM(fs.readFileSync(path.join(out, "index.html"), "utf8"), {
+    url: SITE_URL + "/",
+    runScripts: "dangerously",
+    pretendToBeVisual: true,
+  });
+  const w = dom.window;
+  w.matchMedia = w.matchMedia || (() => ({ matches: false, addEventListener() {}, addListener() {} }));
+  const tag = w.document.createElement("script");
+  tag.textContent = fs.readFileSync(bundle, "utf8");
+  w.document.body.appendChild(tag);
+  fs.rmSync(dir, { recursive: true, force: true });
+  return w.document;
+}
+
 const UA = {
   windows: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
   mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
@@ -1788,6 +1869,93 @@ test("the store badges lead with the visitor's store, and still name the other",
   /* AND THE TWO REALLY DIFFER, so a renderer that ignores the platform
      cannot satisfy both lines above by accident. */
   assert.notDeepEqual(onIos, onAndroid, "the badge order does not follow the platform at all");
+});
+
+test("the listing URL is derived from one id, and a store with no listing answers null", () => {
+  /* ONE NUMBER. Apple's own links carry a slug as well
+     (/app/uniplanner/id6804411181) and resolve on the id alone, so a
+     slug written into the URL is a restatement of the listing NAME
+     that goes stale when the name changes and fails silently by
+     redirecting. */
+  assert.match(APPLE_APP_ID, /^\d+$/, "the Apple id is not a plain number");
+  assert.match(APP_STORE_URL, new RegExp(`/app/id${APPLE_APP_ID}$`), "the URL does not end in the id it is derived from");
+  assert.ok(APP_STORE_URL.startsWith("https://apps.apple.com/"), "the listing URL is not an App Store URL");
+
+  assert.equal(storeUrl("ios"), APP_STORE_URL);
+  /* NULL, NOT A GUESS. The Play listing does not exist — the closed
+     test has to run first — and null is what makes the renderer fall
+     back to "Coming soon" instead of publishing a dead link. */
+  assert.equal(storeUrl("android"), null, "a Google Play URL exists and the listing does not");
+  assert.equal(storeUrl("nope"), null);
+  assert.equal(storeUrl(), null);
+});
+
+test("THE APP STORE BADGE IS A REAL LINK TO THE REAL LISTING, read off the built page", () => {
+  /* THE ARTIFACT, not the flag. `FLAGS.appStoreBadge === true` is a
+     claim that a badge is on; what a visitor can do with it is a
+     property of the rendered element, and for a release the badge
+     linked nowhere at all the difference between those two is the
+     whole bug. So this reads the anchor out of the built page. */
+  const doc = renderSiteAs(UA.ios, { maxTouchPoints: 5 });
+  const badges = [...doc.querySelectorAll("[data-store-badges] .badge")];
+  const apple = badges.find((n) => /App Store/.test(n.textContent));
+  assert.ok(apple, "no App Store badge is rendered at all");
+
+  assert.equal(apple.tagName, "A", `the App Store badge is a <${apple.tagName.toLowerCase()}>, so it cannot be clicked`);
+  assert.equal(apple.getAttribute("href"), APP_STORE_URL, "the badge does not point at the listing");
+  assert.match(apple.textContent, /Get it now/, "the badge is linked and still reads as unreleased");
+  /* It leaves this origin. `noopener` because a named target hands the
+     opened page a handle on this one. */
+  assert.equal(apple.getAttribute("target"), "_blank");
+  assert.match(apple.getAttribute("rel") || "", /noopener/);
+
+  /* THE CONTROL. Without it, "the badge is an anchor" is satisfied by a
+     renderer that anchors everything, including the store with no
+     listing — which would publish a dead link for Google Play. */
+  const play = badges.find((n) => /Google Play/.test(n.textContent));
+  assert.ok(play, "no Google Play badge is rendered at all");
+  assert.equal(play.tagName, "SPAN", "Google Play is a link, and its listing does not exist yet");
+  assert.match(play.textContent, /Coming soon/);
+  assert.notEqual(apple.tagName, play.tagName, "both badges render the same element, so the distinction is not being made");
+});
+
+test("A FLAG AND A URL ARE BOTH REQUIRED, and neither one on its own publishes a badge", () => {
+  /* THE PROPERTY THAT LET THE FLAG BE TURNED ON. site/flags.js spent a
+     release describing the hazard of an enabled badge with no href —
+     "worse than Coming soon" — as a thing to remember at the moment of
+     flipping it. Remembering is what this replaces.
+
+     Driven in BOTH directions, because a renderer that ignored the
+     flag and a renderer that ignored the URL would each satisfy one
+     half and ship the other half of the bug. */
+  const live = (patch) => {
+    const doc = renderSitePatched(patch);
+    return [...doc.querySelectorAll("[data-store-badges] .badge")].map((n) => ({
+      name: n.querySelector("b").textContent,
+      tag: n.tagName,
+      text: n.textContent,
+    }));
+  };
+
+  /* A URL with the flag still off stays "Coming soon" — turning a
+     listing on is a decision, not a consequence of the URL existing. */
+  const urlOnly = live({ "store-listing.js": (src) => src.replace("export const PLAY_STORE_URL = null;", 'export const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=x";') });
+  const play = urlOnly.find((b) => b.name === "Google Play");
+  assert.equal(play.tag, "SPAN", "a URL alone published a badge nobody turned on");
+  assert.match(play.text, /Coming soon/);
+
+  /* And the flag with the URL taken away falls back rather than
+     rendering the dead link. This is the state production was one
+     boolean away from for a whole release. */
+  const flagOnly = live({ "store-listing.js": (src) => src.replace(/export const APP_STORE_URL = [^;]+;/, "export const APP_STORE_URL = null;") });
+  const apple = flagOnly.find((b) => b.name === "App Store");
+  assert.equal(apple.tag, "SPAN", "the badge says Get it now with no listing behind it");
+  assert.match(apple.text, /Coming soon/);
+
+  /* NON-VACUITY: the patcher really changes what is rendered, or both
+     assertions above are about a page that was never patched. */
+  const unpatched = live({});
+  assert.equal(unpatched.find((b) => b.name === "App Store").tag, "A", "the unpatched render is not the live page, so the patched ones prove nothing");
 });
 
 test("THE DESKTOP-ONLY FACT SURVIVES WITH EVERY IMAGE REMOVED", () => {

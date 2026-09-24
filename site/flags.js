@@ -19,16 +19,19 @@ export const FLAGS = {
 
   /** App Store badge. ON when the listing is live.
 
-      THE CONDITION IS NOW MET AND THE FLAG IS STILL OFF, deliberately.
-      iOS 1.1.0 is approved and live (build 3523413), so the sentence
-      above is satisfied — but `fillStoreBadges` renders every badge
-      with `href: null`, so flipping this alone produces a badge that
-      says "Get it now" and links nowhere, which is worse than "Coming
-      soon". Turning it on needs the listing URL and the anchor, which
-      is a small piece of work and a decision about the page.
+      ON since 24 September 2026. iOS 1.1.0 is approved and live
+      (build 3523413) and the listing is at APP_STORE_URL in
+      site/store-listing.js, which is where the href comes from.
 
-      This comment used to say iOS had never been compiled. It had. */
-  appStoreBadge: false,
+      THIS BOOLEAN IS NO LONGER THE WHOLE DECISION, and that is
+      deliberate: `fillStoreBadges` requires the flag AND a URL, so
+      flipping one without the other renders "Coming soon" rather than
+      a badge that says "Get it now" and links nowhere. The version of
+      this comment that stood here described exactly that hazard, and
+      the remedy was to make it unreachable instead of remembered.
+
+      An earlier version said iOS had never been compiled. It had. */
+  appStoreBadge: true,
 
   /** The macOS download. ON since Developer ID signing and notarisation
       were wired into build-apps.yml — which is the condition this flag
