@@ -47,8 +47,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { CreditCard, ExternalLink, RefreshCw } from "lucide-react";
 import { fetchUsage } from "./aiNotesClient.js";
-import { DURATION_ORDER, SELLABLE_TIERS, groupPackages, manageSubscriptionUrl } from "./purchasePlans.js";
-import { purchaseCapability, loadPackages, purchasePackage, restorePurchases } from "./purchases.js";
+import { DURATION_ORDER, SELLABLE_TIERS, groupPackages, manageSubscriptionUrl, displayPriceFor } from "./purchasePlans.js";
+import { purchaseCapability, loadPackages, purchasePackage, restorePurchases, introEligibility } from "./purchases.js";
 import {
   ACTIONS,
   ACTIVATING_NOTICE,
@@ -69,6 +69,7 @@ import {
   resetLine,
   unavailableLine,
   webFailureMessage,
+  introLine,
 } from "./plansCopy.js";
 import { bumpEntitlement, entitlementVersion, refreshEntitlementSoon, subscribeEntitlement } from "./entitlementRefresh.js";
 import { STRIPE_ENABLED, WEB_PLANS } from "./billingFlags.js";
@@ -100,6 +101,9 @@ export function PlansPanel({ session }) {
      this is. */
   const [noAccount, setNoAccount] = useState(false);
   const [packages, setPackages] = useState([]);
+  /* Product id -> eligibility. Empty until the read lands, which reads
+     as UNKNOWN everywhere and therefore as the full price. */
+  const [introMap, setIntroMap] = useState({});
   /* null while unasked, then "ok" | "empty" | "failed" — the three
      outcomes `loadPackages` is written to return, kept distinct all the
      way to the screen instead of two of them arriving as an empty array. */
@@ -153,6 +157,17 @@ export function PlansPanel({ session }) {
       }
       setPackages(r.packages);
       setStoreOutcome(r.packages.length ? "ok" : "empty");
+
+      /* ELIGIBILITY IS A SECOND, SEPARATE READ, and its failure must not
+         touch the first. The packages are what the panel is FOR; intro
+         eligibility only decides whether a price is shown at a discount,
+         and `introEligibility` answers UNKNOWN for every failure — so
+         the worst case here is the full price, which is what this panel
+         showed before any of this existed. */
+      const ids = r.packages.map((p) => p.product && p.product.identifier).filter(Boolean);
+      introEligibility({ productIds: ids, session }).then((map) => {
+        if (!cancelled) setIntroMap(map);
+      });
     });
     return () => {
       cancelled = true;
@@ -375,8 +390,19 @@ export function PlansPanel({ session }) {
               <p className="mt-0.5 text-xs text-stone-500">{tierAllowanceLine(group.tier)}</p>
               <div className="mt-2 grid grid-cols-3 gap-1.5">
                 {group.packages.map(({ pkg, tier: t, duration }) => {
-                  const price = pkg.product && pkg.product.priceString;
+                  /* THE PRICE ON SCREEN IS THE ONE THE STORE WILL
+                     CHARGE, decided in `displayPriceFor` rather than
+                     here: iOS needs eligibility, Play prices its own
+                     offers into `priceString`, and UNKNOWN shows the
+                     full price. */
+                  const shown = displayPriceFor({
+                    product: pkg.product,
+                    store: capability.store,
+                    eligibility: introMap[pkg.product && pkg.product.identifier],
+                  });
+                  const price = shown.price;
                   const lines = buyLines(duration, price);
+                  const after = introLine(shown.intro);
                   return (
                     <button
                       key={pkg.identifier}
@@ -389,10 +415,19 @@ export function PlansPanel({ session }) {
                          buys — the card title does, and a screen reader
                          does not read the card title with the button.
                          `buyLabel` is the full sentence, reused. */
-                      aria-label={buyLabel(t, duration, price)}
+                      aria-label={`${buyLabel(t, duration, price)}${after ? `, ${after}` : ""}`}
                     >
                       <span className="leading-tight">{lines.period}</span>
                       {lines.price && <span className="text-[11px] font-normal leading-tight opacity-90">{lines.price}</span>}
+                      {/* WHAT HAPPENS AFTER THE OFFER, on the button
+                          itself. An intro price without "then" is the
+                          half students are surprised by, and a footnote
+                          elsewhere on the card is a footnote. */}
+                      {after && (
+                        <span className="text-[10px] font-normal leading-tight opacity-75" data-intro-after>
+                          {after}
+                        </span>
+                      )}
                     </button>
                   );
                 })}

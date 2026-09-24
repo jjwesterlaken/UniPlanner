@@ -250,6 +250,61 @@ export const buyLines = (duration, priceString) => ({
   price: priceString || "",
 });
 
+/* UNIT NAMES FOR AN INTRO PERIOD. RevenueCat reports DAY / WEEK /
+   MONTH / YEAR; a student reads "3 months". Anything unrecognised
+   falls through to no phrase at all rather than a guess, because the
+   sentence is about money. */
+const INTRO_UNITS = {
+  DAY: ["day", "days"],
+  WEEK: ["week", "weeks"],
+  MONTH: ["month", "months"],
+  YEAR: ["year", "years"],
+};
+
+/**
+ * The second line under an introductory price: what happens after it.
+ *
+ * "A$4.49 then A$8.99" is the whole of what a student needs and is the
+ * half an intro offer most often leaves out. The duration is included
+ * when we can name it — an offer whose period we cannot read still
+ * says THEN WHAT, because the price after is the part somebody is
+ * surprised by.
+ *
+ * Returns "" when there is no offer, so the caller renders nothing
+ * rather than an empty element.
+ *
+ * THE DURATION IS `cycles` x `periodNumberOfUnits`, AND READING EITHER
+ * ONE ALONE IS WRONG ON EVERY PRODUCT THAT IS NOT MONTHLY. `cycles`
+ * counts discounted billing PERIODS; `periodNumberOfUnits` is how long
+ * one period is, in `periodUnit`. One introductory period at 50% on
+ * the six-month plan is `1 x 6 MONTH` = six months, and `cycles` alone
+ * renders that as "for 1 month" — a sentence about a price, five
+ * months short, on a screen somebody is about to pay from.
+ *
+ * A MISSING FACTOR DROPS THE DURATION RATHER THAN GUESSING AT IT. The
+ * `fetchNote` rule applied to a sentence: "then A$8.99" is true with
+ * no duration in it, while "for 1 month" on an offer we could not
+ * measure is a claim we have no evidence for, in the direction that
+ * costs the student.
+ */
+export const introLine = (intro) => {
+  if (!intro || !intro.then) return "";
+  const unit = INTRO_UNITS[String(intro.periodUnit || "").toUpperCase()];
+  const cycles = intro.cycles;
+  const per = intro.periodNumberOfUnits;
+  if (
+    unit &&
+    Number.isFinite(cycles) &&
+    cycles > 0 &&
+    Number.isFinite(per) &&
+    per > 0
+  ) {
+    const n = cycles * per;
+    return `for ${n} ${n === 1 ? unit[0] : unit[1]}, then ${intro.then}`;
+  }
+  return `then ${intro.then}`;
+};
+
 /**
  * What a tier BUYS, under its name on the card.
  *
