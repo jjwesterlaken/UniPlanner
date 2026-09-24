@@ -75,7 +75,7 @@
 import { Capacitor } from "@capacitor/core";
 import { Purchases } from "@revenuecat/purchases-capacitor";
 import { IOS_PUBLIC_KEY, ANDROID_PUBLIC_KEY } from "./purchaseKeys.js";
-import { capabilityFrom } from "./purchasePlans.js";
+import { capabilityFrom, introStatusFrom, INTRO_UNKNOWN } from "./purchasePlans.js";
 
 /** The live answer for this shell, with the pure rule doing the deciding. */
 export const purchaseCapability = ({
@@ -262,5 +262,50 @@ export async function restorePurchases({ session, plugin = Purchases, capability
     return { ok: true, customerInfo: info && info.customerInfo };
   } catch (error) {
     return { ok: false, reason: "sdk-error", error };
+  }
+}
+
+/**
+ * Which products this student is eligible for an introductory price on.
+ *
+ * ALWAYS ANSWERS, NEVER THROWS, AND ANSWERS "UNKNOWN" WHEN IT CANNOT
+ * FIND OUT — which is the whole design. The caller uses this to decide
+ * whether to PRINT A PRICE, so every failure has to land on the side
+ * that shows the full one: a plugin that rejects, a shell that is not
+ * native, a product the map does not mention, an SDK that has not been
+ * configured. RevenueCat says the same thing in its own docs, that
+ * unknown should display non-intro pricing "to not create a misleading
+ * situation".
+ *
+ * IT IS iOS-ONLY AT THE SOURCE — Android always returns UNKNOWN — and
+ * that is deliberately NOT special-cased here. `displayPriceFor` knows
+ * that Play prices its own offers into `priceString`, so an honest
+ * UNKNOWN from this function is exactly right on both platforms and
+ * there is one rule instead of two.
+ */
+export async function introEligibility({
+  productIds = [],
+  session,
+  plugin = Purchases,
+  capability = purchaseCapability(),
+} = {}) {
+  const unknown = {};
+  for (const id of productIds) unknown[id] = INTRO_UNKNOWN;
+  /* RULE 1: THE PLUGIN IS NEVER SPOKEN TO OFF A NATIVE SHELL. Asked
+     before anything else, and answered without touching it. */
+  if (!capability.available || !productIds.length) return unknown;
+
+  const ready = await ensureConfigured({ session, plugin, capability });
+  if (!ready.ok) return unknown;
+
+  try {
+    const map = await plugin.checkTrialOrIntroductoryPriceEligibility({ productIdentifiers: productIds });
+    const out = {};
+    for (const id of productIds) out[id] = introStatusFrom(map && map[id]);
+    return out;
+  } catch (error) {
+    /* Not logged as a failure and not surfaced: the panel renders the
+       full price, which is correct and is what it did yesterday. */
+    return unknown;
   }
 }

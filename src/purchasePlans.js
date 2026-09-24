@@ -52,6 +52,99 @@ export function capabilityFrom({ isNative, platform, iosKey, androidKey } = {}) 
   return { available: true, reason: null, store, apiKey };
 }
 
+/* ==================================================================
+   INTRODUCTORY OFFERS — what a student is shown, and the two ways of
+   getting it wrong.
+
+   An intro offer is configured in App Store Connect or Play Console;
+   the panel has always rendered `product.priceString`, which is the
+   FULL recurring price. So a 50% introductory offer was applied at the
+   till and advertised nowhere.
+
+   TWO NAIVE FIXES, EACH WRONG IN A DIFFERENT DIRECTION.
+
+   "Read `introPrice` and show it" lies on iOS. `introPrice` is the
+   offer that EXISTS ON THE PRODUCT, not the offer THIS student gets —
+   somebody who has subscribed before is ineligible and will be charged
+   full price at the sheet. A discount on our screen that Apple does
+   not honour is a false price on a screen Apple checks, and it is the
+   readback-versus-reality class: the product is a receipt for what was
+   configured, never for what will be charged.
+
+   "Gate it on eligibility" silently kills it on Android. RevenueCat's
+   own documentation: *"Android always returns
+   INTRO_ELIGIBILITY_STATUS_UNKNOWN."* Under an eligibility gate, Play
+   would never show an offer at all.
+
+   THE PLATFORMS ARE NOT SYMMETRIC AND THE ASYMMETRY IS THE ANSWER.
+
+     iOS      `priceString` is the full price and `introPrice` is a
+              separate field, so we ASK, and only ELIGIBLE shows it.
+     Android  `priceString` is documented as "the formatted price value
+              of defaultOption" — Play bakes the applicable offer into
+              the option it hands us. So `priceString` is ALREADY what
+              the student will be charged, and overriding it with
+              `introPrice` would be second-guessing the store.
+
+   UNKNOWN SHOWS THE FULL PRICE, which is RevenueCat's own advice
+   ("the best course of action on unknown status is to display the
+   non-intro pricing, to not create a misleading situation") and the
+   `fetchNote` rule with money attached: not-known is not yes, and the
+   safe direction is understating. A student who is quietly charged
+   less than we said is delighted; the reverse is a refund. */
+
+export const INTRO_ELIGIBLE = "eligible";
+export const INTRO_INELIGIBLE = "ineligible";
+export const INTRO_UNKNOWN = "unknown";
+
+/** RevenueCat's numeric enum, mapped to something readable. Anything
+    unrecognised is UNKNOWN, which is the conservative direction. */
+export function introStatusFrom(raw) {
+  const status = raw && typeof raw === "object" ? raw.status : raw;
+  if (status === 2 || status === INTRO_ELIGIBLE) return INTRO_ELIGIBLE;
+  if (status === 1 || status === INTRO_INELIGIBLE) return INTRO_INELIGIBLE;
+  return INTRO_UNKNOWN;
+}
+
+/**
+ * What to display for one package.
+ *
+ * Returns `{ price, intro }` where `price` is always the string to
+ * show as the headline, and `intro` is `null` or
+ * `{ priceString, cycles, periodUnit, then }`.
+ *
+ * `reason` is carried for the tests and for anybody debugging why an
+ * offer is not on screen, which is the question somebody will ask.
+ */
+export function displayPriceFor({ product, store, eligibility } = {}) {
+  const full = (product && product.priceString) || "";
+  const none = (reason) => ({ price: full, intro: null, reason });
+
+  if (!product) return none("no-product");
+  /* PLAY PRICES THE OFFER ITSELF. `priceString` is defaultOption's
+     formatted price, so it already carries whatever Play will charge
+     — and an `introPrice` laid over it would be us disagreeing with
+     the store about its own billing. */
+  if (store === "play_store") return none("store-prices-it");
+
+  const intro = product.introPrice;
+  if (!intro || !intro.priceString) return none("no-offer");
+  if (eligibility !== INTRO_ELIGIBLE) {
+    return none(eligibility === INTRO_INELIGIBLE ? "not-eligible" : "eligibility-unknown");
+  }
+
+  return {
+    price: intro.priceString,
+    intro: {
+      priceString: intro.priceString,
+      cycles: Number.isFinite(intro.cycles) ? intro.cycles : null,
+      periodUnit: typeof intro.periodUnit === "string" ? intro.periodUnit : null,
+      then: full,
+    },
+    reason: "offer",
+  };
+}
+
 /* THE SIX PACKAGES OF THE `default` OFFERING, keyed by the package
    identifier entered in the RevenueCat dashboard (Phase 3).
 

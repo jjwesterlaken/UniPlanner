@@ -250,6 +250,39 @@ export const buyLines = (duration, priceString) => ({
   price: priceString || "",
 });
 
+/* UNIT NAMES FOR AN INTRO PERIOD. RevenueCat reports DAY / WEEK /
+   MONTH / YEAR; a student reads "3 months". Anything unrecognised
+   falls through to no phrase at all rather than a guess, because the
+   sentence is about money. */
+const INTRO_UNITS = {
+  DAY: ["day", "days"],
+  WEEK: ["week", "weeks"],
+  MONTH: ["month", "months"],
+  YEAR: ["year", "years"],
+};
+
+/**
+ * The second line under an introductory price: what happens after it.
+ *
+ * "A$4.49 then A$8.99" is the whole of what a student needs and is the
+ * half an intro offer most often leaves out. The duration is included
+ * when we can name it — an offer whose period we cannot read still
+ * says THEN WHAT, because the price after is the part somebody is
+ * surprised by.
+ *
+ * Returns "" when there is no offer, so the caller renders nothing
+ * rather than an empty element.
+ */
+export const introLine = (intro) => {
+  if (!intro || !intro.then) return "";
+  const unit = INTRO_UNITS[String(intro.periodUnit || "").toUpperCase()];
+  const n = intro.cycles;
+  if (unit && Number.isFinite(n) && n > 0) {
+    return `for ${n} ${n === 1 ? unit[0] : unit[1]}, then ${intro.then}`;
+  }
+  return `then ${intro.then}`;
+};
+
 /**
  * What a tier BUYS, under its name on the card.
  *
