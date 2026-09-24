@@ -80,7 +80,14 @@ export async function preparePhoto(sharp, file, { maxEdge, quality }) {
  * it wrong here is a 400 on every call, and the same branch is pinned
  * by a test against the real adapter.
  */
-export async function callVision({ apiKey, model, messages, maxTokens }) {
+/* `jsonSchema` IS OPTIONAL AND THE DEFAULT IS UNCHANGED. Four scripts
+   share this function; the photo harnesses and the photo-gate
+   measurement run under JSON mode and their recorded token counts are
+   a bill for THAT configuration, so changing the default here would
+   quietly re-price every photo measurement on its next run. The essay
+   scripts pass a strict schema because they need an enum enforced; the
+   rest pass nothing and get exactly what they had. */
+export async function callVision({ apiKey, model, messages, maxTokens, jsonSchema = null }) {
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -88,7 +95,7 @@ export async function callVision({ apiKey, model, messages, maxTokens }) {
       body: JSON.stringify({
         model,
         messages,
-        response_format: { type: "json_object" },
+        response_format: jsonSchema ? { type: "json_schema", json_schema: jsonSchema } : { type: "json_object" },
         ...(model.startsWith("gpt-5") ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
       }),
     });

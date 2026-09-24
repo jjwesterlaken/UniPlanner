@@ -45,19 +45,11 @@ import { normaliseWords, gramSet, quotedSpans } from "./noWriting.js";
  * criterion has somewhere honest to put that, rather than inventing a
  * deficiency to fill the schema.
  */
-export const DEFICIENCIES = [
-  "claim-without-evidence",
-  "evidence-without-claim",
-  "undefined-term",
-  "unclear-relevance",
-  "unsupported-generalisation",
-  "contradiction",
-  "missing-counterargument",
-  "unattributed-source",
-  "repetition",
-  "structure-unsignposted",
-  "off-criterion",
-];
+/* MOVED to `supabase/functions/_shared/essaySchema.js` and re-exported
+   here, so the essay endpoint (Deno) and this module (browser, Node)
+   read one list. The re-export keeps every existing import working. */
+export { DEFICIENCIES, SEVERITY, SEVERITY_LEVELS, severityOf, essayFeedbackSchema } from "../supabase/functions/_shared/essaySchema.js";
+import { DEFICIENCIES } from "../supabase/functions/_shared/essaySchema.js";
 
 const isFinitePositive = (v) => Number.isInteger(v) && v > 0;
 

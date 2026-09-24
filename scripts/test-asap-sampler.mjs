@@ -22,6 +22,7 @@ import zlib from "node:zlib";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { docxToText, zipEntries } from "./lib/docx-text.mjs";
+import { MIN_ESSAY_WORDS, selectForRead, scoreRanges, normaliseScore, bandOf, DECLARED_SCORE_RANGES } from "./lib/asap-corpus.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -107,6 +108,19 @@ test("a zip with no word/document.xml says what it DID find", () => {
 
 /* ---------- 2. the corpus handling ---------- */
 
+/* SCORES INSIDE EACH SET'S REAL RANGE. The first version used `i % 4`
+   for every set, so set 1 held scores of 0 and 1 — impossible in ASAP,
+   whose set 1 is scored 2-12. Nothing noticed until `scoreRanges`
+   started refusing a corpus whose scores fall outside a declared range,
+   and it refused THIS fixture on its first run. A guard that catches the
+   test's own impossible data is a guard that is reading the data. */
+function scoreFor(set, i) {
+  const r = DECLARED_SCORE_RANGES[set];
+  if (!r) return i % 4;
+  const span = r.max - r.min;
+  return r.min + Math.round(((i % 4) / 3) * span);
+}
+
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "asap-fix-"));
   fs.mkdirSync(path.join(dir, "Essay_Set_Descriptions"));
@@ -115,13 +129,13 @@ function fixture() {
   let id = 1;
   for (const set of [1, 2, 3, 7, 8]) {
     for (let i = 0; i < 8; i++) {
-      rows.push([id++, set, `Dear @CAPS1, I think computers help people in many different ways every single day. My friend @PERSON${i} who lives in @LOCATION1 uses one for about @NUM1 hours a week. It is useful because you can learn new things, talk to family who live far away, and find information for school work without going to a library. Some people say computers are bad for you because you sit down too much and do not exercise enough, but I disagree with that view quite strongly and I will explain exactly why in this essay. It${SMART}s clear enough.`, i % 4].join("\t"));
+      rows.push([id++, set, `Dear @CAPS1, I think computers help people in many different ways every single day. My friend @PERSON${i} who lives in @LOCATION1 uses one for about @NUM1 hours a week. It is useful because you can learn new things, talk to family who live far away, and find information for school work without going to a library. Some people say computers are bad for you because you sit down too much and do not exercise enough, but I disagree with that view quite strongly and I will explain exactly why in this essay. It${SMART}s clear enough. First, computers make it much easier to stay in touch with people you care about. My grandparents live in another country and we talk every weekend using a video call, which would have been impossible for most families only a generation ago. Seeing their faces and hearing their voices matters to me far more than a letter would, and it keeps our family close even though we are separated by thousands of kilometres of ocean and several time zones. Second, computers help students learn in ways that suit them. When I do not understand something in class I can look for a different explanation, watch a video that goes more slowly, or practise with exercises that tell me straight away whether I got the answer right. That kind of immediate feedback is something a single textbook simply cannot give you, however good it is. Finally, the argument that computers make people lazy ignores how people actually use them. Many of my friends use their computers to plan sports training, find new walking tracks, or join clubs they would never have heard about otherwise. So computers do not replace an active life; for a lot of people they are the reason it began.`, scoreFor(set, i)].join("\t"));
     }
   }
   /* A four-word row, deliberately: ASAP has near-blanks in it and the
      floor exists to exclude them. Without one in the fixture the
      floor test would pass over nothing. */
-  rows.push([9999, 1, "Computers are quite good.", 0].join("\t"));
+  rows.push([9999, 1, "Computers are quite good.", DECLARED_SCORE_RANGES[1].min].join("\t")); /* in range: a stub is still scored on the set's own scale */
   fs.writeFileSync(path.join(dir, "training_set_rel3.tsv"), Buffer.from(rows.join("\n"), "latin1"));
   for (const set of [1, 2, 7, 8]) {
     makeDocx(path.join(dir, "Essay_Set_Descriptions", `Essay Set #${set}--ReadMeFirst.docx`), `Prompt ${set}. Scoring: a clear position sustained throughout.`);
@@ -164,7 +178,10 @@ test("THE LENGTH FLOOR EXCLUDES A STUB ESSAY, and the fixture contains one to ex
     const out = runSampler(["--dir", dir, "--per-set", "2", "--dry-run"]);
     assert.match(out, /floor 50, [1-9]\d* rows below it skipped/, "no row was skipped, so the floor did nothing");
     const min = Number(out.match(/words\s+min (\d+)/)[1]);
-    assert.ok(min >= 50, `a ${min}-word essay was sampled under a 50-word floor`);
+    /* AGAINST THE CONSTANT, not a number typed here. This read 50 — the
+       old floor restated — and would have gone on passing if the floor
+       were quietly lowered back, which is the ledger's first entry. */
+    assert.ok(min >= MIN_ESSAY_WORDS, `a ${min}-word essay was sampled under the ${MIN_ESSAY_WORDS}-word floor`);
 
     /* And a floor nothing can meet REFUSES rather than sampling
        nothing quietly. */
@@ -456,11 +473,14 @@ test("A SINGLE SCORE BAND IS REFUSED — the sheet's second question cannot be a
     fs.mkdirSync(path.join(dir, "Essay_Set_Descriptions"));
     const rows = [["essay_id", "essay_set", "essay", "domain1_score"].join("\t")];
     for (let i = 0; i < 8; i++) {
-      /* OVER THE 50-WORD FLOOR, or `loadCorpus` drops every row and the
+      /* OVER THE WORD FLOOR, or `loadCorpus` drops every row and the
          refusal under test is never reached — the first version of this
-         fixture failed for that reason and looked like the band check
-         not working. */
-      rows.push([i + 1, 1, "Computers help people in many different ways every single day and this essay explains exactly why that is so for families and for schools everywhere. You can learn new things, talk to relatives who live a long way away, and find information for your school work without ever going to a library building.", 3].join("\t"));
+         fixture failed for exactly that reason at the old 50-word floor
+         and looked like the band check not working, and it happened
+         again when the floor moved to 250. The essay is built to the
+         CONSTANT now, so the next move of the floor cannot repeat it. */
+      const para = "Computers help people in many different ways every single day, and this essay explains why that is so for families and for schools. You can learn new things, talk to relatives who live a long way away, and find information for school work without ever going to a library building. ";
+      rows.push([i + 1, 1, para.repeat(Math.ceil(MIN_ESSAY_WORDS / para.split(/\s+/).length) + 1).trim(), 3].join("\t"));
     }
     fs.writeFileSync(path.join(dir, "training_set_rel3.tsv"), Buffer.from(rows.join("\n"), "latin1"));
     fs.writeFileSync(path.join(dir, "Essay_Set_Descriptions", "set1.txt"), "Prompt and scoring guide for set 1.");
@@ -468,7 +488,7 @@ test("A SINGLE SCORE BAND IS REFUSED — the sheet's second question cannot be a
     const out = path.join(os.tmpdir(), `asap-read-flat-${Date.now()}.md`);
     const r = runReader(["--dir", dir, "--out", out, "--sets", "1", "--dry-run"]);
     assert.equal(r.code, 1, "a single-band selection was accepted");
-    assert.match(r.out, /same human score/i);
+    assert.match(r.out, /same normalised band/i);
     assert.ok(!fs.existsSync(out), "it wrote a file it had already refused to produce");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -480,6 +500,184 @@ test("the read is GITIGNORED as well as fenced — two lines, because they cover
   assert.match(ignore, /asap-read/, "nothing in .gitignore covers the read file");
 });
 
+/* ================================================================
+   PER-SET BANDS — the bug Jared found by reading the file
+
+   ASAP scores each set on its own range, and the first read compared
+   raw scores across sets: a set-7 essay at 5/30, a WEAK essay, sat at
+   the top of the sheet as "score 5", so the lowest-versus-highest
+   question compared two weak essays.
+   ================================================================ */
+
+test("A SET-7 ESSAY AT 5/30 IS A WEAK ESSAY, and a set-2 essay at 5/6 is a strong one", () => {
+  /* THE REGRESSION, by name. Same raw number, opposite bands. Before
+     the fix these two were indistinguishable on the sheet. */
+  const r7 = { ...DECLARED_SCORE_RANGES[7] };
+  const r2 = { ...DECLARED_SCORE_RANGES[2] };
+  assert.equal(bandOf(normaliseScore(5, r7)), "low", "5/30 did not band as low");
+  assert.equal(bandOf(normaliseScore(5, r2)), "high", "5/6 did not band as high");
+  assert.notEqual(bandOf(normaliseScore(5, r7)), bandOf(normaliseScore(5, r2)), "the same raw score bands the same across sets");
+});
+
+test("THE READ'S STRONG ESSAY IS STRONG IN ITS OWN SET, not merely the largest raw number", () => {
+  /* Driven through selectForRead with rows where RAW order and
+     NORMALISED order disagree — set 7's raw scores are all larger than
+     set 2's, and every set-7 essay here is weak. A selection that
+     still sorted raw scores would put a set-7 essay at the top. */
+  const rows = [
+    ...[3, 4, 5, 6].map((sc, i) => ({ id: `7-${i}`, set: 7, score: sc, words: 400 })),
+    ...[1, 2, 5, 6].map((sc, i) => ({ id: `2-${i}`, set: 2, score: sc, words: 400 })),
+  ];
+  const allScores = [...rows, { set: 7, score: 0 }, { set: 7, score: 30 }];
+  const { chosen, bandsCovered } = selectForRead({ rows, allScores, n: 6, seed: 1 });
+  assert.ok(bandsCovered.length >= 2, `only ${bandsCovered.join(",")} covered, so the comparison is unavailable`);
+  const top = chosen[chosen.length - 1];
+  assert.equal(top.band, "high", `the strongest essay read is in the ${top.band} band`);
+  assert.notEqual(top.set, 7, `the "strongest" essay is set 7 at ${top.score}/30 — raw order is back`);
+  /* And every set-7 essay in this corpus is weak, so none may band high. */
+  assert.ok(chosen.filter((c) => c.set === 7).every((c) => c.band === "low"), "a weak set-7 essay was banded above low");
+});
+
+test("A DECLARED RANGE THE DATA CONTRADICTS IS REFUSED, not quietly used", () => {
+  /* The check that makes restating a third-party range acceptable.
+     It caught this file's own fixture on its first run — set 1 scored
+     0 and 1, which ASAP set 1 cannot — so it is known to bite. */
+  assert.throws(
+    () => scoreRanges([{ set: 1, score: 0 }, { set: 1, score: 12 }]),
+    /outside the declared range/,
+    "a set-1 score of 0 was accepted against a declared 2-12"
+  );
+  const ok = scoreRanges([{ set: 1, score: 2 }, { set: 1, score: 12 }]);
+  assert.equal(ok[1].source, "declared");
+  /* An undeclared set is OBSERVED and says so — the printout labels it,
+     because a range whose top score nobody reached reads narrower than
+     the rubric. */
+  const obs = scoreRanges([{ set: 8, score: 10 }, { set: 8, score: 50 }]);
+  assert.equal(obs[8].source, "observed");
+  assert.deepEqual([obs[8].min, obs[8].max], [10, 50]);
+});
+
+test("THE RANGE COMES FROM EVERY ESSAY, not only the ones above the word floor", () => {
+  /* The floor decides which essays are READ, not the scale they are
+     marked on. Short essays skew low, so a range computed only above
+     the floor would raise an observed minimum and mis-band a set whose
+     range is not declared. Drives the observed (set 8) path, where it
+     matters. */
+  const above = [{ id: "a", set: 8, score: 40, words: 400 }, { id: "b", set: 8, score: 50, words: 400 }];
+  const all = [...above, { set: 8, score: 5 }];
+  const narrow = selectForRead({ rows: above, allScores: above, n: 2 });
+  const wide = selectForRead({ rows: above, allScores: all, n: 2 });
+  assert.equal(narrow.ranges[8].min, 40);
+  assert.equal(wide.ranges[8].min, 5, "a below-floor score did not reach the range");
+  assert.notDeepEqual(
+    narrow.chosen.map((c) => c.band),
+    wide.chosen.map((c) => c.band),
+    "including the below-floor score changed nothing, so the range is not reading it"
+  );
+});
+
+test("THE WORD FLOOR IS 250, and loadCorpus takes it by default", () => {
+  assert.ok(MIN_ESSAY_WORDS >= 250, `the floor is ${MIN_ESSAY_WORDS} — Jared asked for at least 250`);
+  const src = read("scripts/lib/asap-corpus.mjs");
+  assert.match(src, /minWords = MIN_ESSAY_WORDS/, "loadCorpus has its own default instead of the shared floor");
+});
+
+test("THE SAME SEED GIVES THE SAME READ", () => {
+  const rows = [1, 2, 3, 4, 5, 6].map((sc, i) => ({ id: `${i}`, set: 2, score: sc, words: 400 }));
+  const a = selectForRead({ rows, n: 4, seed: 7 }).chosen.map((c) => c.id);
+  const b = selectForRead({ rows, n: 4, seed: 7 }).chosen.map((c) => c.id);
+  const c = selectForRead({ rows, n: 4, seed: 8 }).chosen.map((c) => c.id);
+  assert.deepEqual(a, b, "one seed gave two different reads — a measurement is an anecdote with a bigger n");
+  assert.ok(a.length > 0);
+  /* A different seed CAN coincide on a small corpus; what must not
+     happen is the seed being ignored. */
+  assert.ok(new Set([a.join(), c.join()]).size >= 1);
+});
+
+test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the schema on the wire", () => {
+  /* NOTHING RAN READ MODE PAST --dry-run BEFORE THIS. So the sheet a
+     person opens — the printed point count, the severity mix, both
+     questions — had never been rendered by any test, and the claim that
+     the strict schema reaches the provider rested on a grep of the
+     source. A guard for a bug that needs a user action has to perform
+     the action; this one performs the run.
+
+     The stub RECORDS each request body. That is the artifact: the
+     bytes that left for the provider, not the line of code that
+     intended to send them. */
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "asap-e2e-"));
+  try {
+    const dir = path.join(tmp, "corpus");
+    fs.mkdirSync(path.join(dir, "Essay_Set_Descriptions"), { recursive: true });
+    const para = "The printing press changed who could hold an argument in public, and this essay considers how and why that happened across several decades of European history. ";
+    const body = para.repeat(Math.ceil(MIN_ESSAY_WORDS / para.split(/\s+/).length) + 1).trim();
+    const rows = [["essay_id", "essay_set", "essay", "domain1_score"].join("\t")];
+    /* Set 1 is 2-12 and set 2 is 1-6: a LOW and a HIGH essay in each,
+       so the read has two bands and the table has something to count. */
+    [[1, 2], [1, 12], [2, 1], [2, 6], [1, 7], [2, 3]].forEach(([set, score], i) => rows.push([i + 1, set, body, score].join("\t")));
+    fs.writeFileSync(path.join(dir, "training_set_rel3.tsv"), Buffer.from(rows.join("\n"), "latin1"));
+    fs.writeFileSync(path.join(dir, "Essay_Set_Descriptions", "set1.txt"), "Persuasive: take a position and support it.");
+    fs.writeFileSync(path.join(dir, "Essay_Set_Descriptions", "set2.txt"), "Persuasive: argue a view on censorship.");
+
+    const bodies = path.join(tmp, "bodies.jsonl");
+    const stub = path.join(tmp, "stub.mjs");
+    /* Every call returns two FUNDAMENTAL points and one MINOR, quoting
+       text that is really in the essay, so the arithmetic below is
+       known in advance. */
+    fs.writeFileSync(
+      stub,
+      `import fs from "node:fs";
+       globalThis.fetch = async (_url, init) => {
+         fs.appendFileSync(${JSON.stringify(bodies)}, init.body + "\\n");
+         return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ points: [
+           { quote: "changed who could hold an argument", deficiency: "claim-without-evidence", note: "The claim is asserted, not shown." },
+           { quote: "how and why that happened", deficiency: "unsupported-generalisation", note: "Too broad for what follows." },
+           { quote: "across several decades", deficiency: "repetition", note: "Said twice." },
+         ] }) } }] }) };
+       };\n`
+    );
+    const out = path.join(tmp, "read.md");
+    execFileSync(process.execPath, ["--import", stub, path.join(rootDir, "scripts", "read-asap.mjs"), "--dir", dir, "--out", out, "--sets", "1,2", "--n", "6"], {
+      encoding: "utf8",
+      env: { ...process.env, OPENAI_API_KEY: "sk-fake" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    /* 1. THE SCHEMA REACHED THE WIRE. */
+    const sent = fs.readFileSync(bodies, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.ok(sent.length > 0, "no request was made, so nothing below is about a real run");
+    for (const b of sent) {
+      assert.equal(b.response_format.type, "json_schema", "the request went out as json_object — the enum is a suggestion again");
+      assert.equal(b.response_format.json_schema.strict, true, "the schema went out non-strict");
+      const e = b.response_format.json_schema.schema.properties.points.items.properties.deficiency.enum;
+      assert.ok(e.includes("claim-without-evidence") && e.length > 5, "the enum on the wire is not the closed set");
+    }
+
+    /* 2. THE NUMBERS. 6 essays x 3 points: 12 fundamental, 6 minor. */
+    const md = fs.readFileSync(out, "utf8");
+    assert.match(md, /Point count against band/, "the point-count table is missing");
+    const rowsIn = [...md.matchAll(/^\| (low|middle|high) \| (\d+) \| (\d+) \| [\d.—]+ \| (\d+) \| (\d+) \| (\d+) \|$/gm)];
+    assert.ok(rowsIn.length >= 2, `the band table has ${rowsIn.length} rows`);
+    const total = (i) => rowsIn.reduce((a, r) => a + Number(r[i]), 0);
+    assert.equal(total(3), 18, "the point total across bands is wrong");
+    assert.equal(total(4), 12, "the fundamental total is wrong");
+    assert.equal(total(5), 6, "the minor total is wrong");
+    assert.match(md, /Codes outside the closed set: 0\./, "the unknown-code count is missing or non-zero");
+
+    /* 3. BOTH QUESTIONS, and the severity one by its substance. */
+    assert.match(md, /Does the WEAKER essay get more substantive comment/);
+    assert.match(md, /Does the SUBSTANCE track the band\?/, "the severity question is missing from the sheet");
+
+    /* 4. BANDS, not raw scores — and the false claim is gone. */
+    assert.match(md, /\(low band\)/);
+    assert.match(md, /\(high band\)/);
+    assert.match(md, /\d+\/12/, "raw scores are not shown against their set's maximum");
+    assert.doesNotMatch(md, /1[–-]6 holistic\s+band/, "the sheet still says every set is scored 1-6");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("NO ESSAY TEXT IS PRINTED — the file is the only place it goes", () => {
   /* A terminal is pasteable and scrollback outlives the run. The
      script's own summary must name counts and ids and nothing else. */
@@ -487,8 +685,13 @@ test("NO ESSAY TEXT IS PRINTED — the file is the only place it goes", () => {
   const printed = [...src.matchAll(/console\.(log|error)\(([^\n]*)/g)].map((m) => m[2]).join("\n");
   assert.doesNotMatch(printed, /row\.essay|o\.row\.essay|\.essay\b/, "the script prints essay text to the terminal");
   /* Non-vacuity: it really does write the essay SOMEWHERE, or this
-     guard is about a script that does nothing. */
-  assert.match(src, /sheet\.push\(o\.row\.essay\)/, "the read never writes the essay at all");
+     guard is about a script that does nothing.
+
+     ANY IDENTIFIER, not `o`. The first version pinned the loop
+     variable's NAME, so renaming it to `m` in the per-set banding
+     change failed a guard whose claim is about where the text goes —
+     the ledger's "pinned to the writing, not the claim", in a regex. */
+  assert.match(src, /sheet\.push\(\w+\.row\.essay\)/, "the read never writes the essay at all");
 });
 
 test("npm test runs this file", () => {

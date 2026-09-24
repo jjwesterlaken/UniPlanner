@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFICIENCIES, measurePoint, refusePoint, quoteVariety } from "../src/essayPoints.js";
+import { DEFICIENCIES, measurePoint, refusePoint, quoteVariety, SEVERITY, SEVERITY_LEVELS, severityOf, essayFeedbackSchema } from "../src/essayPoints.js";
 import { ARMS, userMessage } from "./lib/essay-arms.mjs";
 import { SCOPE_CONTROL, scopeControl } from "./lib/two-arm-summary.mjs";
 
@@ -423,6 +423,90 @@ await test("THE SAMPLER'S EXIT CODE IS THE GATE, not a line in its output", () =
     "the sampler discards summariseTwoArm's verdict, so a failed scope control cannot stop anything"
   );
   assert.match(body, /process\.exit\([^)]*verdict/, "the sampler's exit code does not depend on the verdict");
+});
+
+/* ================================================================
+   THE ENUM IS ENFORCED BY A SCHEMA, NOT REQUESTED IN PROSE
+
+   84 of 318 constrained points on 24 September carried a code outside
+   the closed set, and Jared's read found "spelling/grammar", "style"
+   and "conventions" in the output. The prompt described the schema in
+   prose and the call sent `json_object`, which enforces NO schema.
+   ================================================================ */
+
+test("THE SCHEMA'S ENUM IS THE CLOSED SET, by reference and not by restatement", () => {
+  const e = essayFeedbackSchema().schema.properties.points.items.properties.deficiency.enum;
+  assert.deepEqual([...e].sort(), [...DEFICIENCIES].sort(), "the schema enum and the closed set disagree");
+  assert.ok(e.length > 0, "an empty enum would forbid every point");
+  /* And the source does not spell a code out beside the list — a second
+     copy is the one that goes stale when a code is added. */
+  const src = read("supabase/functions/_shared/essaySchema.js").replace(/\/\*[\s\S]*?\*\//g, " ");
+  assert.match(src, /enum: \[\.\.\.DEFICIENCIES\]/, "the schema enum is written out instead of taken from DEFICIENCIES");
+});
+
+test("THE SCHEMA IS VALID STRICT MODE: every object closed, every property required", () => {
+  /* OpenAI's strict mode refuses a schema that leaves a property
+     optional or an object open. Walked recursively so a nested object
+     added later is held to the same rule. */
+  const sch = essayFeedbackSchema();
+  assert.equal(sch.strict, true, "the schema is not marked strict, so the enum is a suggestion again");
+  const walk = (node, at) => {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "object") {
+      assert.equal(node.additionalProperties, false, `${at} is open`);
+      assert.deepEqual([...(node.required || [])].sort(), Object.keys(node.properties || {}).sort(), `${at} leaves a property optional`);
+      for (const [k, v] of Object.entries(node.properties || {})) walk(v, `${at}.${k}`);
+    }
+    if (node.type === "array") walk(node.items, `${at}[]`);
+  };
+  walk(sch.schema, "root");
+  /* `minItems` is not supported in strict mode (CLAUDE.md), and a schema
+     that used it would be refused by the provider at call time. */
+  assert.doesNotMatch(JSON.stringify(sch), /minItems/, "strict mode does not support minItems");
+});
+
+test("EVERY CODE HAS A SEVERITY, and no severity names a code that does not exist", () => {
+  /* So a code added later cannot ship without somebody deciding how
+     serious it is — the route-guard shape, on the deficiency list. */
+  assert.deepEqual(Object.keys(SEVERITY).sort(), [...DEFICIENCIES].sort(), "the severity map and the closed set disagree");
+  for (const [code, level] of Object.entries(SEVERITY)) {
+    assert.ok(SEVERITY_LEVELS.includes(level), `${code} has severity "${level}", which is not a level`);
+  }
+  assert.equal(severityOf("spelling/grammar"), "unknown", "a code outside the set was given a severity");
+});
+
+test("THE APPROVED SPLIT, pinned — and the two codes nobody ruled on stay unrated", () => {
+  /* Jared, 24 September 2026: approved as proposed, with
+     missing-counterargument and unattributed-source under fundamental.
+     The proposal covered nine codes; the other two are UNRATED rather
+     than quietly assigned, and this asserts it so that assigning them
+     is a visible change rather than an edit nobody reviewed. */
+  const fundamental = ["claim-without-evidence", "unsupported-generalisation", "contradiction", "unclear-relevance", "missing-counterargument", "unattributed-source"];
+  const minor = ["repetition", "structure-unsignposted", "undefined-term"];
+  for (const c of fundamental) assert.equal(SEVERITY[c], "fundamental", `${c} is not fundamental`);
+  for (const c of minor) assert.equal(SEVERITY[c], "minor", `${c} is not minor`);
+  assert.deepEqual(
+    Object.entries(SEVERITY).filter(([, v]) => v === "unrated").map(([k]) => k).sort(),
+    ["evidence-without-claim", "off-criterion"],
+    "the unrated set changed — rate a code on purpose, not in passing"
+  );
+});
+
+test("THE READ AND THE HARNESS BOTH SEND THE SCHEMA — one source, every caller", () => {
+  /* The enum fix is worthless in whichever script forgets it. Checked
+     at the call sites, comments stripped. */
+  for (const f of ["scripts/read-asap.mjs", "scripts/measure-two-arm.mjs"]) {
+    const src = read(f).replace(/\/\*[\s\S]*?\*\//g, " ");
+    assert.match(src, /jsonSchema:\s*essayFeedbackSchema\(\)/, `${f} calls the provider without the strict schema`);
+  }
+});
+
+test("callVision'S DEFAULT IS UNCHANGED, so the photo measurements are not re-priced", () => {
+  /* Four scripts share callVision; the photo ones are a bill for JSON
+     mode, and moving the default would re-price them on the next run. */
+  const src = read("scripts/lib/photo-calls.mjs");
+  assert.match(src, /jsonSchema = null/, "the schema is not optional");
+  assert.match(src, /:\s*\{\s*type:\s*"json_object"\s*\}/, "the json_object default is gone");
 });
 
 test("npm test runs this file", () => {

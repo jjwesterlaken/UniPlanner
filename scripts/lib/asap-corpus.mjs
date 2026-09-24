@@ -32,13 +32,172 @@ export const DEFAULT_SETS = [1, 2, 7, 8];
 const ANON = /@[A-Z]+\d*/g;
 export const stripAnon = (s) => s.replace(ANON, " ").replace(/\s{2,}/g, " ").trim();
 
+/* ---------------------------------------------------------------
+ * THE WORD FLOOR — 250, raised from 50 on 24 September 2026.
+ *
+ * Jared's read found five of six chosen essays at 52-91 words. An
+ * essay that short can support one or two points at most, so it cannot
+ * tell you whether the feedback discriminates — a strong 60-word essay
+ * and a weak one both get "one point", and the comparison the read
+ * exists for is not available. 250 is the least a university-relevant
+ * judgement can rest on.
+ *
+ * SHARED BY BOTH CALLERS ON PURPOSE. The two-arm harness takes this
+ * default too, and for the same reason: a 60-word essay cannot carry
+ * several points in either instrument. It MOVES THE HARNESS'S
+ * POPULATION, so its numbers are not comparable with runs before this
+ * change — which is correct, since the earlier population was the
+ * fault.
+ *
+ * WHETHER ENOUGH ESSAYS CLEAR IT is a fact about the corpus, and the
+ * corpus is not in this repository. So `loadCorpus` REPORTS how many
+ * clear it per set rather than this comment asserting it; set 7 (short
+ * narratives) is the one predicted to fall short, and that is a
+ * prediction until a run prints the number.
+ * --------------------------------------------------------------- */
+export const MIN_ESSAY_WORDS = 250;
+
+/* ---------------------------------------------------------------
+ * PER-SET SCORE RANGES — because a raw score is not a band.
+ *
+ * ASAP scores each set on its OWN range. The first read treated
+ * `domain1_score` as comparable across sets, so a set-7 essay at 5 —
+ * five out of THIRTY, a weak essay — was the "score 5" at the top of
+ * the sheet, and the lowest-versus-highest question compared two weak
+ * essays. Found by Jared reading the file, 24 September 2026.
+ *
+ * DECLARED where the rubric range is known, OBSERVED otherwise, and
+ * the difference is printed. The declared ranges are facts about a
+ * third-party dataset, which is the one kind of restatement allowed —
+ * provided something checks it: `scoreRanges` REFUSES a corpus whose
+ * observed scores fall outside a declared range, so a wrong number here
+ * goes red against the data rather than quietly mis-banding it.
+ *
+ * Set 8 is not declared. Its range was not given and is not guessed;
+ * it is taken from the corpus and labelled `observed`, which is weaker
+ * (a range whose top score no essay reached would read as narrower than
+ * the rubric) and is said so on the printout.
+ * --------------------------------------------------------------- */
+export const DECLARED_SCORE_RANGES = Object.freeze({
+  1: { min: 2, max: 12 },
+  2: { min: 1, max: 6 },
+  7: { min: 0, max: 30 },
+});
+
+/**
+ * The range each set is normalised against: declared where known,
+ * observed from `rows` otherwise. Throws if observed scores fall outside
+ * a declared range — the check that stops a wrong declared number from
+ * silently mis-banding every essay in its set.
+ */
+export function scoreRanges(rows) {
+  const out = {};
+  const sets = [...new Set(rows.map((r) => r.set))].sort((a, b) => a - b);
+  for (const set of sets) {
+    const scores = rows.filter((r) => r.set === set).map((r) => r.score).filter(Number.isFinite);
+    if (scores.length === 0) continue;
+    const observed = { min: Math.min(...scores), max: Math.max(...scores) };
+    const declared = DECLARED_SCORE_RANGES[set];
+    if (declared) {
+      if (observed.min < declared.min || observed.max > declared.max) {
+        throw new Error(
+          `set ${set}: observed scores ${observed.min}-${observed.max} fall outside the declared ` +
+            `range ${declared.min}-${declared.max}. The declared range is wrong, or the TSV is not ASAP ` +
+            "training_set_rel3 — either way every band in this set would be wrong."
+        );
+      }
+      out[set] = { ...declared, source: "declared", observed };
+    } else {
+      out[set] = { ...observed, source: "observed", observed };
+    }
+  }
+  return out;
+}
+
+/** Position of a score within its set's range, 0..1. */
+export function normaliseScore(score, range) {
+  if (!range || range.max === range.min) return null;
+  return (score - range.min) / (range.max - range.min);
+}
+
+/* Thirds, deliberately coarse. A read of six to twelve essays cannot
+   support finer bands, and a fine band on a small sample is a number
+   that looks more precise than the evidence behind it. */
+export const BANDS = Object.freeze(["low", "middle", "high"]);
+export function bandOf(position) {
+  if (position === null || !Number.isFinite(position)) return null;
+  if (position < 1 / 3) return "low";
+  if (position < 2 / 3) return "middle";
+  return "high";
+}
+
+/**
+ * The essays a person reads, spread across NORMALISED bands.
+ *
+ * Replaces a selection that sorted RAW scores across sets. Returns
+ * `{ chosen, ranges, bandsCovered }`; each chosen row carries
+ * `position` and `band` beside its raw `score`.
+ *
+ * Round-robin over the bands, each band's rows in a seeded order, so
+ * the result spans low / middle / high whenever the corpus allows, and
+ * the same seed gives the same essays.
+ */
+export function selectForRead({ rows, allScores = rows, n = 6, seed = 1 } = {}) {
+  const ranges = scoreRanges(allScores);
+  let s = seed >>> 0;
+  const rand = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+
+  const banded = rows
+    .map((r) => {
+      const position = normaliseScore(r.score, ranges[r.set]);
+      return { ...r, position, band: bandOf(position) };
+    })
+    .filter((r) => r.band !== null);
+
+  const byBand = new Map(BANDS.map((b) => [b, banded.filter((r) => r.band === b)]));
+  /* Seeded shuffle within each band, so the pick is a sample and not
+     the top of an ordered file. */
+  for (const list of byBand.values()) {
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+  }
+
+  const chosen = [];
+  const used = new Set();
+  let round = 0;
+  while (chosen.length < n) {
+    let took = false;
+    for (const b of BANDS) {
+      const list = byBand.get(b);
+      if (round < list.length && chosen.length < n) {
+        const r = list[round];
+        const key = `${r.set}:${r.id}`;
+        if (!used.has(key)) {
+          chosen.push(r);
+          used.add(key);
+          took = true;
+        }
+      }
+    }
+    if (!took) break;
+    round += 1;
+  }
+  chosen.sort((a, b) => a.position - b.position || a.set - b.set);
+  const bandsCovered = BANDS.filter((b) => chosen.some((r) => r.band === b));
+  return { chosen, ranges, bandsCovered };
+}
+
+
+
 /**
  * Every usable row, plus the rubric for each set.
  *
  * Throws with a message an operator can act on: a missing TSV, a set
  * with no readable rubric, or a corpus that matches nothing.
  */
-export function loadCorpus({ dir, sets = DEFAULT_SETS, minWords = 50 } = {}) {
+export function loadCorpus({ dir, sets = DEFAULT_SETS, minWords = MIN_ESSAY_WORDS } = {}) {
   const tsvPath = path.join(dir, "training_set_rel3.tsv");
   if (!fs.existsSync(tsvPath)) {
     throw new Error(`not found: ${tsvPath}\n\nPoint --dir at the folder you extracted the Kaggle download into.`);
@@ -66,6 +225,14 @@ export function loadCorpus({ dir, sets = DEFAULT_SETS, minWords = 50 } = {}) {
 
   const rows = [];
   let tooShort = 0;
+  /* EVERY SCORE, BEFORE THE FLOOR. The floor decides which essays are
+     READ; it does not decide the scale they are marked on. A set's
+     range is a property of the whole set, and short essays skew low —
+     so a range computed only over the essays that cleared 250 words
+     would raise an observed minimum and mis-band every essay in a set
+     whose range is not declared. */
+  const allScores = [];
+  const perSet = {};
   for (const line of lines.slice(1)) {
     const f = line.split("\t");
     const set = Number(f[iSet]);
@@ -73,6 +240,11 @@ export function loadCorpus({ dir, sets = DEFAULT_SETS, minWords = 50 } = {}) {
     const essay = stripAnon(f[iEssay] || "");
     if (!essay) continue;
     const words = essay.split(/\s+/).filter(Boolean).length;
+    const score = Number(f[iScore]);
+    allScores.push({ set, score });
+    perSet[set] ||= { total: 0, clear: 0 };
+    perSet[set].total += 1;
+    if (words >= minWords) perSet[set].clear += 1;
     /* A FLOOR ON LENGTH, because the first real run admitted a 4-word
        essay. A stub that short gives the model nothing to quote and
        nothing to be wrong about. ASAP has blanks and near-blanks in
@@ -81,7 +253,7 @@ export function loadCorpus({ dir, sets = DEFAULT_SETS, minWords = 50 } = {}) {
       tooShort++;
       continue;
     }
-    rows.push({ id: f[iId], set, score: Number(f[iScore]), essay, words });
+    rows.push({ id: f[iId], set, score, essay, words });
   }
   if (rows.length === 0) throw new Error("no rows matched the requested sets — is this the right TSV?");
 
@@ -124,7 +296,7 @@ export function loadCorpus({ dir, sets = DEFAULT_SETS, minWords = 50 } = {}) {
     );
   }
 
-  return { rows, rubricFor, rubricNote, tsvPath, tooShort, descDir };
+  return { rows, allScores, perSet, minWords, rubricFor, rubricNote, tsvPath, tooShort, descDir };
 }
 
 /**
