@@ -99,6 +99,58 @@ the rest of it real.
 So step 3 (consent v8) is now three edits that the suite will not let
 you make two of.
 
+### AND THE HOLE ONE LEVEL UP, WHICH C1 DOES NOT CLOSE — found 24 September, not built
+
+C1 stops you **adding a material type without bumping**. Nothing stops
+you **adding a feature without adding a type**.
+
+`AI_MATERIAL_TYPES` is a hand-written list. CLAUDE.md describes it as
+*"read out of `groq.js`, `ai-notes` and `ai-text/prompts.js` rather
+than remembered"* — and that is a true statement about how a PERSON
+compiled it, not about a derivation any test performs. So:
+
+```
+add `essay` to ai-text/prompts.js SYSTEM   ->  everything green
+   fingerprint unchanged (no new provider)
+   ledger matches v7  (no new type)
+   the floors still hold (>= 4, >= 5, >= 6)
+   the screen goes on describing six kinds of material out of seven
+```
+
+**That is the exact failure §0 is about, one step earlier in the
+sequence somebody actually performs.** Nobody sets out to add a
+material type; they set out to add a feature, and the type is the thing
+they are supposed to remember. C1 mechanised the second half of the
+chain and left the first half to memory.
+
+**The shape that would close it** is the device-store guard's, which
+this codebase reaches for every time: every task in `ai-text`'s prompt
+set must be mapped to the material type it sends, or excused in writing
+with a reason. Adding `essay` then fails until somebody declares what
+it sends, which changes the fingerprint, which forces the bump — task
+-> type -> fingerprint -> version, with no remembering anywhere in it.
+
+**Two things make it more than a one-liner, which is why it is recorded
+rather than done:**
+
+- `SYSTEM` is **not exported** from `prompts.js`. Deriving the task
+  list needs either a new export from a deployed Edge Function file, or
+  a source grep — and a grep over a file whose prompts contain prose
+  about summarising is the comment-stripping trap waiting to happen.
+- The list spans **two endpoints**. `ai-notes` sends audio and a
+  transcript; `ai-text` sends the rest. A guard covering only the one
+  where the essay happens to land is a guard scoped to a file rather
+  than to the claim, which is its own ledger entry.
+
+**It does not block essay feedback**, and that is worth saying plainly
+so it is not used as one: step 3 adds the type by hand, and from that
+moment C1 forces the bump exactly as designed. The hole bites only if
+somebody forgets the type — which is what guards are for, and is also
+why this is worth doing eventually rather than urgently.
+
+**Jared's ruling wanted**: build it before step 3 (so essay feedback is
+the first feature it covers), after 1.3.0, or not at all.
+
 ---
 
 ## 1. Data and consent
