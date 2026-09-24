@@ -1,6 +1,14 @@
-# Exam prep pack — discovery, for 1.2
+# Exam prep pack — discovery, NOT YET SCHEDULED
 
 **Status: DISCOVERY AND PLAN ONLY.** No code, no endpoint, no screens.
+
+**AND IT IS NO LONGER "FOR 1.2", which is a correction rather than a
+slip.** 1.2.0 was tagged on 24 September and shipped without any of
+this; essay feedback took the next slot and is 1.3.0 by Jared's ruling
+the same day. **No version is written here on purpose** — picking one
+would be inventing a schedule nobody has agreed, and a version number
+in a discovery document is the kind of stale fact that gets quoted back
+as a commitment. It goes in whichever release it is scheduled for.
 Nothing here merges to `main` until 1.1.0 is approved and the closed
 test is running.
 
@@ -152,6 +160,35 @@ is the only kind of confirmation that file accepts.
 renders its controls through — so consent and the allowance arrive
 together and a sixth feature inherits both. There is no route to a
 provider in that file that does not pass the branch.
+
+### AND IT IS NOW ENFORCED RATHER THAN CONFIRMED — 24 September 2026
+
+This section was written before the route guard existed, and the guard
+changes what "checkable rather than argued" costs: **nothing, and it is
+no longer optional.**
+
+`MATERIAL_ROUTES` in `src/aiMaterialTypes.js` maps every route material
+leaves by to what goes out along it, and `test-legal.mjs` DERIVES the
+route list from the endpoints. So the moment `pack` is added to
+`ai-text`'s prompt set the suite goes RED naming `ai-text:pack`, and the
+only way back to green is to declare what it sends. The conclusion above
+does not change — a pack sends `own-notes-and-cards`, which is already a
+type, so the fingerprint does not move and nothing re-prompts — but the
+declaration is now a REQUIRED EDIT rather than a paragraph somebody
+agreed with.
+
+That is the difference this document asked for in its own heading. The
+work it adds is one line:
+
+```js
+"ai-text:pack": ["own-notes-and-cards"],
+```
+
+**And if a future pack ever reads transcripts** — the case "What WOULD
+bump it" names below — that line is where it becomes visible, because
+the type it would have to name is `lecture-transcript`, the fingerprint
+moves, and the ledger demands the bump. The hypothetical in the next
+paragraph is now the thing the guard is watching for.
 
 ### What WOULD bump it
 
@@ -316,10 +353,14 @@ still has to fit.
    before this and the weight must not be typed in the meantime — a
    placeholder weight in `TASK_CREDITS` is the `UNMEASURED` marker
    situation without the marker.
-5. **The endpoint**, as another `TASKS` entry. The allowance read
-   precedes the provider call, which is what makes a missing column fail
-   free; a failed call bills nothing and unparseable output IS billed,
-   under its own code, because those tokens were generated and charged.
+5. **The endpoint**, as another `TASKS` entry — which is now literally
+   true rather than loosely: `ai-text/prompts.js` exports `TASKS` as
+   `SYSTEM`'s own keys, so adding the prompt adds the route, and the
+   route guard reddens until `MATERIAL_ROUTES` says what it sends (§2).
+   The allowance read precedes the provider call, which is what makes a
+   missing column fail free; a failed call bills nothing and unparseable
+   output IS billed, under its own code, because those tokens were
+   generated and charged.
 6. **The screen**, through `AiActionFrame`, with the pre-flight estimate.
    The cost is FIXED at one call, so this is the ordinary `canAfford`
    rather than `sectionsAffordable` — which is a simplification the
