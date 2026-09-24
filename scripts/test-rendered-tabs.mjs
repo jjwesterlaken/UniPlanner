@@ -35,6 +35,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { buildConsentPatch } from "../src/aiNotesLogic.js";
+import { SUPPORT_URL } from "../src/legalLinks.js";
 
 const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = path.join(rootDir, "dist-web");
@@ -432,6 +433,26 @@ async function run() {
         assert.doesNotMatch(html, /data-purchase-controls/, "the web build is showing purchase controls");
         assert.doesNotMatch(html, /data-package=/, "the web build is showing buyable packages");
         assert.match(html, /Privacy Policy/, "the panel does not link the privacy policy, which Apple requires on a subscription screen");
+
+        /* THE WAY TO REPORT SOMETHING WRONG, and the version beside it.
+           Asserted on the RENDERED tab rather than on the source,
+           because the dead macOS download button was right in its data
+           layer and wrong in its renderer.
+
+           THE URL IS DERIVED from legalLinks.js rather than typed here.
+           A literal would be the restatement pattern in the guard
+           written to check the link, and it is exactly what let the
+           documents' host allowlist go stale. */
+        assert.ok(
+          html.includes(`href="${SUPPORT_URL}"`),
+          `the Account tab offers no way to get in touch at ${SUPPORT_URL}`
+        );
+        assert.match(html, /Something not working\?/, "the link is there with nothing saying what it is for");
+        /* AND IT ASKS FOR THE VERSION. "Which build is this user on" is
+           the first question after any caching or rendering bug, and a
+           report without it costs a round trip. */
+        assert.match(html, /quote the version above/i, "the feedback line does not ask for the version, so reports will arrive without it");
+        assert.match(html, /Version <span class="font-mono">[0-9a-f]{12}<\/span>/, "the build id is not rendered beside it");
       }
       visited.push(id);
     });
