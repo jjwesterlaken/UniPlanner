@@ -123,6 +123,134 @@ for (const p of DOC_PATHS) {
   fs.copyFileSync(from, path.join(OUT, file));
 }
 
+/* ---------- the guides ----------
+
+   Static pages that answer a question somebody typed into a search
+   engine, with a link into the app. No script in them at all, which is
+   asserted rather than intended: a guide is the one kind of page on
+   this origin with no reason to run anything, so anything it ran would
+   be a third-party tag or an analytics snippet arriving where nobody
+   was looking for it.
+
+   COPIED FROM THE FOLDER, NOT LISTED. A third guide comes along by
+   existing, which is the same rule as the site's data modules above and
+   the documents below — and the opposite of the deploy workflow that
+   named one Edge Function while the repo had two.
+
+   THEY ARE NOT LEGAL DOCUMENTS and deliberately do not go through
+   DOCUMENT_PATHS. That list is derived from the `*_URL` constants, and
+   every one of those URLs is in a store listing or a Stripe dashboard
+   field and is swept by test-legal for claims about a student's data. A
+   marketing page in there would be held to promises it does not make
+   and would be demanded by documents that should not mention it. */
+const GUIDE_DIR = "guides";
+/* THEY LIVE UNDER public/site/, WITH THE MARKETING PAGE, and that is
+   load-bearing rather than tidy. `build-web` copies all of `public/`
+   into `dist-web`, and `prepare-native` refuses any top-level entry of
+   dist-web that is not declared shipped or excluded — the gate that
+   exists because the marketing page once shipped inside a store
+   bundle. `site` is already excluded, with the reason "prices and
+   external download links do not belong in a store bundle", which is
+   exactly what a guide is. So site-only content belongs under it and
+   inherits that decision instead of needing a new one. */
+const guideSrc = path.join("public", "site", GUIDE_DIR);
+if (!fs.existsSync(guideSrc)) throw new Error(`public/${GUIDE_DIR}/ is missing — the guides would 404 at URLs that are indexed`);
+const guides = fs.readdirSync(guideSrc).filter((f) => f.endsWith(".html"));
+if (guides.length === 0) throw new Error(`public/${GUIDE_DIR}/ has no pages — an empty guides directory ships a folder nothing serves`);
+fs.mkdirSync(path.join(OUT, GUIDE_DIR), { recursive: true });
+/* Each guide's own canonical, collected as they are written. See the
+   sitemap block below for why it is READ rather than rebuilt. */
+const guideUrls = [];
+for (const f of fs.readdirSync(guideSrc)) {
+  const from = path.join(guideSrc, f);
+  if (!f.endsWith(".html")) {
+    fs.copyFileSync(from, path.join(OUT, GUIDE_DIR, f));
+    continue;
+  }
+  /* THE SAME SUBSTITUTION THE MARKETING PAGE GETS, and absolute for the
+     same reason: this origin answers on two hostnames, those are two
+     origins, and a relative app link would strand an apex visitor's
+     planner on an origin nobody else ever uses. */
+  let page = fs.readFileSync(from, "utf8");
+  page = page.split("__APP_URL__").join(`${SITE_URL}${APP_PATH}`);
+  if (page.includes("__APP_")) throw new Error(`public/${GUIDE_DIR}/${f} still carries an unfilled app-link placeholder`);
+  /* AND IT MUST CARRY THE LINK AT ALL. A guide with no route into the
+     app is an article we wrote for nothing — and the placeholder is the
+     only thing that would have said so, silently, by being absent. */
+  if (!page.includes(`${SITE_URL}${APP_PATH}`)) {
+    throw new Error(`public/${GUIDE_DIR}/${f} has no link into the app — a guide with no call to action is an article written for nobody`);
+  }
+  /* THE CANONICAL IS THE PAGE'S OWN STATEMENT OF ITS URL, and the
+     sitemap takes it from here rather than rebuilding it from the
+     filename. Cloudflare Pages 301s `/x.html` to `/x`, so the served
+     URL is extensionless while the file is not — rebuilding the path
+     means encoding that redirect in a second place and getting to
+     disagree with the page about which URL is canonical. A sitemap and
+     a canonical that name different URLs for one page is the one
+     mistake a sitemap can make that is worse than having none. */
+  const canonical = /<link rel="canonical" href="([^"]+)"/.exec(page);
+  if (!canonical) {
+    throw new Error(`public/site/${GUIDE_DIR}/${f} has no canonical link — the sitemap would have to guess its URL`);
+  }
+  if (!canonical[1].startsWith(`${SITE_URL}/`)) {
+    throw new Error(`public/site/${GUIDE_DIR}/${f} declares a canonical outside ${SITE_URL}: ${canonical[1]}`);
+  }
+  guideUrls.push(canonical[1]);
+  fs.writeFileSync(path.join(OUT, GUIDE_DIR, f), page);
+}
+
+/* ---------- the sitemap, and the robots line that points at it ----------
+
+   WHY THIS EXISTS AT ALL: nothing on the marketing page links to a
+   guide. That link is Grace's call and is not made here, so without a
+   sitemap the two pages are reachable only by knowing the URL — which
+   is the same as not being published. `test-guides.mjs` already says
+   in its header that nothing in `npm test` can answer whether a search
+   engine found a page; this is the one thing we can do about it that
+   is not a design change to somebody else's page.
+
+   DERIVED FROM WHAT WAS BUILT. A third guide appears in the sitemap by
+   existing, exactly as it appears in the build by existing. A typed
+   list here would be the restatement pattern in the one file whose
+   whole job is to be a list.
+
+   WHAT IS IN IT: the marketing page and the guides — the pages we want
+   found. Deliberately NOT the app: `/app/` is a JavaScript shell whose
+   indexed form is a blank mount, and offering it to a crawler as
+   content competes with the page written to be the answer. Also not
+   the legal documents: they are reachable and indexable either way
+   (nothing here blocks anything), but a sitemap says "these are the
+   pages I want ranked", and ranking a privacy policy is not a goal.
+
+   NO `lastmod`, DELIBERATELY. The honest value would be when the
+   CONTENT changed, and the only value available here is when the BUILD
+   ran — which moves on every deploy whether or not a word changed. A
+   lastmod that always says "today" is not a weaker signal than none,
+   it is a false one, and crawlers discount a feed that cries wolf. */
+const xmlEscape = (u) =>
+  u.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const sitemapUrls = [`${SITE_URL}/`, ...guideUrls];
+if (sitemapUrls.length < 2) throw new Error("the sitemap would list only the home page — no guide contributed a URL");
+fs.writeFileSync(
+  path.join(OUT, "sitemap.xml"),
+  `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+    sitemapUrls.map((u) => `  <url><loc>${xmlEscape(u)}</loc></url>\n`).join("") +
+    `</urlset>\n`
+);
+/* ONE `Sitemap:` LINE AND NOTHING ELSE. An absent robots.txt already
+   means "crawl everything", so `User-agent: * / Allow: /` restates the
+   default and exists only to make the file well-formed for the crawlers
+   that expect a group. NO `Disallow` is written: blocking `/app/` from
+   indexing is a real decision with a real effect, nobody asked for it,
+   and the correct mechanism for it would be a noindex meta in the app
+   shell rather than a line here. Recorded in the pull request instead
+   of taken quietly. */
+fs.writeFileSync(
+  path.join(OUT, "robots.txt"),
+  `User-agent: *\nAllow: /\n\nSitemap: ${SITE_URL}/sitemap.xml\n`
+);
+
 /* ---------- the app, verbatim, one level down ---------- */
 fs.cpSync(APP_BUILD, path.join(OUT, APP_DIR), { recursive: true });
 
@@ -306,5 +434,5 @@ for (const page of ["index.html", ...DOC_PATHS.map((p) => `${p.replace(/^\//, ""
 }
 
 console.log(
-  `site build OK -> ${OUT}/ (${modules.length} modules, ${DOC_PATHS.length} documents, app at ${APP_PATH}/, ${moved.length} moved paths)`
+  `site build OK -> ${OUT}/ (${modules.length} modules, ${DOC_PATHS.length} documents, ${guides.length} guides, sitemap ${sitemapUrls.length} urls, app at ${APP_PATH}/, ${moved.length} moved paths)`
 );

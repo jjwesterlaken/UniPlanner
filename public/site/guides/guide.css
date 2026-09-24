@@ -1,0 +1,138 @@
+/* The guides' shared stylesheet.
+
+   THE FONTS ARE SELF-HOSTED, for the reason the marketing page gives at
+   length: this origin promises no third-party requests, the privacy
+   policy says so, and test-local-only pins it. Two guide pages quietly
+   linking fonts.googleapis.com would make all three untrue.
+
+   ONE FILE RATHER THAN TWO COPIES OF THE SAME INLINE BLOCK. A same-
+   origin stylesheet is allowed by the origin's CSP (`style-src 'self'`),
+   and two inline copies is two things to keep in step — the pattern
+   this codebase has a seventeen-entry ledger about. */
+
+@font-face {
+  font-family: Newsreader;
+  src: url(/fonts/newsreader.woff2) format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Inter;
+  src: url(/fonts/inter.woff2) format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --teal: #0d7068;
+  --teal-dark: #0a5a54;
+  --teal-pale: #dcefec;
+  --teal-text: #0a4f49;
+  --ink: #16211f;
+  --soft: #5f6b68;
+  --line: #e2e2dd;
+  --bg: #faf9f6;
+  --card: #fff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.w { max-width: 720px; margin: 0 auto; padding: 0 20px; }
+
+header {
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+.brandrow { display: flex; align-items: center; height: 60px; }
+.brand {
+  font-family: Newsreader, serif;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+main { padding: 40px 0 8px; }
+
+h1 {
+  font-family: Newsreader, serif;
+  font-size: 34px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin: 0 0 12px;
+}
+h2 {
+  font-family: Newsreader, serif;
+  font-size: 23px;
+  line-height: 1.3;
+  margin: 36px 0 10px;
+}
+.lede { font-size: 19px; color: var(--soft); margin: 0 0 8px; }
+
+a { color: var(--teal-dark); }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 18px 0;
+  font-size: 16px;
+}
+th, td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+th { font-weight: 600; color: var(--soft); font-size: 14px; letter-spacing: 0.02em; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+
+.box {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin: 20px 0;
+}
+.box p:first-child { margin-top: 0; }
+.box p:last-child { margin-bottom: 0; }
+
+.cta {
+  background: var(--teal-pale);
+  border: 1px solid #bfdfda;
+  border-radius: 14px;
+  padding: 22px;
+  margin: 36px 0 8px;
+}
+.cta h2 { margin-top: 0; }
+.btn {
+  display: inline-block;
+  margin-top: 6px;
+  background: var(--teal);
+  color: #fff;
+  text-decoration: none;
+  font-weight: 600;
+  padding: 11px 20px;
+  border-radius: 10px;
+}
+.btn:hover { background: var(--teal-dark); }
+
+footer {
+  margin-top: 44px;
+  border-top: 1px solid var(--line);
+  padding: 20px 0 40px;
+  font-size: 15px;
+  color: var(--soft);
+}
+footer a { margin-right: 16px; }
