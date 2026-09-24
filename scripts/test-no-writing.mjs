@@ -524,6 +524,137 @@ test("IT REFUSES rather than falling back when the selector is gone", () => {
   );
 });
 
+/* ================================================================
+   THE WORDING RULE — armed before the copy exists
+
+   ESSAY-FEEDBACK.md §3's last subsection asks for the readings guard
+   pointed at this feature: no user-facing wording may offer to write,
+   rewrite or fix a student's essay. The whole no-writing constraint is
+   a legal and product position before it is a technical one, and a
+   sentence offering to "polish your draft" undoes it whatever
+   `checkNoWriting` does.
+
+   NOW, BEFORE STEP 5 WRITES ANY COPY, because that is the only moment
+   arming it is free — the leak-gate lesson. A guard added after the
+   copy exists has to be reconciled with whatever got written; one
+   added before is a constraint the copy is written under.
+   ================================================================ */
+
+/* §3 SKETCHED A BLUNT `/rewrite/i` AND IT WOULD HAVE FAILED ON THE
+   FEATURE'S OWN PROMISE. The thing this feature most needs to say is
+   that it does NOT rewrite your essay — so the banned word appears in
+   the sentence that makes the ban true, which is the guard-meets-its-
+   own-subject shape for the seventh time, and the first where the
+   collision is with USER-FACING copy rather than with a comment.
+
+   Stripping comments does not help here: the collision is in the
+   product's own words. So an occurrence is permitted only when it is
+   DECLARED below with a reason, the device-store guard's arrangement.
+   A promise gets written down once; an offer cannot be written at
+   all. */
+const SUBSTITUTION_PATTERNS = [
+  /write (it|this|that|your essay|your draft) for you/i,
+  /\brewrit(e|es|ing|ten)\b/i,
+  /fix (your|the) (essay|draft|writing)/i,
+  /improve[sd]? your writing for you/i,
+  /\b(polish|polishes|polishing|edit|edits|editing) your (essay|draft)\b/i,
+  /(better|stronger) version of (your|the|it)/i,
+  /\bghost-?writ/i,
+];
+
+/* Lines that may contain a banned phrase, each with the reason it is
+   not an offer. EMPTY TODAY, on purpose: no essay copy exists yet, so
+   anything the sweep finds is something somebody just wrote and should
+   look at. Adding an entry is a decision, which is the point. */
+const DECLARED_SUBSTITUTION_LINES = {
+  // "we never rewrite your essay": "the promise itself, not an offer",
+};
+
+test("NO USER-FACING COPY OFFERS TO WRITE, REWRITE OR FIX AN ESSAY", () => {
+  /* Scoped to the CLAIM and not to a file. The readings version of
+     this rule reads `READING_COPY` plus two named modules, which
+     CLAUDE.md's ledger already records as one of four guards whose
+     claim is broader than what they read. Written fresh, there is no
+     reason to inherit that: user-facing wording lives all over `src/`,
+     and a sentence offering to polish a draft is exactly as damaging
+     in a help topic as in the panel. */
+  const dir = path.join(rootDir, "src");
+  const files = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (/\.(js|jsx)$/.test(e.name)) files.push(full);
+    }
+  };
+  walk(dir);
+  assert.ok(files.length > 20, `the sweep found ${files.length} source files, so it is reading almost nothing`);
+
+  /* THE CONTROL, and without it an empty offender list says only that
+     the patterns never match anything. Run them over a sentence that
+     IS an offer and require every pattern family to be reachable. */
+  const offers = [
+    "We will write it for you.",
+    "UniPlanner rewrites your essay.",
+    "We fix your essay before you hand it in.",
+    "It improves your writing for you.",
+    "We polish your draft.",
+    "Get a better version of your essay.",
+    "A ghostwriter for your assignments.",
+  ];
+  for (const [i, pattern] of SUBSTITUTION_PATTERNS.entries()) {
+    assert.ok(
+      offers.some((o) => pattern.test(o)),
+      `pattern ${i} (${pattern}) matches none of the control offers, so it guards nothing`
+    );
+  }
+
+  const offenders = [];
+  for (const file of files) {
+    /* Comments stripped first — six instances in the ledger, and this
+       file will carry prose explaining the rule. */
+    const src = fs
+      .readFileSync(file, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/^\s*\/\/.*$/gm, " ");
+    src.split("\n").forEach((line, n) => {
+      for (const pattern of SUBSTITUTION_PATTERNS) {
+        if (!pattern.test(line)) continue;
+        const declared = Object.keys(DECLARED_SUBSTITUTION_LINES).some((phrase) =>
+          line.toLowerCase().includes(phrase.toLowerCase())
+        );
+        if (declared) continue;
+        offenders.push(`${path.relative(rootDir, file)}:${n + 1}: ${line.trim().slice(0, 100)}`);
+        return;
+      }
+    });
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    "copy offers to write or rewrite a student's essay, which is the position the whole no-writing " +
+      "constraint rests on:\n" + offenders.join("\n") +
+      "\nIf a line SAYS WE DO NOT do it, declare it in DECLARED_SUBSTITUTION_LINES with that reason."
+  );
+});
+
+test("A DECLARED LINE IS CHECKED, not rubber-stamped", () => {
+  /* An excuse mechanism nobody verifies is a place to put anything.
+     A declaration must name a phrase that a banned pattern actually
+     matches — otherwise it is a line in a file that permits nothing
+     and looks like it permits something. */
+  for (const [phrase, reason] of Object.entries(DECLARED_SUBSTITUTION_LINES)) {
+    assert.ok(
+      SUBSTITUTION_PATTERNS.some((p) => p.test(phrase)),
+      `"${phrase}" is declared but no pattern matches it, so the declaration does nothing`
+    );
+    assert.ok(
+      typeof reason === "string" && reason.trim().length > 15,
+      `"${phrase}" is declared without a reason worth reading`
+    );
+  }
+});
+
 test("npm test runs this file", () => {
   assert.match(JSON.parse(read("package.json")).scripts.test, /test-no-writing\.mjs/);
 });
