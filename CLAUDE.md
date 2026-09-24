@@ -689,8 +689,12 @@ offline storage, sync between devices, or the no-service-worker rule has
 been run on a device**, and the service-worker check is the one with a
 live risk behind it: `http://localhost` is a secure context, so Android
 is excluded only by the protocol test in `index.html`, and a worker
-there would shadow an app-store update. **iOS has never been compiled at
-all.** The list and its current state live in `MOBILE-BUILD.md`.
+there would shadow an app-store update. **iOS 1.1.0 has since shipped —
+approved and live, build 3523413, compiled from Grace's Mac and run on
+her iPhone** — so the platform is no longer unexercised; what is still
+unrun is the device WALK-THROUGH of the list. Its current state lives
+in `MOBILE-BUILD.md`, which is a record and not the artifact: see the
+section below on reading a document as evidence.
 
 **The platforms are not symmetric, and looking for the mirror is the
 habit worth keeping.** iOS needs no routing permission — WKWebView
@@ -5419,6 +5423,63 @@ store's upload validator and an Edge Function secret are all beyond
 anything in `npm test`. For those the artifact check is a hardware or
 dashboard step, and it belongs on `MOBILE-BUILD.md`'s list rather than
 being approximated by a source grep that would pass either way.
+
+### A DOCUMENT IS A CLAIM ABOUT THE ARTIFACT. IT IS NEVER THE ARTIFACT.
+
+Recorded 24 September 2026, on Jared's instruction, and it is the
+paragraph directly above turned inside out. That one says some
+artifacts are unreachable from a build machine and the check belongs
+on `MOBILE-BUILD.md`'s list. **What it does not say, and what cost a
+schedule, is that the list is then a RECORD of those checks and not
+the checks.**
+
+`MOBILE-BUILD.md` said *"iOS has never been compiled at all."* iOS
+1.1.0 was approved and live on the App Store — build 3523413, compiled
+and uploaded from Grace's Mac, run by her on her own iPhone. The
+document had simply not been updated when the release happened, which
+is the ordinary fate of every document.
+
+**I ASSERTED IT THREE TIMES AND THE THIRD WAS THE WORST.** Once in a
+1.2.0 contents list, once in a date estimate that put "your first iOS
+compile — realistically two sessions" on the critical path, and once
+flatly: *"iOS has never been compiled — not 'not recently', never."*
+That last one **quoted the document as though quoting it were
+evidence**, which is the move to watch for: citing a source makes a
+claim feel checked while changing nothing about whether it is true.
+
+**IT IS THE READINESS-AUDIT FAILURE AGAIN, one document over.**
+`IOS-RELEASE.md` §1 once certified account deletion by citing
+`src/accountDeletion.js:96` and a migration filename — every citation
+accurate, none of them evidence, because the claim was about what a
+database contained. Here every citation was accurate too and the claim
+was about what was on the App Store. **A file and a line are evidence
+about a file and a line.**
+
+**THE CHECK IS THE SAME SHAPE AS "LIST THE OPEN PRs", and it is just
+as cheap.** Before a date, a plan or a contents list depends on the
+state of something outside this repository — a store listing, a
+dashboard, an applied migration, a live endpoint — ask the thing
+itself, or ask the person who can see it. One line in a message
+("is iOS live?") would have cost nothing and saved a schedule built
+around work that was already done.
+
+**AND THE TELL IS THE CONFIDENCE, not the source.** The first two
+assertions were hedged into a table. The third was emphatic —
+*not "not recently", never* — and emphasis is what a stale fact
+acquires when it has been repeated. **A claim getting firmer across a
+conversation without new evidence is a claim drifting away from its
+evidence**, and the only cure is to go back to what it was ever based
+on. Here that was one sentence in a markdown file that nobody had
+touched since before the release.
+
+The remedy in the document itself is a sentence saying what it is:
+`MOBILE-BUILD.md`'s state table now ends by naming itself a record
+rather than evidence, and says to open the listing when a date depends
+on it. Two other copies of the stale fact were found by grep in the
+same pass — one in this file, one in `site/flags.js`, where the App
+Store badge is held off by a comment that had stopped being true.
+**A fact that is wrong is usually wrong in more than one place**, so
+the sweep is part of the fix rather than a tidy-up after it.
 
 ### A MIGRATION THAT CAN SKIP SILENTLY IS NOT IDEMPOTENT — IT IS UNOBSERVABLE
 

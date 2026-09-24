@@ -1,11 +1,16 @@
 # Compiling UniPlanner to a phone or tablet
 
-**Android has been compiled and run on real hardware** (moto g05,
-August 2026 — recording verified end to end, API 36 confirmed on the
-generated project). **iOS has never been compiled at all.** These are
-the two first-time guides — **Android for Jared on Windows**, **iOS
-for Grace on a Mac** — and a verification list at the end that matters
-more than the build itself.
+**Both platforms have been compiled and run on real hardware.**
+Android on a moto g05, August 2026 — recording verified end to end,
+API 36 confirmed on the generated project. **iOS 1.1.0 is APPROVED AND
+LIVE ON THE APP STORE, build 3523413**, compiled and uploaded from
+Grace's Mac and run by her on her own iPhone.
+
+These are the two first-time guides — **Android for Jared on Windows**,
+**iOS for Grace on a Mac** — and a verification list at the end that
+matters more than the build itself. They remain first-time guides
+because the next person to do either may not be the person who did it
+last.
 
 Neither guide assumes you have built a mobile app before.
 
@@ -398,9 +403,28 @@ argument for the list:
   granted it. No desktop browser has a manifest, so no environment the
   suite runs in could have been unhappy about it.
 
-**Everything else on this list is still outstanding**, and the groups
-worth naming because it is easy to read "hardware verified" as covering
-them:
+**iOS 1.1.0 SHIPPED — approved and live on the App Store, build
+3523413.** Compiled and uploaded from Grace's Mac, and run by her on
+her own iPhone. The cycle that produced it, so the next one is a
+repeat rather than a rediscovery:
+
+```
+git pull
+REVENUECAT_IOS_KEY=... npm run build
+cd mobile && npm run settings
+npx cap sync ios
+# Xcode: Archive -> Validate -> Distribute / Upload
+```
+
+`npm run settings` is the step that is easy to skip and expensive to
+skip: it writes `NSMicrophoneUsageDescription`, whose absence is an
+instant rejection rather than a bug you find later.
+
+**What that does and does NOT tell you.** It says the app builds,
+signs, uploads, passes App Review and runs. It does not say the items
+below have been walked, because they are a checklist somebody sits
+down with rather than something a working app demonstrates by
+existing.
 
 | Group | State |
 |---|---|
@@ -408,10 +432,20 @@ them:
 | Sync across devices (5–6) | **not run** |
 | No service worker on either platform (7) | **not run** — Android is the live risk |
 | "Record from" wording and the Bluetooth-headset case (10–11) | **not run** |
-| **iOS, all of it** | **not run** — nothing has been compiled to an Apple device |
+| **iOS build, upload and App Review** | **DONE** — 1.1.0, build 3523413, live |
+| **iOS device walk-through (the list above, on an iPhone)** | **not run** |
 
 The renderer-recovery hardening below is also still open: the crash that
 triggered it is fixed, the *response* to the next one is not.
+
+**THE STATE ABOVE IS A RECORD, NOT EVIDENCE, and the distinction cost
+a plan.** This table said iOS had never been compiled for some time
+after 1.1.0 was live on the App Store, and it was read back as though
+it were the artifact — three times in one conversation, to build a
+submission schedule around a first compile that had already happened.
+The App Store listing and the build number are the artifact; this file
+is somebody's claim about them. When a date depends on it, open the
+listing. CLAUDE.md has the general form.
 
 ### The bottom tab bar — phone widths
 
