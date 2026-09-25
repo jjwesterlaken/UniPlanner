@@ -81,6 +81,14 @@ const opt = (n, d = null) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : d;
 };
 const dir = opt("--dir");
+/* --keep FILE saves the pooled NUMBERS (no text: the child JSON is
+   already redacted, and quoteNormalised is stripped again here) so the
+   threshold check can be re-run at any settings without another call.
+   --summarise FILE reads one back; --settings cap,floor,window,unit
+   then reports what those four numbers cost each arm. */
+const keepFile = opt("--keep");
+const summariseFile = opt("--summarise");
+const settingsArg = opt("--settings");
 const perSet = Number(opt("--per-set", "8"));
 const runs = opt("--runs", "3");
 const seed = Number(opt("--seed", "1"));
@@ -103,6 +111,25 @@ if (!["two-arm", "novelty"].includes(mode)) {
   process.exit(1);
 }
 const SETS = (opt("--sets", "1,2,7,8")).split(",").map((s) => Number(s.trim()));
+
+if (summariseFile) {
+  const kept = JSON.parse(fs.readFileSync(summariseFile, "utf8"));
+  const lib = await import(pathToFileURL(path.join(ROOT, "scripts", "lib", "two-arm-summary.mjs")).href);
+  const verdict = lib.summariseTwoArm(kept.results, { sets: kept.sets, essays: kept.essays, sentences: kept.sentences, truncated: kept.truncated });
+  if (settingsArg) {
+    const [maxNoteWords, minQuoteWords, window, matchUnit] = settingsArg.split(",").map(Number);
+    const e = lib.evaluateSettings(kept.results, kept.sentences, { maxNoteWords, minQuoteWords, window, matchUnit });
+    console.log(`\nAT cap ${maxNoteWords}w, quote >= ${minQuoteWords}w, window ${window}, matchUnit ${matchUnit}:\n`);
+    console.log("  arm            points refused      sentences refused");
+    for (const id of ["constrained", "adversarial"]) {
+      const r = e[id];
+      const f = (n, d, rate) => `${n}/${d} (${rate === null ? "—" : (rate * 100).toFixed(1)}%)`;
+      console.log(`  ${id.padEnd(14)} ${f(r.pointsRefused, r.points, r.pointRate).padEnd(19)} ${f(r.sentencesRefused, r.sentences, r.sentenceRate)}`);
+    }
+    console.log(`\n  rule (constrained points refused <= ${lib.MAX_LEGITIMATE_REFUSAL * 100}%): ${e.meetsRule ? "MET" : "NOT MET"}`);
+  }
+  process.exit(verdict && verdict.ok === false ? 1 : 0);
+}
 
 if (!dir) {
   console.error(
@@ -173,6 +200,8 @@ if (dryRun) {
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "asap-"));
 const results = [];
+const sentences = { constrained: [], adversarial: [] };
+const truncated = { constrained: 0, adversarial: 0 };
 try {
   for (const [n, row] of chosen.entries()) {
     const base = `s${row.set}-${row.id}`;
@@ -200,6 +229,8 @@ try {
       if (mode === "two-arm") {
         for (const arm of ["constrained", "adversarial"]) {
           for (const m of parsed.measured[arm] || []) results.push({ ...m, arm, set: row.set, essayId: row.id });
+          for (const x of (parsed.sentences && parsed.sentences[arm]) || []) sentences[arm].push({ ...x, set: row.set, essayId: row.id });
+          truncated[arm] += (parsed.truncated && parsed.truncated[arm]) || 0;
         }
       } else {
         for (const m of parsed.measurements) results.push({ ...m, set: row.set, essayId: row.id });
@@ -226,7 +257,12 @@ if (mode === "two-arm") {
      that supports no claim must not be reported as a successful
      measurement, because the next thing that happens is somebody
      reading a threshold off it. */
-  const verdict = summariseTwoArm(results, { sets: SETS, essays: chosen.length });
+  if (keepFile) {
+    const numbersOnly = results.map(({ quoteNormalised, ...rest }) => rest);
+    fs.writeFileSync(keepFile, JSON.stringify({ sets: SETS, essays: chosen.length, results: numbersOnly, sentences, truncated }));
+    console.error(`numbers kept in ${keepFile} (no essay text)`);
+  }
+  const verdict = summariseTwoArm(results, { sets: SETS, essays: chosen.length, sentences, truncated });
   process.exit(verdict && verdict.ok === false ? 1 : 0);
 }
 

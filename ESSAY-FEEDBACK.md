@@ -504,6 +504,35 @@ measurement, **and it must be measured before it ships** — the
 distribution lesson from the ink work: a threshold sized to an anecdote
 is sized to the wrong thing.
 
+### THE THRESHOLDS, AND THE RULE THEY ARE READ BY (Jared, 25 September 2026)
+
+`ESSAY_NO_WRITING` in `ai-text/config.ts` holds four numbers, and until
+they are set the essay task refuses before any spend. They are read off
+the no-writing harness run on **gpt-5.6-luna**, the model that ships,
+never on another model's output, and never guessed:
+
+| threshold | what it refuses | read from |
+|---|---|---|
+| `maxNoteWords` | a note long enough to hold a paragraph | the constrained arm's note-length **p99, plus a margin** |
+| `minQuoteWords` | a quote too short to locate anything | the **shortest quote that still locates uniquely** in the constrained arm |
+| `window` | a run of new prose that long, not in the essay or the criteria | the constrained arm's **longest novel run**, with margin, so analysis in a note is never mistaken for a rewrite |
+| `matchUnit` | the n-gram a word must share with the source to count as "not new" | the harness's own setting, the one the distribution was measured at |
+
+**THE RULE: at the chosen settings, the constrained arm (the prompt we
+ship) must refuse at most 2% of its legitimate points.** Every threshold
+is taken from the constrained arm's own distribution, so the settings
+protect real feedback first.
+
+**WHERE THE TABLE SHOWS NO SEPARATION FROM THE ADVERSARIAL ARM, IT IS
+SAID, and the thresholds are still set to protect legitimate feedback.**
+On gpt-4o-mini there was none: the adversarial arm offered almost no
+wording, so no cell separated the two. When that holds on Luna too, the
+length and window thresholds are guards against size, not against
+ghostwriting, and **the code-side offered-wording refusal is the
+ghostwriting control**: any quoted span in a note that is not in the
+essay or the criteria refuses the whole reply (`_shared/essayReply.js`).
+Nothing in the numbers pretends to be more than that.
+
 ### What happens on a refusal, and it costs money
 
 **The refusal is BILLED**, under its own code, and the copy says so.

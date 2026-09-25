@@ -119,3 +119,30 @@ export async function productionModel({ hasImages = false, task = null, modelSou
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
+
+/**
+ * The output ceiling a task SHIPS with: MAX_TOKENS[task] from
+ * ai-text/config.ts, bundled the same way as the model above.
+ *
+ * A harness that calls with a different ceiling measures a different
+ * configuration. measure-two-arm called Luna, a reasoning model whose
+ * reasoning tokens count against the ceiling, at 2,000 while the
+ * endpoint ships 4,000 — so replies the endpoint would accept were being
+ * cut off and counted as malformed. Read, not typed, for the reason the
+ * model is.
+ */
+export async function productionCeiling(task, { configSource = path.join(ROOT, "supabase/functions/ai-text/config.ts") } = {}) {
+  const { build } = await import("esbuild");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "prod-ceiling-"));
+  try {
+    const out = await build({ entryPoints: [configSource], bundle: true, format: "esm", platform: "neutral", write: false });
+    const file = path.join(tmp, "config.mjs");
+    fs.writeFileSync(file, out.outputFiles[0].text);
+    const mod = await import(pathToFileURL(file).href);
+    const n = mod.MAX_TOKENS && mod.MAX_TOKENS[task];
+    if (!Number.isInteger(n) || n < 1) throw new Error(`ai-text/config.ts has no MAX_TOKENS.${task}; refusing to guess a ceiling`);
+    return n;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}

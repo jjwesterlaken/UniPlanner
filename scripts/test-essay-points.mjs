@@ -37,7 +37,8 @@ const RESOLVED = {
   photos: await productionModel({ hasImages: true }),
   summarise: await productionModel({ hasImages: false, task: "summarise" }),
 };
-import { SCOPE_CONTROL, scopeControl } from "./lib/two-arm-summary.mjs";
+import { SCOPE_CONTROL, scopeControl, evaluateSettings, pointRefused, quoteUniqueness, MAX_LEGITIMATE_REFUSAL } from "./lib/two-arm-summary.mjs";
+import { productionCeiling } from "./lib/production-model.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -836,6 +837,96 @@ test("callVision'S DEFAULT IS UNCHANGED, so the photo measurements are not re-pr
   const src = read("scripts/lib/photo-calls.mjs");
   assert.match(src, /jsonSchema = null/, "the schema is not optional");
   assert.match(src, /:\s*\{\s*type:\s*"json_object"\s*\}/, "the json_object default is gone");
+});
+
+/* ---------- the threshold read ---------- */
+
+const PT = (o = {}) => ({
+  quoteWords: 8, quoteVerbatim: true, quoteOccurrences: 1, noteWords: 12,
+  deficiency: DEFICIENCIES[0], deficiencyKnown: true, offeredSpans: [],
+  noteNovel: { 3: 10, 4: 10, 5: 10, 6: 10 }, ...o,
+});
+const SETTINGS = { maxNoteWords: 30, minQuoteWords: 4, window: 20, matchUnit: 4 };
+
+test("THE HARNESS CALLS AT THE ENDPOINT'S CEILING, read from config.ts rather than typed", () => {
+  /* 2,000 was typed into measure-two-arm while the endpoint sends
+     4,000 to a reasoning model: the run measured a configuration that
+     does not ship. */
+  const src = strip(read("scripts/measure-two-arm.mjs"));
+  assert.match(src, /productionCeiling\("essay"\)/);
+  assert.doesNotMatch(src, /maxTokens:\s*\d/, "a literal ceiling is back in the harness");
+});
+
+const ESSAY_CEILING = await productionCeiling("essay");
+test("productionCeiling reads MAX_TOKENS.essay out of config.ts", () => {
+  const cfg = read("supabase/functions/ai-text/config.ts");
+  const typed = Number(cfg.match(/essay:\s*([\d_]+)/)[1].replace(/_/g, ""));
+  assert.equal(ESSAY_CEILING, typed);
+  assert.equal(typed, 4000);
+});
+
+test("A CUT-OFF REPLY IS COUNTED APART FROM A MALFORMED ONE, and both reach the JSON", () => {
+  const src = strip(read("scripts/measure-two-arm.mjs"));
+  assert.match(src, /finish_reason\s*===\s*"length"/);
+  assert.match(src, /truncated\[arm\.id\]\+\+/);
+  assert.match(src, /malformed,\s*truncated,\s*measured:\s*forFile,\s*sentences/);
+});
+
+test("measurePoint records how often the quote occurs and the note's novel runs at every unit", () => {
+  const m = measurePoint({
+    point: { quote: "the cat sat", deficiency: DEFICIENCIES[0], note: "this names a feeling without showing where it comes from" },
+    essay: "the cat sat down. later the cat sat again.",
+  });
+  assert.equal(m.quoteOccurrences, 2);
+  for (const k of [3, 4, 5, 6]) assert.ok(Number.isInteger(m.noteNovel[k]) && m.noteNovel[k] > 0, `no reading at ${k}`);
+  const once = measurePoint({ point: { quote: "sat down", deficiency: DEFICIENCIES[0], note: "x" }, essay: "the cat sat down. later the cat sat again." });
+  assert.equal(once.quoteOccurrences, 1);
+});
+
+test("THE WINDOW REFUSES AT run >= window, the endpoint's comparison", () => {
+  assert.equal(pointRefused(PT({ noteNovel: { 4: 19 } }), SETTINGS), false);
+  assert.equal(pointRefused(PT({ noteNovel: { 4: 20 } }), SETTINGS), true);
+});
+
+test("A POINT WITH NO NOVEL-RUN READING IS AN ERROR, never a pass", () => {
+  /* Points measured by the old harness have no noteNovel. Reading them
+     as un-refused would validate a window over data that cannot fail it. */
+  const { noteNovel, ...old } = PT();
+  assert.throws(() => pointRefused(old, SETTINGS), /re-run the harness/);
+});
+
+test("evaluateSettings: the 2% rule over constrained POINTS, with replies beside it", () => {
+  const results = [
+    ...Array.from({ length: 98 }, () => ({ ...PT(), arm: "constrained" })),
+    ...Array.from({ length: 2 }, () => ({ ...PT({ noteWords: 40 }), arm: "constrained" })),
+    ...Array.from({ length: 50 }, () => ({ ...PT({ noteWords: 40 }), arm: "adversarial" })),
+  ];
+  const sentences = { constrained: [{ novel: { 4: 25 } }, { novel: { 4: 5 } }], adversarial: [{ novel: { 4: 30 } }] };
+  const e = evaluateSettings(results, sentences, SETTINGS);
+  assert.equal(e.constrained.pointsRefused, 2);
+  assert.equal(e.constrained.pointRate, 0.02);
+  assert.equal(e.meetsRule, true, "exactly 2% is allowed");
+  assert.equal(e.adversarial.pointRate, 1);
+  assert.equal(e.constrained.sentencesRefused, 1);
+  /* THE CONTROL: one more refused point breaks it. */
+  results[0] = { ...PT({ noteWords: 40 }), arm: "constrained" };
+  assert.equal(evaluateSettings(results, sentences, SETTINGS).meetsRule, false);
+  assert.equal(MAX_LEGITIMATE_REFUSAL, 0.02);
+});
+
+test("quoteUniqueness counts only verbatim quotes, by length", () => {
+  const rows = quoteUniqueness([
+    PT({ quoteWords: 2, quoteOccurrences: 3 }),
+    PT({ quoteWords: 2, quoteOccurrences: 1 }),
+    PT({ quoteWords: 5, quoteOccurrences: 1 }),
+    PT({ quoteWords: 5, quoteVerbatim: false, quoteOccurrences: 0 }),
+  ]);
+  assert.deepEqual(rows, [{ words: 2, n: 2, unique: 1 }, { words: 5, n: 1, unique: 1 }]);
+});
+
+test("--keep WRITES NUMBERS ONLY: quoteNormalised is stripped before the file", () => {
+  const src = strip(read("scripts/sample-asap.mjs"));
+  assert.match(src, /results\.map\(\(\{\s*quoteNormalised,\s*\.\.\.rest\s*\}\)\s*=>\s*rest\)/);
 });
 
 test("npm test runs this file", () => {

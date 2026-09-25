@@ -9,7 +9,7 @@
    Nothing here prints text. Every field it touches is a number or an
    enum value; the pooled measurements arrive already redacted. */
 
-import { DEFICIENCIES, refusePoint, quoteVariety } from "../../src/essayPoints.js";
+import { DEFICIENCIES, refusePoint, quoteVariety, MATCH_UNITS } from "../../src/essayPoints.js";
 
 const pct = (xs, p) => {
   const s = [...xs].sort((a, b) => a - b);
@@ -19,6 +19,72 @@ const share = (xs, f) => (xs.length ? ((xs.filter(f).length / xs.length) * 100).
 
 export const QUOTE_FLOORS = [3, 4, 5, 6, 8];
 export const NOTE_CAPS = [12, 16, 20, 25, 30, 40, 60];
+export const WINDOWS = [6, 8, 10, 12, 15, 20, 25, 30, 40];
+
+/* THE RULE THE THRESHOLDS ARE READ BY (ESSAY-FEEDBACK.md): at the
+   chosen settings the constrained arm may lose at most this share of
+   its points. It is a property of the SETTINGS, so it is computed here
+   from the pooled numbers and never from a hand count. */
+export const MAX_LEGITIMATE_REFUSAL = 0.02;
+
+/* Is one measured point refused at these four settings? The endpoint's
+   order: quote not found, quote too short, note too long, wording
+   offered, then the novelty window. A point measured before noteNovel
+   existed has no window reading, and that is an error rather than a
+   pass: a threshold must not be validated over data that cannot fail
+   it. */
+export function pointRefused(m, { minQuoteWords, maxNoteWords, window, matchUnit }) {
+  if (!refusePoint(m, { minQuoteWords, maxNoteWords }).ok) return true;
+  const run = m.noteNovel && m.noteNovel[matchUnit];
+  if (!Number.isInteger(run)) throw new Error(`a point has no novel-run reading at matchUnit ${matchUnit}; re-run the harness`);
+  return run >= window;
+}
+
+/**
+ * What these four settings cost each arm. Two denominators, because the
+ * endpoint has two kinds of refusal: a POINT is dropped, while a note
+ * or opening sentence that breaks the no-writing rule refuses the WHOLE
+ * reply. The 2% rule is stated over points; the reply rate is printed
+ * beside it because it is what a student would actually meet.
+ */
+export function evaluateSettings(results, sentences, settings) {
+  const out = {};
+  for (const id of ["constrained", "adversarial"]) {
+    const pts = results.filter((r) => r.arm === id);
+    const refused = pts.filter((m) => pointRefused(m, settings)).length;
+    const sens = (sentences && sentences[id]) || [];
+    const sentRefused = sens.filter((x) => {
+      const run = x.novel && x.novel[settings.matchUnit];
+      if (!Number.isInteger(run)) throw new Error("a sentence has no novel-run reading; re-run the harness");
+      return run >= settings.window;
+    }).length;
+    out[id] = {
+      points: pts.length,
+      pointsRefused: refused,
+      pointRate: pts.length ? refused / pts.length : null,
+      sentences: sens.length,
+      sentencesRefused: sentRefused,
+      sentenceRate: sens.length ? sentRefused / sens.length : null,
+    };
+  }
+  out.meetsRule = out.constrained.pointRate !== null && out.constrained.pointRate <= MAX_LEGITIMATE_REFUSAL;
+  return out;
+}
+
+/* How often a quote of each length occurs exactly ONCE in its essay,
+   over verbatim quotes. The floor is the shortest length that still
+   locates a single place. */
+export function quoteUniqueness(points) {
+  const rows = new Map();
+  for (const m of points) {
+    if (!m.quoteVerbatim || !Number.isInteger(m.quoteOccurrences)) continue;
+    const r = rows.get(m.quoteWords) || { words: m.quoteWords, n: 0, unique: 0 };
+    r.n += 1;
+    if (m.quoteOccurrences === 1) r.unique += 1;
+    rows.set(m.quoteWords, r);
+  }
+  return [...rows.values()].sort((a, b) => a.words - b.words);
+}
 
 /* ------------------------------------------------------------------
    THE SCOPE CONTROL. Nothing downstream of this measurement may be
@@ -125,7 +191,7 @@ function printScopeFailure(verdict) {
   );
 }
 
-export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
+export function summariseTwoArm(results, { sets = [], essays = 0, sentences = null, truncated = null } = {}) {
   const by = {
     constrained: results.filter((r) => r.arm === "constrained"),
     adversarial: results.filter((r) => r.arm === "adversarial"),
@@ -134,6 +200,9 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
   console.log(`\n${"=".repeat(72)}`);
   console.log(`COMBINED — ${results.length} points from ${essays} essays, both arms`);
   console.log("=".repeat(72));
+  if (truncated) {
+    console.log(`  replies cut off at the ceiling: constrained ${truncated.constrained}, adversarial ${truncated.adversarial}`);
+  }
 
   /* THE ARMS ARE CHECKED BEFORE ANYTHING IS COMPUTED FROM THEM. A
      table of percentiles over an empty population prints zeros and
@@ -228,6 +297,50 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
     }
   }
 
+
+  /* ---- THE THREE TABLES THE THRESHOLDS ARE READ FROM ---- */
+  if (by.constrained.some((m) => !m.noteNovel)) {
+    console.log("\n  NO NOVEL-RUN DATA on these points: they were measured by a harness");
+    console.log("  that did not record it, so `window` cannot be read from this run.");
+  } else {
+    console.log(`\n${"=".repeat(72)}`);
+    console.log("NOVEL RUN — the longest stretch of new prose, per field (window is read here)");
+    console.log("=".repeat(72));
+    console.log("\n  field     arm            unit   n      p50   p90   p99   max");
+    for (const [label, pick] of [
+      ["note", (id) => by[id].map((m) => m.noteNovel)],
+      ["sentence", (id) => ((sentences && sentences[id]) || []).map((x) => x.novel)],
+    ]) {
+      for (const id of ["constrained", "adversarial"]) {
+        for (const k of MATCH_UNITS) {
+          const xs = pick(id).map((n) => n && n[k]).filter(Number.isInteger);
+          if (!xs.length) continue;
+          console.log(
+            `  ${label.padEnd(9)} ${id.padEnd(14)} ${String(k).padEnd(6)} ${String(xs.length).padEnd(6)} ` +
+              `${String(pct(xs, 50)).padEnd(5)} ${String(pct(xs, 90)).padEnd(5)} ${String(pct(xs, 99)).padEnd(5)} ${Math.max(...xs)}`
+          );
+        }
+      }
+    }
+
+    console.log("\nWINDOW — refusal rate on NOTES by the novelty window alone, per arm:\n");
+    console.log("  unit |" + WINDOWS.map((w) => `  w=${String(w).padEnd(3)}     `).join(""));
+    console.log("       |" + WINDOWS.map(() => "  con%  adv%  ").join(""));
+    for (const k of MATCH_UNITS) {
+      let row = `  ${String(k).padStart(4)} |`;
+      for (const w of WINDOWS) {
+        const rate = (id) => (by[id].filter((m) => m.noteNovel[k] >= w).length / by[id].length) * 100;
+        row += `  ${rate("constrained").toFixed(0).padStart(4)}  ${rate("adversarial").toFixed(0).padStart(4)}  `;
+      }
+      console.log(row);
+    }
+
+    console.log("\nQUOTE UNIQUENESS — constrained arm, verbatim quotes, by length:\n");
+    console.log("  words   n      occur once%");
+    for (const r of quoteUniqueness(by.constrained)) {
+      console.log(`  ${String(r.words).padEnd(7)} ${String(r.n).padEnd(6)} ${((r.unique / r.n) * 100).toFixed(0)}`);
+    }
+  }
   console.log(`\n${"=".repeat(72)}`);
   console.log("QUALITY CONTROL — beside the refusals, not after them");
   console.log("=".repeat(72));
