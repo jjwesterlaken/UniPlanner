@@ -203,60 +203,88 @@ export const PREDICTION_PATTERNS = Object.freeze([
 export const predictionFraming = (text = "") =>
   PREDICTION_PATTERNS.filter((re) => re.test(String(text))).map((re) => re.source);
 
+/* How well the essay fits one band's descriptor. A closed set so the
+   read can find "the band it fits best" without parsing prose. */
+export const BAND_FITS = Object.freeze(["fits", "partly", "does-not-fit"]);
+
 /* ---------------------------------------------------------------
  * THE STRICT SCHEMA.
  *
  * OpenAI's strict mode requires every property to be REQUIRED and
  * `additionalProperties: false` on every object, and does not support
- * `minItems` (CLAUDE.md records that one). `enum` IS supported, which
- * is the whole point. The enums are `DEFICIENCIES` and `GENRES` BY
- * REFERENCE, so they cannot drift from the lists above.
+ * `minItems` (CLAUDE.md records that one). `enum` and a NESTED `anyOf`
+ * are supported; the root may not itself be an `anyOf`, which is why
+ * the per-genre branches sit under `reading`.
  *
- * PROPERTY ORDER IS GENERATION ORDER, and it is chosen: genre first
- * (everything after depends on it), then the points, then the overall
- * reading. The overall reading is DISPLAYED first and GENERATED last,
- * so the model summarises the points it has actually made rather than
- * committing to a verdict and then finding points to fit it.
+ * THE GENRE EXCLUSION IS IN THE SCHEMA, NOT THE PROSE. `reading` is one
+ * branch per genre, and each branch's deficiency enum is `codesFor`
+ * that genre. Once the model writes `"genre": "narrative"`, only the
+ * narrative branch still matches, so the decoder cannot produce
+ * `unsupported-generalisation` after it. The 25 September read found
+ * exactly two off-genre points, both that code on a set-8 story, with
+ * the exclusion stated only in the prompt. This is the enum lesson
+ * again: a prompt says what was asked for, and only the schema says
+ * what can come back.
  *
- * WHETHER THE PROVIDER HONOURS IT is a question for the output, not
- * for this file: the read prints its `deficiency-unknown` count on
- * every run, and under a schema that is really enforced it is zero by
- * construction. A non-zero there means the schema is not reaching the
- * decoder, whatever this object says.
+ * PROPERTY ORDER IS GENERATION ORDER, and every step here is placed on
+ * purpose:
+ *   1. genre, because it decides which codes exist;
+ *   2. mainIdea and support, VERBATIM spans, so the model has found the
+ *      argument before it judges any sentence of it. The same read
+ *      coded an 11/12 essay's THESIS `claim-without-evidence` when the
+ *      whole essay was its evidence: sentence-level reading of an
+ *      argument-level property;
+ *   3. the points;
+ *   4. bandsConsidered, EVERY band the criteria define, lowest first,
+ *      each with its fit, before the one band is chosen. The read's
+ *      opening reading said "Score Point 2" for 10 of 12 essays,
+ *      including three the human raters scored 9, 10 and 11 of 12;
+ *   5. band and sentence, last, summarising what came before.
+ *
+ * mainIdea and support are free text the model writes, so they carry
+ * the no-writing risk a note does. They must be VERBATIM, and the read
+ * counts every span that is not; the endpoint (step 4) must refuse
+ * them on the same verbatim check as a quote.
  * --------------------------------------------------------------- */
+const closed = (properties) => ({
+  type: "object",
+  properties,
+  required: Object.keys(properties),
+  additionalProperties: false,
+});
+
+const readingFor = (genre) =>
+  closed({
+    genre: { type: "string", enum: [genre] },
+    mainIdea: { type: "string" },
+    support: { type: "array", items: { type: "string" } },
+    points: {
+      type: "array",
+      items: closed({
+        quote: { type: "string" },
+        deficiency: { type: "string", enum: codesFor(genre) },
+        note: { type: "string" },
+      }),
+    },
+  });
+
 export function essayFeedbackSchema() {
   return {
     name: "essay_feedback",
     strict: true,
-    schema: {
-      type: "object",
-      properties: {
-        genre: { type: "string", enum: [...GENRES] },
-        points: {
+    schema: closed({
+      reading: { anyOf: GENRES.map(readingFor) },
+      overall: closed({
+        bandsConsidered: {
           type: "array",
-          items: {
-            type: "object",
-            properties: {
-              quote: { type: "string" },
-              deficiency: { type: "string", enum: [...DEFICIENCIES] },
-              note: { type: "string" },
-            },
-            required: ["quote", "deficiency", "note"],
-            additionalProperties: false,
-          },
-        },
-        overall: {
-          type: "object",
-          properties: {
+          items: closed({
             band: { type: "string" },
-            sentence: { type: "string" },
-          },
-          required: ["band", "sentence"],
-          additionalProperties: false,
+            fit: { type: "string", enum: [...BAND_FITS] },
+          }),
         },
-      },
-      required: ["genre", "points", "overall"],
-      additionalProperties: false,
-    },
+        band: { type: "string" },
+        sentence: { type: "string" },
+      }),
+    }),
   };
 }

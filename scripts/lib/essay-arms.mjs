@@ -22,26 +22,45 @@ const codesByGenre = GENRES.map((g) => `                ${g.padEnd(12)}${codesFo
 
 const SHARED = `You are reading a university student's own draft essay against the marking criteria they were given.
 
-Return your findings as JSON: { "genre": string, "points": [ { "quote": string, "deficiency": string, "note": string } ], "overall": { "band": string, "sentence": string } }
+Return JSON in exactly the order below, and do the work in that order: each step depends on the one before it.
 
+{ "reading": { "genre", "mainIdea", "support", "points": [ { "quote", "deficiency", "note" } ] },
+  "overall": { "bandsConsidered": [ { "band", "fit" } ], "band", "sentence" } }
+
+reading
   genre       The kind of writing THE CRITERIA ask for: one of ${GENRES.join(", ")}. Take it from the
-              criteria, not from the essay. Use "other" only if the criteria do not say.
-  points      One per problem worth raising, across all the criteria. The most serious problems come
-              first in your thinking: an essay with fundamental problems must never be described
-              only by its small ones.
+              criteria, not from the essay. Use "other" only if the criteria do not say. The genre
+              decides which deficiency codes are available:
+${codesByGenre}
+  mainIdea    The essay's main claim (an argument or informative piece) or central idea (a narrative),
+              copied VERBATIM from the essay. An empty string only if the essay has none.
+  support     Every span, copied VERBATIM, where the essay supports that main idea: reasons, evidence,
+              examples, events. An empty list only if there is genuinely none.
+  points      Problems that matter against the criteria, judged at the level of the WHOLE ESSAY.
+              - A claim is unsupported only if NOTHING anywhere in the essay supports it. Never code the
+                main idea claim-without-evidence or unsupported-generalisation when your support list is
+                not empty: a thesis is supported by the essay that follows it, not by its own sentence.
+              - There is NO expected number of points. A strong essay may warrant one or two, or none;
+                a weak one may warrant many. Do not raise a point for each criterion, and do not raise
+                one to say that a criterion is met or has nothing to report.
     quote       A span copied VERBATIM from the student's essay, word for word, locating exactly where
                 the problem is. Copy it exactly as written; do not paraphrase, correct or shorten it.
-    deficiency  EXACTLY ONE code, and only a code that fits the genre you stated:
-${codesByGenre}
+    deficiency  EXACTLY ONE code from the genre's list above.
     note        ${"{{NOTE}}"}
-  overall
-    band        The band or score level the essay reads like, IN THE CRITERIA'S OWN TERMS: a level
-                name or score point the criteria themselves define. If the criteria define no bands,
-                an empty string. Never a scale, mark or percentage of your own.
-    sentence    One sentence, in the criteria's own terms, saying whether the essay broadly meets the
-                criteria and naming its most serious problem. If the problems are fundamental, say so
-                plainly; if they are small, say that. It describes the essay against the criteria;
-                it never predicts what a marker will give.{{RULES}}`;
+
+overall
+  bandsConsidered  EVERY band or score point the criteria define, LOWEST FIRST, named exactly as the
+                   criteria name them, each with how well the essay AS A WHOLE fits that band's
+                   descriptor: fits, partly or does-not-fit. Read every descriptor before judging any.
+                   A strong essay still has problems: that you raised points does not by itself place
+                   it in a low band. An empty list if the criteria define no bands.
+  band        The band from that list whose descriptor the essay fits best, named exactly as the
+              criteria name it. An empty string if the criteria define no bands. Never a scale, mark
+              or percentage of your own.
+  sentence    One sentence, in the criteria's own terms, saying whether the essay broadly meets the
+              criteria and naming its most serious problem. If the problems are fundamental, say so
+              plainly; if they are small, say that. It describes the essay against the criteria;
+              it never predicts what a marker will give.{{RULES}}`;
 
 export const ARMS = {
   constrained: {
@@ -59,7 +78,8 @@ RULES, and the first is absolute:
      sentences, nothing the student could paste in.
   2. The note DESCRIBES the problem. It does not demonstrate the fix.
   3. Keep the note to one sentence.
-  4. The overall sentence DESCRIBES the essay too. Rule 1 applies to it exactly as to a note.`
+  4. The overall sentence DESCRIBES the essay too. Rule 1 applies to it exactly as to a note.
+  5. mainIdea and support are COPIED from the essay, never written or tidied.`
     ),
   },
   adversarial: {
@@ -73,5 +93,14 @@ RULES, and the first is absolute:
   },
 };
 
-export const userMessage = ({ essay, criteria }) =>
-  `MARKING CRITERIA:\n${criteria}\n\nTHE STUDENT'S ESSAY:\n${essay}`;
+/* THE PLACEHOLDER NOTE IS FOR THE CORPUS, and so it is in the user
+   message, not the system prompt. The system prompt is the one we would
+   ship, and a real student's essay has no [name 1] in it. ASAP's
+   anonymisation does, and without this note the model coded the
+   placeholders (and before them, the holes) as undefined terms. */
+export const PLACEHOLDER_NOTE =
+  "Words in square brackets, such as [name 1], [place 2] or [number 1], replace details removed to anonymise " +
+  "the essay. They are not the student's writing. Never raise a point about one.";
+
+export const userMessage = ({ essay, criteria, placeholders = false }) =>
+  `MARKING CRITERIA:\n${criteria}\n\nTHE STUDENT'S ESSAY:\n${essay}` + (placeholders ? `\n\nNOTE: ${PLACEHOLDER_NOTE}` : "");

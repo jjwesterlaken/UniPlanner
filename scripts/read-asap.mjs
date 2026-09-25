@@ -224,7 +224,7 @@ for (const [i, row] of chosen.entries()) {
     model,
     messages: [
       { role: "system", content: arm.system },
-      { role: "user", content: userMessage({ essay: row.essay, criteria: corpus.rubricFor.get(row.set) }) },
+      { role: "user", content: userMessage({ essay: row.essay, criteria: corpus.rubricFor.get(row.set), placeholders: true }) },
     ],
     maxTokens: 2000,
     /* THE STRICT SCHEMA, so the deficiency enum is enforced by the
@@ -237,8 +237,9 @@ for (const [i, row] of chosen.entries()) {
      ones that worked; a file containing only the successes is a
      flattering sample of our own output. */
   const m = error
-    ? { failure: error, count: 0, sev: { fundamental: 0, minor: 0, outside: 0, unknown: 0 }, offGenre: [], predictionHits: [] }
-    : measureReply({ content: json?.choices?.[0]?.message?.content ?? "", set: row.set });
+    ? measureReply({ content: "", set: row.set })
+    : measureReply({ content: json?.choices?.[0]?.message?.content ?? "", set: row.set, essay: row.essay, humanBand: row.band });
+  if (error) m.failure = error;
   out.push({ row, ...m });
 }
 
@@ -254,7 +255,10 @@ const byBand = BANDS.map((band) => {
   const inBand = measured.filter((m) => m.row.band === band && !m.failure);
   const sum = (k) => inBand.reduce((a, m) => a + m.sev[k], 0);
   const pts = inBand.reduce((a, m) => a + m.count, 0);
-  return { band, essays: inBand.length, pts, fundamental: sum("fundamental"), minor: sum("minor"), outside: sum("outside") };
+  const counted = inBand.reduce((a, m) => a + m.counted, 0);
+  const agree = inBand.filter((m) => m.agrees).length;
+  const placed = inBand.filter((m) => m.placed).length;
+  return { band, essays: inBand.length, pts, counted, agree, placed, fundamental: sum("fundamental"), minor: sum("minor"), outside: sum("outside") };
 });
 const ok = measured.filter((m) => !m.failure);
 const unknownTotal = ok.reduce((a, m) => a + m.sev.unknown, 0);
@@ -262,6 +266,10 @@ const offGenreTotal = ok.reduce((a, m) => a + m.offGenre.length, 0);
 const genreKnown = ok.filter((m) => m.genreMatches !== null);
 const genreRight = genreKnown.filter((m) => m.genreMatches).length;
 const predictionTotal = ok.filter((m) => m.predictionHits.length).length;
+const placedOk = ok.filter((m) => m.placed);
+const agreeing = placedOk.filter((m) => m.agrees).length;
+const thesisTotal = ok.reduce((a, m) => a + m.thesisFlagged.length, 0);
+const notVerbatimTotal = ok.reduce((a, m) => a + m.notVerbatim.length, 0);
 
 const sheet = [
   "# ASAP read — does the feedback point at anything a marker cares about?",
@@ -298,10 +306,10 @@ const sheet = [
   "points. It need not — a strong essay can have six small things worth saying — which is",
   "why the severity mix beside it is the number that matters more.",
   "",
-  "| band | essays | points | per essay | fundamental | minor | outside the count |",
-  "|---|---|---|---|---|---|---|",
+  "| band | essays | points | per essay | fundamental | minor | outside the count | faults per essay | reading agrees |",
+  "|---|---|---|---|---|---|---|---|---|",
   ...byBand.map((b) =>
-    `| ${b.band} | ${b.essays} | ${b.pts} | ${b.essays ? (b.pts / b.essays).toFixed(1) : "—"} | ${b.fundamental} | ${b.minor} | ${b.outside} |`
+    `| ${b.band} | ${b.essays} | ${b.pts} | ${b.essays ? (b.pts / b.essays).toFixed(1) : "—"} | ${b.fundamental} | ${b.minor} | ${b.outside} | ${b.essays ? (b.counted / b.essays).toFixed(1) : "—"} | ${b.agree} of ${b.placed} |`
   ),
   "",
   `**Codes outside the closed set: ${unknownTotal}.** Under the strict schema this run sends,`,
@@ -311,19 +319,30 @@ const sheet = [
   "*outside the count* is `off-criterion`: the model saying it had nothing against a",
   "criterion. It is not a fault, so it is counted apart from both severity columns.",
   "",
-  "**Three checks on the new instructions, each counted rather than judged:**",
+  "*faults per essay* leaves out `off-criterion`. If it is still flat across the bands, the",
+  "prompt is still asking for a quota rather than for what is wrong.",
+  "",
+  `**Model's reading agrees with the human band: ${agreeing} of ${placedOk.length}.** The model lists`,
+  "every band the rubric defines, lowest first, and picks one; where that pick sits in its own list",
+  "is put into thirds and compared with where the human score sits in the set's range. The last",
+  "read was about 2 of 12. Essays whose pick could not be placed in the list are left out of the",
+  `count: ${ok.length - placedOk.length} this run.`,
+  "",
+  "**Checks on the instructions, each counted rather than judged:**",
   "",
   `- **Genre read from the criteria:** ${genreRight} of ${genreKnown.length} essays got the genre their ASAP set really asks for (sets 1 and 2 argument, 7 and 8 narrative).`,
-  `- **Codes that do not fit the genre the model itself stated: ${offGenreTotal}.** The prompt lists the codes each genre allows. Every one here is the model contradicting its own statement, such as \`claim-without-evidence\` on an essay it called a narrative.`,
+  `- **Codes that do not fit the genre the model itself stated: ${offGenreTotal}.** Each genre's codes are now an enum in the schema, so this is zero by construction. A non-zero means the schema did not reach the model.`,
   `- **Opening sentences that read as a prediction (the ESSAY-FEEDBACK.md §4 ban): ${predictionTotal}.** It should be zero.`,
+  `- **Main idea coded as unsupported while the model's own support list is not empty: ${thesisTotal}.** The 11/12 essay's defect. It should be zero.`,
+  `- **Main-idea or support spans not found verbatim in the essay: ${notVerbatimTotal}.** These fields are copied, never written; each one here is wording the model made up.`,
   "",
   "## The sheet — fill this in as you read",
   "",
-  "| # | set | score | band | model's reading | points | fund. | minor | Points at things a marker would care about? | Notes |",
-  "|---|---|---|---|---|---|---|---|---|---|",
+  "| # | set | score | band | model's reading | agrees | points | fund. | minor | Points at things a marker would care about? | Notes |",
+  "|---|---|---|---|---|---|---|---|---|---|---|",
   ...measured.map(
     (m, i) =>
-      `| ${i + 1} | ${m.row.set} | ${m.row.score}/${ranges[m.row.set].max} | ${m.row.band} | ${m.failure ? "—" : m.overall.band || "(none)"} | ${m.failure ? "—" : m.count} | ${m.failure ? "—" : m.sev.fundamental} | ${m.failure ? "—" : m.sev.minor} | yes / partly / no | |`
+      `| ${i + 1} | ${m.row.set} | ${m.row.score}/${ranges[m.row.set].max} | ${m.row.band} | ${m.failure ? "—" : m.overall.band || "(none)"} | ${m.failure || m.agrees === null ? "—" : m.agrees ? "yes" : "no"} | ${m.failure ? "—" : m.count} | ${m.failure ? "—" : m.sev.fundamental} | ${m.failure ? "—" : m.sev.minor} | yes / partly / no | |`
   ),
   "",
   "**Two questions the table cannot hold:**",
@@ -384,13 +403,21 @@ for (const [i, m] of measured.entries()) {
     sheet.push("");
     sheet.push(`> **Opening reading** · reads like: ${m.overall.band ? `**${m.overall.band}**` : "_(no band)_"}`);
     sheet.push(`> ${m.overall.sentence || "_(no sentence)_"}`);
+    if (m.overall.bandsConsidered.length) {
+      sheet.push(`> Bands weighed: ${m.overall.bandsConsidered.map((b) => `${b.band} _(${b.fit})_`).join(" · ")}`);
+    }
     if (m.predictionHits.length) sheet.push(`> ⚠ trips the §4 prediction ban: ${m.predictionHits.join(", ")}`);
+    sheet.push("");
+    sheet.push(`Main idea: \`${String(m.mainIdea || "(none)").replace(/`/g, "'")}\` · ${m.support.length} supporting span(s)`);
+    for (const x of m.notVerbatim) sheet.push(`- ⚠ **not in the essay:** \`${String(x).replace(/`/g, "'")}\``);
     sheet.push("");
     if (!m.count) {
       sheet.push("**No points at all.** The model read the essay and raised nothing — worth noting on the sheet.");
     }
     for (const p of m.ordered) {
-      const off = m.offGenre.includes(p) ? ` · **does not fit ${m.genre}**` : "";
+      const off =
+        (m.offGenre.includes(p) ? ` · **does not fit ${m.genre}**` : "") +
+        (m.thesisFlagged.includes(p) ? " · **the main idea, coded unsupported despite support**" : "");
       sheet.push(`- **${p.deficiency || "(no deficiency)"}** · _${severityOf(p.deficiency)}_${off}`);
       sheet.push(`  - quotes: \`${String(p.quote || "").replace(/`/g, "'")}\``);
       sheet.push(`  - says: ${p.note || "(nothing)"}`);

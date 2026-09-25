@@ -125,7 +125,10 @@ if (!dryRun && !process.env.OPENAI_API_KEY) {
    restatement pattern with a corpus attached. */
 let corpus;
 try {
-  corpus = loadCorpus({ dir, sets: SETS, minWords });
+  /* STRIPPED, not placeholdered: this script measures how much of a
+     rewrite is the student's own words, and identical placeholders in
+     every essay would inflate that. See asap-corpus.mjs. */
+  corpus = loadCorpus({ dir, sets: SETS, minWords, anon: "strip" });
 } catch (e) {
   console.error(e.message);
   process.exit(1);

@@ -151,7 +151,9 @@ for (const arm of Object.values(ARMS)) {
     }
     let points;
     try {
-      points = JSON.parse(json.choices[0].message.content).points;
+      /* The schema nests the points under \`reading\` since the per-genre
+         branches (essaySchema.js). */
+      points = JSON.parse(json.choices[0].message.content).reading?.points;
       if (!Array.isArray(points)) throw new Error("no points array");
     } catch (e) {
       malformed[arm.id]++;

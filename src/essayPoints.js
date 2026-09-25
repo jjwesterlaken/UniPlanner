@@ -60,6 +60,7 @@ export {
   codesFor,
   PREDICTION_PATTERNS,
   predictionFraming,
+  BAND_FITS,
   essayFeedbackSchema,
 } from "../supabase/functions/_shared/essaySchema.js";
 import { DEFICIENCIES } from "../supabase/functions/_shared/essaySchema.js";

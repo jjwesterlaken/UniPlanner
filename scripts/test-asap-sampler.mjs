@@ -22,7 +22,8 @@ import zlib from "node:zlib";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { docxToText, zipEntries } from "./lib/docx-text.mjs";
-import { MIN_ESSAY_WORDS, selectForRead, scoreRanges, normaliseScore, bandOf, bandAvailability, DECLARED_SCORE_RANGES } from "./lib/asap-corpus.mjs";
+import { MIN_ESSAY_WORDS, selectForRead, scoreRanges, normaliseScore, bandOf, bandAvailability, DECLARED_SCORE_RANGES, placeholderAnon, stripAnon, PLACEHOLDER_LABELS } from "./lib/asap-corpus.mjs";
+import { PLACEHOLDER_NOTE } from "./lib/essay-arms.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -617,6 +618,22 @@ test("THE DRY RUN SAYS WHICH BANDS A SET CAN FILL above the floor, not only how 
   assert.match(strip(read("scripts/read-asap.mjs")), /bandAvailability\(\{ rows: corpus\.rows, ranges \}\)/, "the dry run does not compute per-band availability");
 });
 
+test("ANONYMISED TOKENS BECOME PLACEHOLDERS for what a model reads, and holes only for the no-writing measurement", () => {
+  const raw = "Dear @CAPS1, my friend @PERSON2 in @LOCATION1 uses it @NUM1 hours. @PERSON1 and @CAPS1 again.";
+  assert.equal(
+    placeholderAnon(raw),
+    "Dear [proper noun 1], my friend [name 2] in [place 1] uses it [number 1] hours. [name 1] and [proper noun 1] again."
+  );
+  assert.equal(stripAnon(raw), "Dear , my friend in uses it hours. and again.", "the measurement's strip changed");
+  assert.equal(placeholderAnon("@ZORP3 said"), "[redacted 3] said", "an unknown family was guessed at");
+  /* ONE LABEL PER FAMILY: @CAPS1 and @PERSON1 are different entities. */
+  const labels = Object.values(PLACEHOLDER_LABELS);
+  assert.equal(new Set(labels).size, labels.length, "two families share a placeholder, so two entities would read as one");
+  assert.ok(labels.length >= 10, "the label table is nearly empty, so the distinctness check says little");
+  /* The no-writing sampler keeps stripping, on purpose. */
+  assert.match(strip(read("scripts/sample-asap.mjs")), /anon: "strip"/, "sample-asap changed how it anonymises");
+});
+
 test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the schema on the wire", () => {
   /* NOTHING RAN READ MODE PAST --dry-run BEFORE THIS. So the sheet a
      person opens — the printed point count, the severity mix, both
@@ -632,7 +649,7 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
   try {
     const dir = path.join(tmp, "corpus");
     fs.mkdirSync(path.join(dir, "Essay_Set_Descriptions"), { recursive: true });
-    const para = "The printing press changed who could hold an argument in public, and this essay considers how and why that happened across several decades of European history. ";
+    const para = "The printing press changed who could hold an argument in public, and this essay considers how and why that happened across several decades of European history, as @PERSON1 argued. ";
     const body = para.repeat(Math.ceil(MIN_ESSAY_WORDS / para.split(/\s+/).length) + 1).trim();
     const rows = [["essay_id", "essay_set", "essay", "domain1_score"].join("\t")];
     /* Set 1 is 2-12 and set 2 is 1-6: a LOW and a HIGH essay in each,
@@ -654,11 +671,15 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
       `import fs from "node:fs";
        globalThis.fetch = async (_url, init) => {
          fs.appendFileSync(${JSON.stringify(bodies)}, init.body + "\\n");
-         return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ genre: "argument", points: [
+         return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ reading: { genre: "argument",
+           mainIdea: "across several decades of European history",
+           support: ["The printing press changed who could hold an argument in public"],
+           points: [
            { quote: "across several decades", deficiency: "repetition", note: "Said twice." },
            { quote: "changed who could hold an argument", deficiency: "claim-without-evidence", note: "The claim is asserted, not shown." },
            { quote: "how and why that happened", deficiency: "unsupported-generalisation", note: "Too broad for what follows." },
-         ], overall: { band: "3", sentence: "OVERALL-SENTINEL: it partly meets the criteria; its central claim is never supported." } }) } }] }) };
+         ] }, overall: { bandsConsidered: ["1","2","3","4","5","6"].map((band) => ({ band, fit: band === "3" ? "fits" : "partly" })),
+           band: "3", sentence: "OVERALL-SENTINEL: it partly meets the criteria; its central claim is never supported." } }) } }] }) };
        };\n`
     );
     const out = path.join(tmp, "read.md");
@@ -674,14 +695,23 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     for (const b of sent) {
       assert.equal(b.response_format.type, "json_schema", "the request went out as json_object — the enum is a suggestion again");
       assert.equal(b.response_format.json_schema.strict, true, "the schema went out non-strict");
-      const e = b.response_format.json_schema.schema.properties.points.items.properties.deficiency.enum;
-      assert.ok(e.includes("claim-without-evidence") && e.length > 5, "the enum on the wire is not the closed set");
+      const branches = b.response_format.json_schema.schema.properties.reading.anyOf;
+      assert.ok(Array.isArray(branches) && branches.length === 4, "the per-genre branches did not reach the wire");
+      const e = branches.find((x) => x.properties.genre.enum[0] === "argument").properties.points.items.properties.deficiency.enum;
+      assert.ok(e.includes("claim-without-evidence") && e.length > 5, "the argument branch's enum on the wire is not its codes");
+      /* THE ESSAY WENT OUT WITH A PLACEHOLDER, NOT A HOLE, and with the note
+         saying a placeholder is never a fault. */
+      const user = b.messages.find((x) => x.role === "user").content;
+      assert.ok(user.includes("as [name 1] argued"), "the anonymised name went out as a hole or a raw token");
+      assert.ok(!/@[A-Z]/.test(user), "a raw ASAP token reached the model");
+      assert.ok(user.includes(PLACEHOLDER_NOTE), "the placeholder note did not go out with the essay");
+      assert.ok(!b.messages.find((x) => x.role === "system").content.includes(PLACEHOLDER_NOTE), "the note leaked into the system prompt");
     }
 
     /* 2. THE NUMBERS. 6 essays x 3 points: 12 fundamental, 6 minor. */
     const md = fs.readFileSync(out, "utf8");
     assert.match(md, /Point count against band/, "the point-count table is missing");
-    const rowsIn = [...md.matchAll(/^\| (low|middle|high) \| (\d+) \| (\d+) \| [\d.—]+ \| (\d+) \| (\d+) \| (\d+) \|$/gm)];
+    const rowsIn = [...md.matchAll(/^\| (low|middle|high) \| (\d+) \| (\d+) \| [\d.—]+ \| (\d+) \| (\d+) \| (\d+) \| [\d.—]+ \| \d+ of \d+ \|$/gm)];
     assert.ok(rowsIn.length >= 2, `the band table has ${rowsIn.length} rows`);
     const total = (i) => rowsIn.reduce((a, r) => a + Number(r[i]), 0);
     assert.equal(total(3), 18, "the point total across bands is wrong");
@@ -691,6 +721,10 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     assert.match(md, /Genre read from the criteria:\*\* 6 of 6/, "the genre check did not count all six argument essays");
     assert.match(md, /Codes that do not fit the genre the model itself stated: 0\./, "the off-genre count is missing or wrong");
     assert.match(md, /read as a prediction[^:]*: 0\./, "the prediction count is missing or non-zero");
+    /* 1 of 3 essays in each set is middle, and the reply always picks 3 of 1-6, which places middle. */
+    assert.match(md, /agrees with the human band: 2 of 6\./, "the agreement count is missing or wrong");
+    assert.match(md, /coded as unsupported while the model's own support list is not empty: 0\./, "the thesis count is missing or wrong");
+    assert.match(md, /not found verbatim in the essay: 0\./, "the verbatim count is missing or wrong");
 
     /* 2b. THE OPENING READING COMES FIRST, AND THE POINTS FUNDAMENTAL FIRST. */
     const first = md.slice(md.indexOf("## 1. Set"));
@@ -699,7 +733,7 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     assert.ok(at("OVERALL-SENTINEL") < at("**claim-without-evidence**"), "the opening reading does not come before the points");
     assert.ok(at("**unsupported-generalisation**") < at("**repetition**"), "a minor point is shown above a fundamental one");
     assert.ok(at("**claim-without-evidence**") < at("**unsupported-generalisation**"), "the model's order was not kept inside a level");
-    assert.match(md, /\| 3 \| 3 \| 2 \| 1 \|/, "the model's reading is not in the sheet row beside the counts");
+    assert.match(md, /\| 3 \| (yes|no) \| 3 \| 2 \| 1 \|/, "the model's reading and its agreement are not in the sheet row beside the counts");
 
     /* 3. BOTH QUESTIONS, and the severity one by its substance. */
     assert.match(md, /Does the WEAKER essay get more substantive comment/);
