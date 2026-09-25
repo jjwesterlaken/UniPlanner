@@ -60,6 +60,13 @@ export {
   codesFor,
   PREDICTION_PATTERNS,
   predictionFraming,
+  BAND_RATING_MIN,
+  BAND_RATING_MAX,
+  bestFit,
+  CODE_DEFINITIONS,
+  applyThesisRule,
+  onMainIdea,
+  wordsForMatch,
   essayFeedbackSchema,
 } from "../supabase/functions/_shared/essaySchema.js";
 import { DEFICIENCIES } from "../supabase/functions/_shared/essaySchema.js";

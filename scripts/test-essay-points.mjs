@@ -20,10 +20,12 @@ import { fileURLToPath } from "node:url";
 
 import {
   DEFICIENCIES, measurePoint, refusePoint, quoteVariety, SEVERITY, SEVERITY_LEVELS, severityOf, essayFeedbackSchema,
-  orderBySeverity, GENRES, APPLIES_TO, fitsGenre, codesFor, predictionFraming,
+  orderBySeverity, GENRES, APPLIES_TO, fitsGenre, codesFor, predictionFraming, BAND_RATING_MIN, BAND_RATING_MAX,
+  bestFit, CODE_DEFINITIONS, applyThesisRule, wordsForMatch,
 } from "../src/essayPoints.js";
-import { measureReply } from "./lib/essay-read.mjs";
-import { ARMS, userMessage } from "./lib/essay-arms.mjs";
+import { normaliseWords } from "../src/noWriting.js";
+import { measureReply, placeBand, isVerbatim } from "./lib/essay-read.mjs";
+import { ARMS, userMessage, PLACEHOLDER_NOTE } from "./lib/essay-arms.mjs";
 import { SCOPE_CONTROL, scopeControl } from "./lib/two-arm-summary.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -438,14 +440,27 @@ await test("THE SAMPLER'S EXIT CODE IS THE GATE, not a line in its output", () =
    prose and the call sent `json_object`, which enforces NO schema.
    ================================================================ */
 
-test("THE SCHEMA'S ENUM IS THE CLOSED SET, by reference and not by restatement", () => {
-  const e = essayFeedbackSchema().schema.properties.points.items.properties.deficiency.enum;
-  assert.deepEqual([...e].sort(), [...DEFICIENCIES].sort(), "the schema enum and the closed set disagree");
-  assert.ok(e.length > 0, "an empty enum would forbid every point");
-  /* And the source does not spell a code out beside the list — a second
-     copy is the one that goes stale when a code is added. */
+test("EACH GENRE'S BRANCH ALLOWS EXACTLY ITS OWN CODES, by reference and not by restatement", () => {
+  /* The genre exclusion lives in the schema now: one branch per genre
+     under reading.anyOf, each with codesFor(genre) as its enum. The 25
+     September read found two off-genre points with the exclusion only
+     in the prose. */
+  const branches = essayFeedbackSchema().schema.properties.reading.anyOf;
+  assert.deepEqual(branches.map((b) => b.properties.genre.enum), GENRES.map((g) => [g]), "one branch per genre, each pinned to its genre");
+  const union = new Set();
+  for (const b of branches) {
+    const g = b.properties.genre.enum[0];
+    const e = b.properties.points.items.properties.deficiency.enum;
+    assert.deepEqual(e, codesFor(g), `the ${g} branch's enum is not codesFor("${g}")`);
+    e.forEach((c) => union.add(c));
+  }
+  assert.deepEqual([...union].sort(), [...DEFICIENCIES].sort(), "some code is reachable from no branch, or a branch offers a code outside the set");
+  const narrative = branches.find((b) => b.properties.genre.enum[0] === "narrative").properties.points.items.properties.deficiency.enum;
+  assert.ok(!narrative.includes("unsupported-generalisation"), "the narrative branch still offers the code the read found on set 8");
+  /* The source takes each enum from codesFor, never a typed list. */
   const src = read("supabase/functions/_shared/essaySchema.js").replace(/\/\*[\s\S]*?\*\//g, " ");
-  assert.match(src, /enum: \[\.\.\.DEFICIENCIES\]/, "the schema enum is written out instead of taken from DEFICIENCIES");
+  assert.match(src, /enum: codesFor\(genre\)/, "the per-genre enum is written out instead of derived");
+  assert.match(src, /anyOf: GENRES\.map\(readingFor\)/, "the branches are not derived from GENRES");
 });
 
 test("THE SCHEMA IS VALID STRICT MODE: every object closed, every property required", () => {
@@ -454,19 +469,45 @@ test("THE SCHEMA IS VALID STRICT MODE: every object closed, every property requi
      added later is held to the same rule. */
   const sch = essayFeedbackSchema();
   assert.equal(sch.strict, true, "the schema is not marked strict, so the enum is a suggestion again");
+  let visited = 0;
   const walk = (node, at) => {
     if (!node || typeof node !== "object") return;
     if (node.type === "object") {
+      visited += 1;
       assert.equal(node.additionalProperties, false, `${at} is open`);
       assert.deepEqual([...(node.required || [])].sort(), Object.keys(node.properties || {}).sort(), `${at} leaves a property optional`);
       for (const [k, v] of Object.entries(node.properties || {})) walk(v, `${at}.${k}`);
     }
     if (node.type === "array") walk(node.items, `${at}[]`);
+    /* INTO anyOf TOO. The per-genre branches are anyOf, and a walker
+       that stops at it would pass them unchecked: green over exactly
+       the part added last. */
+    if (Array.isArray(node.anyOf)) node.anyOf.forEach((b, i) => walk(b, `${at}|${i}`));
   };
+  let objects = 0;
+  const count = (n) => {
+    if (!n || typeof n !== "object") return;
+    if (n.type === "object") objects += 1;
+    Object.values(n).forEach(count);
+  };
+  count(sch.schema);
+  assert.equal(objects, 3 + 2 * GENRES.length, "the schema's shape changed; recount what the walk must visit");
+  assert.equal(sch.schema.type, "object", "strict mode refuses a root that is not an object (a root anyOf is not allowed)");
   walk(sch.schema, "root");
+  /* NON-VACUITY: the walk must have VISITED every object the schema
+     holds, or an unwalked branch passes by never being looked at. */
+  assert.equal(visited, objects, `the walk visited ${visited} of ${objects} objects`);
   /* `minItems` is not supported in strict mode (CLAUDE.md), and a schema
      that used it would be refused by the provider at call time. */
   assert.doesNotMatch(JSON.stringify(sch), /minItems/, "strict mode does not support minItems");
+});
+
+test("EVERY CODE IS DEFINED, and the definitions reach the prompt", () => {
+  assert.deepEqual(Object.keys(CODE_DEFINITIONS).sort(), [...DEFICIENCIES].sort(), "a code has no definition, or a definition names no code");
+  for (const [c, d] of Object.entries(CODE_DEFINITIONS)) {
+    assert.ok(d.length > 20, `${c}'s definition says almost nothing`);
+    assert.ok(ARMS.constrained.system.includes(d), `${c}'s definition is not in the prompt`);
+  }
 });
 
 test("EVERY CODE HAS A SEVERITY, and no severity names a code that does not exist", () => {
@@ -543,13 +584,44 @@ test("THE PROMPT'S PER-GENRE CODE LIST IS DERIVED from the map, not typed", () =
   assert.match(sys, /Rule 1 applies to it/, "the no-writing rule does not cover the overall sentence");
 });
 
-test("THE SCHEMA ASKS FOR THE GENRE AND THE OVERALL READING, and orders them for generation", () => {
-  const props = essayFeedbackSchema().schema.properties;
-  assert.deepEqual(Object.keys(props), ["genre", "points", "overall"], "the generation order changed: overall must come after the points");
-  assert.deepEqual(props.genre.enum, [...GENRES]);
-  assert.deepEqual(Object.keys(props.overall.properties), ["band", "sentence"]);
-  const src = read("supabase/functions/_shared/essaySchema.js").replace(/\/\*[\s\S]*?\*\//g, " ");
-  assert.match(src, /enum: \[\.\.\.GENRES\]/, "the genre enum is written out instead of taken from GENRES");
+test("THE SCHEMA'S ORDER IS THE ORDER OF THE WORK: genre, the argument, the points, every band, then one", () => {
+  const root = essayFeedbackSchema().schema.properties;
+  assert.deepEqual(Object.keys(root), ["reading", "overall"]);
+  for (const b of root.reading.anyOf) {
+    assert.deepEqual(Object.keys(b.properties), ["genre", "mainIdea", "support", "points"], "the argument must be found before any sentence is judged");
+  }
+  assert.deepEqual(Object.keys(root.overall.properties), ["bandCount", "bandsConsidered", "band", "sentence"], "every band must be counted and weighed before one is chosen");
+  assert.deepEqual(Object.keys(root.overall.properties.bandsConsidered.items.properties), ["band", "descriptor", "rating"], "each band must quote its descriptor before it is rated");
+  assert.equal(root.overall.properties.bandCount.type, "integer");
+  assert.equal(root.overall.properties.bandsConsidered.items.properties.rating.type, "integer", "bands are no longer rated");
+  assert.ok(!("fit" in root.overall.properties.bandsConsidered.items.properties), "the threshold field is back beside the rating");
+});
+
+test("THE PROMPT ASKS FOR NO NUMBER OF POINTS, and reads the argument before the sentence", () => {
+  const sys = ARMS.constrained.system;
+  assert.doesNotMatch(sys, /across all the criteria/i, "the old wording that invited a point per criterion is back");
+  assert.match(sys, /NO expected number of points/, "the prompt does not say a strong essay may warrant one or two");
+  assert.match(sys, /Do not raise a point for each criterion/);
+  assert.match(sys, /only if NOTHING anywhere in the essay supports it/, "unsupported is judged sentence by sentence again");
+  assert.match(sys, /Read every\s+descriptor before rating any/, "the bands are not all weighed first");
+  assert.match(sys, /exactly bandCount entries, LOWEST FIRST, none skipped/, "the prompt no longer asks for every band");
+  assert.match(sys, /describes the essay BEST/, "the band is no longer the best fit");
+  assert.match(sys, /rate RESEMBLANCE/, "the rating is no longer about resemblance");
+  assert.doesNotMatch(sys, /\bmeets, partly\b|marked meets/, "the threshold wording is back");
+  assert.match(sys, /WHAT COUNTS AS SUPPORT is whatever the criteria say counts/, "support is not defined from the criteria");
+  assert.match(sys, /A claim followed by a reason or example is not\s+claim-without-evidence/);
+  assert.match(sys, /Minor does not mean optional/, "the prompt no longer says minor problems are raised on strong essays");
+  assert.doesNotMatch(sys, /\[name/, "the corpus's placeholder note leaked into the prompt we would ship");
+});
+
+test("THE PLACEHOLDER NOTE rides on the ASAP user message only, and says a placeholder is never a fault", () => {
+  const plain = userMessage({ essay: "E", criteria: "C" });
+  const noted = userMessage({ essay: "E", criteria: "C", placeholders: true });
+  assert.ok(!plain.includes(PLACEHOLDER_NOTE), "the note is added for a real student's essay too");
+  assert.ok(noted.includes(PLACEHOLDER_NOTE));
+  assert.match(PLACEHOLDER_NOTE, /Never raise a point about one/);
+  const readSrc = read("scripts/read-asap.mjs").replace(/\/\*[\s\S]*?\*\//g, " ");
+  assert.match(readSrc, /placeholders: true/, "the read sends ASAP essays without the note");
 });
 
 test("THE §4 BAN catches prediction framing and passes §4's own proposed wording", () => {
@@ -562,30 +634,154 @@ test("THE §4 BAN catches prediction framing and passes §4's own proposed wordi
   assert.deepEqual(predictionFraming("The essay broadly meets the criteria, but its main claim has no support."), []);
 });
 
+const RE_ESSAY = "Computers help people. They let families talk every week. They help students learn at their own pace. Some say they make people lazy, but many use them to plan sport.";
+const replyOf = ({ genre = "argument", codes = [], quotes = [], mainIdea = "Computers help people.", support = ["They let families talk every week."],
+  bands = ["1", "2", "3", "4", "5", "6"], band = "5", best = null, bandCount = null, descriptor = () => "Score Point", rating = null,
+  sentence = "It broadly meets the criteria; the counter-argument is thin." } = {}) =>
+  JSON.stringify({
+    reading: { genre, mainIdea, support, points: codes.map((d, i) => ({ quote: quotes[i] || "q", deficiency: d, note: "n" })) },
+    overall: {
+      bandCount: bandCount ?? bands.length,
+      /* By default the ratings peak at the named band, so the best fit IS
+         the named band; `best` moves the peak to test a mismatch, and
+         `rating` replaces the whole function. */
+      bandsConsidered: bands.map((b, i) => ({
+        band: b,
+        descriptor: descriptor(b),
+        rating: rating ? rating(i) : Math.max(1, 9 - 2 * Math.abs(i - (best ?? bands.indexOf(band)))),
+      })),
+      band,
+      sentence,
+    },
+  });
+
 test("measureReply: off-genre codes are counted against the model's OWN genre, and the set's genre separately", () => {
-  const reply = (genre, codes, overall = { band: "3", sentence: "It partly meets the criteria; the main claim is unsupported." }) =>
-    JSON.stringify({ genre, points: codes.map((d) => ({ quote: "q", deficiency: d, note: "n" })), overall });
-  const story = measureReply({ content: reply("narrative", ["claim-without-evidence", "repetition", "conventions"]), set: 7 });
+  const story = measureReply({ content: replyOf({ genre: "narrative", codes: ["claim-without-evidence", "repetition", "conventions"] }), set: 7, essay: RE_ESSAY });
   assert.equal(story.failure, null);
   assert.equal(story.offGenre.length, 1, "claim-without-evidence on a declared narrative was not counted");
   assert.equal(story.genreMatches, true);
-  assert.equal(story.sev.fundamental, 1);
-  assert.equal(story.sev.minor, 2);
+  assert.deepEqual([story.sev.fundamental, story.sev.minor], [1, 2]);
   assert.equal(story.ordered[0].deficiency, "claim-without-evidence");
 
-  const argued = measureReply({ content: reply("argument", ["claim-without-evidence"]), set: 7 });
-  assert.equal(argued.offGenre.length, 0, "a code that fits the stated genre was counted as off-genre");
+  const argued = measureReply({ content: replyOf({ codes: ["claim-without-evidence"] }), set: 7, essay: RE_ESSAY });
+  assert.equal(argued.offGenre.length, 0);
   assert.equal(argued.genreMatches, false, "calling a set-7 story an argument was not caught");
-
-  assert.equal(measureReply({ content: reply("argument", []), set: 99 }).genreMatches, null, "an unrecorded set read as a wrong genre");
-  assert.match(measureReply({ content: JSON.stringify({ genre: "argument", points: [] }), set: 1 }).failure, /overall/);
-  assert.match(measureReply({ content: reply("poetry", []), set: 1 }).failure, /genre/);
+  assert.equal(measureReply({ content: replyOf(), set: 99 }).genreMatches, null, "an unrecorded set read as a wrong genre");
+  assert.match(measureReply({ content: JSON.stringify({ reading: { genre: "argument", mainIdea: "", support: [], points: [] } }), set: 1 }).failure, /overall/);
+  assert.match(measureReply({ content: replyOf({ genre: "poetry" }), set: 1 }).failure, /genre/);
   assert.match(measureReply({ content: "not json", set: 1 }).failure, /parse/);
-  assert.deepEqual(
-    measureReply({ content: reply("argument", [], { band: "", sentence: "You'll get a 4." }), set: 1 }).predictionHits.length > 0,
-    true,
-    "a predicting opening sentence was not flagged"
-  );
+  assert.ok(measureReply({ content: replyOf({ sentence: "You'll get a 4." }), set: 1 }).predictionHits.length, "a predicting opening sentence was not flagged");
+});
+
+test("THE THESIS RULE IS ENFORCED IN CODE: an unsupported-claim point on the main idea is removed, and counted", () => {
+  const m = measureReply({ content: replyOf({ codes: ["claim-without-evidence", "conventions"], quotes: ["Computers help people", "Computers help people"] }), set: 1, essay: RE_ESSAY });
+  assert.equal(m.thesisDropped.length, 1, "the 11/12 essay's defect was not removed");
+  assert.equal(m.thesisDropped[0].deficiency, "claim-without-evidence");
+  assert.deepEqual(m.ordered.map((p) => p.deficiency), ["conventions"], "the removed point is still shown, or the other point went with it");
+  assert.equal(m.sev.fundamental, 0, "the removed point is still counted in the severity mix");
+  assert.equal(m.thesisFlagged.length, 0, "after the rule, the count and the rule disagree about the main idea");
+  /* Control 1: with an empty support list, calling the thesis unsupported is the right call and stays. */
+  assert.equal(measureReply({ content: replyOf({ support: [], codes: ["claim-without-evidence"], quotes: ["Computers help people"] }), set: 1, essay: RE_ESSAY }).thesisDropped.length, 0);
+  /* Control 2: an unsupported claim elsewhere is not the thesis and stays. */
+  assert.equal(measureReply({ content: replyOf({ codes: ["claim-without-evidence"], quotes: ["many use them to plan sport"] }), set: 1, essay: RE_ESSAY }).thesisDropped.length, 0);
+  /* Control 3: a non-"unsupported" code on the thesis stays. */
+  assert.equal(measureReply({ content: replyOf({ codes: ["undefined-term"], quotes: ["Computers help people"] }), set: 1, essay: RE_ESSAY }).thesisDropped.length, 0);
+});
+
+test("applyThesisRule never mutates, and returns both halves", () => {
+  const points = [{ quote: "a b c", deficiency: "unsupported-generalisation" }, { quote: "x", deficiency: "repetition" }];
+  const before = JSON.stringify(points);
+  const { kept, dropped } = applyThesisRule({ mainIdea: "A, b c!", support: ["s"], points });
+  assert.equal(JSON.stringify(points), before);
+  assert.deepEqual([kept.length, dropped.length], [1, 1]);
+  assert.deepEqual(applyThesisRule({ mainIdea: "A b c", support: [], points }).dropped, []);
+});
+
+test("wordsForMatch MIRRORS normaliseWords: the Edge Function copy and the src copy agree", () => {
+  const battery = [
+    "Computers help people.", "It\u2019s \u201Cclear\u201D \u2014 isn\u2019t it?", "  -leading and trailing-  ", "e-mail, co-op; 3.5 %",
+    "O'Brien's \u2018quote\u2019", "ALL CAPS and MiXeD", "", "[name 1] met [place 2]",
+  ];
+  for (const t of battery) assert.deepEqual(wordsForMatch(t), normaliseWords(t), `the two normalisers disagree on ${JSON.stringify(t)}`);
+});
+
+test("MAIN IDEA AND SUPPORT MUST BE COPIED: a written span is a fabrication, a dropped placeholder is not", () => {
+  const essay = "My friend [name 1] lives in [place 2] and uses it daily. Computers help people.";
+  const m = (support) => measureReply({ content: replyOf({ mainIdea: "Computers help people.", support }), set: 1, essay });
+  assert.deepEqual(m(["My friend [name 1] lives in [place 2]"]).notVerbatim, []);
+  const dropped = m(["My friend lives in and uses it daily."]);
+  assert.deepEqual(dropped.notVerbatim, [], "a sentence minus its placeholders was counted as a fabrication");
+  assert.deepEqual(dropped.placeholderOnly, ["My friend lives in and uses it daily."], "the placeholder-only difference was not reported");
+  const invented = m(["Computers connect grandparents across oceans."]);
+  assert.deepEqual(invented.notVerbatim, ["Computers connect grandparents across oceans."]);
+  assert.deepEqual(invented.placeholderOnly, [], "a fabrication was filed as a placeholder drop");
+  assert.ok(isVerbatim("they LET families talk", RE_ESSAY), "case and punctuation should not decide verbatim");
+  assert.ok(isVerbatim("It\u2019s daily", "it's daily"), "curly quotes decided verbatim");
+  assert.ok(!isVerbatim("", RE_ESSAY), "an empty span counts as verbatim");
+  assert.ok(!isVerbatim("[name 1]", essay), "a span of nothing but a placeholder counts as verbatim");
+});
+
+test("THE BAND IS PLACED IN THE MODEL'S OWN LIST, and agreement is against the human third", () => {
+  const five = measureReply({ content: replyOf({ band: "5" }), set: 1, essay: RE_ESSAY, humanBand: "high" });
+  assert.equal(five.placed.band, "high");
+  assert.equal(five.agrees, true);
+  const two = measureReply({ content: replyOf({ band: "Score Point 2", bands: ["Score Point 1", "Score Point 2", "Score Point 3", "Score Point 4", "Score Point 5", "Score Point 6"] }), set: 1, essay: RE_ESSAY, humanBand: "high" });
+  assert.equal(two.placed.band, "low", "the read's 'Score Point 2' on a high essay was not placed low");
+  assert.equal(two.agrees, false);
+  /* A pick named by number only, against labelled bands, still places. */
+  assert.equal(placeBand({ band: "2", bandsConsidered: ["Score Point 1", "Score Point 2", "Score Point 3"].map((b) => ({ band: b })) }).index, 1);
+  /* Written highest-first: the numbers decide the direction, not the order. */
+  assert.equal(placeBand({ band: "6", bandsConsidered: ["6", "5", "4", "3", "2", "1"].map((b) => ({ band: b })) }).band, "high");
+  assert.equal(placeBand({ band: "Distinction", bandsConsidered: [{ band: "Pass" }, { band: "Credit" }, { band: "Distinction" }] }).band, "high");
+  assert.equal(placeBand({ band: "7", bandsConsidered: ["1", "2"].map((b) => ({ band: b })) }), null, "a pick outside the list was placed");
+  assert.equal(placeBand({ band: "", bandsConsidered: [] }), null);
+  assert.equal(measureReply({ content: replyOf({ band: "", bands: [], bandCount: 0 }), set: 1, essay: RE_ESSAY, humanBand: "low" }).agrees, null, "no bands read as disagreement");
+});
+
+test("THE PICK IS THE BEST-RATED BAND, made in code, and a named band that ignores the ratings is counted", () => {
+  const b = (ratings) => ratings.map((rating, i) => ({ band: String(i + 1), rating }));
+  assert.deepEqual(bestFit(b([2, 5, 8, 4])), { band: "3", rating: 8, tied: ["3"] });
+  /* TIES: the model's own named band breaks them when it is one of them... */
+  assert.equal(bestFit(b([2, 8, 8, 8]), "4").band, "4");
+  /* ...otherwise the middle of the tie, which leans neither up nor down. */
+  assert.equal(bestFit(b([2, 8, 8, 8]), "1").band, "3");
+  assert.deepEqual(bestFit(b([2, 8, 8, 8])).tied, ["2", "3", "4"]);
+  assert.deepEqual(bestFit([]), { band: "", rating: null, tied: [] });
+  /* The top-band defect three rounds running: it rates 5 best and names 3. */
+  const harsh = measureReply({ content: replyOf({ band: "3", best: 4 }), set: 1, essay: RE_ESSAY, humanBand: "high" });
+  assert.equal(harsh.pick, "5", "the pick followed the named band rather than the ratings");
+  assert.equal(harsh.agrees, true, "agreement is not measured on the best-fit pick");
+  assert.equal(harsh.namedAgrees, false);
+  assert.equal(harsh.namedMatchesPick, false);
+  assert.equal(measureReply({ content: replyOf({ band: "5" }), set: 1, essay: RE_ESSAY }).namedMatchesPick, true);
+  const tie = measureReply({ content: replyOf({ band: "", rating: () => 7 }), set: 1, essay: RE_ESSAY });
+  assert.equal(tie.pickTied.length, 6, "an all-way tie was not reported");
+});
+
+test("A RATING OUTSIDE THE RANGE is counted, not trusted", () => {
+  const bad = measureReply({ content: replyOf({ rating: (i) => (i === 0 ? 0 : i === 1 ? 11 : 5) }), set: 1, essay: RE_ESSAY });
+  assert.equal(bad.ratingsOutOfRange.length, 2);
+  assert.equal(measureReply({ content: replyOf(), set: 1, essay: RE_ESSAY }).ratingsOutOfRange.length, 0, "control: in-range ratings were flagged");
+  assert.deepEqual([BAND_RATING_MIN, BAND_RATING_MAX], [1, 10]);
+});
+
+test("EVERY BAND WEIGHED is checked against the stated count, the set's known count, and the criteria's own words", () => {
+  const criteria = "Score Point 1 ... Score Point 6 descriptors";
+  const full = measureReply({ content: replyOf(), set: 1, essay: RE_ESSAY, criteria });
+  assert.deepEqual([full.bandsShort, full.bandsBelowKnown, full.descriptorsInvented.length], [false, false, 0]);
+  const partial = measureReply({ content: replyOf({ bands: ["3", "4", "5"], band: "5" }), set: 1, essay: RE_ESSAY, criteria });
+  assert.equal(partial.bandsBelowKnown, true, "three bands of set 1's six were accepted as all of them");
+  assert.equal(partial.bandsShort, false, "control: the model's own count of three was met");
+  assert.equal(measureReply({ content: replyOf({ bands: ["3", "4", "5"], band: "5", bandCount: 6 }), set: 1, essay: RE_ESSAY }).bandsShort, true);
+  assert.equal(measureReply({ content: replyOf({ bands: ["3", "4", "5"], band: "5" }), set: 8, essay: RE_ESSAY }).bandsBelowKnown, false, "set 8's count was assumed");
+  const invented = measureReply({ content: replyOf({ descriptor: (b) => `a fine essay at level ${b}` }), set: 1, essay: RE_ESSAY, criteria });
+  assert.equal(invented.descriptorsInvented.length, 6, "descriptors not in the criteria were not caught");
+  assert.match(measureReply({ content: JSON.stringify({ reading: { genre: "argument", mainIdea: "", support: [], points: [] }, overall: { bandsConsidered: [], band: "", sentence: "s" } }), set: 1 }).failure, /overall/, "a reply with no bandCount was accepted");
+});
+
+test("FAULTS PER ESSAY leave out off-criterion", () => {
+  const m = measureReply({ content: replyOf({ codes: ["repetition", "off-criterion", "off-criterion"] }), set: 1, essay: RE_ESSAY });
+  assert.deepEqual([m.count, m.counted], [3, 1]);
 });
 
 test("THE READ AND THE HARNESS BOTH SEND THE SCHEMA — one source, every caller", () => {

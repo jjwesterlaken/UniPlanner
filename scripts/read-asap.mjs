@@ -49,7 +49,15 @@
      --n <count>      how many essays       (default 6)
      --sets <list>    default 1,2,7,8       (source-dependent sets excluded)
      --seed <n>       default 1, so the same essays come back
-     --model <id>     default is the shipped SUMMARY_MODEL
+     --model <id>     default is the shipped SUMMARY_MODEL. A MEASUREMENT OVERRIDE ONLY: it
+                      changes what this script calls and nothing else. The feature's
+                      model is modelFor() in _shared/model.ts, and nothing here writes it.
+     --usd-in <n>     the provider's price per 1M input tokens, for a model the
+     --usd-out <n>    repository does not price (per 1M output tokens). Without them
+                      the read reports tokens and says the cost is unknown.
+     --max-tokens <n> the output ceiling. Default 2000, or 8000 for the GPT-5 family,
+                      whose reasoning tokens count against it: a ceiling a reasoning
+                      model spends before answering is a truncated reply, not a reading.
      --dry-run        pick the essays, call nothing, spend nothing
 
    IT RUNS AFTER THE SCOPE CONTROL AND THE TWO-ARM MEASUREMENT, on the
@@ -65,11 +73,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadCorpus, selectForRead, bandAvailability, DEFAULT_SETS, MIN_ESSAY_WORDS, BANDS } from "./lib/asap-corpus.mjs";
-import { essayFeedbackSchema, severityOf } from "../src/essayPoints.js";
+import { essayFeedbackSchema, severityOf, BAND_RATING_MIN, BAND_RATING_MAX } from "../src/essayPoints.js";
 import { measureReply } from "./lib/essay-read.mjs";
 import { ARMS, userMessage } from "./lib/essay-arms.mjs";
 import { callVision } from "./lib/photo-calls.mjs";
 import { productionModel } from "./lib/production-model.mjs";
+import { loadPricing, usdFor } from "./lib/model-prices.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -84,7 +93,12 @@ const dir = opt("--dir");
 const n = Number(opt("--n", "6"));
 const seed = Number(opt("--seed", "1"));
 const sets = (opt("--sets", DEFAULT_SETS.join(","))).split(",").map((x) => Number(x.trim()));
-const model = opt("--model") || (await productionModel({ hasImages: false }));
+const shipped = await productionModel({ hasImages: false });
+const model = opt("--model") || shipped;
+const maxTokens = Number(opt("--max-tokens", model.startsWith("gpt-5") ? "8000" : "2000"));
+const num = (x) => (x === null ? null : Number(x));
+const pricing = await loadPricing({ usdIn: num(opt("--usd-in")), usdOut: num(opt("--usd-out")) });
+const price = pricing.priceFor(model);
 const dryRun = argv.includes("--dry-run");
 const outArg = opt("--out", path.join(os.homedir(), "asap-read.md"));
 
@@ -190,7 +204,9 @@ for (const set of sets) {
 }
 console.log("");
 console.log(`ids          ${chosen.map((c) => `${c.set}:${c.id}`).join(" ")}`);
-console.log(`model        ${model}`);
+console.log(`model        ${model}${model === shipped ? "   (the shipped model)" : `   (a MEASUREMENT OVERRIDE; the shipped model is ${shipped})`}`);
+console.log(`price        ${price ? `$${price.in} / $${price.out} per 1M in / out, from ${price.source}` : "UNKNOWN: this model is not priced in the repository; pass --usd-in and --usd-out from the provider's pricing page"}`);
+console.log(`ceiling      ${maxTokens} output tokens`);
 console.log(`out          ${outPath}`);
 console.log(`text         WRITTEN IN FULL to that file, and nowhere else. Delete it when read.`);
 
@@ -201,6 +217,21 @@ if (bandsCovered.length < 2) {
       "and that cannot be answered inside one band. Raise --n, change --seed, or add a set.\n"
   );
   process.exit(1);
+}
+
+/* THE COST, ESTIMATED BEFORE ANYTHING IS SPENT: input from characters
+   at credits.ts's own CHARS_PER_TOKEN, output at the full ceiling, so
+   this is an upper bound per essay. The real run reports what was
+   actually used. */
+{
+  const sysChars = ARMS.constrained.system.length;
+  const inTok = chosen.map((r) => (sysChars + (corpus.rubricFor.get(r.set) || "").length + r.essay.length) / pricing.charsPerToken);
+  const meanIn = inTok.reduce((a, b) => a + b, 0) / (inTok.length || 1);
+  const ceilingUsd = price ? usdFor({ prompt_tokens: meanIn, completion_tokens: maxTokens }, price) : null;
+  console.log(
+    `estimate     ~${Math.round(meanIn)} input tokens per essay; at most ` +
+      (ceilingUsd === null ? "(price unknown)" : `$${ceilingUsd.toFixed(4)} and ${pricing.creditsFor(ceilingUsd)} credit(s) per essay, $${(ceilingUsd * chosen.length).toFixed(3)} for the run`)
+  );
 }
 
 if (dryRun) {
@@ -224,9 +255,9 @@ for (const [i, row] of chosen.entries()) {
     model,
     messages: [
       { role: "system", content: arm.system },
-      { role: "user", content: userMessage({ essay: row.essay, criteria: corpus.rubricFor.get(row.set) }) },
+      { role: "user", content: userMessage({ essay: row.essay, criteria: corpus.rubricFor.get(row.set), placeholders: true }) },
     ],
-    maxTokens: 2000,
+    maxTokens,
     /* THE STRICT SCHEMA, so the deficiency enum is enforced by the
        decoder rather than requested in the prose. See essaySchema.js. */
     jsonSchema: essayFeedbackSchema(),
@@ -237,9 +268,16 @@ for (const [i, row] of chosen.entries()) {
      ones that worked; a file containing only the successes is a
      flattering sample of our own output. */
   const m = error
-    ? { failure: error, count: 0, sev: { fundamental: 0, minor: 0, outside: 0, unknown: 0 }, offGenre: [], predictionHits: [] }
-    : measureReply({ content: json?.choices?.[0]?.message?.content ?? "", set: row.set });
-  out.push({ row, ...m });
+    ? measureReply({ content: "", set: row.set })
+    : measureReply({ content: json?.choices?.[0]?.message?.content ?? "", set: row.set, essay: row.essay, criteria: corpus.rubricFor.get(row.set), humanBand: row.band });
+  if (error) m.failure = error;
+  /* WHAT WAS REALLY USED, per call. A reply cut off at the ceiling is
+     reported as a failure of THIS configuration rather than parsed as
+     a short reading. */
+  const usage = json?.usage || null;
+  const finish = json?.choices?.[0]?.finish_reason || null;
+  if (finish === "length") m.failure = `cut off at the ${maxTokens}-token ceiling (finish_reason length)`;
+  out.push({ row, ...m, usage, finish, usd: usage ? usdFor(usage, price) : null });
 }
 
 /* ---------- the file ---------- */
@@ -254,7 +292,10 @@ const byBand = BANDS.map((band) => {
   const inBand = measured.filter((m) => m.row.band === band && !m.failure);
   const sum = (k) => inBand.reduce((a, m) => a + m.sev[k], 0);
   const pts = inBand.reduce((a, m) => a + m.count, 0);
-  return { band, essays: inBand.length, pts, fundamental: sum("fundamental"), minor: sum("minor"), outside: sum("outside") };
+  const counted = inBand.reduce((a, m) => a + m.counted, 0);
+  const agree = inBand.filter((m) => m.agrees).length;
+  const placed = inBand.filter((m) => m.placed).length;
+  return { band, essays: inBand.length, pts, counted, agree, placed, fundamental: sum("fundamental"), minor: sum("minor"), outside: sum("outside") };
 });
 const ok = measured.filter((m) => !m.failure);
 const unknownTotal = ok.reduce((a, m) => a + m.sev.unknown, 0);
@@ -262,6 +303,34 @@ const offGenreTotal = ok.reduce((a, m) => a + m.offGenre.length, 0);
 const genreKnown = ok.filter((m) => m.genreMatches !== null);
 const genreRight = genreKnown.filter((m) => m.genreMatches).length;
 const predictionTotal = ok.filter((m) => m.predictionHits.length).length;
+const placedOk = ok.filter((m) => m.placed);
+const agreeing = placedOk.filter((m) => m.agrees).length;
+const thesisTotal = ok.reduce((a, m) => a + m.thesisFlagged.length, 0);
+const droppedTotal = ok.reduce((a, m) => a + m.thesisDropped.length, 0);
+const notVerbatimTotal = ok.reduce((a, m) => a + m.notVerbatim.length, 0);
+const placeholderOnlyTotal = ok.reduce((a, m) => a + m.placeholderOnly.length, 0);
+const bandsShort = ok.filter((m) => m.bandsShort).length;
+const bandsBelowKnown = ok.filter((m) => m.bandsBelowKnown).length;
+const knownSets = ok.filter((m) => [1, 2].includes(m.row.set)).length;
+const namedOk = ok.filter((m) => m.namedPlaced);
+const namedAgreeing = namedOk.filter((m) => m.namedAgrees).length;
+const namedOff = ok.filter((m) => m.namedMatchesPick === false).length;
+const tiedTotal = ok.filter((m) => m.pickTied.length).length;
+const ratingsBad = ok.reduce((a, m) => a + m.ratingsOutOfRange.length, 0);
+const highOk = ok.filter((m) => m.row.band === "high" && m.placed);
+const highPicks = highOk.map((m) => m.pick);
+const highUniformlyLow = highOk.length > 0 && highOk.every((m) => m.placed.band !== "high");
+/* COST, measured. Mean and max over the calls that reported usage. */
+const used = measured.filter((m) => m.usage);
+const meanOf = (f) => (used.length ? used.reduce((a, m) => a + f(m), 0) / used.length : null);
+const meanIn = meanOf((m) => m.usage.prompt_tokens || 0);
+const meanOut = meanOf((m) => m.usage.completion_tokens || 0);
+const meanReason = meanOf((m) => m.usage.completion_tokens_details?.reasoning_tokens || 0);
+const priced = used.filter((m) => m.usd !== null);
+const meanUsd = priced.length ? priced.reduce((a, m) => a + m.usd, 0) / priced.length : null;
+const maxUsd = priced.length ? Math.max(...priced.map((m) => m.usd)) : null;
+const truncated = measured.filter((m) => m.finish === "length").length;
+const descriptorsInvented = ok.reduce((a, m) => a + m.descriptorsInvented.length, 0);
 
 const sheet = [
   "# ASAP read — does the feedback point at anything a marker cares about?",
@@ -298,10 +367,10 @@ const sheet = [
   "points. It need not — a strong essay can have six small things worth saying — which is",
   "why the severity mix beside it is the number that matters more.",
   "",
-  "| band | essays | points | per essay | fundamental | minor | outside the count |",
-  "|---|---|---|---|---|---|---|",
+  "| band | essays | points | per essay | fundamental | minor | outside the count | faults per essay | reading agrees |",
+  "|---|---|---|---|---|---|---|---|---|",
   ...byBand.map((b) =>
-    `| ${b.band} | ${b.essays} | ${b.pts} | ${b.essays ? (b.pts / b.essays).toFixed(1) : "—"} | ${b.fundamental} | ${b.minor} | ${b.outside} |`
+    `| ${b.band} | ${b.essays} | ${b.pts} | ${b.essays ? (b.pts / b.essays).toFixed(1) : "—"} | ${b.fundamental} | ${b.minor} | ${b.outside} | ${b.essays ? (b.counted / b.essays).toFixed(1) : "—"} | ${b.agree} of ${b.placed} |`
   ),
   "",
   `**Codes outside the closed set: ${unknownTotal}.** Under the strict schema this run sends,`,
@@ -311,19 +380,55 @@ const sheet = [
   "*outside the count* is `off-criterion`: the model saying it had nothing against a",
   "criterion. It is not a fault, so it is counted apart from both severity columns.",
   "",
-  "**Three checks on the new instructions, each counted rather than judged:**",
+  "*faults per essay* leaves out `off-criterion`. If it is still flat across the bands, the",
+  "prompt is still asking for a quota rather than for what is wrong.",
+  "",
+  `**Best-fit reading agrees with the human band: ${agreeing} of ${placedOk.length}.** The model rates`,
+  "every band's descriptor for how well it describes the essay, and the pick is the best-rated band,",
+  "chosen in code. Where it sits in the model's own list of bands is put into thirds and compared",
+  "with where the human score sits in the set's range. Rounds so far: 2 of 12, 5 of 12, 6 of 18.",
+  `Picks that could not be placed are left out: ${ok.length - placedOk.length} this run.`,
+  "",
+  `**The high band:** ${highOk.length} essays, picked as ${highPicks.join(", ") || "(none)"}.`,
+  `${highUniformlyLow ? "**Every high-band essay was read below the high band, as in the last three rounds.**" : "Not uniformly read low."}`,
+  "",
+  `The band the model itself NAMED agrees ${namedAgreeing} of ${namedOk.length}, and differed from its own best-rated`,
+  `band on ${namedOff} essay(s). Ties for the top rating: ${tiedTotal}. Ratings outside ${BAND_RATING_MIN}-${BAND_RATING_MAX}: ${ratingsBad}.`,
+  "",
+  "**Did it weigh every band?** Strict mode cannot require a list length, so this is counted:",
+  `lists shorter than the band count the model itself stated: ${bandsShort}; shorter than the rubric's`,
+  `six score points on sets 1 and 2: ${bandsBelowKnown} of ${knownSets}; descriptors not found in the criteria: ${descriptorsInvented}.`,
+  "",
+  "**Checks on the instructions, each counted rather than judged:**",
   "",
   `- **Genre read from the criteria:** ${genreRight} of ${genreKnown.length} essays got the genre their ASAP set really asks for (sets 1 and 2 argument, 7 and 8 narrative).`,
-  `- **Codes that do not fit the genre the model itself stated: ${offGenreTotal}.** The prompt lists the codes each genre allows. Every one here is the model contradicting its own statement, such as \`claim-without-evidence\` on an essay it called a narrative.`,
+  `- **Codes that do not fit the genre the model itself stated: ${offGenreTotal}.** Each genre's codes are now an enum in the schema, so this is zero by construction. A non-zero means the schema did not reach the model.`,
   `- **Opening sentences that read as a prediction (the ESSAY-FEEDBACK.md §4 ban): ${predictionTotal}.** It should be zero.`,
+  `- **Points removed by the thesis rule: ${droppedTotal}.** An unsupported-claim point on the main idea, while the model's own support list is not empty, is now removed in code rather than asked against in prose; the last read had 3. Each removal is shown under its essay. (Left after the rule: ${thesisTotal}, which is zero by construction.)`,
+  `- **Spans not in the essay even with placeholders set aside: ${notVerbatimTotal}.** These are the likely fabrications: main-idea or support text the model wrote rather than copied. **Spans that differed only by a dropped placeholder: ${placeholderOnlyTotal}**, which is copying, not writing.`,
+  "",
+  "## What this run cost, measured",
+  "",
+  `Model \`${model}\`${model === shipped ? " (the shipped model)" : ` — a measurement override; the shipped model is \`${shipped}\``}.`,
+  `Price: ${price ? `$${price.in} / $${price.out} per 1M input / output tokens, from ${price.source}` : "**unknown**, not priced in the repository and not passed"}.`,
+  `Ceiling: ${maxTokens} output tokens; **replies cut off at it: ${truncated}**.`,
+  "",
+  "| per essay | input tokens | output tokens | of which reasoning | USD | credits |",
+  "|---|---|---|---|---|---|",
+  `| mean | ${meanIn === null ? "—" : Math.round(meanIn)} | ${meanOut === null ? "—" : Math.round(meanOut)} | ${meanReason === null ? "—" : Math.round(meanReason)} | ${meanUsd === null ? "—" : meanUsd.toFixed(5)} | ${meanUsd === null ? "—" : pricing.creditsFor(meanUsd)} |`,
+  `| max | | | | ${maxUsd === null ? "—" : maxUsd.toFixed(5)} | ${maxUsd === null ? "—" : pricing.creditsFor(maxUsd)} |`,
+  "",
+  `Credits use credits.ts's own \`creditsFor\` at $${pricing.usdPerCredit.toFixed(6)} a credit. This is the MEASURED cost of`,
+  "these essays, not the price: the product prices an action from its ceilings, so a re-derived",
+  "credit price is set in step 4 from the chosen model's ceilings, with this as the check on it.",
   "",
   "## The sheet — fill this in as you read",
   "",
-  "| # | set | score | band | model's reading | points | fund. | minor | Points at things a marker would care about? | Notes |",
-  "|---|---|---|---|---|---|---|---|---|---|",
+  "| # | set | score | band | model's reading | agrees | points | fund. | minor | Points at things a marker would care about? | Notes |",
+  "|---|---|---|---|---|---|---|---|---|---|---|",
   ...measured.map(
     (m, i) =>
-      `| ${i + 1} | ${m.row.set} | ${m.row.score}/${ranges[m.row.set].max} | ${m.row.band} | ${m.failure ? "—" : m.overall.band || "(none)"} | ${m.failure ? "—" : m.count} | ${m.failure ? "—" : m.sev.fundamental} | ${m.failure ? "—" : m.sev.minor} | yes / partly / no | |`
+      `| ${i + 1} | ${m.row.set} | ${m.row.score}/${ranges[m.row.set].max} | ${m.row.band} | ${m.failure ? "—" : m.pick || "(none)"} | ${m.failure || m.agrees === null ? "—" : m.agrees ? "yes" : "no"} | ${m.failure ? "—" : m.count} | ${m.failure ? "—" : m.sev.fundamental} | ${m.failure ? "—" : m.sev.minor} | yes / partly / no | |`
   ),
   "",
   "**Two questions the table cannot hold:**",
@@ -382,15 +487,28 @@ for (const [i, m] of measured.entries()) {
     const genreNote = m.genreMatches === false ? ` · **the set asks for ${m.expectedGenre}**` : "";
     sheet.push(`Genre stated: _${m.genre}_${genreNote}`);
     sheet.push("");
-    sheet.push(`> **Opening reading** · reads like: ${m.overall.band ? `**${m.overall.band}**` : "_(no band)_"}`);
+    sheet.push(`> **Opening reading** · reads like: ${m.pick ? `**${m.pick}**` : "_(no band)_"}`);
     sheet.push(`> ${m.overall.sentence || "_(no sentence)_"}`);
+    if (m.overall.bandsConsidered.length) {
+      sheet.push(`> Bands rated (${m.overall.bandsConsidered.length} of a stated ${m.overall.bandCount}): ${m.overall.bandsConsidered.map((b) => `${b.band} _(${b.rating})_`).join(" · ")}`);
+      sheet.push(`> Best fit, picked in code: **${m.pick || "(none)"}**${m.pickTied.length ? ` (tied: ${m.pickTied.join(", ")})` : ""}`);
+    }
+    if (m.namedMatchesPick === false) sheet.push(`> ⚠ named **${m.overall.band}**, but its own best-rated band is **${m.pick}**`);
     if (m.predictionHits.length) sheet.push(`> ⚠ trips the §4 prediction ban: ${m.predictionHits.join(", ")}`);
+    sheet.push("");
+    sheet.push(`Main idea: \`${String(m.mainIdea || "(none)").replace(/`/g, "'")}\` · ${m.support.length} supporting span(s)`);
+    for (const x of m.notVerbatim) sheet.push(`- ⚠ **not in the essay:** \`${String(x).replace(/`/g, "'")}\``);
+    for (const p of m.thesisDropped) {
+      sheet.push(`- ✂ **removed by the thesis rule:** ${p.deficiency} on \`${String(p.quote || "").replace(/`/g, "'")}\` (${p.note || ""})`);
+    }
     sheet.push("");
     if (!m.count) {
       sheet.push("**No points at all.** The model read the essay and raised nothing — worth noting on the sheet.");
     }
     for (const p of m.ordered) {
-      const off = m.offGenre.includes(p) ? ` · **does not fit ${m.genre}**` : "";
+      const off =
+        (m.offGenre.includes(p) ? ` · **does not fit ${m.genre}**` : "") +
+        (m.thesisFlagged.includes(p) ? " · **the main idea, coded unsupported despite support**" : "");
       sheet.push(`- **${p.deficiency || "(no deficiency)"}** · _${severityOf(p.deficiency)}_${off}`);
       sheet.push(`  - quotes: \`${String(p.quote || "").replace(/`/g, "'")}\``);
       sheet.push(`  - says: ${p.note || "(nothing)"}`);
@@ -405,5 +523,7 @@ fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, sheet.join("\n"), "utf8");
 
 console.log(`\nWritten: ${outPath}`);
+console.log(`  agreement ${agreeing} of ${placedOk.length} (best fit); high band read as ${highPicks.join(", ") || "(none)"}${highUniformlyLow ? " — ALL BELOW HIGH" : ""}`);
+console.log(`  cost      ${meanUsd === null ? "unknown (no price)" : `$${meanUsd.toFixed(5)} mean, $${maxUsd.toFixed(5)} max per essay; ${pricing.creditsFor(meanUsd)} credit(s) mean`}; ${truncated} cut off at the ceiling`);
 console.log(`  ${out.filter((o) => !o.failure && o.count).length} of ${out.length} essays produced feedback.`);
 console.log("  Open it, fill in the sheet at the top, and delete the file when you are done.");

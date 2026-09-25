@@ -21,8 +21,11 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 import { docxToText, zipEntries } from "./lib/docx-text.mjs";
-import { MIN_ESSAY_WORDS, selectForRead, scoreRanges, normaliseScore, bandOf, bandAvailability, DECLARED_SCORE_RANGES } from "./lib/asap-corpus.mjs";
+import { MIN_ESSAY_WORDS, selectForRead, scoreRanges, normaliseScore, bandOf, bandAvailability, DECLARED_SCORE_RANGES, placeholderAnon, stripAnon, PLACEHOLDER_LABELS } from "./lib/asap-corpus.mjs";
+import { PLACEHOLDER_NOTE } from "./lib/essay-arms.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -450,6 +453,45 @@ test("the fence resolves `..`, so it cannot be walked around", () => {
   }
 });
 
+test("--model IS A MEASUREMENT OVERRIDE: it says so, prices from the repository, and never guesses a price", () => {
+  const dir = fixture();
+  const out = path.join(os.tmpdir(), `asap-read-model-${Date.now()}.md`);
+  const shipped = runReader(["--dir", dir, "--out", out, "--sets", "1", "--dry-run"]);
+  assert.equal(shipped.code, 0, shipped.out);
+  assert.match(shipped.out, /\(the shipped model\)/);
+  assert.match(shipped.out, /from credits\.ts/, "the shipped model is not priced from credits.ts");
+  assert.match(shipped.out, /ceiling\s+2000 output tokens/);
+
+  const mini = runReader(["--dir", dir, "--out", out, "--sets", "1", "--model", "gpt-5.4-mini", "--dry-run"]);
+  assert.equal(mini.code, 0, mini.out);
+  assert.match(mini.out, /MEASUREMENT OVERRIDE; the shipped model is gpt-4o-mini/, "an override does not say it is one");
+  assert.match(mini.out, /from model\.ts/, "gpt-5.4-mini is not priced from model.ts");
+  /* THE NUMBERS, not only the label. Read out of model.ts by bundling it
+     here, independently of model-prices.mjs, so this compares the
+     script's output against the module and not against itself. */
+  const { buildSync } = require("esbuild");
+  const bundled = buildSync({ entryPoints: [path.join(rootDir, "supabase/functions/_shared/model.ts")], bundle: true, format: "cjs", platform: "neutral", write: false }).outputFiles[0].text;
+  const mod = { exports: {} };
+  new Function("module", "exports", bundled)(mod, mod.exports);
+  const { VISION_USD_PER_1M_INPUT: vin, VISION_USD_PER_1M_OUTPUT: vout, VISION_MODEL } = mod.exports;
+  assert.equal(VISION_MODEL, "gpt-5.4-mini", "this test assumes the vision model is the one being compared; recheck it");
+  assert.ok(mini.out.includes(`$${vin} / $${vout} per 1M`), `gpt-5.4-mini's printed rate is not model.ts's $${vin} / $${vout}`);
+  assert.match(mini.out, /ceiling\s+8000 output tokens/, "a reasoning model got the ceiling it would spend before answering");
+  assert.match(mini.out, /at most \$\d/, "no cost estimate before spending");
+
+  const unpriced = runReader(["--dir", dir, "--out", out, "--sets", "1", "--model", "some-unpriced-model", "--dry-run"]);
+  assert.match(unpriced.out, /price\s+UNKNOWN/, "an unpriced model was given a price");
+  assert.match(unpriced.out, /\(price unknown\)/);
+  const passed = runReader(["--dir", dir, "--out", out, "--sets", "1", "--model", "some-unpriced-model", "--usd-in", "2", "--usd-out", "8", "--dry-run"]);
+  assert.match(passed.out, /\$2 \/ \$8 per 1M in \/ out, from --usd-in\/--usd-out/);
+
+  /* AND IT CANNOT MOVE THE SHIPPED PATH: the script writes one file, the
+     sheet, and names nothing under supabase/ as a write target. */
+  const src = strip(read("scripts/read-asap.mjs"));
+  const writes = [...src.matchAll(/fs\.(writeFileSync|appendFileSync|renameSync|copyFileSync)\(([^,]+)/g)].map((m) => m[2].trim());
+  assert.deepEqual(writes, ["outPath"], `read-asap writes somewhere other than the sheet: ${writes.join(", ")}`);
+});
+
 test("AND IT ACCEPTS A PATH OUTSIDE — the control, or the fence could be refusing everything", () => {
   const dir = fixture();
   const out = path.join(os.tmpdir(), `asap-read-control-${Date.now()}.md`);
@@ -617,6 +659,22 @@ test("THE DRY RUN SAYS WHICH BANDS A SET CAN FILL above the floor, not only how 
   assert.match(strip(read("scripts/read-asap.mjs")), /bandAvailability\(\{ rows: corpus\.rows, ranges \}\)/, "the dry run does not compute per-band availability");
 });
 
+test("ANONYMISED TOKENS BECOME PLACEHOLDERS for what a model reads, and holes only for the no-writing measurement", () => {
+  const raw = "Dear @CAPS1, my friend @PERSON2 in @LOCATION1 uses it @NUM1 hours. @PERSON1 and @CAPS1 again.";
+  assert.equal(
+    placeholderAnon(raw),
+    "Dear [proper noun 1], my friend [name 2] in [place 1] uses it [number 1] hours. [name 1] and [proper noun 1] again."
+  );
+  assert.equal(stripAnon(raw), "Dear , my friend in uses it hours. and again.", "the measurement's strip changed");
+  assert.equal(placeholderAnon("@ZORP3 said"), "[redacted 3] said", "an unknown family was guessed at");
+  /* ONE LABEL PER FAMILY: @CAPS1 and @PERSON1 are different entities. */
+  const labels = Object.values(PLACEHOLDER_LABELS);
+  assert.equal(new Set(labels).size, labels.length, "two families share a placeholder, so two entities would read as one");
+  assert.ok(labels.length >= 10, "the label table is nearly empty, so the distinctness check says little");
+  /* The no-writing sampler keeps stripping, on purpose. */
+  assert.match(strip(read("scripts/sample-asap.mjs")), /anon: "strip"/, "sample-asap changed how it anonymises");
+});
+
 test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the schema on the wire", () => {
   /* NOTHING RAN READ MODE PAST --dry-run BEFORE THIS. So the sheet a
      person opens — the printed point count, the severity mix, both
@@ -632,7 +690,7 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
   try {
     const dir = path.join(tmp, "corpus");
     fs.mkdirSync(path.join(dir, "Essay_Set_Descriptions"), { recursive: true });
-    const para = "The printing press changed who could hold an argument in public, and this essay considers how and why that happened across several decades of European history. ";
+    const para = "The printing press changed who could hold an argument in public, and this essay considers how and why that happened across several decades of European history, as @PERSON1 argued. ";
     const body = para.repeat(Math.ceil(MIN_ESSAY_WORDS / para.split(/\s+/).length) + 1).trim();
     const rows = [["essay_id", "essay_set", "essay", "domain1_score"].join("\t")];
     /* Set 1 is 2-12 and set 2 is 1-6: a LOW and a HIGH essay in each,
@@ -654,11 +712,15 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
       `import fs from "node:fs";
        globalThis.fetch = async (_url, init) => {
          fs.appendFileSync(${JSON.stringify(bodies)}, init.body + "\\n");
-         return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ genre: "argument", points: [
+         return { ok: true, json: async () => ({ usage: { prompt_tokens: 1000, completion_tokens: 500 }, choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ reading: { genre: "argument",
+           mainIdea: "across several decades of European history",
+           support: ["The printing press changed who could hold an argument in public"],
+           points: [
            { quote: "across several decades", deficiency: "repetition", note: "Said twice." },
            { quote: "changed who could hold an argument", deficiency: "claim-without-evidence", note: "The claim is asserted, not shown." },
            { quote: "how and why that happened", deficiency: "unsupported-generalisation", note: "Too broad for what follows." },
-         ], overall: { band: "3", sentence: "OVERALL-SENTINEL: it partly meets the criteria; its central claim is never supported." } }) } }] }) };
+         ] }, overall: { bandCount: 6, bandsConsidered: ["1","2","3","4","5","6"].map((band) => ({ band, descriptor: "Persuasive", rating: band === "3" ? 8 : 4 })),
+           band: "3", sentence: "OVERALL-SENTINEL: it partly meets the criteria; its central claim is never supported." } }) } }] }) };
        };\n`
     );
     const out = path.join(tmp, "read.md");
@@ -674,14 +736,23 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     for (const b of sent) {
       assert.equal(b.response_format.type, "json_schema", "the request went out as json_object — the enum is a suggestion again");
       assert.equal(b.response_format.json_schema.strict, true, "the schema went out non-strict");
-      const e = b.response_format.json_schema.schema.properties.points.items.properties.deficiency.enum;
-      assert.ok(e.includes("claim-without-evidence") && e.length > 5, "the enum on the wire is not the closed set");
+      const branches = b.response_format.json_schema.schema.properties.reading.anyOf;
+      assert.ok(Array.isArray(branches) && branches.length === 4, "the per-genre branches did not reach the wire");
+      const e = branches.find((x) => x.properties.genre.enum[0] === "argument").properties.points.items.properties.deficiency.enum;
+      assert.ok(e.includes("claim-without-evidence") && e.length > 5, "the argument branch's enum on the wire is not its codes");
+      /* THE ESSAY WENT OUT WITH A PLACEHOLDER, NOT A HOLE, and with the note
+         saying a placeholder is never a fault. */
+      const user = b.messages.find((x) => x.role === "user").content;
+      assert.ok(user.includes("as [name 1] argued"), "the anonymised name went out as a hole or a raw token");
+      assert.ok(!/@[A-Z]/.test(user), "a raw ASAP token reached the model");
+      assert.ok(user.includes(PLACEHOLDER_NOTE), "the placeholder note did not go out with the essay");
+      assert.ok(!b.messages.find((x) => x.role === "system").content.includes(PLACEHOLDER_NOTE), "the note leaked into the system prompt");
     }
 
     /* 2. THE NUMBERS. 6 essays x 3 points: 12 fundamental, 6 minor. */
     const md = fs.readFileSync(out, "utf8");
     assert.match(md, /Point count against band/, "the point-count table is missing");
-    const rowsIn = [...md.matchAll(/^\| (low|middle|high) \| (\d+) \| (\d+) \| [\d.—]+ \| (\d+) \| (\d+) \| (\d+) \|$/gm)];
+    const rowsIn = [...md.matchAll(/^\| (low|middle|high) \| (\d+) \| (\d+) \| [\d.—]+ \| (\d+) \| (\d+) \| (\d+) \| [\d.—]+ \| \d+ of \d+ \|$/gm)];
     assert.ok(rowsIn.length >= 2, `the band table has ${rowsIn.length} rows`);
     const total = (i) => rowsIn.reduce((a, r) => a + Number(r[i]), 0);
     assert.equal(total(3), 18, "the point total across bands is wrong");
@@ -691,6 +762,20 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     assert.match(md, /Genre read from the criteria:\*\* 6 of 6/, "the genre check did not count all six argument essays");
     assert.match(md, /Codes that do not fit the genre the model itself stated: 0\./, "the off-genre count is missing or wrong");
     assert.match(md, /read as a prediction[^:]*: 0\./, "the prediction count is missing or non-zero");
+    /* 1 of 3 essays in each set is middle, and the reply always picks 3 of 1-6, which places middle. */
+
+    assert.match(md, /Points removed by the thesis rule: 0\./, "the thesis-rule count is missing or wrong");
+    assert.match(md, /not in the essay even with placeholders set aside: 0\./, "the fabrication count is missing or wrong");
+    assert.match(md, /differed only by a dropped placeholder: 0\*\*/, "the placeholder-only count is missing");
+    assert.match(md, /Best-fit reading agrees with the human band: 2 of 6\./, "the best-fit agreement is missing or wrong");
+    assert.match(md, /differed from its own best-rated\s+band on 0 essay/, "the named-vs-pick count is missing or wrong");
+    assert.match(md, /Ties for the top rating: 0\. Ratings outside 1-10: 0\./, "the tie and range counts are missing");
+    /* THE COST TABLE, from the stub's usage. */
+    assert.match(md, /## What this run cost, measured/, "the cost section is missing");
+    assert.match(md, /\| mean \| 1000 \| 500 \| 0 \| 0\.00045 \| 1 \|/, "the measured cost is missing or not priced from credits.ts");
+    assert.match(md, /replies cut off at it: 0/);
+    assert.match(md, /shorter than the band count the model itself stated: 0; shorter than the rubric's/, "the band-completeness counts are missing");
+    assert.match(md, /descriptors not found in the criteria: 0\./, "the descriptor check is missing or wrong");
 
     /* 2b. THE OPENING READING COMES FIRST, AND THE POINTS FUNDAMENTAL FIRST. */
     const first = md.slice(md.indexOf("## 1. Set"));
@@ -699,7 +784,7 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     assert.ok(at("OVERALL-SENTINEL") < at("**claim-without-evidence**"), "the opening reading does not come before the points");
     assert.ok(at("**unsupported-generalisation**") < at("**repetition**"), "a minor point is shown above a fundamental one");
     assert.ok(at("**claim-without-evidence**") < at("**unsupported-generalisation**"), "the model's order was not kept inside a level");
-    assert.match(md, /\| 3 \| 3 \| 2 \| 1 \|/, "the model's reading is not in the sheet row beside the counts");
+    assert.match(md, /\| 3 \| (yes|no) \| 3 \| 2 \| 1 \|/, "the model's reading and its agreement are not in the sheet row beside the counts");
 
     /* 3. BOTH QUESTIONS, and the severity one by its substance. */
     assert.match(md, /Does the WEAKER essay get more substantive comment/);

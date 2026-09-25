@@ -32,15 +32,64 @@ export const DEFAULT_SETS = [1, 2, 7, 8];
    reported as unknown rather than guessed. */
 export const SET_GENRES = Object.freeze({ 1: "argument", 2: "argument", 7: "narrative", 8: "narrative" });
 
+/* HOW MANY SCORE POINTS EACH SET'S RUBRIC DEFINES, where known: sets 1
+   and 2 are scored on score points 1 to 6. Set 8's rubric is scored by
+   trait and is not declared, so the read reports it as unknown rather
+   than asserting a count. This checks the model listed every band
+   rather than two or three of them. */
+export const SET_BAND_COUNTS = Object.freeze({ 1: 6, 2: 6 });
+
 /* @CAPS1, @PERSON2, @LOCATION1, @NUM1, @ORGANIZATION1, @DATE1 … the
    whole family, including the bare forms. One pattern rather than a
-   list, because a list is a restatement of somebody else's scheme.
+   list, because a list is a restatement of somebody else's scheme. */
+const ANON = /@([A-Z]+?)(\d*)(?![A-Z])/g;
 
-   They are stripped because they are frequent and IDENTICAL across
-   essays, so left in they inflate coverage and push measured novel
-   runs DOWN — the measurement would flatter the constraint. */
-const ANON = /@[A-Z]+\d*/g;
+/* STRIPPED, for the no-writing measurement only. The tokens are frequent
+   and IDENTICAL across essays, so left in they inflate coverage and push
+   measured novel runs DOWN; the measurement would flatter the
+   constraint. sample-asap.mjs asks for this explicitly. */
 export const stripAnon = (s) => s.replace(ANON, " ").replace(/\s{2,}/g, " ").trim();
+
+/* A NEUTRAL PLACEHOLDER, for anything a model READS. Deleting the token
+   left a hole mid-sentence ("my friend who lives in uses one for
+   hours"), and the model coded the holes: on Jared's 11/12 essay, 3 of
+   the 4 minor points were `undefined-term` on a gap the corpus had
+   made. A placeholder keeps the sentence whole and says what was there.
+
+   The index is kept (`[name 2]`), because @PERSON1 and @PERSON2 are
+   different people, and an essay that mixes them up is one the model
+   should be able to see. An unrecognised family becomes `[redacted]`
+   rather than a guess, and keeps its index. */
+const PLACEHOLDER = Object.freeze({
+  PERSON: "name",
+  CAPS: "proper noun",
+  DR: "doctor",
+  ORGANIZATION: "organisation",
+  LOCATION: "place",
+  CITY: "city",
+  STATE: "state",
+  COUNTRY: "country",
+  DATE: "date",
+  MONTH: "month",
+  TIME: "time",
+  MONEY: "amount",
+  PERCENT: "percentage",
+  NUM: "number",
+  EMAIL: "email",
+  URL: "link",
+});
+/* ONE LABEL PER FAMILY, never shared. @CAPS1 and @PERSON1 are numbered
+   independently, so if both became "[name 1]" two different entities
+   would read as one, and the essay would seem to say something it does
+   not. A test asserts the labels are distinct. */
+export const PLACEHOLDER_LABELS = PLACEHOLDER;
+export const placeholderFor = (family) => PLACEHOLDER[family] || "redacted";
+export const placeholderAnon = (s) =>
+  s
+    .replace(ANON, (_m, family, n) => ` [${placeholderFor(family)}${n ? ` ${n}` : ""}] `)
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,;:!?])/g, "$1")
+    .trim();
 
 /* ---------------------------------------------------------------
  * THE WORD FLOOR — 250, raised from 50 on 24 September 2026.
@@ -229,7 +278,11 @@ export function selectForRead({ rows, allScores = rows, n = 6, seed = 1 } = {}) 
  * Throws with a message an operator can act on: a missing TSV, a set
  * with no readable rubric, or a corpus that matches nothing.
  */
-export function loadCorpus({ dir, sets = DEFAULT_SETS, minWords = MIN_ESSAY_WORDS } = {}) {
+/* `anon` is "placeholder" (the default, for anything a model reads) or
+   "strip" (the no-writing measurement). See the two functions above. */
+export function loadCorpus({ dir, sets = DEFAULT_SETS, minWords = MIN_ESSAY_WORDS, anon = "placeholder" } = {}) {
+  if (anon !== "placeholder" && anon !== "strip") throw new Error(`anon must be "placeholder" or "strip", not ${JSON.stringify(anon)}`);
+  const clean = anon === "strip" ? stripAnon : placeholderAnon;
   const tsvPath = path.join(dir, "training_set_rel3.tsv");
   if (!fs.existsSync(tsvPath)) {
     throw new Error(`not found: ${tsvPath}\n\nPoint --dir at the folder you extracted the Kaggle download into.`);
@@ -269,7 +322,7 @@ export function loadCorpus({ dir, sets = DEFAULT_SETS, minWords = MIN_ESSAY_WORD
     const f = line.split("\t");
     const set = Number(f[iSet]);
     if (!sets.includes(set)) continue;
-    const essay = stripAnon(f[iEssay] || "");
+    const essay = clean(f[iEssay] || "");
     if (!essay) continue;
     const words = essay.split(/\s+/).filter(Boolean).length;
     const score = Number(f[iScore]);

@@ -62,6 +62,28 @@ export const DEFICIENCIES = Object.freeze([
   "off-criterion",
 ]);
 
+/* WHAT EACH CODE MEANS, one line each, and the prompt is built from
+   these. The prompt used to list the codes and define none, so the
+   rules it did spell out (all about argument) became the de-facto
+   definition of "a problem", and on the second calibration read minor
+   codes vanished from the high band altogether (0 minor points across
+   four strong essays). A code with no definition is a code the model
+   has to guess at. A test asserts every code has one. */
+export const CODE_DEFINITIONS = Object.freeze({
+  "claim-without-evidence": "a claim that nothing anywhere in the essay supports, by the criteria's own idea of support",
+  "evidence-without-claim": "evidence, an example or a quotation that is not tied to any point the essay makes",
+  "undefined-term": "a key term the reader needs explained that the essay never explains",
+  "unclear-relevance": "a passage whose bearing on the essay's main idea or the task is not made clear",
+  "unsupported-generalisation": "a sweeping statement (all, always, everyone) that goes further than the essay's support",
+  contradiction: "two parts of the essay that say incompatible things",
+  "missing-counterargument": "an obvious objection the criteria expect the essay to address, left unaddressed",
+  "unattributed-source": "a fact, figure or idea taken from somewhere else with no indication of where",
+  repetition: "the same point, phrase or word repeated without adding anything",
+  "structure-unsignposted": "a move between ideas or paragraphs the reader is not guided through",
+  conventions: "spelling, grammar, punctuation or sentence construction that gets in the way of the reader",
+  "off-criterion": "a criterion the essay does not engage with at all",
+});
+
 /* ---------------------------------------------------------------
  * SEVERITY — a FIXED MAP OF OURS, never assigned by the model.
  *
@@ -204,59 +226,179 @@ export const predictionFraming = (text = "") =>
   PREDICTION_PATTERNS.filter((re) => re.test(String(text))).map((re) => re.source);
 
 /* ---------------------------------------------------------------
+ * THE THESIS RULE, ENFORCED IN CODE, because the prose rule did not
+ * hold: three of twelve essays on the second read still had their main
+ * idea coded `claim-without-evidence` or `unsupported-generalisation`
+ * while the model's OWN support list was not empty. A thesis is
+ * supported by the essay that follows it, so such a point is removed
+ * after the reply arrives, and the removal is returned rather than
+ * hidden, so the read can count it and step 4 can log it.
+ *
+ * "On the main idea" means the point's quote and the main idea contain
+ * one another once normalised: narrow on purpose, so only a point that
+ * is really about the thesis sentence is removed.
+ *
+ * `wordsForMatch` MIRRORS `normaliseWords` in src/noWriting.js. This
+ * file is deployed with the Edge Functions and cannot import from
+ * src/, so the mirror is allowed and a test asserts the two agree on a
+ * battery, the equality-as-guard rule.
+ * --------------------------------------------------------------- */
+export function wordsForMatch(text) {
+  return String(text || "")
+    .replace(/[\u2018\u2019\u201B\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201F\u2033]/g, '"')
+    .replace(/[\u2010-\u2015]/g, "-")
+    .toLowerCase()
+    .replace(/[^a-z0-9'\-\s]/g, " ")
+    .replace(/(^|\s)[-']+|[-']+(?=\s|$)/g, "$1")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+const phrase = (text) => wordsForMatch(text).join(" ");
+const UNSUPPORTED_CODES = Object.freeze(["claim-without-evidence", "unsupported-generalisation"]);
+
+/** Is this point a "not supported" point about the main idea itself? */
+export function onMainIdea(point, mainIdea) {
+  const q = phrase(point && point.quote);
+  const m = phrase(mainIdea);
+  return q.length > 0 && m.length > 0 && (m.includes(q) || q.includes(m));
+}
+
+/**
+ * Remove every unsupported-claim point on the main idea when the
+ * support list is not empty. Returns both halves; never mutates.
+ */
+export function applyThesisRule({ mainIdea = "", support = [], points = [] }) {
+  if (!Array.isArray(support) || support.length === 0) return { kept: [...points], dropped: [] };
+  const kept = [];
+  const dropped = [];
+  for (const p of points) {
+    (UNSUPPORTED_CODES.includes(p && p.deficiency) && onMainIdea(p, mainIdea) ? dropped : kept).push(p);
+  }
+  return { kept, dropped };
+}
+
+/* BEST FIT, NOT A THRESHOLD. Two rounds of threshold wording failed at
+   the top. "Fits" read every strong essay one band low, and "meets"
+   engaged on 3 of 18 essays, because the model read "meets" as
+   "flawless" and so marked almost nothing met. So each band's
+   descriptor is RATED for how well it describes the essay, and the
+   band is the one it describes best: resemblance, not a pass mark.
+   The pick is made HERE, in code, from the model's ratings. The model
+   still names a band, and the read counts when the two differ.
+
+   The range is not enforced by the schema (strict mode's numeric
+   bounds are not relied on here), so a rating outside it is counted
+   by the read rather than trusted. */
+export const BAND_RATING_MIN = 1;
+export const BAND_RATING_MAX = 10;
+
+/**
+ * The best-fitting band from a lowest-first list of rated bands.
+ * TIES are returned, not broken silently: `tied` lists every band that
+ * shares the top rating. The pick among a tie is the model's own named
+ * band when it is one of them (its tie-break, not ours), otherwise the
+ * middle of the tie, which leans neither up nor down.
+ * @returns {{ band: string, rating: number|null, tied: string[] }}
+ */
+export function bestFit(bandsConsidered = [], named = "") {
+  const rated = bandsConsidered.filter((b) => b && Number.isFinite(b.rating));
+  if (!rated.length) return { band: "", rating: null, tied: [] };
+  const top = Math.max(...rated.map((b) => b.rating));
+  const tied = rated.filter((b) => b.rating === top).map((b) => b.band);
+  const band = tied.includes(named) ? named : tied[Math.floor((tied.length - 1) / 2)];
+  return { band, rating: top, tied };
+}
+
+/* ---------------------------------------------------------------
  * THE STRICT SCHEMA.
  *
  * OpenAI's strict mode requires every property to be REQUIRED and
  * `additionalProperties: false` on every object, and does not support
- * `minItems` (CLAUDE.md records that one). `enum` IS supported, which
- * is the whole point. The enums are `DEFICIENCIES` and `GENRES` BY
- * REFERENCE, so they cannot drift from the lists above.
+ * `minItems` (CLAUDE.md records that one). `enum` and a NESTED `anyOf`
+ * are supported; the root may not itself be an `anyOf`, which is why
+ * the per-genre branches sit under `reading`.
  *
- * PROPERTY ORDER IS GENERATION ORDER, and it is chosen: genre first
- * (everything after depends on it), then the points, then the overall
- * reading. The overall reading is DISPLAYED first and GENERATED last,
- * so the model summarises the points it has actually made rather than
- * committing to a verdict and then finding points to fit it.
+ * THE GENRE EXCLUSION IS IN THE SCHEMA, NOT THE PROSE. `reading` is one
+ * branch per genre, and each branch's deficiency enum is `codesFor`
+ * that genre. Once the model writes `"genre": "narrative"`, only the
+ * narrative branch still matches, so the decoder cannot produce
+ * `unsupported-generalisation` after it. The 25 September read found
+ * exactly two off-genre points, both that code on a set-8 story, with
+ * the exclusion stated only in the prompt. This is the enum lesson
+ * again: a prompt says what was asked for, and only the schema says
+ * what can come back.
  *
- * WHETHER THE PROVIDER HONOURS IT is a question for the output, not
- * for this file: the read prints its `deficiency-unknown` count on
- * every run, and under a schema that is really enforced it is zero by
- * construction. A non-zero there means the schema is not reaching the
- * decoder, whatever this object says.
+ * PROPERTY ORDER IS GENERATION ORDER, and every step here is placed on
+ * purpose:
+ *   1. genre, because it decides which codes exist;
+ *   2. mainIdea and support, VERBATIM spans, so the model has found the
+ *      argument before it judges any sentence of it. The same read
+ *      coded an 11/12 essay's THESIS `claim-without-evidence` when the
+ *      whole essay was its evidence: sentence-level reading of an
+ *      argument-level property;
+ *   3. the points;
+ *   4. bandsConsidered, EVERY band the criteria define, lowest first,
+ *      each RATED for how well its descriptor describes the essay,
+ *      before the one band is named. The best fit is picked in code. The read's
+ *      opening reading said "Score Point 2" for 10 of 12 essays,
+ *      including three the human raters scored 9, 10 and 11 of 12;
+ *   5. band and sentence, last, summarising what came before.
+ *
+ * mainIdea and support are free text the model writes, so they carry
+ * the no-writing risk a note does. They must be VERBATIM, and the read
+ * counts every span that is not; the endpoint (step 4) must refuse
+ * them on the same verbatim check as a quote.
  * --------------------------------------------------------------- */
+const closed = (properties) => ({
+  type: "object",
+  properties,
+  required: Object.keys(properties),
+  additionalProperties: false,
+});
+
+const readingFor = (genre) =>
+  closed({
+    genre: { type: "string", enum: [genre] },
+    mainIdea: { type: "string" },
+    support: { type: "array", items: { type: "string" } },
+    points: {
+      type: "array",
+      items: closed({
+        quote: { type: "string" },
+        deficiency: { type: "string", enum: codesFor(genre) },
+        note: { type: "string" },
+      }),
+    },
+  });
+
 export function essayFeedbackSchema() {
   return {
     name: "essay_feedback",
     strict: true,
-    schema: {
-      type: "object",
-      properties: {
-        genre: { type: "string", enum: [...GENRES] },
-        points: {
+    schema: closed({
+      reading: { anyOf: GENRES.map(readingFor) },
+      overall: closed({
+        /* STRICT MODE CANNOT REQUIRE A LENGTH (no minItems), so
+           "one entry per band" is made checkable instead: the model
+           states how many bands the criteria define BEFORE listing them,
+           and each entry quotes its descriptor from the criteria. The
+           read counts lists shorter than the stated count, lists shorter
+           than a set's known count, and descriptors not found in the
+           criteria. */
+        bandCount: { type: "integer" },
+        bandsConsidered: {
           type: "array",
-          items: {
-            type: "object",
-            properties: {
-              quote: { type: "string" },
-              deficiency: { type: "string", enum: [...DEFICIENCIES] },
-              note: { type: "string" },
-            },
-            required: ["quote", "deficiency", "note"],
-            additionalProperties: false,
-          },
-        },
-        overall: {
-          type: "object",
-          properties: {
+          items: closed({
             band: { type: "string" },
-            sentence: { type: "string" },
-          },
-          required: ["band", "sentence"],
-          additionalProperties: false,
+            descriptor: { type: "string" },
+            rating: { type: "integer" },
+          }),
         },
-      },
-      required: ["genre", "points", "overall"],
-      additionalProperties: false,
-    },
+        band: { type: "string" },
+        sentence: { type: "string" },
+      }),
+    }),
   };
 }
