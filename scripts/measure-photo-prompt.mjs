@@ -125,16 +125,28 @@ const REL = "supabase/functions/ai-text/prompts.js";
 
 const current = await import(pathToFileURL(path.join(ROOT, REL)).href);
 
-let baselineSrc;
+/* THE WHOLE supabase/functions TREE AT THE REF, not the one file.
+   prompts.js imports siblings in _shared (the essay prompt, since 25
+   September 2026), so a lone copy written to a temp folder cannot
+   resolve them and the script died before reaching its own refusal.
+   Extracting the ref's tree means the baseline's imports resolve to what
+   they were AT THAT COMMIT, which is the only baseline worth comparing
+   against. Each file is read with `git show`, so no archive or tar tool
+   is needed on anybody's laptop. */
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "photo-prompt-"));
 try {
-  baselineSrc = git("show", `${baselineRef}:${REL}`);
+  const files = git("ls-tree", "-r", "--name-only", baselineRef, "--", "supabase/functions").split("\n").filter(Boolean);
+  if (!files.includes(REL)) throw new Error("missing");
+  for (const f of files) {
+    const out = path.join(tmpRoot, f);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, execFileSync("git", ["show", `${baselineRef}:${f}`], { cwd: ROOT }));
+  }
 } catch {
   console.error(`could not read ${REL} at ${baselineRef}`);
   process.exit(1);
 }
-const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "photo-prompt-")), "prompts.js");
-fs.writeFileSync(tmp, baselineSrc);
-const baseline = await import(pathToFileURL(tmp).href);
+const baseline = await import(pathToFileURL(path.join(tmpRoot, REL)).href);
 
 const oneImage = { images: ["data:image/jpeg;base64,AA"] };
 const promptOf = (mod) => mod.buildMessages("summarise", oneImage)[0].content;
