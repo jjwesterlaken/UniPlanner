@@ -7,6 +7,7 @@
 // an error rather than into unparseable JSON.
 
 import { modelFor } from "../_shared/model.ts";
+import { essayFeedbackSchema } from "../_shared/essaySchema.js";
 
 export const openaiTextAdapter = {
   name: "openai",
@@ -16,12 +17,14 @@ export const openaiTextAdapter = {
     maxTokens,
     apiKey,
     hasImages = false,
+    task = null,
     fetchImpl = fetch,
   }: {
     messages: { role: string; content: unknown }[];
     maxTokens: number;
     apiKey: string;
     hasImages?: boolean;
+    task?: string | null;
     fetchImpl?: typeof fetch;
   }): Promise<string> {
     /* THE MODEL IS CHOSEN PER MEDIUM, not per task. Photographs and
@@ -38,7 +41,9 @@ export const openaiTextAdapter = {
        different question from asking which one applies. One place
        answers it now, for the adapter and for anything measuring the
        adapter. */
-    const model = modelFor({ hasImages });
+    /* AND BY TASK FOR ESSAY, the one task chosen on its own measurement
+       (model.ts says why). */
+    const model = modelFor({ hasImages, task });
     const res = await fetchImpl("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -49,7 +54,12 @@ export const openaiTextAdapter = {
         // have four shapes, and prompts.js validates each one on the way
         // back. Asking for JSON here still stops the model wrapping its
         // answer in prose, which is the failure this actually prevents.
-        response_format: { type: "json_object" },
+        /* EXCEPT ESSAY, which sends its STRICT schema: its codes are an
+           enum per genre, and only a schema the decoder enforces makes
+           that hold (essaySchema.js). The Gate A reads measured it this
+           way, so it ships this way. */
+        response_format:
+          task === "essay" ? { type: "json_schema", json_schema: essayFeedbackSchema() } : { type: "json_object" },
         /* Never absent. Without it the model may emit its full
            16,384-token output on every call, which is what would set the
            price of the product -- see MAX_TOKENS in config.ts, where each

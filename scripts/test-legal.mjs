@@ -23,7 +23,7 @@ import {
 } from "../src/accountDeletion.js";
 import * as links from "../src/legalLinks.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL, TERMS_URL, SUPPORT_URL, PRIVACY_EMAIL, SUPPORT_EMAIL, SITE_URL } from "../src/legalLinks.js";
-import { CONSENT_TEXT, AI_CONSENT_VERSION } from "../src/aiNotesLogic.js";
+import { CONSENT_TEXT, AI_CONSENT_VERSION, ESSAY_CONSENT_LINE } from "../src/aiNotesLogic.js";
 import { AI_PROVIDERS } from "../src/aiProviders.js";
 import {
   AI_MATERIAL_TYPES,
@@ -31,6 +31,7 @@ import {
   CONSENT_MATERIAL_LEDGER,
   materialFingerprint,
   MATERIAL_ROUTES,
+  suppliedMaterialTypes,
 } from "../src/aiMaterialTypes.js";
 import { AUDIO_DELETION_PROMISE } from "../src/aiNotesLogic.js";
 import { TIERS, allowanceForTier } from "../src/aiTextLimits.js";
@@ -1350,6 +1351,51 @@ async function run() {
     }
     const ids = AI_MATERIAL_TYPES.map((t) => t.id);
     assert.equal(new Set(ids).size, ids.length, "two material types share an id, so one of them is invisible to the fingerprint");
+  });
+
+  await test("consent v8 covers essay drafts, sent AS WRITTEN, and the screen and the policy make the same claim", () => {
+    /* ESSAY-FEEDBACK.md §1, C2 and C4. An essay carries the student's
+       name, student ID and course code, and it goes to the provider as
+       written because a filter that removes "some" names is a promise
+       we cannot keep. So both documents must say three things: an essay
+       is sent, identifiers go with it, and we do not remove them. Matched
+       by CLAIM rather than by sentence, so Grace can reword either. */
+    assert.ok(AI_CONSENT_VERSION >= 8, "essay drafts are a material type and shipped without a consent bump");
+    const screen = CONSENT_TEXT.bullets.find((b) => /essay/i.test(b));
+    assert.ok(screen, "the consent screen has no essay bullet");
+    assert.equal(screen, ESSAY_CONSENT_LINE, "the essay bullet is not the one constant a rewording edits");
+    const policy = prose("privacy.html");
+    for (const [what, re] of [
+      ["an essay is sent as written", /essay[^.]*(exactly as you wrote|as written)/i],
+      ["the identifiers go with it", /essay[^.]*\bname\b[^.]*student ID/i],
+      ["we do not remove them", /(don't|do not) remove anything/i],
+    ]) {
+      assert.match(screen, re, `the consent screen does not say ${what}`);
+      assert.match(policy, re, `the privacy policy does not say ${what}`);
+    }
+    /* The screen tells the student what they CAN do, which is the honest
+       mitigation; a warning with no action is a dead end. */
+    assert.match(screen, /take out|remove[^.]*before/i, "the screen warns without saying the student can remove identifiers first");
+  });
+
+  await test("EVERY SUPPLIED MATERIAL IS IN EVERY MARKED ENUMERATION in the policy (C3: the next type cannot be left out)", () => {
+    /* The policy lists what a student can supply in hand-written
+       sentences, because an HTML file cannot import a constant. Each such
+       list is marked with supplied-materials comments, and every supplied
+       type must appear in EVERY marked passage, so adding a type to
+       aiMaterialTypes.js reddens here until each list names it. Scoped
+       to the passages, not the page: "essay" anywhere on the page would
+       have passed with one list still describing four things out of five. */
+    const raw = page("privacy.html");
+    const passages = [...raw.matchAll(/<!-- supplied-materials:start -->([\s\S]*?)<!-- supplied-materials:end -->/g)].map((m) =>
+      m[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ")
+    );
+    assert.ok(passages.length >= 2, `found ${passages.length} marked enumerations; the AI-features list and the overseas list are both meant to be marked`);
+    const supplied = suppliedMaterialTypes();
+    assert.ok(supplied.length >= 4, "fewer supplied types than exist today, so this checks less than it claims");
+    for (const [i, text] of passages.entries()) {
+      for (const t of supplied) assert.match(text, t.disclosedAs, `marked enumeration ${i + 1} leaves out ${t.id} (${t.what})`);
+    }
   });
 
   await test("THE MATERIAL LIST IS TIED TO THE CONSENT VERSION: a new kind of material cannot ship without a bump", () => {

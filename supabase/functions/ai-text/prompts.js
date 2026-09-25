@@ -14,6 +14,9 @@
    reaches a student looking correct.
    ================================================================== */
 
+import { ESSAY_SYSTEM_PROMPT, essayUserMessage } from "../_shared/essayPrompt.js";
+import { finishEssayReply } from "../_shared/essayReply.js";
+
 const SHARED_RULES = [
   "You are helping a university student study.",
   "Be accurate. If the material does not support an answer, say so rather than inventing one.",
@@ -152,6 +155,14 @@ const SYSTEM = {
     '"assessable":[string],"openQuestions":[string]}. ' +
     "Consecutive sections overlap slightly, so the same point may appear twice — say it once. " +
     "Add nothing that is not in the summaries given, and drop nothing that only one of them mentions.",
+
+  /* ESSAY FEEDBACK. The prompt the Gate A reads measured, imported from
+     _shared rather than written here, so the endpoint sends exactly what
+     gpt-5.6-luna was chosen on. Its output shape is enforced by a
+     strict json_schema (openai.ts), not by prose, and it does NOT use
+     SHARED_RULES: that prompt is complete as measured, and adding a
+     line to it would be a configuration nobody measured. */
+  essay: ESSAY_SYSTEM_PROMPT,
 };
 
 /**
@@ -224,6 +235,15 @@ export function buildMessages(task, body) {
       { role: "user", content: String(body.text || "") },
     ];
   }
+  if (task === "essay") {
+    /* The criteria and the essay together, labelled, as ONE user message:
+       the shape that was measured. Both are the student's, both are
+       content, and neither touches the system prompt. */
+    return [
+      { role: "system", content: system },
+      { role: "user", content: essayUserMessage({ essay: String(body.text || ""), criteria: String(body.criteria || "") }) },
+    ];
+  }
   if (task === "merge") {
     /* One user message per section, in order, so the model sees the
        sequence rather than one blob it has to infer an order from. */
@@ -290,7 +310,13 @@ const asString = (v) => (typeof v === "string" ? v : "");
  * is indistinguishable, to a student, from a lecture that genuinely had
  * nothing to say. An error is honest; a blank section is not.
  */
-export function parseTaskResult(task, raw) {
+export function parseTaskResult(task, raw, context = {}) {
+  /* THE ESSAY IS CHECKED AGAINST WHAT WAS SUBMITTED, so it needs the
+     essay, the criteria and the no-writing thresholds as well as the
+     reply. Everything it does is in _shared/essayReply.js. */
+  if (task === "essay") {
+    return finishEssayReply({ raw, essay: context.text || "", criteria: context.criteria || "", thresholds: context.thresholds || null });
+  }
   let parsed;
   try {
     parsed = JSON.parse(raw);

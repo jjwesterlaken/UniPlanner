@@ -562,10 +562,14 @@ async function main() {
       assert.equal(cfg.TASK_CREDITS[task], expected, `${task} is priced at ${cfg.TASK_CREDITS[task]}, derived says ${expected}`);
     }
     /* And the ordering the derivation implies, stated so a silent
-       inversion is visible: nothing costs less than an explanation, and
-       a full-length summarise is the dearest of the five. */
+       inversion is visible: nothing costs less than an explanation, a
+       full-length summarise is the dearest of the five that run on
+       SUMMARY_MODEL, and essay, on a reasoning model with a 4,000-token
+       ceiling, is the dearest of all. */
+    const onSummary = cfg.TASKS.filter((t) => t !== "essay");
     assert.equal(Math.min(...cfg.TASKS.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.explain);
-    assert.equal(Math.max(...cfg.TASKS.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.summarise);
+    assert.equal(Math.max(...onSummary.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.summarise);
+    assert.equal(Math.max(...cfg.TASKS.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.essay);
   });
 
   await test("THE PHOTO BATCH PRICE IS HELD, and says what unblocks it", async () => {
@@ -1516,6 +1520,217 @@ async function main() {
         `${what}: ${body.model} was sent ${forbidden}, which that family rejects with a 400`
       );
     }
+  });
+
+  /* ---------------------------------------------------------------- */
+  /*  ESSAY FEEDBACK                                                    */
+  /* ---------------------------------------------------------------- */
+
+  await test("ESSAY IS PRICED AT 9 CREDITS: 24,000 in and 4,000 out at the essay model's own rates (RULED)", async () => {
+    /* Jared, 25 September 2026. Pinned, so a ceiling or a rate that moves
+       turns this red rather than drifting the price. The rates are read
+       out of model.ts, not typed here. */
+    assert.equal(cfg.MAX_INPUT_CHARS.essay, 24_000);
+    assert.equal(cfg.MAX_TOKENS.essay, 4_000);
+    const usd =
+      (24_000 / credits.CHARS_PER_TOKEN) * (model.ESSAY_USD_PER_1M_INPUT / 1e6) + 4_000 * (model.ESSAY_USD_PER_1M_OUTPUT / 1e6);
+    assert.ok(Math.abs(cfg.usdForTask("essay") - usd) < 1e-12, "essay is not priced at the essay model's rates");
+    assert.equal(cfg.TASK_CREDITS.essay, 9, "the essay price moved off the ruled 9");
+    /* The client mirror says the same, or a screen promises one number
+       while the server charges another. */
+    const limits = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    assert.equal(limits.TASK_CREDITS.essay, cfg.TASK_CREDITS.essay, "the client's essay price disagrees with the server's");
+    /* Control: pricing essay at SUMMARY_MODEL's rates would have been 5,
+       so the rate lookup is really doing the work. */
+    const atSummary = (24_000 / credits.CHARS_PER_TOKEN) * (credits.USD_PER_1M_INPUT / 1e6) + 4_000 * (credits.USD_PER_1M_OUTPUT / 1e6);
+    assert.notEqual(credits.creditsFor(atSummary), cfg.TASK_CREDITS.essay);
+  });
+
+  const ESSAY =
+    "Computers help people in many ways every single day. They let families talk every week across oceans and time zones. " +
+    "They help students learn at their own pace with patient explanations. Some say they make people lazy but many people use them to plan sport and exercise.";
+  const CRITERIA =
+    "Score Point 1: no position. Score Point 2: a weak position. Score Point 3: a clear position with some support. Score Point 4: a clear position that is well supported.";
+  const THRESHOLDS = { window: 20, matchUnit: 3, minQuoteWords: 4, maxNoteWords: 25 };
+  const bands = (ratings) => ratings.map((rating, i) => ({ band: `Score Point ${i + 1}`, descriptor: "a clear position", rating }));
+  const essayReply = (over = {}) => ({
+    reading: {
+      genre: "argument",
+      mainIdea: "Computers help people in many ways every single day.",
+      support: ["They let families talk every week across oceans and time zones.", "Computers connect grandparents everywhere."],
+      points: [
+        { quote: "Computers help people in many ways every single day", deficiency: "claim-without-evidence", note: "The claim is broad." },
+        { quote: "computers make people lazy sometimes", deficiency: "missing-counterargument", note: "Paraphrased, not quoted." },
+        { quote: "help students learn at their own pace with patient explanations", deficiency: "unsupported-generalisation", note: "No example shows this." },
+        { quote: "Some say they make people lazy but many people use them to plan sport", deficiency: "missing-counterargument", note: "The objection is raised and answered in one clause." },
+      ],
+      ...(over.reading || {}),
+    },
+    overall: { bandCount: 4, bandsConsidered: bands([2, 4, 8, 6]), band: "Score Point 4", sentence: "The essay takes a clear position with some support.", ...(over.overall || {}) },
+  });
+  const essayBody = (over = {}) => ({ task: "essay", text: ESSAY, criteria: CRITERIA, consentVersion: 8, ...over });
+  const recording = (payload) => ({
+    calls: 0,
+    args: null,
+    async complete(args) {
+      this.calls++;
+      this.args = args;
+      return JSON.stringify(payload);
+    },
+  });
+
+  await test("ESSAY IS OFF IN PRODUCTION until the no-writing thresholds are measured, and refusing costs nothing", async () => {
+    /* config.ts leaves them null on purpose. This drives the handler with
+       NO override, so it is production's configuration being tested. */
+    assert.equal(cfg.ESSAY_NO_WRITING, null, "the thresholds were set without the measurement this file says they need");
+    const summarizer = recording(essayReply());
+    const trace = [];
+    const admin = makeAdmin({ trace });
+    const res = await run(essayBody(), { supabaseAdmin: admin, summarizer });
+    assert.equal(res.status, 503);
+    assert.equal((await res.json()).code, "essay_unavailable");
+    assert.equal(summarizer.calls, 0, "an essay reached the provider with nothing to check the reply against");
+    assert.ok(!trace.includes("db:select:ai_usage"), "the allowance was read before refusing, so the refusal was not free");
+    assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 0, "a refusal was billed");
+  });
+
+  await test("ESSAY NEEDS CONSENT v8, checked on the server, and a v8 acceptance is let through (the control)", async () => {
+    for (const [what, version] of [["v7", 7], ["no version at all (an older build)", undefined], ["a string", "8"]]) {
+      const summarizer = recording(essayReply());
+      const body = essayBody();
+      if (version === undefined) delete body.consentVersion;
+      else body.consentVersion = version;
+      const res = await run(body, { supabaseAdmin: makeAdmin(), summarizer, essayNoWriting: THRESHOLDS });
+      assert.equal(res.status, 403, `${what} was let through`);
+      assert.equal((await res.json()).code, "consent_required");
+      assert.equal(summarizer.calls, 0, `${what}: an essay was sent without agreement to send one`);
+    }
+    const ok = recording(essayReply());
+    const res = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer: ok, essayNoWriting: THRESHOLDS });
+    assert.equal(res.status, 200, `a v8 acceptance was refused: ${await res.text()}`);
+    /* And the other tasks never look at the version, so no older build is
+       refused for anything it could already do. */
+    const explain = await run({ task: "explain", topic: "t", text: "x" }, { supabaseAdmin: makeAdmin(), summarizer: okSummarizer(EXPLAIN_OK) });
+    assert.equal(explain.status, 200, "a task that sends no essay was refused over the essay's consent version");
+  });
+
+  await test("THE ESSAY'S CONSENT FLOOR IS DERIVED from the material ledger, not typed", async () => {
+    const mat = await import(toUrl(path.join(rootDir, "src/aiMaterialTypes.js")));
+    const first = Math.min(
+      ...Object.entries(mat.CONSENT_MATERIAL_LEDGER)
+        .filter(([, fp]) => fp.split(",").some((e) => e.startsWith("essay-draft:")))
+        .map(([v]) => Number(v))
+    );
+    assert.ok(Number.isFinite(first), "no ledger version records essay drafts at all");
+    assert.equal(cfg.ESSAY_MIN_CONSENT_VERSION, first, "the server's essay consent floor is not the version that first disclosed essays");
+    assert.equal(mat.MATERIAL_ROUTES["ai-text:essay"]?.join(), "essay-draft", "the essay route is not mapped to essay drafts");
+  });
+
+  await test("AN ESSAY RUN END TO END: the reply is checked in code, billed at 9, and returns only what locates something", async () => {
+    const summarizer = recording(essayReply());
+    const admin = makeAdmin();
+    const res = await run(essayBody(), { supabaseAdmin: admin, summarizer, essayNoWriting: THRESHOLDS });
+    assert.equal(res.status, 200, await res.clone().text());
+    const { result } = await res.json();
+    /* The model and schema this task runs on reached the adapter. */
+    assert.equal(summarizer.args.task, "essay", "the adapter was not told which task, so it cannot pick the essay model or schema");
+    assert.equal(summarizer.args.maxTokens, 4_000);
+    assert.match(summarizer.args.messages[0].content, /WHAT COUNTS AS SUPPORT/, "the measured prompt was not sent");
+    assert.ok(summarizer.args.messages[1].content.includes(CRITERIA) && summarizer.args.messages[1].content.includes(ESSAY));
+    /* Four points came back: the thesis, a paraphrase, and two that
+       locate something. Only the last two are returned. */
+    assert.deepEqual(
+      result.points.map((p) => p.deficiency),
+      ["unsupported-generalisation", "missing-counterargument"],
+      "the thesis point or the paraphrased quote reached the student"
+    );
+    assert.deepEqual(result.points.map((p) => p.severity), ["fundamental", "fundamental"]);
+    assert.equal(result.dropped.thesis, 1, "the thesis rule did not run over the verified support");
+    assert.equal(result.dropped.quoteNotFound, 1, "a quote the student never wrote was returned as theirs");
+    assert.equal(result.dropped.fabricatedSpans, 1, "an invented support span was not caught");
+    /* Best fit, picked in code, over the model's own naming. */
+    assert.equal(result.band, "Score Point 3", "the band followed the model's naming rather than its ratings");
+    assert.ok(!("mainIdea" in result) && !("support" in result), "the scaffolding spans were returned to the client");
+    /* Billed once, at the ruled price. */
+    const rpcs = admin.seen.filter((x) => x.op === "rpc");
+    assert.equal(rpcs.length, 1);
+    assert.equal(rpcs[0].payload.p_credits, 9, `billed ${rpcs[0].payload.p_credits}, not the ruled 9`);
+  });
+
+  await test("A REPLY THAT OFFERS WRITING IS REFUSED, BILLED, under its own code", async () => {
+    const offering = essayReply({
+      reading: {
+        points: [
+          {
+            quote: "help students learn at their own pace with patient explanations",
+            deficiency: "unsupported-generalisation",
+            note: 'Try "computers bring every family closer together" here instead.',
+          },
+        ],
+      },
+    });
+    const admin = makeAdmin();
+    const res = await run(essayBody(), { supabaseAdmin: admin, summarizer: recording(offering), essayNoWriting: THRESHOLDS });
+    assert.equal(res.status, 422);
+    assert.equal((await res.json()).code, "writing_refused");
+    assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 1, "generated tokens went unbilled");
+    const copy = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    assert.ok(copy.AI_TEXT_FAILURES.writing_refused && /charged/i.test(copy.AI_TEXT_FAILURES.writing_refused.detail), "the refusal's copy does not say it was charged");
+    assert.ok(copy.AI_TEXT_FAILURES.essay_unavailable && /nothing was charged/i.test(copy.AI_TEXT_FAILURES.essay_unavailable.detail));
+  });
+
+  await test("A BAND THE CRITERIA DO NOT NAME IS NO BAND, and a predicting sentence is blanked (§4)", async () => {
+    const invented = essayReply({
+      overall: { bandsConsidered: [{ band: "Distinction", descriptor: "x", rating: 9 }, { band: "Pass", descriptor: "x", rating: 3 }], band: "Distinction", sentence: "You'll get a Distinction." },
+    });
+    const res = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer: recording(invented), essayNoWriting: THRESHOLDS });
+    const { result } = await res.json();
+    assert.equal(result.band, "", "a band the pasted criteria never mention was returned");
+    assert.equal(result.sentence, "", "a prediction reached the student");
+    assert.equal(result.dropped.sentence, 1);
+  });
+
+  await test("ESSAY VALIDATION: criteria required, criteria nowhere else, and one cap over both that names each part", async () => {
+    const noCriteria = await run(essayBody({ criteria: "" }), { supabaseAdmin: makeAdmin(), essayNoWriting: THRESHOLDS });
+    assert.equal(noCriteria.status, 400);
+    const stray = await run({ task: "explain", topic: "t", text: "x", criteria: "c" }, { supabaseAdmin: makeAdmin(), summarizer: okSummarizer(EXPLAIN_OK) });
+    assert.equal(stray.status, 400, "criteria were accepted on a task that never reads them");
+    const long = await run(essayBody({ text: "w ".repeat(12_000), criteria: "c".repeat(1_000) }), { supabaseAdmin: makeAdmin(), essayNoWriting: THRESHOLDS });
+    assert.equal(long.status, 413);
+    const msg = (await long.json()).error;
+    assert.match(msg, /25,000 characters \(24,000 \+ 1,000\) and the limit is 24,000/, `the overage message does not name both parts: ${msg}`);
+  });
+
+  await test("THE REAL ADAPTER sends essay to gpt-5.6-luna with its strict schema, and nothing else changes", async () => {
+    const { build: b } = await import("esbuild");
+    const out = await b({ entryPoints: [path.join(rootDir, "supabase/functions/ai-text/openai.ts")], bundle: true, format: "esm", platform: "neutral", write: false });
+    const f = path.join(tmpDir, "adapter-essay.mjs");
+    fs.writeFileSync(f, out.outputFiles[0].text);
+    const { openaiTextAdapter } = await import(toUrl(f));
+    const bodyFor = async (task) => {
+      let sent = null;
+      await openaiTextAdapter.complete({
+        messages: [{ role: "user", content: "x" }],
+        maxTokens: 4000,
+        apiKey: "sk-test",
+        task,
+        fetchImpl: async (_u, init) => {
+          sent = JSON.parse(init.body);
+          return { ok: true, json: async () => ({ choices: [{ message: { content: "{}" }, finish_reason: "stop" }] }) };
+        },
+      });
+      return sent;
+    };
+    const essay = await bodyFor("essay");
+    const summarise = await bodyFor("summarise");
+    assert.equal(essay.model, model.ESSAY_MODEL);
+    assert.equal(essay.response_format.type, "json_schema");
+    assert.equal(essay.response_format.json_schema.strict, true);
+    assert.equal(essay.response_format.json_schema.schema.properties.reading.anyOf.length, 4, "the per-genre branches did not reach the wire");
+    assert.equal(essay.max_completion_tokens, 4000, "a GPT-5 model was not sent max_completion_tokens");
+    /* Control: another task is exactly as it was. */
+    assert.equal(summarise.model, model.SUMMARY_MODEL);
+    assert.deepEqual(summarise.response_format, { type: "json_object" });
   });
 
   fs.rmSync(tmpDir, { recursive: true, force: true });

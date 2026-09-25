@@ -42,6 +42,8 @@ import {
   TASK_CREDITS,
   TEXT_TIERS,
   MAX_READING_CHUNKS,
+  ESSAY_NO_WRITING,
+  ESSAY_MIN_CONSENT_VERSION,
 } from "./config.ts";
 
 const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra, "ai-text"));
@@ -68,6 +70,10 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
   const summarizer = (deps.summarizer as typeof openaiTextAdapter) || openaiTextAdapter;
   const env = (deps.env as (n: string) => string | undefined) || ((n: string) => Deno.env.get(n));
   const now = (deps.now as () => Date) || (() => new Date());
+  /* Injectable so a test can drive the essay path end to end with
+     thresholds set, while production reads config.ts, where they are
+     unset until measured. */
+  const essayNoWriting = ("essayNoWriting" in deps ? deps.essayNoWriting : ESSAY_NO_WRITING) as typeof ESSAY_NO_WRITING;
 
   let stage = "env_check";
   try {
@@ -188,6 +194,36 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
        A PAID TIER NEVER REACHES THE COMPARISON. checkPhotoPages returns
        ok for any tier that is not a trial, so the cap cannot leak onto
        an account that bought a monthly allowance. */
+    /* ESSAY FEEDBACK, TWO REFUSALS BEFORE ANYTHING IS SPENT.
+
+       1. NOT ON UNTIL MEASURED. The no-writing thresholds are unset in
+          config.ts until they have been read off real output, and without
+          them the reply cannot be checked, so the task refuses here, before
+          the allowance read, having cost nothing.
+       2. CONSENT TO SEND AN ESSAY, which is v8's and no earlier version's.
+          The provider check above cannot see it: the companies did not
+          change, the material did. An older build sends no version and is
+          refused for this task only. */
+    if (task === "essay") {
+      if (!essayNoWriting) {
+        logStage(stage, { rejected: "essay_unavailable" });
+        return errorResponse(stage, "essay_unavailable", "Essay feedback isn't available yet.", 503);
+      }
+      /* A NUMBER, not anything Number() accepts: the client sends the
+         integer it recorded, and "8" or true arriving here is not that. */
+      const claimed = (body as { consentVersion?: unknown }).consentVersion;
+      const accepted = typeof claimed === "number" ? claimed : NaN;
+      if (!Number.isInteger(accepted) || accepted < ESSAY_MIN_CONSENT_VERSION) {
+        logStage(stage, { rejected: "consent_required", reason: "essay_consent_version", accepted: Number.isFinite(accepted) ? accepted : null });
+        return errorResponse(
+          stage,
+          "consent_required",
+          "Essay feedback needs your agreement to what is sent. Please reload the app and read what is sent before trying again.",
+          403
+        );
+      }
+    }
+
     const photoPages = Array.isArray(body.images) ? body.images.length : 0;
     const cap = checkPhotoPages({
       tier: profile.tier,
@@ -244,6 +280,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
         apiKey: env("OPENAI_API_KEY")!,
         // Which MEDIUM this is, not which task — see openai.ts.
         hasImages: Array.isArray(body.images) && body.images.length > 0,
+        task,
       });
     } catch (err) {
       // Nothing is billed. The call failed, so there is nothing to
@@ -256,7 +293,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
     stage = "parse";
     let result: unknown;
     try {
-      result = parseTaskResult(task, raw);
+      result = parseTaskResult(task, raw, { text: valid.text, criteria: (valid as { criteria?: string }).criteria || "", thresholds: essayNoWriting });
     } catch (err) {
       /* Billed anyway, deliberately: the tokens were generated and we
          were charged for them. Saying so is the same honesty ai-notes
@@ -277,6 +314,13 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          pages, because the student can act on it: retake page 3. The
          client copy states both halves -- this attempt used allowance,
          and the resubmit charges again as its own smaller batch. */
+      /* THE REPLY OFFERED WRITING. Billed, as every generated output is,
+         and under its own code, because it is a different fact from an
+         unusable reply: the student can retry, and the copy says the
+         retry charges again (ESSAY-FEEDBACK.md §3). */
+      if ((err as { essayRefusal?: string }).essayRefusal === "writing") {
+        return jsonResponse({ ok: false, stage, code: "writing_refused", error: "The feedback came back in a form we don't show." }, 422);
+      }
       const unreadable = (err as { unreadablePages?: number[] }).unreadablePages;
       if (Array.isArray(unreadable)) {
         return jsonResponse(

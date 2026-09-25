@@ -46,6 +46,25 @@ export const AI_TEXT_FAILURES = {
       "We were charged for that attempt, so it has used some of your AI study help — we'd rather tell you than have you find out from the number. Trying again usually works.",
   },
 
+  /* ESSAY FEEDBACK IS NOT SWITCHED ON YET: the server refuses it until
+     the no-writing thresholds are measured. Nothing was sent to anyone
+     and nothing was charged, and both are said. */
+  essay_unavailable: {
+    title: "Essay feedback isn't available yet.",
+    detail: "Nothing was sent and nothing was charged.",
+  },
+
+  /* THE FEEDBACK OFFERED WRITING, which this feature must never do, so
+     it was not shown. BOTH HALVES, the pages_unreadable rule: the attempt
+     was charged, because the tokens were generated, and a retry charges
+     again. And it is not the student's fault, which is said. */
+  writing_refused: {
+    title: "That feedback came back in a form we don't show.",
+    detail:
+      "It started suggesting wording for your essay rather than pointing at what to work on, so we stopped it. " +
+      "That attempt was charged, and trying again will be charged again. Nothing you did caused this.",
+  },
+
   /* The legibility refusal on photographed pages. BOTH HALVES, by
      ruling: this attempt used allowance (output was generated -- the
      refusal IS the output), and resubmitting the retaken pages will

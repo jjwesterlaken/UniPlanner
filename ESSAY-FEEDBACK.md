@@ -361,7 +361,67 @@ criteria in one call, which covers 3,000 words with ~5,700 characters of
 criteria, or ~3,600 words with a short rubric. Over it, refuse naming
 the overage, the existing rule.
 
-### The credit cost, derived
+### The credit cost, derived — ON LUNA: 9 credits at a 4,000-token ceiling (RULED)
+
+**The 3-credit figure below the line was derived for gpt-4o-mini at a
+2,000-token output ceiling, and both halves have moved.** Gate A chose
+`gpt-5.6-luna` (Jared, 25 September 2026) on measured agreement with the
+human raters (11/18 and 9/18 on two seeds, the only model that stopped
+reading every high-band essay one band low), at $0.20 / $1.20 per 1M
+input / output tokens. Those rates are Jared's, read off OpenAI's pricing
+page that day; the build container cannot reach it. They are in
+`_shared/model.ts` as `ESSAY_USD_PER_1M_*`.
+
+**The ceiling comes from what was measured, not from 8,000.** Luna is a
+reasoning model, and its reasoning tokens are output tokens: 2,000 would
+cut off most replies. Across 36 runs the max cost was $0.00455 a run. The
+read printed a per-essay USD maximum but not a per-essay token maximum,
+so the output maximum is BOUNDED, not read: at the smallest input any run
+could have had (the 7,067-character system prompt plus a 250-word essay,
+no rubric at all, ~2,010 tokens), $0.00455 buys at most **~3,460 output
+tokens**. Every real run had more input than that, so the real maximum is
+lower, around 3,200. The next read prints the token maximum directly.
+
+Priced the product's way, at the task's own ceilings
+(`MAX_INPUT_CHARS.essay` = 24,000, the system prompt excluded as for every
+other task):
+
+```
+out ceiling   ceiling cost   credits   headroom over the ~3,460 bound
+   3,000        $0.00474        7        none: BELOW the measured max, so some replies are cut off
+   3,500        $0.00534        8        ~1%
+   4,000        $0.00594        9        ~16%
+   4,500        $0.00654       10        ~30%
+```
+
+**It did not land in the 5–7 band that was set as the price.** 7 credits
+needs a ceiling below the measured maximum, and a reply cut off at the
+ceiling is still billed, because the tokens were generated. And the
+measurement is on ASAP essays of 350–650 words, where a university essay
+runs to 3,000; its verbatim support spans and its points both grow with
+length, so if anything the ceiling needs more headroom, not less.
+
+**RULED, Jared, 25 September 2026: 9 credits, at `MAX_TOKENS.essay =
+4,000` and `MAX_INPUT_CHARS.essay = 24,000`.** `TASK_CREDITS.essay` is
+derived from those two ceilings at `ESSAY_USD_PER_1M_*` like every other
+task's, and a test pins it at 9, so a ceiling or a rate that moves turns
+the price red rather than drifting it. The two alternatives that were
+not taken: 8 at 3,500 (about 1% headroom over the bound), and a lower
+reasoning effort, which is a different configuration needing its own
+agreement number before it could be priced.
+
+What the MEAN run costs, for scale: $0.00342, **5 credits**. Pricing at
+the mean charges an average student the average, and loses money on
+every long essay. That is the reverse of how every other task here is
+priced, which is why the ceiling is the price.
+
+Against the allowances at 9 credits: the trial buys **6 runs**, not 20;
+Study AI 100 a month; Study AI Max 333.
+
+---
+
+**THE gpt-4o-mini DERIVATION, superseded, kept because the reasoning
+about ceilings still holds:**
 
 Priced the same way every other task is — **at its own ceilings**, so the
 number is an upper bound on what one call can cost us:
@@ -373,41 +433,15 @@ weakspots   in   6,000 chars  out   800 tok  $0.000694  = 1 credit
 summarise   in  20,000 chars  out 2,000 tok  $0.001914  = 3 credits
 merge       in  12,000 chars  out 2,000 tok  $0.001629  = 2 credits
 
-essay       in  24,000 chars  out 2,000 tok  $0.002057  = 3 credits   <- proposed
+essay       in  24,000 chars  out 2,000 tok  $0.002057  = 3 credits   <- on gpt-4o-mini, superseded
 ```
 
-**A run costs 3 credits.** And it is stable across the sensible range —
-every combination from 20k/2000 to 30k/2500 lands on 3 or 4, so the
-answer does not hinge on picking the cap precisely:
-
-```
-in 20,000  out 2,000  = 3      in 28,000  out 2,000  = 3
-in 24,000  out 2,500  = 3      in 28,000  out 2,500  = 4
-in 24,000  out 3,000  = 4      in 30,000  out 3,000  = 4
-```
-
-A **real** 3,000-word run (not the ceiling) is `$0.001805` = **3
-credits**. A 1,500-word one is 2.
-
-Against the allowances:
-
-| tier | allowance | runs |
-|---|---|---|
-| Free | 60, once ever | **20** |
-| Study AI | 900/month | 300 |
-| Study AI Max | 3,000/month | 1,000 |
-
-For scale: 3 credits is a **3-minute recorded lecture**, and a whole
-pasted reading (4 chunks + merge) is **14**. Essay feedback is one of the
-*cheapest* things in the app — cheaper per run than summarising a
-reading, because an essay is shorter than a reading and the output
-ceiling is what dominates.
-
-**`MAX_TOKENS.essay = 2,000`** — the same as `summarise`. Feedback across
-~5 criteria with a paragraph each plus the band reasoning is that shape.
-Note the depth lesson from `ai-notes`: if the output reads thin, **fix
-the prompt first and measure**, do not raise the ceiling. Raising it to
-3,000 costs a fourth credit and buys permission to be verbose.
+The input ceiling is unchanged by the model move: **`MAX_INPUT_CHARS.essay
+= 24,000`** still covers 3,000 words with ~5,700 characters of criteria.
+The output ceiling is what moved, from 2,000 to the figure being ruled on
+above. The depth lesson from `ai-notes` still applies: if the output
+reads thin, **fix the prompt first and measure**, do not raise the
+ceiling.
 
 ---
 
@@ -604,10 +638,12 @@ Recommendation: **`TEXT_TIERS` unchanged — free, ai, ai_max.**
 
 The existing reasoning applies with more force here than anywhere:
 
-- At 3 credits a run, the trial buys **20 essays**. That is not a
-  teaser, it is a semester.
+- On gpt-4o-mini at 3 credits a run, the trial bought **20 essays**. On
+  Luna at the ruled 9 credits (§2) it buys **6**. That is a
+  demonstration rather than a semester, which is what the trial is for,
+  and the argument for every tier stands.
 - It costs about **2 cents** per free account that uses the whole trial
-  on this feature alone.
+  on this feature alone: 6 runs at the measured $0.00342 mean.
 - Essay feedback is the most legible reason to pay for this app. Gating
   it entirely means nobody experiences the thing they would be buying —
   and a student who has had one essay read and found it useful is the
@@ -625,7 +661,7 @@ transcription minutes where this costs a fifth of a cent.
 | **1** | The consent-version guard (§0, item C1) | **Independent. Land first, whatever happens to this feature.** |
 | **2** | The no-writing constraint, measured on real output (§3) | Decides whether the feature is defensible at all |
 | **3** | Consent v8 + policy (§1) | Must precede any deploy that can send an essay |
-| **4** | The endpoint task + caps (§2) | 24,000 / 2,000 / 3 credits |
+| **4** | The endpoint task + caps (§2) | on `gpt-5.6-luna`: 24,000 in, 4,000 out, 9 credits (ruled) |
 | **5** | The panel on the assessment row (§5) | Grace's, for layout and wording |
 | **6** | The mark-comparison loop (§"THE MARK COMPARISON") | Migration 0023 WIDENS, so it is applied before the client that reads it |
 
@@ -750,7 +786,7 @@ and keeping them apart is the whole point of writing this down:
 | | answered by | due |
 |---|---|---|
 | Does the structure stop ghostwriting? | the two-arm run over the 32 ASAP essays | before the endpoint is built |
-| Is the feedback worth 3 credits? | a person reading the feedback beside a real ASAP score, via `read-asap.mjs` | **before it ships to students** |
+| Is the feedback worth its credits? | a person reading the feedback beside a real ASAP score, via `read-asap.mjs` | **before it ships to students** |
 
 **WHY NOT BEFORE THE MECHANISM IS MEASURED.** A quality judgement made
 against a mechanism that does not hold is a judgement about output
@@ -789,7 +825,7 @@ design, which a fixture we wrote is allowed to make.
 ## What this document cannot answer
 
 - **Whether the model can grade against a UNIVERSITY rubric well enough
-  to be worth 3 credits.** Narrowed on 23 September 2026 rather than
+  to be worth its credits.** Narrowed on 23 September 2026 rather than
   closed. `read-asap.mjs` answers the weaker question — does the
   feedback point at real problems, and is it harder on a weaker essay —
   against ASAP's human rater scores, and the limits of that are in the

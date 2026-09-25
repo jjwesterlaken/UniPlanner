@@ -127,18 +127,35 @@ export const AI_MATERIAL_TYPES = [
     what: "text you paste from a reading",
     retention: "relayed-not-stored",
     disclosedAs: /paste/i,
+    supplied: true,
   },
   {
     id: "page-photos",
     what: "photographs of pages you are studying",
     retention: "relayed-not-stored",
     disclosedAs: /photo/i,
+    supplied: true,
   },
   {
     id: "own-notes-and-cards",
     what: "notes, study cards and explanations you have written",
     retention: "relayed-not-stored",
     disclosedAs: /study cards/i,
+    supplied: true,
+  },
+  /* v8, 25 September 2026. An essay is not "notes you have written"
+     stretched: it carries the student's name, student ID, course code
+     and sometimes their tutor's, and it is their own assessable work
+     (ESSAY-FEEDBACK.md §1). It is sent AS WRITTEN, identifiers
+     included, because a filter that removes "some" names is a promise
+     that cannot be kept. The screen says so and says the student can
+     remove them first; the policy says the same. */
+  {
+    id: "essay-draft",
+    what: "a draft essay you paste in for feedback, with the marking criteria you paste beside it, sent as written, including any name or student ID in it",
+    retention: "relayed-not-stored",
+    disclosedAs: /essay/i,
+    supplied: true,
   },
 ];
 
@@ -156,6 +173,14 @@ export const AI_MATERIAL_TYPES = [
  * is what we promise about it. Both are things a student agreed to.
  * The wording around them is not.
  */
+/* WHAT THE STUDENT SUPPLIES, as opposed to what the app produces from a
+   recording. The policy lists these in two hand-written sentences (an
+   HTML file cannot import this one), so each such passage is marked in
+   privacy.html and test-legal.mjs requires every supplied type in every
+   marked passage. That is ESSAY-FEEDBACK.md's C3: the next type added
+   here cannot be left out of the enumeration. */
+export const suppliedMaterialTypes = (types = AI_MATERIAL_TYPES) => types.filter((t) => t.supplied === true);
+
 export function materialFingerprint(types = AI_MATERIAL_TYPES) {
   return types
     .map((t) => `${t.id}:${t.retention}`)
@@ -190,6 +215,9 @@ export function materialFingerprint(types = AI_MATERIAL_TYPES) {
  */
 export const CONSENT_MATERIAL_LEDGER = {
   7: "course-name:relayed-not-stored,lecture-audio:deleted-on-transcription,lecture-transcript:kept-server-side,own-notes-and-cards:relayed-not-stored,page-photos:relayed-not-stored,pasted-reading:relayed-not-stored",
+  /* v8: essay drafts, sent as written. Jared, 25 September 2026: v8
+     before the essay route exists, and every student is re-asked once. */
+  8: "course-name:relayed-not-stored,essay-draft:relayed-not-stored,lecture-audio:deleted-on-transcription,lecture-transcript:kept-server-side,own-notes-and-cards:relayed-not-stored,page-photos:relayed-not-stored,pasted-reading:relayed-not-stored",
 };
 
 /**
@@ -257,6 +285,10 @@ export const MATERIAL_ROUTES = {
      Mapping it to the source is more truthful than excusing it, and it
      is why no "sends nothing" option exists above. */
   "ai-text:merge": ["pasted-reading"],
+  /* The essay and the criteria pasted beside it. One type, because the
+     criteria go only with an essay and are disclosed in the same line:
+     a type of its own would be a disclosure nobody reads separately. */
+  "ai-text:essay": ["essay-draft"],
 
   /* ---- ai-notes: one entry per adapter method ---- */
 

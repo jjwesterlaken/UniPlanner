@@ -34,7 +34,7 @@
 
    Options:
      --runs <n>      default 2, per arm
-     --model <id>    default is the shipped SUMMARY_MODEL
+     --model <id>    default is the shipped essay model, modelFor({ task: "essay" })
      --json <file>   raw measurements, redacted unless --show-text
      --show-text     print quotes and notes. OFF BY DEFAULT: the quote
                      field is the student's own words by construction,
@@ -104,7 +104,7 @@ const criteria = fs.readFileSync(rubricFile, "utf8");
    being deliberate about: essay feedback is text-only and paste-only,
    so this is the call site that changes if that ever stops being
    true. */
-const model = opt("--model") || (await productionModel({ hasImages: false }));
+const model = opt("--model") || (await productionModel({ hasImages: false, task: "essay" }));
 
 console.log("=".repeat(72));
 console.log("TWO-ARM — does the structure separate description from ghostwriting?");

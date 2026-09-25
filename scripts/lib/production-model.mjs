@@ -72,7 +72,7 @@ const MODEL_TS = path.join(ROOT, "supabase/functions/_shared/model.ts");
  * cases are a table rather than something only a real run can reach.
  * Nothing but a test ever passes it, and the default is the real file.
  */
-export async function productionModel({ hasImages = false, modelSource = MODEL_TS } = {}) {
+export async function productionModel({ hasImages = false, task = null, modelSource = MODEL_TS } = {}) {
   const source = modelSource;
   if (!fs.existsSync(source)) {
     throw new Error(
@@ -110,9 +110,9 @@ export async function productionModel({ hasImages = false, modelSource = MODEL_T
           "Refusing rather than reading a constant by name: which constant applies is the question, and guessing it is how a harness measures a stand-in."
       );
     }
-    const model = mod.modelFor({ hasImages });
+    const model = mod.modelFor({ hasImages, task });
     if (typeof model !== "string" || !model.trim()) {
-      throw new Error(`modelFor({ hasImages: ${hasImages} }) returned ${JSON.stringify(model)} rather than a model id.`);
+      throw new Error(`modelFor({ hasImages: ${hasImages}, task: ${JSON.stringify(task)} }) returned ${JSON.stringify(model)} rather than a model id.`);
     }
     return model;
   } finally {

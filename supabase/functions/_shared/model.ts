@@ -62,6 +62,10 @@ export const SUMMARY_MODEL = "gpt-4o-mini";
 /** Photographed pages. */
 export const VISION_MODEL = "gpt-5.4-mini";
 
+/** Essay feedback. Chosen on measured agreement with human raters, not
+    on price; see the essay-model note below and ESSAY-FEEDBACK.md. */
+export const ESSAY_MODEL = "gpt-5.6-luna";
+
 /**
  * WHICH MODEL A REQUEST GETS, and the rule lives here rather than at
  * the adapter because it is this file's whole subject.
@@ -75,11 +79,21 @@ export const VISION_MODEL = "gpt-5.4-mini";
  * today only because the feature being measured is text-only, and a
  * coincidence is not a derivation.
  *
- * PER MEDIUM, NEVER PER TASK. Photographs and pasted text are the same
- * `summarise` task; see the header and COST-MODEL.md 12.5 for what
- * moving the task rather than the medium would cost.
+ * PER MEDIUM WITHIN A TASK. Photographs and pasted text are the same
+ * `summarise` task, and moving that task rather than the medium would
+ * make every text chunk and lecture dearer (COST-MODEL.md 12.5), so a
+ * medium still decides between SUMMARY_MODEL and VISION_MODEL.
+ *
+ * ESSAY IS ITS OWN TASK, and the one exception by task, because it was
+ * chosen by task. Gate A compared four models on the same 18 ASAP
+ * essays, scored for best-fit agreement with the human rater's band:
+ * gpt-4o-mini 6/18, gpt-5.4-mini 5/18, gpt-5.4 9/18, gpt-5.6-luna 11/18
+ * (and 9/18 on a second seed, 20/36 across both). Only Luna stopped
+ * reading every high-band essay one band low. No other task has been
+ * measured on it, and no other task moves.
  */
-export function modelFor({ hasImages = false }: { hasImages?: boolean } = {}): string {
+export function modelFor({ hasImages = false, task = null }: { hasImages?: boolean; task?: string | null } = {}): string {
+  if (task === "essay") return ESSAY_MODEL;
   return hasImages ? VISION_MODEL : SUMMARY_MODEL;
 }
 
@@ -90,6 +104,16 @@ export function modelFor({ hasImages = false }: { hasImages?: boolean } = {}): s
    input side alone, which is the exact drift this file exists to stop. */
 export const VISION_USD_PER_1M_INPUT = 0.75;
 export const VISION_USD_PER_1M_OUTPUT = 4.5;
+
+/* Published rates for ESSAY_MODEL, per 1M tokens. NOT REPRODUCED FROM
+   THIS REPOSITORY: the build container cannot reach OpenAI's pricing
+   page. The figures are Jared's, read off that page on 25 September
+   2026 (openai.com/api/pricing). The vision rates above were
+   reproduced independently and these were not, and the difference is
+   recorded rather than smoothed over. MOVE THEM WITH THE STRING, for
+   the reason given above: an essay's credits are derived from these. */
+export const ESSAY_USD_PER_1M_INPUT = 0.2;
+export const ESSAY_USD_PER_1M_OUTPUT = 1.2;
 
 /* WHAT WE ACTUALLY GET BILLED for one batch of PHOTOS_PER_CHUNK pages
    at maxEdge 1024 and detail "original" — MEASURED, not modelled, on

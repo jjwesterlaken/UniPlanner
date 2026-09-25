@@ -41,6 +41,8 @@ export const TASK_CREDITS = {
   practice: 2,
   summarise: 3,
   merge: 2,
+  /* On gpt-5.6-luna at a 4,000-token ceiling: ruled 25 September 2026. */
+  essay: 9,
 };
 
 /* A MIRROR, and the mirror is the allowed form here: this is a browser
