@@ -22,7 +22,7 @@ import zlib from "node:zlib";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { docxToText, zipEntries } from "./lib/docx-text.mjs";
-import { MIN_ESSAY_WORDS, selectForRead, scoreRanges, normaliseScore, bandOf, DECLARED_SCORE_RANGES } from "./lib/asap-corpus.mjs";
+import { MIN_ESSAY_WORDS, selectForRead, scoreRanges, normaliseScore, bandOf, bandAvailability, DECLARED_SCORE_RANGES } from "./lib/asap-corpus.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -594,6 +594,29 @@ test("THE SAME SEED GIVES THE SAME READ", () => {
   assert.ok(new Set([a.join(), c.join()]).size >= 1);
 });
 
+test("THE DRY RUN SAYS WHICH BANDS A SET CAN FILL above the floor, not only how many essays it has", () => {
+  /* The floor keeps long essays and length tracks score, so a set of
+     short narratives can clear the floor only in its upper bands. A
+     total of 40 would read as plenty while the low band held none. */
+  const allScores = [
+    ...[0, 30, 5, 15, 25].map((score, i) => ({ id: i, set: 7, score })),
+    ...[2, 12, 7].map((score, i) => ({ id: 100 + i, set: 1, score })),
+  ];
+  const ranges = scoreRanges(allScores);
+  const rows = [
+    { id: 10, set: 7, score: 25 },
+    { id: 11, set: 7, score: 28 },
+    { id: 12, set: 7, score: 15 },
+    { id: 20, set: 1, score: 2 },
+  ];
+  const a = bandAvailability({ rows, ranges });
+  assert.deepEqual(a[7], { low: 0, middle: 1, high: 2 }, "set 7's bands were not counted from its own range");
+  assert.deepEqual(a[1], { low: 1, middle: 0, high: 0 });
+  assert.equal(a[8], undefined, "a set with no rows was invented");
+  /* And the dry run prints it: the header names the three bands. */
+  assert.match(strip(read("scripts/read-asap.mjs")), /bandAvailability\(\{ rows: corpus\.rows, ranges \}\)/, "the dry run does not compute per-band availability");
+});
+
 test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the schema on the wire", () => {
   /* NOTHING RAN READ MODE PAST --dry-run BEFORE THIS. So the sheet a
      person opens — the printed point count, the severity mix, both
@@ -623,17 +646,19 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     const stub = path.join(tmp, "stub.mjs");
     /* Every call returns two FUNDAMENTAL points and one MINOR, quoting
        text that is really in the essay, so the arithmetic below is
-       known in advance. */
+       known in advance. The MINOR one comes FIRST, so the sheet's
+       fundamental-first order is something the renderer did rather
+       than the order the reply happened to arrive in. */
     fs.writeFileSync(
       stub,
       `import fs from "node:fs";
        globalThis.fetch = async (_url, init) => {
          fs.appendFileSync(${JSON.stringify(bodies)}, init.body + "\\n");
-         return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ points: [
+         return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ genre: "argument", points: [
+           { quote: "across several decades", deficiency: "repetition", note: "Said twice." },
            { quote: "changed who could hold an argument", deficiency: "claim-without-evidence", note: "The claim is asserted, not shown." },
            { quote: "how and why that happened", deficiency: "unsupported-generalisation", note: "Too broad for what follows." },
-           { quote: "across several decades", deficiency: "repetition", note: "Said twice." },
-         ] }) } }] }) };
+         ], overall: { band: "3", sentence: "OVERALL-SENTINEL: it partly meets the criteria; its central claim is never supported." } }) } }] }) };
        };\n`
     );
     const out = path.join(tmp, "read.md");
@@ -663,6 +688,18 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     assert.equal(total(4), 12, "the fundamental total is wrong");
     assert.equal(total(5), 6, "the minor total is wrong");
     assert.match(md, /Codes outside the closed set: 0\./, "the unknown-code count is missing or non-zero");
+    assert.match(md, /Genre read from the criteria:\*\* 6 of 6/, "the genre check did not count all six argument essays");
+    assert.match(md, /Codes that do not fit the genre the model itself stated: 0\./, "the off-genre count is missing or wrong");
+    assert.match(md, /read as a prediction[^:]*: 0\./, "the prediction count is missing or non-zero");
+
+    /* 2b. THE OPENING READING COMES FIRST, AND THE POINTS FUNDAMENTAL FIRST. */
+    const first = md.slice(md.indexOf("## 1. Set"));
+    const at = (needle) => first.indexOf(needle);
+    assert.ok(at("OVERALL-SENTINEL") > 0, "the opening reading is not on the essay's section");
+    assert.ok(at("OVERALL-SENTINEL") < at("**claim-without-evidence**"), "the opening reading does not come before the points");
+    assert.ok(at("**unsupported-generalisation**") < at("**repetition**"), "a minor point is shown above a fundamental one");
+    assert.ok(at("**claim-without-evidence**") < at("**unsupported-generalisation**"), "the model's order was not kept inside a level");
+    assert.match(md, /\| 3 \| 3 \| 2 \| 1 \|/, "the model's reading is not in the sheet row beside the counts");
 
     /* 3. BOTH QUESTIONS, and the severity one by its substance. */
     assert.match(md, /Does the WEAKER essay get more substantive comment/);

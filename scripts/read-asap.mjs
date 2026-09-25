@@ -64,8 +64,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadCorpus, selectForRead, DEFAULT_SETS, MIN_ESSAY_WORDS, BANDS } from "./lib/asap-corpus.mjs";
-import { essayFeedbackSchema, severityOf, SEVERITY_LEVELS } from "../src/essayPoints.js";
+import { loadCorpus, selectForRead, bandAvailability, DEFAULT_SETS, MIN_ESSAY_WORDS, BANDS } from "./lib/asap-corpus.mjs";
+import { essayFeedbackSchema, severityOf } from "../src/essayPoints.js";
+import { measureReply } from "./lib/essay-read.mjs";
 import { ARMS, userMessage } from "./lib/essay-arms.mjs";
 import { callVision } from "./lib/photo-calls.mjs";
 import { productionModel } from "./lib/production-model.mjs";
@@ -168,17 +169,24 @@ console.log(`essays       ${chosen.length} (asked for ${n}), seed ${seed}`);
 console.log(`bands        ${bandsCovered.join(", ")}   <- normalised within each set; the sheet needs a spread here`);
 console.log(`word floor   ${corpus.minWords}`);
 console.log("");
-console.log("  set  range   source     essays >= floor / all");
+const avail = bandAvailability({ rows: corpus.rows, ranges });
+console.log("  set  range   source     essays >= floor / all    low  middle  high");
 for (const set of sets) {
   const r = ranges[set];
   const a = corpus.perSet[set] || { total: 0, clear: 0 };
+  const b = avail[set] || { low: 0, middle: 0, high: 0 };
   const range = r ? `${r.min}-${r.max}`.padEnd(7) : "-      ";
   const src = r ? r.source.padEnd(10) : "-         ";
-  /* A SHORTFALL IS SAID, not hidden. Set 7 is short narratives and was
-     predicted to fall short of the floor; this line is where that
-     prediction becomes a number. */
-  const warn = a.clear < 3 ? "   <- too few to read at this floor" : "";
-  console.log(`  ${String(set).padEnd(4)} ${range} ${src} ${String(a.clear).padStart(5)} / ${a.total}${warn}`);
+  /* A SHORTFALL IS SAID, not hidden, and PER BAND. Set 7 is short
+     narratives and was predicted to fall short of the floor. The floor
+     keeps the longer essays and length tracks score, so the low band is
+     where it would fall short first, and a total would hide that. */
+  const thin = BANDS.filter((x) => b[x] < 3);
+  const warn = a.clear < 3 ? "   <- too few to read at this floor" : thin.length ? `   <- under 3 in: ${thin.join(", ")}` : "";
+  console.log(
+    `  ${String(set).padEnd(4)} ${range} ${src} ${String(a.clear).padStart(5)} / ${String(a.total).padEnd(9)}` +
+      `${String(b.low).padStart(5)} ${String(b.middle).padStart(7)} ${String(b.high).padStart(5)}${warn}`
+  );
 }
 console.log("");
 console.log(`ids          ${chosen.map((c) => `${c.set}:${c.id}`).join(" ")}`);
@@ -224,22 +232,14 @@ for (const [i, row] of chosen.entries()) {
     jsonSchema: essayFeedbackSchema(),
   });
 
-  let points = null;
-  let failure = null;
-  if (error) failure = error;
-  else {
-    try {
-      points = JSON.parse(json.choices[0].message.content).points;
-      if (!Array.isArray(points)) throw new Error("no points array");
-    } catch (e) {
-      /* REPORTED IN THE FILE, not skipped. An essay that produced
-         nothing is a fact about the feature and the reader should see
-         it beside the ones that worked — a file containing only the
-         successes is a flattering sample of our own output. */
-      failure = `the output did not parse as the schema (${e.message})`;
-    }
-  }
-  out.push({ row, points, failure });
+  /* REPORTED IN THE FILE, not skipped. An essay that produced nothing
+     is a fact about the feature and the reader should see it beside the
+     ones that worked; a file containing only the successes is a
+     flattering sample of our own output. */
+  const m = error
+    ? { failure: error, count: 0, sev: { fundamental: 0, minor: 0, outside: 0, unknown: 0 }, offGenre: [], predictionHits: [] }
+    : measureReply({ content: json?.choices?.[0]?.message?.content ?? "", set: row.set });
+  out.push({ row, ...m });
 }
 
 /* ---------- the file ---------- */
@@ -248,21 +248,20 @@ for (const [i, row] of chosen.entries()) {
    severity mix are facts about the output, computed the same way for
    every essay, so a reader does not have to count and cannot miscount.
    What stays for a person is the judgement the numbers cannot make. */
-const sevCount = (points) => {
-  const c = { fundamental: 0, minor: 0, unrated: 0, unknown: 0 };
-  for (const p of points || []) c[severityOf(p.deficiency)] += 1;
-  return c;
-};
-const measured = out.map((o) => ({ ...o, count: (o.points || []).length, sev: sevCount(o.points) }));
+const measured = out;
 
 const byBand = BANDS.map((band) => {
   const inBand = measured.filter((m) => m.row.band === band && !m.failure);
   const sum = (k) => inBand.reduce((a, m) => a + m.sev[k], 0);
   const pts = inBand.reduce((a, m) => a + m.count, 0);
-  return { band, essays: inBand.length, pts, fundamental: sum("fundamental"), minor: sum("minor"), unrated: sum("unrated") };
+  return { band, essays: inBand.length, pts, fundamental: sum("fundamental"), minor: sum("minor"), outside: sum("outside") };
 });
-const unknownTotal = measured.reduce((a, m) => a + m.sev.unknown, 0);
-const narrativeSets = [7, 8].filter((x) => sets.includes(x));
+const ok = measured.filter((m) => !m.failure);
+const unknownTotal = ok.reduce((a, m) => a + m.sev.unknown, 0);
+const offGenreTotal = ok.reduce((a, m) => a + m.offGenre.length, 0);
+const genreKnown = ok.filter((m) => m.genreMatches !== null);
+const genreRight = genreKnown.filter((m) => m.genreMatches).length;
+const predictionTotal = ok.filter((m) => m.predictionHits.length).length;
 
 const sheet = [
   "# ASAP read — does the feedback point at anything a marker cares about?",
@@ -299,36 +298,32 @@ const sheet = [
   "points. It need not — a strong essay can have six small things worth saying — which is",
   "why the severity mix beside it is the number that matters more.",
   "",
-  "| band | essays | points | per essay | fundamental | minor | unrated |",
+  "| band | essays | points | per essay | fundamental | minor | outside the count |",
   "|---|---|---|---|---|---|---|",
   ...byBand.map((b) =>
-    `| ${b.band} | ${b.essays} | ${b.pts} | ${b.essays ? (b.pts / b.essays).toFixed(1) : "—"} | ${b.fundamental} | ${b.minor} | ${b.unrated} |`
+    `| ${b.band} | ${b.essays} | ${b.pts} | ${b.essays ? (b.pts / b.essays).toFixed(1) : "—"} | ${b.fundamental} | ${b.minor} | ${b.outside} |`
   ),
   "",
   `**Codes outside the closed set: ${unknownTotal}.** Under the strict schema this run sends,`,
   "that is zero by construction. A non-zero here means the schema did not reach the model,",
   "and every severity number above is computed over points with holes in them.",
   "",
-  "*unrated* is `evidence-without-claim` and `off-criterion`, whose severity has not been",
-  "ruled on; they are counted apart rather than folded into either column.",
+  "*outside the count* is `off-criterion`: the model saying it had nothing against a",
+  "criterion. It is not a fault, so it is counted apart from both severity columns.",
   "",
-  ...(narrativeSets.length
-    ? [
-        `**A KNOWN DEFECT TO READ AROUND:** sets ${narrativeSets.join(" and ")} are NARRATIVE. The prompt does`,
-        "not yet take the genre from the rubric, so it applies argument codes — `claim-without-evidence`",
-        "on a story's closing line — where they do not belong, and those count as *fundamental*.",
-        "A fundamental point on a narrative essay is suspect until that is fixed. **Answer the",
-        "severity question on the argument sets (1 and 2) first.**",
-        "",
-      ]
-    : []),
+  "**Three checks on the new instructions, each counted rather than judged:**",
+  "",
+  `- **Genre read from the criteria:** ${genreRight} of ${genreKnown.length} essays got the genre their ASAP set really asks for (sets 1 and 2 argument, 7 and 8 narrative).`,
+  `- **Codes that do not fit the genre the model itself stated: ${offGenreTotal}.** The prompt lists the codes each genre allows. Every one here is the model contradicting its own statement, such as \`claim-without-evidence\` on an essay it called a narrative.`,
+  `- **Opening sentences that read as a prediction (the ESSAY-FEEDBACK.md §4 ban): ${predictionTotal}.** It should be zero.`,
+  "",
   "## The sheet — fill this in as you read",
   "",
-  "| # | set | score | band | points | fund. | minor | Points at things a marker would care about? | Notes |",
-  "|---|---|---|---|---|---|---|---|---|",
+  "| # | set | score | band | model's reading | points | fund. | minor | Points at things a marker would care about? | Notes |",
+  "|---|---|---|---|---|---|---|---|---|---|",
   ...measured.map(
     (m, i) =>
-      `| ${i + 1} | ${m.row.set} | ${m.row.score}/${ranges[m.row.set].max} | ${m.row.band} | ${m.failure ? "—" : m.count} | ${m.failure ? "—" : m.sev.fundamental} | ${m.failure ? "—" : m.sev.minor} | yes / partly / no | |`
+      `| ${i + 1} | ${m.row.set} | ${m.row.score}/${ranges[m.row.set].max} | ${m.row.band} | ${m.failure ? "—" : m.overall.band || "(none)"} | ${m.failure ? "—" : m.count} | ${m.failure ? "—" : m.sev.fundamental} | ${m.failure ? "—" : m.sev.minor} | yes / partly / no | |`
   ),
   "",
   "**Two questions the table cannot hold:**",
@@ -347,11 +342,16 @@ const sheet = [
   ">",
   "> `                                                                        `",
   "",
-  "**What the answers decide.** If 2 is *yes*, the feedback discriminates and the fix is",
-  "presentation: order points by severity, and open with a sentence saying whether the essay",
-  "broadly meets the criteria, so six small points on a good essay do not read as six",
-  "failures. If 2 is *no*, the prompt is not discriminating, and that is a prompt problem",
-  "to solve before any screen is built.",
+  "**What the answers decide.** This run already ORDERS points by severity and OPENS with an",
+  "overall reading, the presentation fix the last read pointed to, so the question is now",
+  "whether that presentation is honest. If 2 is *yes*, the opening sentence and the order",
+  "should make a weak essay read as weak and a strong one as strong. If 2 is *no*, the",
+  "codes the model picks do not follow quality, and ordering by them only arranges noise:",
+  "that is a prompt problem to solve before any screen is built.",
+  "",
+  "The *model's reading* column is the band the model says the essay reads like, in the",
+  "rubric's own terms. Set it beside *score*: it is the easiest place to see whether the",
+  "opening sentence tracks the human rater at all.",
   "",
   "---",
   "",
@@ -371,17 +371,27 @@ for (const [i, m] of measured.entries()) {
   sheet.push("");
   sheet.push("### The feedback");
   sheet.push("");
-  /* IN THE MODEL'S ORDER, with severity LABELLED rather than sorted by.
-     Sorting would show the proposed presentation before the read has
-     decided whether that presentation is the right fix — and a sheet
-     that already looks tidy is a sheet that answers its own question. */
+  /* THE OPENING READING FIRST, then the points FUNDAMENTAL FIRST: the
+     order the student would see. The model's own order is kept inside a
+     level (orderBySeverity is stable). The genre and anything that
+     breaks the new rules are shown beside the point, so a reader can
+     see a violation without counting. */
   if (m.failure) {
     sheet.push(`**Nothing came back.** ${m.failure}`);
-  } else if (!m.count) {
-    sheet.push("**No points at all.** The model read the essay and raised nothing — worth noting on the sheet.");
   } else {
-    for (const p of m.points) {
-      sheet.push(`- **${p.deficiency || "(no deficiency)"}** · _${severityOf(p.deficiency)}_`);
+    const genreNote = m.genreMatches === false ? ` · **the set asks for ${m.expectedGenre}**` : "";
+    sheet.push(`Genre stated: _${m.genre}_${genreNote}`);
+    sheet.push("");
+    sheet.push(`> **Opening reading** · reads like: ${m.overall.band ? `**${m.overall.band}**` : "_(no band)_"}`);
+    sheet.push(`> ${m.overall.sentence || "_(no sentence)_"}`);
+    if (m.predictionHits.length) sheet.push(`> ⚠ trips the §4 prediction ban: ${m.predictionHits.join(", ")}`);
+    sheet.push("");
+    if (!m.count) {
+      sheet.push("**No points at all.** The model read the essay and raised nothing — worth noting on the sheet.");
+    }
+    for (const p of m.ordered) {
+      const off = m.offGenre.includes(p) ? ` · **does not fit ${m.genre}**` : "";
+      sheet.push(`- **${p.deficiency || "(no deficiency)"}** · _${severityOf(p.deficiency)}_${off}`);
       sheet.push(`  - quotes: \`${String(p.quote || "").replace(/`/g, "'")}\``);
       sheet.push(`  - says: ${p.note || "(nothing)"}`);
     }
@@ -395,5 +405,5 @@ fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, sheet.join("\n"), "utf8");
 
 console.log(`\nWritten: ${outPath}`);
-console.log(`  ${out.filter((o) => o.points && o.points.length).length} of ${out.length} essays produced feedback.`);
+console.log(`  ${out.filter((o) => !o.failure && o.count).length} of ${out.length} essays produced feedback.`);
 console.log("  Open it, fill in the sheet at the top, and delete the file when you are done.");

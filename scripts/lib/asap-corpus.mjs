@@ -22,6 +22,16 @@ import { readDocxText } from "./docx-text.mjs";
    student. That is a different measurement, not a bigger one. */
 export const DEFAULT_SETS = [1, 2, 7, 8];
 
+/* WHAT EACH SET'S PROMPT ASKS FOR, as the ASAP set descriptions state
+   it: sets 1 and 2 are persuasive (a letter about computers, an essay
+   on library censorship) and 7 and 8 are narrative (a story about
+   patience, a story about laughter). These are FACTS ABOUT THE CORPUS,
+   and the read compares them against the genre the model says the
+   criteria describe, so "did it read the genre from the rubric" is
+   counted rather than judged. Keyed by set, so a set with no entry is
+   reported as unknown rather than guessed. */
+export const SET_GENRES = Object.freeze({ 1: "argument", 2: "argument", 7: "narrative", 8: "narrative" });
+
 /* @CAPS1, @PERSON2, @LOCATION1, @NUM1, @ORGANIZATION1, @DATE1 … the
    whole family, including the bare forms. One pattern rather than a
    list, because a list is a restatement of somebody else's scheme.
@@ -142,6 +152,28 @@ export function bandOf(position) {
  * the result spans low / middle / high whenever the corpus allows, and
  * the same seed gives the same essays.
  */
+/**
+ * How many essays AT OR ABOVE THE FLOOR each set has in each band.
+ *
+ * The floor keeps the longer essays, and length tracks score, so a set
+ * can clear the floor comfortably in total while having almost nothing
+ * left in its LOW band. A total alone would hide exactly that, and the
+ * read's whole question needs a weak essay beside a strong one. So the
+ * dry run prints this per band before anything is spent.
+ *
+ * `rows` are the floor-filtered rows; `ranges` come from every score.
+ */
+export function bandAvailability({ rows, ranges }) {
+  const out = {};
+  for (const r of rows) {
+    const band = bandOf(normaliseScore(r.score, ranges[r.set]));
+    if (!band) continue;
+    out[r.set] ??= Object.fromEntries(BANDS.map((b) => [b, 0]));
+    out[r.set][band] += 1;
+  }
+  return out;
+}
+
 export function selectForRead({ rows, allScores = rows, n = 6, seed = 1 } = {}) {
   const ranges = scoreRanges(allScores);
   let s = seed >>> 0;

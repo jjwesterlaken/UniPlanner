@@ -18,7 +18,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFICIENCIES, measurePoint, refusePoint, quoteVariety, SEVERITY, SEVERITY_LEVELS, severityOf, essayFeedbackSchema } from "../src/essayPoints.js";
+import {
+  DEFICIENCIES, measurePoint, refusePoint, quoteVariety, SEVERITY, SEVERITY_LEVELS, severityOf, essayFeedbackSchema,
+  orderBySeverity, GENRES, APPLIES_TO, fitsGenre, codesFor, predictionFraming,
+} from "../src/essayPoints.js";
+import { measureReply } from "./lib/essay-read.mjs";
 import { ARMS, userMessage } from "./lib/essay-arms.mjs";
 import { SCOPE_CONTROL, scopeControl } from "./lib/two-arm-summary.mjs";
 
@@ -189,7 +193,7 @@ test("THE ENUM IS DERIVED INTO BOTH PROMPTS, never retyped", () => {
     }
   }
   const src = strip(read("scripts/lib/essay-arms.mjs"));
-  assert.match(src, /DEFICIENCIES\.join/, "the list is interpolated rather than restated");
+  assert.match(src, /codesFor\(/, "the per-genre lists are not derived from the genre map");
   for (const d of DEFICIENCIES) {
     assert.ok(!src.includes(`"${d}"`), `${d} is typed into the prompt as a literal as well as derived`);
   }
@@ -475,20 +479,112 @@ test("EVERY CODE HAS A SEVERITY, and no severity names a code that does not exis
   assert.equal(severityOf("spelling/grammar"), "unknown", "a code outside the set was given a severity");
 });
 
-test("THE APPROVED SPLIT, pinned — and the two codes nobody ruled on stay unrated", () => {
+test("THE RULED SPLIT, pinned: every code rated, off-criterion outside the count", () => {
   /* Jared, 24 September 2026: approved as proposed, with
      missing-counterargument and unattributed-source under fundamental.
-     The proposal covered nine codes; the other two are UNRATED rather
-     than quietly assigned, and this asserts it so that assigning them
-     is a visible change rather than an edit nobody reviewed. */
-  const fundamental = ["claim-without-evidence", "unsupported-generalisation", "contradiction", "unclear-relevance", "missing-counterargument", "unattributed-source"];
-  const minor = ["repetition", "structure-unsignposted", "undefined-term"];
-  for (const c of fundamental) assert.equal(SEVERITY[c], "fundamental", `${c} is not fundamental`);
-  for (const c of minor) assert.equal(SEVERITY[c], "minor", `${c} is not minor`);
+     25 September 2026: evidence-without-claim fundamental, off-criterion
+     outside the count, and conventions added as minor. Pinned so a
+     change of severity is a visible edit rather than one in passing. */
+  const want = {
+    fundamental: ["claim-without-evidence", "contradiction", "evidence-without-claim", "missing-counterargument", "unattributed-source", "unclear-relevance", "unsupported-generalisation"],
+    minor: ["conventions", "repetition", "structure-unsignposted", "undefined-term"],
+    outside: ["off-criterion"],
+  };
+  for (const [level, codes] of Object.entries(want)) {
+    assert.deepEqual(Object.entries(SEVERITY).filter(([, v]) => v === level).map(([k]) => k).sort(), codes, `the ${level} set changed`);
+  }
+  assert.deepEqual([...SEVERITY_LEVELS], ["fundamental", "minor", "outside"], "the levels or their display order changed");
+  assert.ok(!Object.values(SEVERITY).includes("unrated"), "a code is still unrated after the ruling");
+  assert.ok(DEFICIENCIES.includes("conventions"), "mechanics points have nowhere honest to go");
+});
+
+test("POINTS ARE SHOWN FUNDAMENTAL FIRST, and the model's order survives inside a level", () => {
+  const pts = [
+    { deficiency: "repetition", n: 1 },
+    { deficiency: "off-criterion", n: 2 },
+    { deficiency: "claim-without-evidence", n: 3 },
+    { deficiency: "spelling/grammar", n: 4 },
+    { deficiency: "conventions", n: 5 },
+    { deficiency: "contradiction", n: 6 },
+  ];
+  const before = JSON.stringify(pts);
+  const got = orderBySeverity(pts).map((p) => p.n);
+  assert.deepEqual(got, [3, 6, 1, 5, 2, 4], "not fundamental, then minor, then outside, then unknown — or not stable within a level");
+  assert.equal(JSON.stringify(pts), before, "orderBySeverity mutated its input");
+  /* Control: the input really was out of order, so the sort did work. */
+  assert.notDeepEqual(pts.map((p) => p.n), got);
+});
+
+test("EVERY CODE SAYS WHICH GENRES IT FITS, and a story is never told it lacks evidence", () => {
+  assert.deepEqual(Object.keys(APPLIES_TO).sort(), [...DEFICIENCIES].sort(), "the genre map and the closed set disagree");
+  for (const [code, genres] of Object.entries(APPLIES_TO)) {
+    assert.ok(genres.length > 0, `${code} fits no genre, so it can never be used`);
+    for (const g of genres) assert.ok(GENRES.includes(g), `${code} names a genre that does not exist: ${g}`);
+  }
+  for (const c of ["claim-without-evidence", "evidence-without-claim", "unsupported-generalisation", "missing-counterargument"]) {
+    assert.ok(!fitsGenre(c, "narrative"), `${c} is allowed on a narrative, which is the defect the read found`);
+    assert.ok(fitsGenre(c, "argument"), `${c} no longer fits an argument`);
+  }
+  assert.deepEqual(codesFor("other"), [...DEFICIENCIES], "'other' should rule nothing out");
+  assert.ok(!fitsGenre("repetition", "poetry"), "an unknown genre fits something");
+  /* Control: genres really differ, or the map decides nothing. */
+  assert.notDeepEqual(codesFor("narrative"), codesFor("argument"));
+});
+
+test("THE PROMPT'S PER-GENRE CODE LIST IS DERIVED from the map, not typed", () => {
+  const sys = ARMS.constrained.system;
+  for (const g of GENRES) {
+    const line = sys.split("\n").find((l) => l.trim().startsWith(g + " ") || l.trim().startsWith(g + "\t"));
+    assert.ok(line, `the prompt has no code list for ${g}`);
+    assert.deepEqual(line.trim().slice(g.length).trim().split(/,\s*/), codesFor(g), `the prompt's ${g} list is not codesFor("${g}")`);
+  }
+  assert.doesNotMatch(sys, /\{\{/, "a placeholder was left in the shipped prompt");
+  assert.doesNotMatch(ARMS.adversarial.system, /\{\{/, "a placeholder was left in the adversarial prompt");
+  assert.match(sys, /Rule 1 applies to it/, "the no-writing rule does not cover the overall sentence");
+});
+
+test("THE SCHEMA ASKS FOR THE GENRE AND THE OVERALL READING, and orders them for generation", () => {
+  const props = essayFeedbackSchema().schema.properties;
+  assert.deepEqual(Object.keys(props), ["genre", "points", "overall"], "the generation order changed: overall must come after the points");
+  assert.deepEqual(props.genre.enum, [...GENRES]);
+  assert.deepEqual(Object.keys(props.overall.properties), ["band", "sentence"]);
+  const src = read("supabase/functions/_shared/essaySchema.js").replace(/\/\*[\s\S]*?\*\//g, " ");
+  assert.match(src, /enum: \[\.\.\.GENRES\]/, "the genre enum is written out instead of taken from GENRES");
+});
+
+test("THE §4 BAN catches prediction framing and passes §4's own proposed wording", () => {
+  for (const bad of ["You'll get a Credit for this.", "Your mark will be a 4.", "Predicted grade: B", "This guarantees a pass.", "This is what you'll score."]) {
+    assert.ok(predictionFraming(bad).length, `not caught: ${bad}`);
+  }
+  /* The control: the sentence ESSAY-FEEDBACK.md proposes must pass, or
+     the ban forbids the wording it exists to protect. */
+  assert.deepEqual(predictionFraming("Against the criteria you pasted, this reads like a Credit."), []);
+  assert.deepEqual(predictionFraming("The essay broadly meets the criteria, but its main claim has no support."), []);
+});
+
+test("measureReply: off-genre codes are counted against the model's OWN genre, and the set's genre separately", () => {
+  const reply = (genre, codes, overall = { band: "3", sentence: "It partly meets the criteria; the main claim is unsupported." }) =>
+    JSON.stringify({ genre, points: codes.map((d) => ({ quote: "q", deficiency: d, note: "n" })), overall });
+  const story = measureReply({ content: reply("narrative", ["claim-without-evidence", "repetition", "conventions"]), set: 7 });
+  assert.equal(story.failure, null);
+  assert.equal(story.offGenre.length, 1, "claim-without-evidence on a declared narrative was not counted");
+  assert.equal(story.genreMatches, true);
+  assert.equal(story.sev.fundamental, 1);
+  assert.equal(story.sev.minor, 2);
+  assert.equal(story.ordered[0].deficiency, "claim-without-evidence");
+
+  const argued = measureReply({ content: reply("argument", ["claim-without-evidence"]), set: 7 });
+  assert.equal(argued.offGenre.length, 0, "a code that fits the stated genre was counted as off-genre");
+  assert.equal(argued.genreMatches, false, "calling a set-7 story an argument was not caught");
+
+  assert.equal(measureReply({ content: reply("argument", []), set: 99 }).genreMatches, null, "an unrecorded set read as a wrong genre");
+  assert.match(measureReply({ content: JSON.stringify({ genre: "argument", points: [] }), set: 1 }).failure, /overall/);
+  assert.match(measureReply({ content: reply("poetry", []), set: 1 }).failure, /genre/);
+  assert.match(measureReply({ content: "not json", set: 1 }).failure, /parse/);
   assert.deepEqual(
-    Object.entries(SEVERITY).filter(([, v]) => v === "unrated").map(([k]) => k).sort(),
-    ["evidence-without-claim", "off-criterion"],
-    "the unrated set changed — rate a code on purpose, not in passing"
+    measureReply({ content: reply("argument", [], { band: "", sentence: "You'll get a 4." }), set: 1 }).predictionHits.length > 0,
+    true,
+    "a predicting opening sentence was not flagged"
   );
 });
 
