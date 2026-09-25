@@ -143,8 +143,11 @@ export function orderBySeverity(points = []) {
  * `other` accepts every code: when the criteria do not say, nothing
  * can be ruled out.
  *
- * PROPOSED, NOT YET RULED: which codes are argument-only is a
- * judgement, and this is the first draft of it.
+ * RULED, Jared, 25 September 2026: approved as proposed. A narrative
+ * may not be given claim-without-evidence, evidence-without-claim,
+ * unsupported-generalisation, missing-counterargument or
+ * unattributed-source, and an informative piece may not be given
+ * missing-counterargument. A test pins the narrative half.
  * --------------------------------------------------------------- */
 export const GENRES = Object.freeze(["argument", "informative", "narrative", "other"]);
 
