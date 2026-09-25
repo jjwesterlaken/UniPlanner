@@ -30,8 +30,12 @@ export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, 
      wrote, and forbidden for the two that are built server-side from a
      structured payload. "Forbidden" rather than "ignored": a field that
      is silently dropped is a field someone will one day rely on. */
-  const needsText = task === "explain" || task === "summarise";
+  const needsText = task === "explain" || task === "summarise" || task === "essay";
   const text = typeof body.text === "string" ? body.text : "";
+  /* THE CRITERIA are the essay task's second input and nobody else's.
+     Forbidden elsewhere, for the reason given above. */
+  const criteria = typeof body.criteria === "string" ? body.criteria : "";
+  if (task !== "essay" && body.criteria !== undefined) return bad("criteria are only accepted for essay");
 
   /* PHOTOGRAPHED PAGES: `summarise` and no other task, one MEDIUM per
      request (text XOR images -- a mixed request has no honest ordering
@@ -62,6 +66,28 @@ export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, 
     return { ok: true, task, text: "", images };
   }
 
+  if (task === "essay") {
+    if (!text.trim()) return bad("text is required for this task");
+    /* No criteria, no feedback: the whole reading is "against the
+       criteria you pasted" (ESSAY-FEEDBACK.md §4), and there is nothing
+       honest to say against none. */
+    if (!criteria.trim()) return bad("criteria are required for this task");
+    /* ONE CAP OVER BOTH, because the model reads both and the bill is for
+       both. The message names the total and says which part is which, so
+       the student knows whether to trim the essay or the criteria. */
+    const total = text.length + criteria.length;
+    if (total > maxInputChars.essay) {
+      return {
+        ok: false,
+        code: "too_long",
+        error:
+          `Your essay and criteria come to ${total.toLocaleString()} characters ` +
+          `(${text.length.toLocaleString()} + ${criteria.length.toLocaleString()}) and the limit is ` +
+          `${maxInputChars.essay.toLocaleString()}. Shorten one of them and try again.`,
+      };
+    }
+    return { ok: true, task, text, criteria, images: null };
+  }
   if (needsText) {
     if (!text.trim()) return bad("text is required for this task");
     if (text.length > maxInputChars[task]) {

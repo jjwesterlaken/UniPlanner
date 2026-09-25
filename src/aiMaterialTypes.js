@@ -285,6 +285,10 @@ export const MATERIAL_ROUTES = {
      Mapping it to the source is more truthful than excusing it, and it
      is why no "sends nothing" option exists above. */
   "ai-text:merge": ["pasted-reading"],
+  /* The essay and the criteria pasted beside it. One type, because the
+     criteria go only with an essay and are disclosed in the same line:
+     a type of its own would be a disclosure nobody reads separately. */
+  "ai-text:essay": ["essay-draft"],
 
   /* ---- ai-notes: one entry per adapter method ---- */
 

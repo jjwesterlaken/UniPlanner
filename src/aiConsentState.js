@@ -76,6 +76,17 @@ export const consentMirror = () => mirrored;
 export const acceptedProviders = () => (mirrored && mirrored.providers) || null;
 
 /**
+ * The consent VERSION this account accepted, for the request body.
+ *
+ * Sent for the same reason as the provider set, and checked by the
+ * server for the essay task only: v8 is the first version that disclosed
+ * essay drafts, and the provider set did not change, so the fingerprint
+ * alone cannot tell a v7 acceptance from a v8 one. From the mirror, not
+ * from this build's constant, for the reason given above.
+ */
+export const acceptedConsentVersion = () => (mirrored && Number.isInteger(mirrored.version) ? mirrored.version : null);
+
+/**
  * The refusal, or null.
  *
  * Returns an Error shaped like every other client refusal in this

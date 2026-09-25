@@ -1,5 +1,5 @@
 /* ==================================================================
-   ai-text — one endpoint, five tasks
+   ai-text — one endpoint, six tasks
 
    THE DESIGN DECISION THAT SHAPES EVERYTHING ELSE: this function reads
    no user content from the database. The client sends the text -- it
@@ -35,11 +35,16 @@ import {
   VISION_USD_PER_1M_INPUT,
   VISION_USD_PER_1M_OUTPUT,
   MEASURED_PHOTO_BATCH_INPUT_TOKENS,
+  SUMMARY_MODEL,
+  ESSAY_MODEL,
+  ESSAY_USD_PER_1M_INPUT,
+  ESSAY_USD_PER_1M_OUTPUT,
+  modelFor,
 } from "../_shared/model.ts";
 
 export const SUMMARY_PROVIDER = "openai";
 
-export const TASKS = ["practice", "explain", "weakspots", "summarise", "merge"] as const;
+export const TASKS = ["practice", "explain", "weakspots", "summarise", "merge", "essay"] as const;
 export type Task = (typeof TASKS)[number];
 
 /* ---------- output ceilings, one justification each ----------
@@ -74,6 +79,18 @@ export const MAX_TOKENS: Record<Task, number> = {
   /* One summary out of several. Same output shape as `summarise`, so
      the same ceiling -- the input is bigger and the output is not. */
   merge: 2000,
+
+  /* Essay feedback, on a REASONING model: gpt-5.6-luna's reasoning
+     tokens count against this ceiling, so it is set from measurement,
+     not from the shape of the JSON. 36 ASAP runs cost at most $0.00455,
+     which at the smallest input any run could have had bounds the
+     output at ~3,460 tokens; 4,000 is that plus ~16%. RULED, Jared, 25
+     September 2026, with the price it implies (TASK_CREDITS.essay = 9).
+     ESSAY-FEEDBACK.md §2 has the derivation and the options not taken.
+     Measured on essays of 350-650 words where a university essay runs
+     to 3,000, so a truncation here is the first thing to look at when
+     the real traffic starts. */
+  essay: 4000,
 };
 
 /* ---------- input caps ----------
@@ -93,6 +110,12 @@ export const MAX_INPUT_CHARS: Record<Task, number> = {
      leaves room for a verbose one without leaving room for a second
      reading's worth. */
   merge: 12_000,
+  /* The essay AND the criteria, together, because the model reads both
+     and the bill is for both. 3,000 words (~18,300 characters) plus
+     ~5,700 of criteria. Never chunked: a marker reads the whole essay,
+     and feedback on four quarters cannot say whether the argument holds
+     together. Over it, refuse naming the overage. ESSAY-FEEDBACK.md §2. */
+  essay: 24_000,
 };
 
 /* ---------- photographed pages ----------
@@ -211,14 +234,52 @@ export const WEAKSPOTS_MAX_TOPICS = 40;
    means one minute of recorded lecture, which is a quantity a student
    already has an intuition for, so it can be said out loud. */
 
+/* AT THE RATES OF THE MODEL THE TASK REALLY USES. Every task used to be
+   priced at SUMMARY_MODEL's rates because every text task ran on it.
+   Essay runs on ESSAY_MODEL, so the rate is looked up from `modelFor`,
+   the same function the adapter asks. A task that moves model re-prices
+   itself; a model with no rate here refuses to load rather than being
+   priced as something it is not. */
+const RATES: Record<string, { in: number; out: number }> = {
+  [SUMMARY_MODEL]: { in: USD_PER_1M_INPUT, out: USD_PER_1M_OUTPUT },
+  [ESSAY_MODEL]: { in: ESSAY_USD_PER_1M_INPUT, out: ESSAY_USD_PER_1M_OUTPUT },
+};
+export const ratesForTask = (task: Task) => {
+  const model = modelFor({ hasImages: false, task });
+  const rates = RATES[model];
+  if (!rates) throw new Error(`no published rate for ${model}, which ${task} would run on`);
+  return rates;
+};
+
 /** What one call of `task` costs us, at its own input and output caps. */
 export const usdForTask = (task: Task) =>
-  (MAX_INPUT_CHARS[task] / CHARS_PER_TOKEN) * (USD_PER_1M_INPUT / 1_000_000) +
-  MAX_TOKENS[task] * (USD_PER_1M_OUTPUT / 1_000_000);
+  (MAX_INPUT_CHARS[task] / CHARS_PER_TOKEN) * (ratesForTask(task).in / 1_000_000) +
+  MAX_TOKENS[task] * (ratesForTask(task).out / 1_000_000);
 
 export const TASK_CREDITS: Record<Task, number> = Object.fromEntries(
   TASKS.map((task) => [task, creditsFor(usdForTask(task))])
 ) as Record<Task, number>;
+
+/* ---------- essay feedback: the two things that must be true first ----------
+
+   THE NO-WRITING THRESHOLDS ARE NOT SET, and until they are the
+   endpoint refuses the essay task before it reads the allowance, so a
+   refusal costs nothing. They have no defaults anywhere, on purpose
+   (noWriting.js): the window a run of new prose is refused at, and the
+   shortest quote that locates anything, are to be read off
+   scripts/measure-no-writing.mjs on real Luna output, not guessed. The
+   #133 run could not size them (its adversarial arm had almost no
+   rewrites in it) and the #142 control is synthetic. Setting these four
+   numbers is what turns the feature on. */
+export const ESSAY_NO_WRITING: { window: number; matchUnit: number; minQuoteWords: number; maxNoteWords: number } | null = null;
+
+/* The first consent version that disclosed essay drafts. The server
+   checks it for the essay task only, because the essay is the only
+   material v8 added: a client that accepted v7 has not agreed to send
+   one. Other tasks do not look at it, so no older build is refused for
+   anything it could already do. A test derives this from the material
+   ledger rather than trusting the number. */
+export const ESSAY_MIN_CONSENT_VERSION = 8;
 
 /* ---------- the photo batch price, DERIVED FROM A MEASUREMENT ----------
 
