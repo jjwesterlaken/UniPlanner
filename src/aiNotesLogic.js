@@ -129,7 +129,23 @@ import {
  */
 export const AUDIO_DELETION_PROMISE = "deleted the moment it's transcribed";
 
-export const AI_CONSENT_VERSION = 7;
+/* v8, 25 September 2026: essay drafts (ESSAY-FEEDBACK.md §1). The
+   provider set is unchanged, so the fingerprint does not move and this
+   number does all the work; the material ledger in aiMaterialTypes.js
+   is what forced it. Every student who accepted v7 is re-asked once,
+   which is correct: they have not agreed to send an essay. */
+export const AI_CONSENT_VERSION = 8;
+
+/* THE ESSAY LINE, DRAFTED FOR GRACE and shipped as the draft (Jared, 25
+   September 2026). It says two things and both are load-bearing: the
+   essay goes AS WRITTEN, identifiers included, and we do not remove
+   them. That is ESSAY-FEEDBACK.md §1's honest mitigation: a prompt on
+   the screen rather than a filter in the code, because a filter that
+   removes "some" names is a promise we cannot keep. Its own constant so
+   a rewording is one edit and test-legal.mjs can hold the policy to the
+   same claim. */
+export const ESSAY_CONSENT_LINE =
+  "An essay you paste in for feedback is sent exactly as you wrote it, including your name, student ID and anything else in it. We don't remove anything for you, so take out what you'd rather not send before you paste it.";
 
 export const CONSENT_TEXT = {
   title: "Before you use the AI features",
@@ -147,6 +163,7 @@ export const CONSENT_TEXT = {
     `Your recording is ${AUDIO_DELETION_PROMISE}. Neither we nor ${transcriptionProviderNames().join(" nor ")} keep it.`,
     `Transcripts and notes stay on our server in Sydney for ${RESULT_RETENTION_DAYS} days so you can recover them if something goes wrong — ${FAILED_RESULT_RETENTION_DAYS} days if the job didn't finish, so nothing you paid for is lost. Anything you save into your planner is yours until you delete it.`,
     "Text and photos you supply aren't stored — not in your planner, not on our server. Only the result is, and only if you save it.",
+    ESSAY_CONSENT_LINE,
     "AI output can be wrong. It's there to help you revise, not to replace your own work.",
     "Recording a lecture is your responsibility. Many universities require the lecturer's consent, and recording without permission can be unlawful in some states.",
   ],

@@ -361,7 +361,7 @@ criteria in one call, which covers 3,000 words with ~5,700 characters of
 criteria, or ~3,600 words with a short rubric. Over it, refuse naming
 the overage, the existing rule.
 
-### The credit cost, derived — ON LUNA, and it is NOT 3 any more
+### The credit cost, derived — ON LUNA: 9 credits at a 4,000-token ceiling (RULED)
 
 **The 3-credit figure below the line was derived for gpt-4o-mini at a
 2,000-token output ceiling, and both halves have moved.** Gate A chose
@@ -394,16 +394,21 @@ out ceiling   ceiling cost   credits   headroom over the ~3,460 bound
    4,500        $0.00654       10        ~30%
 ```
 
-**It does not land in the 5–7 band that was set as the price.** 7 credits
+**It did not land in the 5–7 band that was set as the price.** 7 credits
 needs a ceiling below the measured maximum, and a reply cut off at the
-ceiling is still billed, because the tokens were generated. The honest
-reading is **9 credits at a 4,000-token ceiling**, and that is still
-priced off ASAP essays of 350–650 words, where a university essay runs to
-3,000. Its verbatim support spans and its points both grow with length,
-so if anything the ceiling needs more headroom, not less. **AWAITING A
-RULING:** 9 at 4,000, 8 at 3,500 with almost no headroom, or a lower
-reasoning effort re-measured, which is a different configuration and
-needs its own agreement number before it can be priced.
+ceiling is still billed, because the tokens were generated. And the
+measurement is on ASAP essays of 350–650 words, where a university essay
+runs to 3,000; its verbatim support spans and its points both grow with
+length, so if anything the ceiling needs more headroom, not less.
+
+**RULED, Jared, 25 September 2026: 9 credits, at `MAX_TOKENS.essay =
+4,000` and `MAX_INPUT_CHARS.essay = 24,000`.** `TASK_CREDITS.essay` is
+derived from those two ceilings at `ESSAY_USD_PER_1M_*` like every other
+task's, and a test pins it at 9, so a ceiling or a rate that moves turns
+the price red rather than drifting it. The two alternatives that were
+not taken: 8 at 3,500 (about 1% headroom over the bound), and a lower
+reasoning effort, which is a different configuration needing its own
+agreement number before it could be priced.
 
 What the MEAN run costs, for scale: $0.00342, **5 credits**. Pricing at
 the mean charges an average student the average, and loses money on
@@ -634,7 +639,7 @@ Recommendation: **`TEXT_TIERS` unchanged — free, ai, ai_max.**
 The existing reasoning applies with more force here than anywhere:
 
 - On gpt-4o-mini at 3 credits a run, the trial bought **20 essays**. On
-  Luna at the 9 credits awaiting a ruling (§2) it buys **6**. That is a
+  Luna at the ruled 9 credits (§2) it buys **6**. That is a
   demonstration rather than a semester, which is what the trial is for,
   and the argument for every tier stands.
 - It costs about **2 cents** per free account that uses the whole trial
@@ -656,7 +661,7 @@ transcription minutes where this costs a fifth of a cent.
 | **1** | The consent-version guard (§0, item C1) | **Independent. Land first, whatever happens to this feature.** |
 | **2** | The no-writing constraint, measured on real output (§3) | Decides whether the feature is defensible at all |
 | **3** | Consent v8 + policy (§1) | Must precede any deploy that can send an essay |
-| **4** | The endpoint task + caps (§2) | on `gpt-5.6-luna`: 24,000 in, output ceiling and credits awaiting a ruling (§2) |
+| **4** | The endpoint task + caps (§2) | on `gpt-5.6-luna`: 24,000 in, 4,000 out, 9 credits (ruled) |
 | **5** | The panel on the assessment row (§5) | Grace's, for layout and wording |
 | **6** | The mark-comparison loop (§"THE MARK COMPARISON") | Migration 0023 WIDENS, so it is applied before the client that reads it |
 
