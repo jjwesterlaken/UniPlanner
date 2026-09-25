@@ -678,7 +678,7 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
            { quote: "across several decades", deficiency: "repetition", note: "Said twice." },
            { quote: "changed who could hold an argument", deficiency: "claim-without-evidence", note: "The claim is asserted, not shown." },
            { quote: "how and why that happened", deficiency: "unsupported-generalisation", note: "Too broad for what follows." },
-         ] }, overall: { bandsConsidered: ["1","2","3","4","5","6"].map((band) => ({ band, fit: band === "3" ? "fits" : "partly" })),
+         ] }, overall: { bandCount: 6, bandsConsidered: ["1","2","3","4","5","6"].map((band) => ({ band, descriptor: "Persuasive", fit: Number(band) <= 3 ? "meets" : "does-not-meet" })),
            band: "3", sentence: "OVERALL-SENTINEL: it partly meets the criteria; its central claim is never supported." } }) } }] }) };
        };\n`
     );
@@ -723,8 +723,13 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     assert.match(md, /read as a prediction[^:]*: 0\./, "the prediction count is missing or non-zero");
     /* 1 of 3 essays in each set is middle, and the reply always picks 3 of 1-6, which places middle. */
     assert.match(md, /agrees with the human band: 2 of 6\./, "the agreement count is missing or wrong");
-    assert.match(md, /coded as unsupported while the model's own support list is not empty: 0\./, "the thesis count is missing or wrong");
-    assert.match(md, /not found verbatim in the essay: 0\./, "the verbatim count is missing or wrong");
+    assert.match(md, /Points removed by the thesis rule: 0\./, "the thesis-rule count is missing or wrong");
+    assert.match(md, /not in the essay even with placeholders set aside: 0\./, "the fabrication count is missing or wrong");
+    assert.match(md, /differed only by a dropped placeholder: 0\*\*/, "the placeholder-only count is missing");
+    assert.match(md, /HIGHEST one the model itself marked `meets`: 2 of 6\./, "the derived-band agreement is missing or wrong");
+    assert.match(md, /chosen band differed from it on 0 essay/, "the chosen-vs-derived count is missing or wrong");
+    assert.match(md, /shorter than the band count the model itself stated: 0; shorter than the rubric's/, "the band-completeness counts are missing");
+    assert.match(md, /descriptors not found in the criteria: 0\./, "the descriptor check is missing or wrong");
 
     /* 2b. THE OPENING READING COMES FIRST, AND THE POINTS FUNDAMENTAL FIRST. */
     const first = md.slice(md.indexOf("## 1. Set"));

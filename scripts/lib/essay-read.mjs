@@ -15,16 +15,30 @@
    chosen band sits is read off the model's OWN list of the rubric's
    bands, so no scale is assumed here. */
 
-import { SEVERITY_LEVELS, severityOf, orderBySeverity, fitsGenre, GENRES, predictionFraming } from "../../src/essayPoints.js";
+import { SEVERITY_LEVELS, severityOf, orderBySeverity, fitsGenre, GENRES, predictionFraming, applyThesisRule, onMainIdea as pointOnMainIdea, highestMet } from "../../src/essayPoints.js";
 import { normaliseWords } from "../../src/noWriting.js";
-import { SET_GENRES, bandOf } from "./asap-corpus.mjs";
+import { SET_GENRES, SET_BAND_COUNTS, bandOf } from "./asap-corpus.mjs";
 
 const joined = (text) => ` ${normaliseWords(text).join(" ")} `;
 
-/** Is `span` a verbatim run of `essay`, after the same normalisation a quote gets? */
-export const isVerbatim = (span, essay) => {
+/* ASAP's placeholders, as asap-corpus.mjs writes them: [name 2],
+   [proper noun 1], [place]. The model often drops them when it copies
+   a sentence, and the second read counted 10 non-verbatim spans of
+   which most were exactly that: the sentence minus its placeholders.
+   That is not the model writing anything, so both sides lose their
+   placeholders before comparing. */
+const PLACEHOLDER = /\[[a-z]+(?: [a-z]+)?(?: \d+)?\]/gi;
+export const withoutPlaceholders = (text) => String(text || "").replace(PLACEHOLDER, " ");
+
+/** Is `span` a verbatim run of `text`, after quote normalisation and with placeholders removed from both? */
+export const isVerbatim = (span, text) => {
+  const s = joined(withoutPlaceholders(span));
+  return s.trim().length > 0 && joined(withoutPlaceholders(text)).includes(s);
+};
+/** The strict form, placeholders kept: what the first count used. */
+const isVerbatimStrict = (span, text) => {
   const s = joined(span);
-  return s.trim().length > 0 && joined(essay).includes(s);
+  return s.trim().length > 0 && joined(text).includes(s);
 };
 
 const firstNumber = (text) => {
@@ -56,20 +70,12 @@ export function placeBand({ band, bandsConsidered }) {
   return { index: i, of: list.length, position, band: bandOf(position) };
 }
 
-/* A point on the main idea itself: its quote and the main idea contain
-   one another once normalised. Loose on purpose, since the quote is
-   usually a clause of the thesis sentence. */
-const onMainIdea = (quote, mainIdea) => {
-  const q = joined(quote).trim();
-  const m = joined(mainIdea).trim();
-  return q.length > 0 && m.length > 0 && (m.includes(q) || q.includes(m));
-};
 const UNSUPPORTED = new Set(["claim-without-evidence", "unsupported-generalisation"]);
 
 /**
  * @param {{ content: string, set: number, essay?: string, humanBand?: string }} args
  */
-export function measureReply({ content, set, essay = "", humanBand = null }) {
+export function measureReply({ content, set, essay = "", criteria = "", humanBand = null }) {
   const empty = () => ({ ...Object.fromEntries(SEVERITY_LEVELS.map((l) => [l, 0])), unknown: 0 });
   const nothing = (failure) => ({
     failure,
@@ -79,9 +85,17 @@ export function measureReply({ content, set, essay = "", humanBand = null }) {
     offGenre: [],
     predictionHits: [],
     notVerbatim: [],
+    placeholderOnly: [],
     thesisFlagged: [],
+    thesisDropped: [],
     placed: null,
     agrees: null,
+    derivedBand: "",
+    derivedPlaced: null,
+    derivedAgrees: null,
+    bandsShort: false,
+    bandsBelowKnown: false,
+    descriptorsInvented: [],
   });
 
   let parsed;
@@ -98,11 +112,14 @@ export function measureReply({ content, set, essay = "", humanBand = null }) {
   if (!GENRES.includes(r.genre)) return nothing(`no recognised genre (${JSON.stringify(r.genre)})`);
   if (typeof r.mainIdea !== "string" || !Array.isArray(r.support)) return nothing("no mainIdea or support");
   const o = parsed.overall;
-  if (!o || typeof o.band !== "string" || typeof o.sentence !== "string" || !Array.isArray(o.bandsConsidered)) {
+  if (!o || typeof o.band !== "string" || typeof o.sentence !== "string" || !Array.isArray(o.bandsConsidered) || !Number.isInteger(o.bandCount)) {
     return nothing("no overall reading");
   }
 
-  const points = r.points;
+  /* THE THESIS RULE RUNS FIRST, exactly as the endpoint will run it, and
+     everything below is measured on what a student would be shown. The
+     dropped points are kept so the sheet can count and show them. */
+  const { kept: points, dropped: thesisDropped } = applyThesisRule(r);
   const sev = empty();
   for (const p of points) sev[severityOf(p && p.deficiency)] += 1;
 
@@ -112,6 +129,9 @@ export function measureReply({ content, set, essay = "", humanBand = null }) {
      own words, which is the no-writing risk in a new field. */
   const spans = [...(r.mainIdea ? [r.mainIdea] : []), ...r.support];
   const placed = placeBand({ band: o.band, bandsConsidered: o.bandsConsidered });
+  const derivedBand = highestMet(o.bandsConsidered);
+  const derivedPlaced = placeBand({ band: derivedBand, bandsConsidered: o.bandsConsidered });
+  const known = Object.prototype.hasOwnProperty.call(SET_BAND_COUNTS, set) ? SET_BAND_COUNTS[set] : null;
 
   return {
     failure: null,
@@ -122,14 +142,35 @@ export function measureReply({ content, set, essay = "", humanBand = null }) {
     genreMatches: expectedGenre === null ? null : r.genre === expectedGenre,
     mainIdea: r.mainIdea,
     support: r.support,
+    /* TRUE fabrications: not in the essay even with placeholders set
+       aside. `placeholderOnly` is the rest of the old count, spans that
+       differ from the essay by nothing but a dropped placeholder. */
     notVerbatim: essay ? spans.filter((x) => !isVerbatim(x, essay)) : [],
+    placeholderOnly: essay ? spans.filter((x) => isVerbatim(x, essay) && !isVerbatimStrict(x, essay)) : [],
     /* The 11/12 essay's defect, counted: the main idea coded as
        unsupported while the model's own support list is not empty. */
+    thesisDropped,
+    /* After the rule this is zero by construction; it stays as the check
+       that the rule and the count agree about what "on the main idea"
+       means. */
     thesisFlagged:
-      r.support.length > 0 ? points.filter((p) => UNSUPPORTED.has(p && p.deficiency) && onMainIdea(p.quote, r.mainIdea)) : [],
-    overall: { band: o.band, sentence: o.sentence, bandsConsidered: o.bandsConsidered },
+      r.support.length > 0 ? points.filter((p) => UNSUPPORTED.has(p && p.deficiency) && pointOnMainIdea(p, r.mainIdea)) : [],
+    overall: { band: o.band, sentence: o.sentence, bandsConsidered: o.bandsConsidered, bandCount: o.bandCount },
     placed,
     agrees: placed && humanBand ? placed.band === humanBand : null,
+    /* The band the model's OWN fits imply: the highest one it marked
+       meets. When this differs from the band it chose, the model did not
+       follow its own reading, and that is counted. */
+    derivedBand,
+    derivedPlaced,
+    derivedAgrees: derivedPlaced && humanBand ? derivedPlaced.band === humanBand : null,
+    chosenMatchesDerived: derivedBand ? derivedBand === o.band : null,
+    /* ONE ENTRY PER BAND, checked two ways, since strict mode cannot
+       require a length: against the count the model itself stated, and
+       against the set's known count where we have one. */
+    bandsShort: o.bandsConsidered.length < o.bandCount,
+    bandsBelowKnown: known !== null && o.bandsConsidered.length < known,
+    descriptorsInvented: criteria ? o.bandsConsidered.filter((b) => !isVerbatim(b && b.descriptor, criteria)) : [],
     ordered: orderBySeverity(points),
     count: points.length,
     /* What a student would read as faults: everything but `outside`. */

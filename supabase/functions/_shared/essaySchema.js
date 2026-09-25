@@ -62,6 +62,28 @@ export const DEFICIENCIES = Object.freeze([
   "off-criterion",
 ]);
 
+/* WHAT EACH CODE MEANS, one line each, and the prompt is built from
+   these. The prompt used to list the codes and define none, so the
+   rules it did spell out (all about argument) became the de-facto
+   definition of "a problem", and on the second calibration read minor
+   codes vanished from the high band altogether (0 minor points across
+   four strong essays). A code with no definition is a code the model
+   has to guess at. A test asserts every code has one. */
+export const CODE_DEFINITIONS = Object.freeze({
+  "claim-without-evidence": "a claim that nothing anywhere in the essay supports, by the criteria's own idea of support",
+  "evidence-without-claim": "evidence, an example or a quotation that is not tied to any point the essay makes",
+  "undefined-term": "a key term the reader needs explained that the essay never explains",
+  "unclear-relevance": "a passage whose bearing on the essay's main idea or the task is not made clear",
+  "unsupported-generalisation": "a sweeping statement (all, always, everyone) that goes further than the essay's support",
+  contradiction: "two parts of the essay that say incompatible things",
+  "missing-counterargument": "an obvious objection the criteria expect the essay to address, left unaddressed",
+  "unattributed-source": "a fact, figure or idea taken from somewhere else with no indication of where",
+  repetition: "the same point, phrase or word repeated without adding anything",
+  "structure-unsignposted": "a move between ideas or paragraphs the reader is not guided through",
+  conventions: "spelling, grammar, punctuation or sentence construction that gets in the way of the reader",
+  "off-criterion": "a criterion the essay does not engage with at all",
+});
+
 /* ---------------------------------------------------------------
  * SEVERITY — a FIXED MAP OF OURS, never assigned by the model.
  *
@@ -203,9 +225,75 @@ export const PREDICTION_PATTERNS = Object.freeze([
 export const predictionFraming = (text = "") =>
   PREDICTION_PATTERNS.filter((re) => re.test(String(text))).map((re) => re.source);
 
-/* How well the essay fits one band's descriptor. A closed set so the
-   read can find "the band it fits best" without parsing prose. */
-export const BAND_FITS = Object.freeze(["fits", "partly", "does-not-fit"]);
+/* ---------------------------------------------------------------
+ * THE THESIS RULE, ENFORCED IN CODE, because the prose rule did not
+ * hold: three of twelve essays on the second read still had their main
+ * idea coded `claim-without-evidence` or `unsupported-generalisation`
+ * while the model's OWN support list was not empty. A thesis is
+ * supported by the essay that follows it, so such a point is removed
+ * after the reply arrives, and the removal is returned rather than
+ * hidden, so the read can count it and step 4 can log it.
+ *
+ * "On the main idea" means the point's quote and the main idea contain
+ * one another once normalised: narrow on purpose, so only a point that
+ * is really about the thesis sentence is removed.
+ *
+ * `wordsForMatch` MIRRORS `normaliseWords` in src/noWriting.js. This
+ * file is deployed with the Edge Functions and cannot import from
+ * src/, so the mirror is allowed and a test asserts the two agree on a
+ * battery, the equality-as-guard rule.
+ * --------------------------------------------------------------- */
+export function wordsForMatch(text) {
+  return String(text || "")
+    .replace(/[\u2018\u2019\u201B\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201F\u2033]/g, '"')
+    .replace(/[\u2010-\u2015]/g, "-")
+    .toLowerCase()
+    .replace(/[^a-z0-9'\-\s]/g, " ")
+    .replace(/(^|\s)[-']+|[-']+(?=\s|$)/g, "$1")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+const phrase = (text) => wordsForMatch(text).join(" ");
+const UNSUPPORTED_CODES = Object.freeze(["claim-without-evidence", "unsupported-generalisation"]);
+
+/** Is this point a "not supported" point about the main idea itself? */
+export function onMainIdea(point, mainIdea) {
+  const q = phrase(point && point.quote);
+  const m = phrase(mainIdea);
+  return q.length > 0 && m.length > 0 && (m.includes(q) || q.includes(m));
+}
+
+/**
+ * Remove every unsupported-claim point on the main idea when the
+ * support list is not empty. Returns both halves; never mutates.
+ */
+export function applyThesisRule({ mainIdea = "", support = [], points = [] }) {
+  if (!Array.isArray(support) || support.length === 0) return { kept: [...points], dropped: [] };
+  const kept = [];
+  const dropped = [];
+  for (const p of points) {
+    (UNSUPPORTED_CODES.includes(p && p.deficiency) && onMainIdea(p, mainIdea) ? dropped : kept).push(p);
+  }
+  return { kept, dropped };
+}
+
+/* Whether the essay MEETS a band's descriptor. "Meets", not "fits": the
+   second read was calibrated at the bottom and one band low at the top
+   (all four high-band essays read "Score Point 3"). The model was
+   choosing the lowest band it did not fail. The band is now the HIGHEST
+   one marked `meets`, which the read derives in code and compares with
+   the band the model chose. */
+export const BAND_FITS = Object.freeze(["meets", "partly", "does-not-meet"]);
+
+/** The highest band in a lowest-first list marked `meets`, or "" if none. */
+export function highestMet(bandsConsidered = []) {
+  for (let i = bandsConsidered.length - 1; i >= 0; i--) {
+    if (bandsConsidered[i] && bandsConsidered[i].fit === "meets") return bandsConsidered[i].band;
+  }
+  return "";
+}
 
 /* ---------------------------------------------------------------
  * THE STRICT SCHEMA.
@@ -275,10 +363,19 @@ export function essayFeedbackSchema() {
     schema: closed({
       reading: { anyOf: GENRES.map(readingFor) },
       overall: closed({
+        /* STRICT MODE CANNOT REQUIRE A LENGTH (no minItems), so
+           "one entry per band" is made checkable instead: the model
+           states how many bands the criteria define BEFORE listing them,
+           and each entry quotes its descriptor from the criteria. The
+           read counts lists shorter than the stated count, lists shorter
+           than a set's known count, and descriptors not found in the
+           criteria. */
+        bandCount: { type: "integer" },
         bandsConsidered: {
           type: "array",
           items: closed({
             band: { type: "string" },
+            descriptor: { type: "string" },
             fit: { type: "string", enum: [...BAND_FITS] },
           }),
         },

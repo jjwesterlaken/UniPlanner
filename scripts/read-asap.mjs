@@ -238,7 +238,7 @@ for (const [i, row] of chosen.entries()) {
      flattering sample of our own output. */
   const m = error
     ? measureReply({ content: "", set: row.set })
-    : measureReply({ content: json?.choices?.[0]?.message?.content ?? "", set: row.set, essay: row.essay, humanBand: row.band });
+    : measureReply({ content: json?.choices?.[0]?.message?.content ?? "", set: row.set, essay: row.essay, criteria: corpus.rubricFor.get(row.set), humanBand: row.band });
   if (error) m.failure = error;
   out.push({ row, ...m });
 }
@@ -269,7 +269,16 @@ const predictionTotal = ok.filter((m) => m.predictionHits.length).length;
 const placedOk = ok.filter((m) => m.placed);
 const agreeing = placedOk.filter((m) => m.agrees).length;
 const thesisTotal = ok.reduce((a, m) => a + m.thesisFlagged.length, 0);
+const droppedTotal = ok.reduce((a, m) => a + m.thesisDropped.length, 0);
 const notVerbatimTotal = ok.reduce((a, m) => a + m.notVerbatim.length, 0);
+const placeholderOnlyTotal = ok.reduce((a, m) => a + m.placeholderOnly.length, 0);
+const derivedOk = ok.filter((m) => m.derivedPlaced);
+const derivedAgreeing = derivedOk.filter((m) => m.derivedAgrees).length;
+const chosenOff = ok.filter((m) => m.chosenMatchesDerived === false).length;
+const bandsShort = ok.filter((m) => m.bandsShort).length;
+const bandsBelowKnown = ok.filter((m) => m.bandsBelowKnown).length;
+const knownSets = ok.filter((m) => [1, 2].includes(m.row.set)).length;
+const descriptorsInvented = ok.reduce((a, m) => a + m.descriptorsInvented.length, 0);
 
 const sheet = [
   "# ASAP read — does the feedback point at anything a marker cares about?",
@@ -328,13 +337,21 @@ const sheet = [
   "read was about 2 of 12. Essays whose pick could not be placed in the list are left out of the",
   `count: ${ok.length - placedOk.length} this run.`,
   "",
+  `**Agreement if the band is the HIGHEST one the model itself marked \`meets\`: ${derivedAgreeing} of ${derivedOk.length}.**`,
+  `The prompt asks for exactly that band. **The chosen band differed from it on ${chosenOff} essay(s)**, which`,
+  "is the model not following its own reading of the descriptors.",
+  "",
+  "**Did it weigh every band?** Strict mode cannot require a list length, so this is counted:",
+  `lists shorter than the band count the model itself stated: ${bandsShort}; shorter than the rubric's`,
+  `six score points on sets 1 and 2: ${bandsBelowKnown} of ${knownSets}; descriptors not found in the criteria: ${descriptorsInvented}.`,
+  "",
   "**Checks on the instructions, each counted rather than judged:**",
   "",
   `- **Genre read from the criteria:** ${genreRight} of ${genreKnown.length} essays got the genre their ASAP set really asks for (sets 1 and 2 argument, 7 and 8 narrative).`,
   `- **Codes that do not fit the genre the model itself stated: ${offGenreTotal}.** Each genre's codes are now an enum in the schema, so this is zero by construction. A non-zero means the schema did not reach the model.`,
   `- **Opening sentences that read as a prediction (the ESSAY-FEEDBACK.md §4 ban): ${predictionTotal}.** It should be zero.`,
-  `- **Main idea coded as unsupported while the model's own support list is not empty: ${thesisTotal}.** The 11/12 essay's defect. It should be zero.`,
-  `- **Main-idea or support spans not found verbatim in the essay: ${notVerbatimTotal}.** These fields are copied, never written; each one here is wording the model made up.`,
+  `- **Points removed by the thesis rule: ${droppedTotal}.** An unsupported-claim point on the main idea, while the model's own support list is not empty, is now removed in code rather than asked against in prose; the last read had 3. Each removal is shown under its essay. (Left after the rule: ${thesisTotal}, which is zero by construction.)`,
+  `- **Spans not in the essay even with placeholders set aside: ${notVerbatimTotal}.** These are the likely fabrications: main-idea or support text the model wrote rather than copied. **Spans that differed only by a dropped placeholder: ${placeholderOnlyTotal}**, which is copying, not writing.`,
   "",
   "## The sheet — fill this in as you read",
   "",
@@ -404,12 +421,16 @@ for (const [i, m] of measured.entries()) {
     sheet.push(`> **Opening reading** · reads like: ${m.overall.band ? `**${m.overall.band}**` : "_(no band)_"}`);
     sheet.push(`> ${m.overall.sentence || "_(no sentence)_"}`);
     if (m.overall.bandsConsidered.length) {
-      sheet.push(`> Bands weighed: ${m.overall.bandsConsidered.map((b) => `${b.band} _(${b.fit})_`).join(" · ")}`);
+      sheet.push(`> Bands weighed (${m.overall.bandsConsidered.length} of a stated ${m.overall.bandCount}): ${m.overall.bandsConsidered.map((b) => `${b.band} _(${b.fit})_`).join(" · ")}`);
     }
+    if (m.chosenMatchesDerived === false) sheet.push(`> ⚠ chose **${m.overall.band}**, but the highest band it marked meets is **${m.derivedBand}**`);
     if (m.predictionHits.length) sheet.push(`> ⚠ trips the §4 prediction ban: ${m.predictionHits.join(", ")}`);
     sheet.push("");
     sheet.push(`Main idea: \`${String(m.mainIdea || "(none)").replace(/`/g, "'")}\` · ${m.support.length} supporting span(s)`);
     for (const x of m.notVerbatim) sheet.push(`- ⚠ **not in the essay:** \`${String(x).replace(/`/g, "'")}\``);
+    for (const p of m.thesisDropped) {
+      sheet.push(`- ✂ **removed by the thesis rule:** ${p.deficiency} on \`${String(p.quote || "").replace(/`/g, "'")}\` (${p.note || ""})`);
+    }
     sheet.push("");
     if (!m.count) {
       sheet.push("**No points at all.** The model read the essay and raised nothing — worth noting on the sheet.");

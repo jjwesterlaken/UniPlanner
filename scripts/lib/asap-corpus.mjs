@@ -32,6 +32,13 @@ export const DEFAULT_SETS = [1, 2, 7, 8];
    reported as unknown rather than guessed. */
 export const SET_GENRES = Object.freeze({ 1: "argument", 2: "argument", 7: "narrative", 8: "narrative" });
 
+/* HOW MANY SCORE POINTS EACH SET'S RUBRIC DEFINES, where known: sets 1
+   and 2 are scored on score points 1 to 6. Set 8's rubric is scored by
+   trait and is not declared, so the read reports it as unknown rather
+   than asserting a count. This checks the model listed every band
+   rather than two or three of them. */
+export const SET_BAND_COUNTS = Object.freeze({ 1: 6, 2: 6 });
+
 /* @CAPS1, @PERSON2, @LOCATION1, @NUM1, @ORGANIZATION1, @DATE1 … the
    whole family, including the bare forms. One pattern rather than a
    list, because a list is a restatement of somebody else's scheme. */
