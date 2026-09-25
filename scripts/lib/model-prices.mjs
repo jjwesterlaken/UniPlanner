@@ -51,6 +51,8 @@ export async function loadPricing({ usdIn = null, usdOut = null } = {}) {
     ["credits.ts USD_PER_CREDIT", credits.USD_PER_CREDIT],
     ["model.ts VISION_USD_PER_1M_INPUT", models.VISION_USD_PER_1M_INPUT],
     ["model.ts VISION_USD_PER_1M_OUTPUT", models.VISION_USD_PER_1M_OUTPUT],
+    ["model.ts ESSAY_USD_PER_1M_INPUT", models.ESSAY_USD_PER_1M_INPUT],
+    ["model.ts ESSAY_USD_PER_1M_OUTPUT", models.ESSAY_USD_PER_1M_OUTPUT],
   ]) {
     if (!Number.isFinite(v)) throw new Error(`${name} is missing or not a number; refusing to price anything`);
   }
@@ -59,6 +61,7 @@ export async function loadPricing({ usdIn = null, usdOut = null } = {}) {
   const table = {
     [models.SUMMARY_MODEL]: { in: credits.USD_PER_1M_INPUT, out: credits.USD_PER_1M_OUTPUT, source: "credits.ts" },
     [models.VISION_MODEL]: { in: models.VISION_USD_PER_1M_INPUT, out: models.VISION_USD_PER_1M_OUTPUT, source: "model.ts" },
+    [models.ESSAY_MODEL]: { in: models.ESSAY_USD_PER_1M_INPUT, out: models.ESSAY_USD_PER_1M_OUTPUT, source: "model.ts (rates read off OpenAI's page by Jared, 25 Sep 2026)" },
   };
   const overridden = Number.isFinite(usdIn) && Number.isFinite(usdOut);
 
@@ -67,6 +70,7 @@ export async function loadPricing({ usdIn = null, usdOut = null } = {}) {
     charsPerToken: credits.CHARS_PER_TOKEN,
     creditsFor: credits.creditsFor,
     shippedModel: models.SUMMARY_MODEL,
+    essayModel: models.ESSAY_MODEL,
     /** The rate for a model, or null if nobody has supplied one. */
     priceFor(model) {
       if (overridden) return { in: usdIn, out: usdOut, source: "--usd-in/--usd-out" };

@@ -57,7 +57,7 @@
    Options:
      --essay <file>     required: a real essay, the longer the better
      --rubric <file>    required: the criteria it was marked against
-     --model <id>       default is the shipped SUMMARY_MODEL
+     --model <id>       default is the shipped essay model, modelFor({ task: "essay" })
      --runs <n>         default 3. MORE THAN ONE ON PURPOSE — see below
      --redact           print NUMBERS ONLY. No model output, no quoted
                         spans, no novel-run text, and none of it in the
@@ -214,7 +214,7 @@ const { build: buildRequestMessages, source: promptSource } = resolveEssayMessag
    being deliberate about: essay feedback is text-only and paste-only,
    so this is the call site that changes if that ever stops being
    true. */
-const model = opt("--model") || (await productionModel({ hasImages: false }));
+const model = opt("--model") || (await productionModel({ hasImages: false, task: "essay" }));
 
 /* ---------- the control source ----------
 

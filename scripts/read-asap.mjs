@@ -49,7 +49,7 @@
      --n <count>      how many essays       (default 6)
      --sets <list>    default 1,2,7,8       (source-dependent sets excluded)
      --seed <n>       default 1, so the same essays come back
-     --model <id>     default is the shipped SUMMARY_MODEL. A MEASUREMENT OVERRIDE ONLY: it
+     --model <id>     default is the shipped essay model. A MEASUREMENT OVERRIDE ONLY: it
                       changes what this script calls and nothing else. The feature's
                       model is modelFor() in _shared/model.ts, and nothing here writes it.
      --usd-in <n>     the provider's price per 1M input tokens, for a model the
@@ -93,7 +93,7 @@ const dir = opt("--dir");
 const n = Number(opt("--n", "6"));
 const seed = Number(opt("--seed", "1"));
 const sets = (opt("--sets", DEFAULT_SETS.join(","))).split(",").map((x) => Number(x.trim()));
-const shipped = await productionModel({ hasImages: false });
+const shipped = await productionModel({ hasImages: false, task: "essay" });
 const model = opt("--model") || shipped;
 const maxTokens = Number(opt("--max-tokens", model.startsWith("gpt-5") ? "8000" : "2000"));
 const num = (x) => (x === null ? null : Number(x));
@@ -323,6 +323,7 @@ const highUniformlyLow = highOk.length > 0 && highOk.every((m) => m.placed.band 
 /* COST, measured. Mean and max over the calls that reported usage. */
 const used = measured.filter((m) => m.usage);
 const meanOf = (f) => (used.length ? used.reduce((a, m) => a + f(m), 0) / used.length : null);
+const maxOf = (f) => (used.length ? Math.max(...used.map(f)) : null);
 const meanIn = meanOf((m) => m.usage.prompt_tokens || 0);
 const meanOut = meanOf((m) => m.usage.completion_tokens || 0);
 const meanReason = meanOf((m) => m.usage.completion_tokens_details?.reasoning_tokens || 0);
@@ -416,7 +417,10 @@ const sheet = [
   "| per essay | input tokens | output tokens | of which reasoning | USD | credits |",
   "|---|---|---|---|---|---|",
   `| mean | ${meanIn === null ? "—" : Math.round(meanIn)} | ${meanOut === null ? "—" : Math.round(meanOut)} | ${meanReason === null ? "—" : Math.round(meanReason)} | ${meanUsd === null ? "—" : meanUsd.toFixed(5)} | ${meanUsd === null ? "—" : pricing.creditsFor(meanUsd)} |`,
-  `| max | | | | ${maxUsd === null ? "—" : maxUsd.toFixed(5)} | ${maxUsd === null ? "—" : pricing.creditsFor(maxUsd)} |`,
+  /* THE TOKEN MAXIMUM, not only the USD one. The first comparison
+     printed max USD alone, so the output ceiling had to be BOUNDED from
+     it rather than read, and the ceiling is what sets the price. */
+  `| max | ${maxOf((m) => m.usage.prompt_tokens || 0) ?? "—"} | ${maxOf((m) => m.usage.completion_tokens || 0) ?? "—"} | ${maxOf((m) => m.usage.completion_tokens_details?.reasoning_tokens || 0) ?? "—"} | ${maxUsd === null ? "—" : maxUsd.toFixed(5)} | ${maxUsd === null ? "—" : pricing.creditsFor(maxUsd)} |`,
   "",
   `Credits use credits.ts's own \`creditsFor\` at $${pricing.usdPerCredit.toFixed(6)} a credit. This is the MEASURED cost of`,
   "these essays, not the price: the product prices an action from its ceilings, so a re-derived",

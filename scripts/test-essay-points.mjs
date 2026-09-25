@@ -26,6 +26,17 @@ import {
 import { normaliseWords } from "../src/noWriting.js";
 import { measureReply, placeBand, isVerbatim } from "./lib/essay-read.mjs";
 import { ARMS, userMessage, PLACEHOLDER_NOTE } from "./lib/essay-arms.mjs";
+import { ESSAY_SYSTEM_PROMPT, essayUserMessage } from "../supabase/functions/_shared/essayPrompt.js";
+import { productionModel } from "./lib/production-model.mjs";
+
+/* Resolved once, up front, through the real model.ts: the runner below
+   is synchronous on purpose and refuses a promise. */
+const RESOLVED = {
+  essay: await productionModel({ hasImages: false, task: "essay" }),
+  text: await productionModel({ hasImages: false }),
+  photos: await productionModel({ hasImages: true }),
+  summarise: await productionModel({ hasImages: false, task: "summarise" }),
+};
 import { SCOPE_CONTROL, scopeControl } from "./lib/two-arm-summary.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -194,11 +205,37 @@ test("THE ENUM IS DERIVED INTO BOTH PROMPTS, never retyped", () => {
       assert.ok(arm.system.includes(d), `${arm.id} does not offer ${d}`);
     }
   }
-  const src = strip(read("scripts/lib/essay-arms.mjs"));
-  assert.match(src, /codesFor\(/, "the per-genre lists are not derived from the genre map");
-  for (const d of DEFICIENCIES) {
-    assert.ok(!src.includes(`"${d}"`), `${d} is typed into the prompt as a literal as well as derived`);
+  /* The prompt lives in _shared/essayPrompt.js now; both files are
+     swept, so a list typed into either is caught. */
+  const prompt = strip(read("supabase/functions/_shared/essayPrompt.js"));
+  assert.match(prompt, /codesFor\(/, "the per-genre lists are not derived from the genre map");
+  for (const f of ["supabase/functions/_shared/essayPrompt.js", "scripts/lib/essay-arms.mjs"]) {
+    const src = strip(read(f));
+    for (const d of DEFICIENCIES) {
+      assert.ok(!src.includes(`"${d}"`), `${d} is typed into ${f} as a literal as well as derived`);
+    }
   }
+});
+
+test("THE HARNESS MEASURES THE PROMPT THAT SHIPS: the constrained arm IS the endpoint's prompt", () => {
+  /* Gate A chose a model on this exact text. A copy in the harness
+     would let the endpoint send something nobody measured. */
+  assert.equal(ARMS.constrained.system, ESSAY_SYSTEM_PROMPT, "the harness measures a different prompt from the one the endpoint sends");
+  assert.ok(ESSAY_SYSTEM_PROMPT.length > 5000, "the shipped prompt is nearly empty, so the identity says little");
+  const arms = strip(read("scripts/lib/essay-arms.mjs"));
+  assert.doesNotMatch(arms, /WHAT COUNTS AS SUPPORT|bandsConsidered/, "the prompt's text is written out in the harness again");
+  /* The ghostwriting note is harness-only and must never ship. */
+  assert.doesNotMatch(read("supabase/functions/_shared/essayPrompt.js"), /IMPROVED WORDING/, "the adversarial instruction reached the deployed folder");
+  /* And the user message the harness sends to a real student's essay is the shipped one. */
+  assert.equal(userMessage({ essay: "E", criteria: "C" }), essayUserMessage({ essay: "E", criteria: "C" }));
+});
+
+test("THE ESSAY TASK GETS gpt-5.6-luna, AND NOTHING ELSE MOVES", () => {
+  assert.equal(RESOLVED.essay, "gpt-5.6-luna");
+  /* Control: every other request resolves exactly as before. */
+  assert.equal(RESOLVED.text, "gpt-4o-mini", "text moved with the essay");
+  assert.equal(RESOLVED.photos, "gpt-5.4-mini", "photos moved with the essay");
+  assert.equal(RESOLVED.summarise, "gpt-4o-mini");
 });
 
 test("the user message carries the criteria AND the essay, labelled", () => {

@@ -458,13 +458,16 @@ test("--model IS A MEASUREMENT OVERRIDE: it says so, prices from the repository,
   const out = path.join(os.tmpdir(), `asap-read-model-${Date.now()}.md`);
   const shipped = runReader(["--dir", dir, "--out", out, "--sets", "1", "--dry-run"]);
   assert.equal(shipped.code, 0, shipped.out);
-  assert.match(shipped.out, /\(the shipped model\)/);
-  assert.match(shipped.out, /from credits\.ts/, "the shipped model is not priced from credits.ts");
-  assert.match(shipped.out, /ceiling\s+2000 output tokens/);
+  assert.match(shipped.out, /model\s+gpt-5\.6-luna\s+\(the shipped model\)/, "the read's default is not the essay task's model");
+  assert.match(shipped.out, /from model\.ts/, "the essay model is not priced from model.ts");
+
+  const old = runReader(["--dir", dir, "--out", out, "--sets", "1", "--model", "gpt-4o-mini", "--dry-run"]);
+  assert.match(old.out, /from credits\.ts/, "gpt-4o-mini is not priced from credits.ts");
+  assert.match(old.out, /ceiling\s+2000 output tokens/, "a non-reasoning model got the reasoning ceiling");
 
   const mini = runReader(["--dir", dir, "--out", out, "--sets", "1", "--model", "gpt-5.4-mini", "--dry-run"]);
   assert.equal(mini.code, 0, mini.out);
-  assert.match(mini.out, /MEASUREMENT OVERRIDE; the shipped model is gpt-4o-mini/, "an override does not say it is one");
+  assert.match(mini.out, /MEASUREMENT OVERRIDE; the shipped model is gpt-5\.6-luna/, "an override does not say it is one");
   assert.match(mini.out, /from model\.ts/, "gpt-5.4-mini is not priced from model.ts");
   /* THE NUMBERS, not only the label. Read out of model.ts by bundling it
      here, independently of model-prices.mjs, so this compares the
@@ -772,8 +775,10 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     assert.match(md, /Ties for the top rating: 0\. Ratings outside 1-10: 0\./, "the tie and range counts are missing");
     /* THE COST TABLE, from the stub's usage. */
     assert.match(md, /## What this run cost, measured/, "the cost section is missing");
-    assert.match(md, /\| mean \| 1000 \| 500 \| 0 \| 0\.00045 \| 1 \|/, "the measured cost is missing or not priced from credits.ts");
+    /* 1000 in, 500 out at the essay model's rates in model.ts. */
+    assert.match(md, /\| mean \| 1000 \| 500 \| 0 \| 0\.00080 \| 1 \|/, "the measured cost is missing or not priced at the essay model's rates");
     assert.match(md, /replies cut off at it: 0/);
+    assert.match(md, /\| max \| 1000 \| 500 \| 0 \| 0\.00080 \| 1 \|/, "the token maximum is not printed, so a ceiling would have to be guessed again");
     assert.match(md, /shorter than the band count the model itself stated: 0; shorter than the rubric's/, "the band-completeness counts are missing");
     assert.match(md, /descriptors not found in the criteria: 0\./, "the descriptor check is missing or wrong");
 

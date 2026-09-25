@@ -492,7 +492,9 @@ test("NO MEASUREMENT SCRIPT CARRIES A MODEL ID OF ITS OWN", () => {
 test("BOTH SCRIPTS ASK THE SAME QUESTION, and neither reads a constant by name", () => {
   for (const f of ["scripts/measure-two-arm.mjs", "scripts/measure-no-writing.mjs"]) {
     const code = read(f).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
-    assert.match(code, /productionModel\(\{\s*hasImages:\s*false\s*\}\)/, `${f} does not resolve the model through the shared helper`);
+    /* The ESSAY task's model: essay is chosen by task (model.ts), so a
+       harness asking only about the medium would measure summarise's. */
+    assert.match(code, /productionModel\(\{\s*hasImages:\s*false,\s*task:\s*"essay"\s*\}\)/, `${f} does not resolve the essay model through the shared helper`);
     assert.doesNotMatch(code, /SUMMARY_MODEL/, `${f} reads a constant by name again — which constant applies is the question`);
     /* The override stays: naming a model deliberately is how you A/B
        one. What may not exist is a DEFAULT nobody chose. */
