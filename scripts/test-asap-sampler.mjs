@@ -21,6 +21,8 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 import { docxToText, zipEntries } from "./lib/docx-text.mjs";
 import { MIN_ESSAY_WORDS, selectForRead, scoreRanges, normaliseScore, bandOf, bandAvailability, DECLARED_SCORE_RANGES, placeholderAnon, stripAnon, PLACEHOLDER_LABELS } from "./lib/asap-corpus.mjs";
 import { PLACEHOLDER_NOTE } from "./lib/essay-arms.mjs";
@@ -451,6 +453,45 @@ test("the fence resolves `..`, so it cannot be walked around", () => {
   }
 });
 
+test("--model IS A MEASUREMENT OVERRIDE: it says so, prices from the repository, and never guesses a price", () => {
+  const dir = fixture();
+  const out = path.join(os.tmpdir(), `asap-read-model-${Date.now()}.md`);
+  const shipped = runReader(["--dir", dir, "--out", out, "--sets", "1", "--dry-run"]);
+  assert.equal(shipped.code, 0, shipped.out);
+  assert.match(shipped.out, /\(the shipped model\)/);
+  assert.match(shipped.out, /from credits\.ts/, "the shipped model is not priced from credits.ts");
+  assert.match(shipped.out, /ceiling\s+2000 output tokens/);
+
+  const mini = runReader(["--dir", dir, "--out", out, "--sets", "1", "--model", "gpt-5.4-mini", "--dry-run"]);
+  assert.equal(mini.code, 0, mini.out);
+  assert.match(mini.out, /MEASUREMENT OVERRIDE; the shipped model is gpt-4o-mini/, "an override does not say it is one");
+  assert.match(mini.out, /from model\.ts/, "gpt-5.4-mini is not priced from model.ts");
+  /* THE NUMBERS, not only the label. Read out of model.ts by bundling it
+     here, independently of model-prices.mjs, so this compares the
+     script's output against the module and not against itself. */
+  const { buildSync } = require("esbuild");
+  const bundled = buildSync({ entryPoints: [path.join(rootDir, "supabase/functions/_shared/model.ts")], bundle: true, format: "cjs", platform: "neutral", write: false }).outputFiles[0].text;
+  const mod = { exports: {} };
+  new Function("module", "exports", bundled)(mod, mod.exports);
+  const { VISION_USD_PER_1M_INPUT: vin, VISION_USD_PER_1M_OUTPUT: vout, VISION_MODEL } = mod.exports;
+  assert.equal(VISION_MODEL, "gpt-5.4-mini", "this test assumes the vision model is the one being compared; recheck it");
+  assert.ok(mini.out.includes(`$${vin} / $${vout} per 1M`), `gpt-5.4-mini's printed rate is not model.ts's $${vin} / $${vout}`);
+  assert.match(mini.out, /ceiling\s+8000 output tokens/, "a reasoning model got the ceiling it would spend before answering");
+  assert.match(mini.out, /at most \$\d/, "no cost estimate before spending");
+
+  const unpriced = runReader(["--dir", dir, "--out", out, "--sets", "1", "--model", "some-unpriced-model", "--dry-run"]);
+  assert.match(unpriced.out, /price\s+UNKNOWN/, "an unpriced model was given a price");
+  assert.match(unpriced.out, /\(price unknown\)/);
+  const passed = runReader(["--dir", dir, "--out", out, "--sets", "1", "--model", "some-unpriced-model", "--usd-in", "2", "--usd-out", "8", "--dry-run"]);
+  assert.match(passed.out, /\$2 \/ \$8 per 1M in \/ out, from --usd-in\/--usd-out/);
+
+  /* AND IT CANNOT MOVE THE SHIPPED PATH: the script writes one file, the
+     sheet, and names nothing under supabase/ as a write target. */
+  const src = strip(read("scripts/read-asap.mjs"));
+  const writes = [...src.matchAll(/fs\.(writeFileSync|appendFileSync|renameSync|copyFileSync)\(([^,]+)/g)].map((m) => m[2].trim());
+  assert.deepEqual(writes, ["outPath"], `read-asap writes somewhere other than the sheet: ${writes.join(", ")}`);
+});
+
 test("AND IT ACCEPTS A PATH OUTSIDE — the control, or the fence could be refusing everything", () => {
   const dir = fixture();
   const out = path.join(os.tmpdir(), `asap-read-control-${Date.now()}.md`);
@@ -671,14 +712,14 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
       `import fs from "node:fs";
        globalThis.fetch = async (_url, init) => {
          fs.appendFileSync(${JSON.stringify(bodies)}, init.body + "\\n");
-         return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ reading: { genre: "argument",
+         return { ok: true, json: async () => ({ usage: { prompt_tokens: 1000, completion_tokens: 500 }, choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ reading: { genre: "argument",
            mainIdea: "across several decades of European history",
            support: ["The printing press changed who could hold an argument in public"],
            points: [
            { quote: "across several decades", deficiency: "repetition", note: "Said twice." },
            { quote: "changed who could hold an argument", deficiency: "claim-without-evidence", note: "The claim is asserted, not shown." },
            { quote: "how and why that happened", deficiency: "unsupported-generalisation", note: "Too broad for what follows." },
-         ] }, overall: { bandCount: 6, bandsConsidered: ["1","2","3","4","5","6"].map((band) => ({ band, descriptor: "Persuasive", fit: Number(band) <= 3 ? "meets" : "does-not-meet" })),
+         ] }, overall: { bandCount: 6, bandsConsidered: ["1","2","3","4","5","6"].map((band) => ({ band, descriptor: "Persuasive", rating: band === "3" ? 8 : 4 })),
            band: "3", sentence: "OVERALL-SENTINEL: it partly meets the criteria; its central claim is never supported." } }) } }] }) };
        };\n`
     );
@@ -722,12 +763,17 @@ test("THE SHEET IS RENDERED END TO END — the numbers, both questions, and the 
     assert.match(md, /Codes that do not fit the genre the model itself stated: 0\./, "the off-genre count is missing or wrong");
     assert.match(md, /read as a prediction[^:]*: 0\./, "the prediction count is missing or non-zero");
     /* 1 of 3 essays in each set is middle, and the reply always picks 3 of 1-6, which places middle. */
-    assert.match(md, /agrees with the human band: 2 of 6\./, "the agreement count is missing or wrong");
+
     assert.match(md, /Points removed by the thesis rule: 0\./, "the thesis-rule count is missing or wrong");
     assert.match(md, /not in the essay even with placeholders set aside: 0\./, "the fabrication count is missing or wrong");
     assert.match(md, /differed only by a dropped placeholder: 0\*\*/, "the placeholder-only count is missing");
-    assert.match(md, /HIGHEST one the model itself marked `meets`: 2 of 6\./, "the derived-band agreement is missing or wrong");
-    assert.match(md, /chosen band differed from it on 0 essay/, "the chosen-vs-derived count is missing or wrong");
+    assert.match(md, /Best-fit reading agrees with the human band: 2 of 6\./, "the best-fit agreement is missing or wrong");
+    assert.match(md, /differed from its own best-rated\s+band on 0 essay/, "the named-vs-pick count is missing or wrong");
+    assert.match(md, /Ties for the top rating: 0\. Ratings outside 1-10: 0\./, "the tie and range counts are missing");
+    /* THE COST TABLE, from the stub's usage. */
+    assert.match(md, /## What this run cost, measured/, "the cost section is missing");
+    assert.match(md, /\| mean \| 1000 \| 500 \| 0 \| 0\.00045 \| 1 \|/, "the measured cost is missing or not priced from credits.ts");
+    assert.match(md, /replies cut off at it: 0/);
     assert.match(md, /shorter than the band count the model itself stated: 0; shorter than the rubric's/, "the band-completeness counts are missing");
     assert.match(md, /descriptors not found in the criteria: 0\./, "the descriptor check is missing or wrong");
 

@@ -12,7 +12,7 @@
    structure inside it; two arms with identical shape and one
    deliberate difference is the control this needed. */
 
-import { GENRES, codesFor, DEFICIENCIES, CODE_DEFINITIONS } from "../../src/essayPoints.js";
+import { GENRES, codesFor, DEFICIENCIES, CODE_DEFINITIONS, BAND_RATING_MIN, BAND_RATING_MAX } from "../../src/essayPoints.js";
 
 /* THE CODE LIST PER GENRE IS DERIVED from APPLIES_TO, so the prompt
    and the count on the read sheet cannot disagree about which codes a
@@ -30,7 +30,7 @@ const SHARED = `You are reading a university student's own draft essay against t
 Return JSON in exactly the order below, and do the work in that order: each step depends on the one before it.
 
 { "reading": { "genre", "mainIdea", "support", "points": [ { "quote", "deficiency", "note" } ] },
-  "overall": { "bandCount", "bandsConsidered": [ { "band", "descriptor", "fit" } ], "band", "sentence" } }
+  "overall": { "bandCount", "bandsConsidered": [ { "band", "descriptor", "rating" } ], "band", "sentence" } }
 
 WHAT COUNTS AS SUPPORT is whatever the criteria say counts. If they ask for reasons, examples or
 details, then reasons, examples and details ARE support. If they ask for sources or citations, sources
@@ -67,13 +67,14 @@ overall
   bandsConsidered  ALL of them: exactly bandCount entries, LOWEST FIRST, none skipped. For each:
     band             its name, exactly as the criteria name it;
     descriptor       a short phrase copied VERBATIM from the criteria's description of that band;
-    fit              meets, partly or does-not-meet: whether the essay AS A WHOLE does what that
-                     descriptor describes. A descriptor describes a typical essay at that level, not a
-                     flawless one, so an essay can meet a band and still have problems. Read every
-                     descriptor before judging any.
-  band        The HIGHEST band marked meets, named exactly as the criteria name it. Choose the highest
-              band the essay meets, not the lowest band it does not fail. An empty string if the
-              criteria define no bands. Never a scale, mark or percentage of your own.
+    rating           ${BAND_RATING_MIN} to ${BAND_RATING_MAX}: how well that band's descriptor DESCRIBES this essay as a
+                     whole. A descriptor describes a typical essay at that level, not a flawless one, so
+                     rate RESEMBLANCE: an essay with a few problems can still be described very well by
+                     a high band's descriptor. Read every descriptor before rating any, and rate each
+                     band against the essay, not against the other bands.
+  band        The band whose descriptor describes the essay BEST, that is the highest rating, named
+              exactly as the criteria name it. An empty string if the criteria define no bands. Never
+              a scale, mark or percentage of your own.
   sentence    One sentence, in the criteria's own terms, saying whether the essay broadly meets the
               criteria and naming its most serious problem. If the problems are fundamental, say so
               plainly; if they are small, say that. It describes the essay against the criteria;

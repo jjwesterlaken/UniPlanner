@@ -20,8 +20,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   DEFICIENCIES, measurePoint, refusePoint, quoteVariety, SEVERITY, SEVERITY_LEVELS, severityOf, essayFeedbackSchema,
-  orderBySeverity, GENRES, APPLIES_TO, fitsGenre, codesFor, predictionFraming, BAND_FITS,
-  highestMet, CODE_DEFINITIONS, applyThesisRule, wordsForMatch,
+  orderBySeverity, GENRES, APPLIES_TO, fitsGenre, codesFor, predictionFraming, BAND_RATING_MIN, BAND_RATING_MAX,
+  bestFit, CODE_DEFINITIONS, applyThesisRule, wordsForMatch,
 } from "../src/essayPoints.js";
 import { normaliseWords } from "../src/noWriting.js";
 import { measureReply, placeBand, isVerbatim } from "./lib/essay-read.mjs";
@@ -591,9 +591,10 @@ test("THE SCHEMA'S ORDER IS THE ORDER OF THE WORK: genre, the argument, the poin
     assert.deepEqual(Object.keys(b.properties), ["genre", "mainIdea", "support", "points"], "the argument must be found before any sentence is judged");
   }
   assert.deepEqual(Object.keys(root.overall.properties), ["bandCount", "bandsConsidered", "band", "sentence"], "every band must be counted and weighed before one is chosen");
-  assert.deepEqual(Object.keys(root.overall.properties.bandsConsidered.items.properties), ["band", "descriptor", "fit"], "each band must quote its descriptor before it is judged");
+  assert.deepEqual(Object.keys(root.overall.properties.bandsConsidered.items.properties), ["band", "descriptor", "rating"], "each band must quote its descriptor before it is rated");
   assert.equal(root.overall.properties.bandCount.type, "integer");
-  assert.deepEqual(root.overall.properties.bandsConsidered.items.properties.fit.enum, [...BAND_FITS]);
+  assert.equal(root.overall.properties.bandsConsidered.items.properties.rating.type, "integer", "bands are no longer rated");
+  assert.ok(!("fit" in root.overall.properties.bandsConsidered.items.properties), "the threshold field is back beside the rating");
 });
 
 test("THE PROMPT ASKS FOR NO NUMBER OF POINTS, and reads the argument before the sentence", () => {
@@ -602,10 +603,11 @@ test("THE PROMPT ASKS FOR NO NUMBER OF POINTS, and reads the argument before the
   assert.match(sys, /NO expected number of points/, "the prompt does not say a strong essay may warrant one or two");
   assert.match(sys, /Do not raise a point for each criterion/);
   assert.match(sys, /only if NOTHING anywhere in the essay supports it/, "unsupported is judged sentence by sentence again");
-  assert.match(sys, /Read every\s+descriptor before judging any/, "the bands are not all weighed first");
+  assert.match(sys, /Read every\s+descriptor before rating any/, "the bands are not all weighed first");
   assert.match(sys, /exactly bandCount entries, LOWEST FIRST, none skipped/, "the prompt no longer asks for every band");
-  assert.match(sys, /The HIGHEST band marked meets/, "the band is no longer the highest one met");
-  assert.match(sys, /not the lowest band it does not fail/);
+  assert.match(sys, /describes the essay BEST/, "the band is no longer the best fit");
+  assert.match(sys, /rate RESEMBLANCE/, "the rating is no longer about resemblance");
+  assert.doesNotMatch(sys, /\bmeets, partly\b|marked meets/, "the threshold wording is back");
   assert.match(sys, /WHAT COUNTS AS SUPPORT is whatever the criteria say counts/, "support is not defined from the criteria");
   assert.match(sys, /A claim followed by a reason or example is not\s+claim-without-evidence/);
   assert.match(sys, /Minor does not mean optional/, "the prompt no longer says minor problems are raised on strong essays");
@@ -634,15 +636,20 @@ test("THE §4 BAN catches prediction framing and passes §4's own proposed wordi
 
 const RE_ESSAY = "Computers help people. They let families talk every week. They help students learn at their own pace. Some say they make people lazy, but many use them to plan sport.";
 const replyOf = ({ genre = "argument", codes = [], quotes = [], mainIdea = "Computers help people.", support = ["They let families talk every week."],
-  bands = ["1", "2", "3", "4", "5", "6"], band = "5", met = null, bandCount = null, descriptor = () => "Score Point",
+  bands = ["1", "2", "3", "4", "5", "6"], band = "5", best = null, bandCount = null, descriptor = () => "Score Point", rating = null,
   sentence = "It broadly meets the criteria; the counter-argument is thin." } = {}) =>
   JSON.stringify({
     reading: { genre, mainIdea, support, points: codes.map((d, i) => ({ quote: quotes[i] || "q", deficiency: d, note: "n" })) },
     overall: {
       bandCount: bandCount ?? bands.length,
-      /* By default every band up to the chosen one is met, so the chosen
-         band IS the highest met; `met` overrides that to test a mismatch. */
-      bandsConsidered: bands.map((b, i) => ({ band: b, descriptor: descriptor(b), fit: i <= (met ?? bands.indexOf(band)) ? "meets" : "does-not-meet" })),
+      /* By default the ratings peak at the named band, so the best fit IS
+         the named band; `best` moves the peak to test a mismatch, and
+         `rating` replaces the whole function. */
+      bandsConsidered: bands.map((b, i) => ({
+        band: b,
+        descriptor: descriptor(b),
+        rating: rating ? rating(i) : Math.max(1, 9 - 2 * Math.abs(i - (best ?? bands.indexOf(band)))),
+      })),
       band,
       sentence,
     },
@@ -731,16 +738,31 @@ test("THE BAND IS PLACED IN THE MODEL'S OWN LIST, and agreement is against the h
   assert.equal(measureReply({ content: replyOf({ band: "", bands: [], bandCount: 0 }), set: 1, essay: RE_ESSAY, humanBand: "low" }).agrees, null, "no bands read as disagreement");
 });
 
-test("THE HIGHEST BAND MET is derived from the model's own fits, and a chosen band that ignores them is counted", () => {
-  assert.equal(highestMet([{ band: "1", fit: "meets" }, { band: "2", fit: "meets" }, { band: "3", fit: "partly" }]), "2");
-  assert.equal(highestMet([{ band: "1", fit: "partly" }]), "", "a band that was not met was derived");
-  /* The second read's top-band defect: it met 5, chose 3. */
-  const harsh = measureReply({ content: replyOf({ band: "3", met: 4 }), set: 1, essay: RE_ESSAY, humanBand: "high" });
-  assert.equal(harsh.derivedBand, "5");
-  assert.equal(harsh.chosenMatchesDerived, false);
-  assert.equal(harsh.agrees, false);
-  assert.equal(harsh.derivedAgrees, true, "the derived band was not compared with the human band");
-  assert.equal(measureReply({ content: replyOf({ band: "5" }), set: 1, essay: RE_ESSAY }).chosenMatchesDerived, true);
+test("THE PICK IS THE BEST-RATED BAND, made in code, and a named band that ignores the ratings is counted", () => {
+  const b = (ratings) => ratings.map((rating, i) => ({ band: String(i + 1), rating }));
+  assert.deepEqual(bestFit(b([2, 5, 8, 4])), { band: "3", rating: 8, tied: ["3"] });
+  /* TIES: the model's own named band breaks them when it is one of them... */
+  assert.equal(bestFit(b([2, 8, 8, 8]), "4").band, "4");
+  /* ...otherwise the middle of the tie, which leans neither up nor down. */
+  assert.equal(bestFit(b([2, 8, 8, 8]), "1").band, "3");
+  assert.deepEqual(bestFit(b([2, 8, 8, 8])).tied, ["2", "3", "4"]);
+  assert.deepEqual(bestFit([]), { band: "", rating: null, tied: [] });
+  /* The top-band defect three rounds running: it rates 5 best and names 3. */
+  const harsh = measureReply({ content: replyOf({ band: "3", best: 4 }), set: 1, essay: RE_ESSAY, humanBand: "high" });
+  assert.equal(harsh.pick, "5", "the pick followed the named band rather than the ratings");
+  assert.equal(harsh.agrees, true, "agreement is not measured on the best-fit pick");
+  assert.equal(harsh.namedAgrees, false);
+  assert.equal(harsh.namedMatchesPick, false);
+  assert.equal(measureReply({ content: replyOf({ band: "5" }), set: 1, essay: RE_ESSAY }).namedMatchesPick, true);
+  const tie = measureReply({ content: replyOf({ band: "", rating: () => 7 }), set: 1, essay: RE_ESSAY });
+  assert.equal(tie.pickTied.length, 6, "an all-way tie was not reported");
+});
+
+test("A RATING OUTSIDE THE RANGE is counted, not trusted", () => {
+  const bad = measureReply({ content: replyOf({ rating: (i) => (i === 0 ? 0 : i === 1 ? 11 : 5) }), set: 1, essay: RE_ESSAY });
+  assert.equal(bad.ratingsOutOfRange.length, 2);
+  assert.equal(measureReply({ content: replyOf(), set: 1, essay: RE_ESSAY }).ratingsOutOfRange.length, 0, "control: in-range ratings were flagged");
+  assert.deepEqual([BAND_RATING_MIN, BAND_RATING_MAX], [1, 10]);
 });
 
 test("EVERY BAND WEIGHED is checked against the stated count, the set's known count, and the criteria's own words", () => {

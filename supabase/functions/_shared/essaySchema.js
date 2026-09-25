@@ -279,20 +279,36 @@ export function applyThesisRule({ mainIdea = "", support = [], points = [] }) {
   return { kept, dropped };
 }
 
-/* Whether the essay MEETS a band's descriptor. "Meets", not "fits": the
-   second read was calibrated at the bottom and one band low at the top
-   (all four high-band essays read "Score Point 3"). The model was
-   choosing the lowest band it did not fail. The band is now the HIGHEST
-   one marked `meets`, which the read derives in code and compares with
-   the band the model chose. */
-export const BAND_FITS = Object.freeze(["meets", "partly", "does-not-meet"]);
+/* BEST FIT, NOT A THRESHOLD. Two rounds of threshold wording failed at
+   the top. "Fits" read every strong essay one band low, and "meets"
+   engaged on 3 of 18 essays, because the model read "meets" as
+   "flawless" and so marked almost nothing met. So each band's
+   descriptor is RATED for how well it describes the essay, and the
+   band is the one it describes best: resemblance, not a pass mark.
+   The pick is made HERE, in code, from the model's ratings. The model
+   still names a band, and the read counts when the two differ.
 
-/** The highest band in a lowest-first list marked `meets`, or "" if none. */
-export function highestMet(bandsConsidered = []) {
-  for (let i = bandsConsidered.length - 1; i >= 0; i--) {
-    if (bandsConsidered[i] && bandsConsidered[i].fit === "meets") return bandsConsidered[i].band;
-  }
-  return "";
+   The range is not enforced by the schema (strict mode's numeric
+   bounds are not relied on here), so a rating outside it is counted
+   by the read rather than trusted. */
+export const BAND_RATING_MIN = 1;
+export const BAND_RATING_MAX = 10;
+
+/**
+ * The best-fitting band from a lowest-first list of rated bands.
+ * TIES are returned, not broken silently: `tied` lists every band that
+ * shares the top rating. The pick among a tie is the model's own named
+ * band when it is one of them (its tie-break, not ours), otherwise the
+ * middle of the tie, which leans neither up nor down.
+ * @returns {{ band: string, rating: number|null, tied: string[] }}
+ */
+export function bestFit(bandsConsidered = [], named = "") {
+  const rated = bandsConsidered.filter((b) => b && Number.isFinite(b.rating));
+  if (!rated.length) return { band: "", rating: null, tied: [] };
+  const top = Math.max(...rated.map((b) => b.rating));
+  const tied = rated.filter((b) => b.rating === top).map((b) => b.band);
+  const band = tied.includes(named) ? named : tied[Math.floor((tied.length - 1) / 2)];
+  return { band, rating: top, tied };
 }
 
 /* ---------------------------------------------------------------
@@ -324,7 +340,8 @@ export function highestMet(bandsConsidered = []) {
  *      argument-level property;
  *   3. the points;
  *   4. bandsConsidered, EVERY band the criteria define, lowest first,
- *      each with its fit, before the one band is chosen. The read's
+ *      each RATED for how well its descriptor describes the essay,
+ *      before the one band is named. The best fit is picked in code. The read's
  *      opening reading said "Score Point 2" for 10 of 12 essays,
  *      including three the human raters scored 9, 10 and 11 of 12;
  *   5. band and sentence, last, summarising what came before.
@@ -376,7 +393,7 @@ export function essayFeedbackSchema() {
           items: closed({
             band: { type: "string" },
             descriptor: { type: "string" },
-            fit: { type: "string", enum: [...BAND_FITS] },
+            rating: { type: "integer" },
           }),
         },
         band: { type: "string" },

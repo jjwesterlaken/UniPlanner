@@ -15,7 +15,7 @@
    chosen band sits is read off the model's OWN list of the rubric's
    bands, so no scale is assumed here. */
 
-import { SEVERITY_LEVELS, severityOf, orderBySeverity, fitsGenre, GENRES, predictionFraming, applyThesisRule, onMainIdea as pointOnMainIdea, highestMet } from "../../src/essayPoints.js";
+import { SEVERITY_LEVELS, severityOf, orderBySeverity, fitsGenre, GENRES, predictionFraming, applyThesisRule, onMainIdea as pointOnMainIdea, bestFit, BAND_RATING_MIN, BAND_RATING_MAX } from "../../src/essayPoints.js";
 import { normaliseWords } from "../../src/noWriting.js";
 import { SET_GENRES, SET_BAND_COUNTS, bandOf } from "./asap-corpus.mjs";
 
@@ -90,9 +90,12 @@ export function measureReply({ content, set, essay = "", criteria = "", humanBan
     thesisDropped: [],
     placed: null,
     agrees: null,
-    derivedBand: "",
-    derivedPlaced: null,
-    derivedAgrees: null,
+    pick: "",
+    pickTied: [],
+    namedPlaced: null,
+    namedAgrees: null,
+    namedMatchesPick: null,
+    ratingsOutOfRange: [],
     bandsShort: false,
     bandsBelowKnown: false,
     descriptorsInvented: [],
@@ -128,9 +131,12 @@ export function measureReply({ content, set, essay = "", criteria = "", humanBan
      text the model wrote, in a field the student would read as their
      own words, which is the no-writing risk in a new field. */
   const spans = [...(r.mainIdea ? [r.mainIdea] : []), ...r.support];
-  const placed = placeBand({ band: o.band, bandsConsidered: o.bandsConsidered });
-  const derivedBand = highestMet(o.bandsConsidered);
-  const derivedPlaced = placeBand({ band: derivedBand, bandsConsidered: o.bandsConsidered });
+  /* THE PICK IS THE BEST FIT, made here from the model's ratings. The
+     band the model NAMED is kept as a second reading, and the two are
+     compared. */
+  const fit = bestFit(o.bandsConsidered, o.band);
+  const placed = placeBand({ band: fit.band, bandsConsidered: o.bandsConsidered });
+  const namedPlaced = placeBand({ band: o.band, bandsConsidered: o.bandsConsidered });
   const known = Object.prototype.hasOwnProperty.call(SET_BAND_COUNTS, set) ? SET_BAND_COUNTS[set] : null;
 
   return {
@@ -156,15 +162,19 @@ export function measureReply({ content, set, essay = "", criteria = "", humanBan
     thesisFlagged:
       r.support.length > 0 ? points.filter((p) => UNSUPPORTED.has(p && p.deficiency) && pointOnMainIdea(p, r.mainIdea)) : [],
     overall: { band: o.band, sentence: o.sentence, bandsConsidered: o.bandsConsidered, bandCount: o.bandCount },
+    /* PRIMARY: the best-fit pick, placed in the model's own list. */
+    pick: fit.band,
+    pickTied: fit.tied.length > 1 ? fit.tied : [],
     placed,
     agrees: placed && humanBand ? placed.band === humanBand : null,
-    /* The band the model's OWN fits imply: the highest one it marked
-       meets. When this differs from the band it chose, the model did not
-       follow its own reading, and that is counted. */
-    derivedBand,
-    derivedPlaced,
-    derivedAgrees: derivedPlaced && humanBand ? derivedPlaced.band === humanBand : null,
-    chosenMatchesDerived: derivedBand ? derivedBand === o.band : null,
+    /* SECONDARY: the band the model named. Where it differs from its own
+       best-rated band, the model did not follow its own ratings. */
+    namedPlaced,
+    namedAgrees: namedPlaced && humanBand ? namedPlaced.band === humanBand : null,
+    namedMatchesPick: fit.band ? fit.band === o.band : null,
+    ratingsOutOfRange: o.bandsConsidered.filter(
+      (b) => !Number.isInteger(b && b.rating) || b.rating < BAND_RATING_MIN || b.rating > BAND_RATING_MAX
+    ),
     /* ONE ENTRY PER BAND, checked two ways, since strict mode cannot
        require a length: against the count the model itself stated, and
        against the set's known count where we have one. */
