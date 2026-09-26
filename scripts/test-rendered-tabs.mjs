@@ -460,21 +460,24 @@ async function run() {
     });
   }
 
-  /* THE AI TAB'S "Feedback on a draft" CARD, CLICKED THROUGH, in the
-     real app. The claim is about wiring across two tabs — the card on
-     one, the panel on another, joined through PlannerApp's state — so
-     it is made here, from the built bundle, by pressing the controls,
-     rather than by mounting the pieces beside a restated copy of the
-     glue. A new assessment is created (the planner is seeded with none)
-     and the student lands on the Courses tab with that row's panel
-     OPEN: its opt-in, since this account has not opted in. */
-  await test("THE AI TAB'S DRAFT CARD CREATES THE ASSESSMENT AND OPENS ITS PANEL ON THE GRADES ROW", async () => {
+  /* THE AI TAB'S DRAFT CARD, CLICKED THROUGH IN THE REAL APP (Jared,
+     27 September 2026). Its first version asked for an assessment
+     before a draft and its "new assessment" choice could not be
+     selected on a course that already had one: the choice fell back to
+     the first row. The card is now one optional course and the draft,
+     so this presses exactly that: the course dropdown (the control
+     class that failed), paste, run — and requires the result ON THE AI
+     TAB, then the placeholder under the course, then the mark question
+     once a mark goes in on it. One request, and the draft never
+     reaches the stored planner. */
+  await test("THE AI TAB'S DRAFT CARD: pick a course, paste, run, the result stays on the AI tab, and the mark loop works on the placeholder", async () => {
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
     const errors = [];
     page.on("pageerror", (err) => errors.push(String(err)));
+    const now = new Date().toISOString();
     await page.addInitScript(
-      ({ ref, userId, tabKey, consent }) => {
+      ({ ref, userId, tabKey, meta, now }) => {
         const hour = Math.floor(Date.now() / 1000) + 3600;
         localStorage.setItem(
           `sb-${ref}-auth-token`,
@@ -491,13 +494,43 @@ async function run() {
         if (!sessionStorage.getItem("seeded")) {
           sessionStorage.setItem("seeded", "1");
           localStorage.setItem(tabKey, "ai-notes");
-          localStorage.setItem("uni-planner-v1", JSON.stringify({ semester: "Semester 1", semesters: {}, meta: consent }));
+          localStorage.setItem(
+            "uni-planner-v1",
+            JSON.stringify({
+              semester: "Semester 1",
+              semesters: {
+                "Semester 1": {
+                  courses: [{ id: "c-hist", name: "HIST1001", updatedAt: now }],
+                  assessments: [{ id: "real-a1", course: "HIST1001", title: "Essay 1", w: 40, kind: "assignment", updatedAt: now }],
+                },
+              },
+              meta: { ...meta, essayOptIn: { version: 1, at: now } },
+            })
+          );
         }
       },
-      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consent: CONSENTED_META }
+      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, meta: CONSENTED_META, now }
     );
+    let essayCalls = 0;
     await page.route(`${SUPABASE_HOST}/**`, async (route) => {
       const url = route.request().url();
+      if (url.includes("/functions/v1/ai-text")) {
+        essayCalls++;
+        return route.fulfill(
+          json({
+            ok: true,
+            allowanceUsed: 0.1,
+            result: {
+              genre: "argument",
+              band: "Credit",
+              bandTied: [],
+              sentence: "The argument is clear and the support is thin.",
+              points: [{ quote: "card draft words", deficiency: "claim-without-evidence", note: "Nothing supports this.", severity: "fundamental" }],
+              dropped: {},
+            },
+          })
+        );
+      }
       if (url.includes("/auth/v1/user")) return route.fulfill(json({ id: USER_ID, email: "render-probe@example.test" }));
       if (url.includes("/auth/v1/")) return route.fulfill(json({ access_token: "test-token", user: { id: USER_ID } }));
       if (url.includes("/rest/v1/profiles")) return route.fulfill(json(PROFILE_ROW));
@@ -505,25 +538,61 @@ async function run() {
       return route.fulfill(json([]));
     });
     await page.goto("file://" + path.join(OUT, "index.html"));
-    await page.waitForSelector("[data-essay-entry]", { timeout: 15_000 });
-    const before = await page.locator("[data-essay-panel], [data-essay-opt-in]").count();
-    await page.fill("[data-essay-entry-title]", "Draft Essay Probe");
-    await page.fill("[data-essay-entry-weight]", "35");
-    await page.click("[data-essay-entry-go]");
-    await page.waitForSelector("[data-essay-opt-in], [data-essay-panel]", { timeout: 5_000 });
-    const out = await page.evaluate((tabKey) => ({
-      tab: localStorage.getItem(tabKey),
-      entryStillShown: !!document.querySelector("[data-essay-entry]"),
-      rowHasTitle: document.body.innerText.includes("Draft Essay Probe"),
-      openPanels: document.querySelectorAll("[data-essay-opt-in], [data-essay-panel]").length,
-    }), TAB_KEY);
+    await page.waitForSelector("[data-essay-draft-card]", { timeout: 15_000 });
+
+    /* Straight to the draft: no assessment to pick, no button first. */
+    const boxesAtOnce = await page.locator("[data-essay-draft-card] [data-essay-text]").count();
+    const courseSelect = page.locator("[data-essay-draft-course] select");
+    const courseBefore = await courseSelect.inputValue();
+    await courseSelect.selectOption("HIST1001");
+    const courseAfter = await courseSelect.inputValue();
+
+    await page.fill("[data-essay-draft-card] [data-essay-text]", "These are the card draft words for the probe.");
+    await page.fill("[data-essay-draft-card] [data-essay-criteria]", "Pass, Credit, Distinction, High Distinction");
+    await page.click("[data-essay-draft-card] [data-essay-go]");
+    await page.waitForSelector("[data-essay-draft-card] [data-essay-band]", { timeout: 5_000 });
+    const afterRun = await page.evaluate((tabKey) => ({ tab: localStorage.getItem(tabKey) }), TAB_KEY);
+
+    await page.locator("nav button", { hasText: "Courses" }).first().click();
+    await page.waitForTimeout(500);
+    const placeholder = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll("li")].filter((li) => /Essay draft, /.test(li.textContent || ""));
+      const card = rows[0] && rows[0].closest("ul") && rows[0].closest("ul").parentElement;
+      return {
+        count: rows.length,
+        underHist: !!(card && /HIST1001/.test(card.textContent || "")),
+        noWeight: !!(rows[0] && /no weight/.test(rows[0].textContent || "")),
+        title: rows[0] ? (rows[0].querySelector("input[aria-label^='Mark for']") || {}).getAttribute?.("aria-label") : null,
+        askBefore: !!document.querySelector("[data-mark-compare]"),
+      };
+    });
+    if (placeholder.count !== 1) {
+      await ctx.close();
+      assert.fail(`${placeholder.count} "Essay draft" rows on Grades after the run; THE RUN WAS NOT FILED UNDER A PLACEHOLDER`);
+    }
+    const mark = page.locator(`input[aria-label^="Mark for Essay draft, "]`).first();
+    await mark.fill("72");
+    const askWhileTyping = await page.locator("[data-mark-compare]").count();
+    await page.locator("h2").first().click();
+    await page.waitForSelector("[data-mark-compare]", { timeout: 5_000 }).catch(() => {});
+    const askAfter = await page.locator("[data-mark-compare]").count();
+    const stored = await page.evaluate(() => localStorage.getItem("uni-planner-v1") || "");
     await ctx.close();
+
     assert.deepEqual(errors, [], `the click-through threw:\n        ${errors.join("\n        ")}`);
-    assert.equal(before, 0, "a panel was already open on the AI tab, so opening one proves nothing");
-    assert.equal(out.entryStillShown, false, "still on the AI tab after pressing the card's button");
-    assert.equal(out.tab, "courses", `landed on "${out.tab}", not the Courses tab where the Grades row lives`);
-    assert.ok(out.rowHasTitle, "the new assessment is not on the Grades list");
-    assert.equal(out.openPanels, 1, `${out.openPanels} essay panels open; the card should open exactly its own row's`);
+    assert.equal(boxesAtOnce, 1, "the AI tab did not show the draft box straight away");
+    assert.equal(courseBefore, "", "the course does not default to No course");
+    assert.equal(courseAfter, "HIST1001", "CHOOSING A COURSE DID NOT SWITCH — the #155 bug's class");
+    assert.equal(afterRun.tab, "ai-notes", `the run moved the student to "${afterRun.tab}"; the result belongs on the AI tab`);
+    assert.equal(essayCalls, 1, `${essayCalls} reads were sent`);
+    assert.equal(placeholder.count, 1, `${placeholder.count} "Essay draft" rows on Grades; the run should file exactly one`);
+    assert.ok(placeholder.underHist, "the placeholder is not under the course that was picked");
+    assert.ok(placeholder.noWeight, 'the placeholder row does not say "no weight"');
+    assert.equal(placeholder.askBefore, false, "the mark question showed before any mark was entered");
+    assert.equal(askWhileTyping, 0, "the mark question interrupted the typing");
+    assert.equal(askAfter, 1, "A MARK ON THE PLACEHOLDER DID NOT ASK THE MARK QUESTION, so the loop is broken for AI-tab runs");
+    assert.ok(!stored.includes("card draft words"), "THE DRAFT OR ITS QUOTES REACHED THE STORED PLANNER");
+    assert.ok(/Essay draft, /.test(stored), "the placeholder never reached the stored planner, so it would not survive a reload");
   });
 
   /* THE PRODUCTION BUG, 26 September 2026: a delivered essay result

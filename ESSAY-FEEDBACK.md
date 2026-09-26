@@ -729,25 +729,45 @@ already lives.
 and a reading summary do, **inside its own `try`** — a folder is a
 convenience and must never take down work just paid for.
 
-### And a door on the AI tab, which is not a second panel (Jared, 26 September 2026)
+### And a draft card on the AI tab (Jared, 26–27 September 2026)
 
 "Not the AI tab" was about where the PANEL lives, and it still lives
-on the row. The AI tab is where a student looks for AI features, so it
-now carries a **"Feedback on a draft" card** that asks which course and
-assessment the draft is for — creating the assessment when they have
-not added it yet, with the title and weight the Grades form already
-requires — and then takes them to the Courses tab with that row's
-panel open.
+on the Grades row for a student who starts from an assessment. The AI
+tab is where students look for AI features, so it carries a **"Feedback
+on a draft" card** too.
 
-**It is a door, not a copy**, because the mark loop depends on it: the
-comparison is a render condition on the assessment item, so feedback
-given anywhere but on that item could never be joined to its mark. The
-card sends nothing and holds no essay text, so it needs no consent of
-its own; the panel it opens does the gate and the opt-in exactly as
-before. `resolveEssayEntry` in `essayFeedback.js` decides what a choice
-means (a live row, or a complete new one, or nothing), and
-`test-rendered-tabs.mjs` presses the card in the real app and requires
-exactly that row's panel open on the Courses tab.
+**The first version was a door, and it was too many steps.** It asked
+for a course, then an assessment (or a new one with a title and a
+weight), then navigated to Courses. On production its "new assessment"
+choice could not even be selected on a course that already had an
+assessment: the choice fell back to the first row whenever the picked
+value was not a live id, and the new-assessment sentinel never is.
+Reproduced in the real app, then removed with the design.
+
+**Now it is one optional course and the draft, on the AI tab.** The
+same panel renders open inside the card; the student pastes, runs and
+reads the result without leaving the tab. **The run is filed under a
+placeholder assessment** — "Essay draft, 27 Sep", under the chosen
+course, **no weight and no due date** — created on DELIVERY so a
+failed or refused run leaves no row behind (`placeholderAssessment` in
+`essayFeedback.js`). From then on it is an ordinary Grades row, so a
+mark entered on it asks the mark question. No weight means the grade
+maths skips it (`weightOf() > 0` in `grades.js`); the row reads "no
+weight", and a course holding nothing weighted says there is nothing
+to work out rather than "your weights add up to 0%".
+
+The draft's id lives in PlannerApp beside the hold, so the card's run
+survives a tab switch exactly as a row's does. Closing the card starts
+a new draft. `test-rendered-tabs.mjs` presses all of it in the real
+app — the course dropdown, paste, run, result on the AI tab, the
+placeholder under the course, a mark, the question — and goes red
+naming the missing placeholder if the run is not filed.
+
+**Not built: linking a placeholder to a real assessment.** Today a
+student who later adds "Essay 1" with its weight has two rows, and the
+mark loop runs on whichever carries the mark. Moving a placeholder's
+feedback and AI-use record onto a real assessment is a small follow-up
+if Grace wants the control.
 
 **FOR GRACE: "Grades" now holds pre-submission work.** A draft is
 reviewed on the Grades row before there is anything to grade, so the

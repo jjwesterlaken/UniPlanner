@@ -112,7 +112,7 @@ import {
   Settings,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView, useRecordingSession, RecordingIndicator } from "./aiNotes.jsx";
-import { EssayFeedbackPanel, MarkCompareAsk, EssayDraftEntry } from "./essayPanel.jsx";
+import { EssayFeedbackPanel, MarkCompareAsk, EssayDraftCard } from "./essayPanel.jsx";
 import {
   optInNeeded,
   ESSAY_OPT_IN_VERSION,
@@ -124,7 +124,8 @@ import {
   withAiUse,
   feedbackEntry,
   rewriteEntry,
-  resolveEssayEntry,
+  placeholderAssessment,
+  hasWeight,
 } from "./essayFeedback.js";
 import { recordFeedback } from "./essayFeedbackStore.js";
 import { createEssayHold } from "./essayHold.js";
@@ -4610,7 +4611,7 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
               {a.kind === "exam" && <span className="ml-1.5 text-xs text-stone-400">exam</span>}
               {hurdleOf(a) !== null && <span className="ml-1.5 text-xs text-stone-400">hurdle {hurdleOf(a)}%</span>}
             </span>
-            <span className="shrink-0 text-xs text-stone-500">{a.w}%</span>
+            <span className="shrink-0 text-xs text-stone-500">{hasWeight(a) ? `${a.w}%` : ESSAY_COPY.rowNoWeight}</span>
             <input
               className="w-16 shrink-0 rounded border border-stone-200 px-2 py-1 text-right text-sm u-field"
               type="number"
@@ -4639,9 +4640,7 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
                 onRate={(x) => essay.onRate(a, x)}
                 onSave={(x) => essay.onSave(a, x)}
                 onRewrite={(x) => essay.onRewrite(a, x)}
-                requestOpen={essay.openFor === a.id}
                 hold={essay.hold}
-                onOpened={essay.onOpened}
               />
             </div>
           )}
@@ -4658,6 +4657,13 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
         ))}
       </ul>
 
+      {/* A course holding only weightless items (an essay draft filed
+          from the AI tab) has nothing to calculate, and "your weights
+          add up to 0%" would read as a mistake the student made. */}
+      {summary.weightSum === 0 ? (
+        <p data-no-weights className="text-xs text-stone-500">{ESSAY_COPY.noWeightsCourse}</p>
+      ) : (
+      <>
       {summary.weightSum !== 100 && (
         <p className="mb-2 flex items-start gap-1.5 text-xs text-stone-500">
           <TriangleAlert size={13} className="mt-0.5 shrink-0" />
@@ -4698,6 +4704,8 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
           </p>
         )}
       </div>
+      </>
+      )}
     </Card>
   );
 }
@@ -5151,10 +5159,11 @@ export default function PlannerApp() {
   }, [mode, resolvedMode]);
   const [themeOpen, setThemeOpen] = useState(false);
   const [focusedCourse, setFocusedCourse] = useState(null);
-  /* The assessment whose essay panel the AI tab's "Feedback on a draft"
-     card asked to open. Consumed by the row once it has opened, so a
-     later visit to Courses does not reopen it. */
-  const [essayOpenFor, setEssayOpenFor] = useState(null);
+  /* The AI tab's draft card: the id its run will be filed under, and
+     the course picked. Here and not in the card, because the card
+     unmounts on a tab switch and the id is the key its held run is
+     stored under. The assessment itself is created only on delivery. */
+  const [essayDraft, setEssayDraft] = useState(() => ({ id: uid(), course: "" }));
   /* Essay runs live here, above the tab switch, so a delivered result
      survives leaving the Courses tab (essayHold.js). Memory only. */
   const essayHoldRef = useRef(null);
@@ -6201,9 +6210,7 @@ export default function PlannerApp() {
         session,
         allowanceApi: textAllowance,
         rule: rounding,
-        openFor: essayOpenFor,
         hold: essayHoldRef.current,
-        onOpened: () => setEssayOpenFor(null),
         optIn: {
           needed: optInNeeded(data.meta),
           accept: () =>
@@ -6282,20 +6289,43 @@ export default function PlannerApp() {
       }
     : null;
 
-  /* THE AI TAB'S DOOR INTO THE SAME PANEL (Jared, 26 September 2026).
-     The panel stays on the Grades row, because the mark it asks about
-     lives on that item and the mark loop is a render condition there;
-     this only chooses the row, creating it when the student has not
-     added the assessment yet, and takes them to it. It sends nothing:
-     the panel behind it does its own consent and opt-in. */
-  const openEssayDraft = (choice) => {
-    const target = resolveEssayEntry(choice, { uid, assessments: sem.assessments });
-    if (!target) return;
-    if (target.create) addItem("assessments", target.create);
-    if (focused && focused !== target.course) setFocusedCourse(null);
-    setEssayOpenFor(target.id);
-    setTab("courses");
-  };
+  /* THE AI TAB'S DRAFT CARD (Jared, 27 September 2026). The draft is
+     pasted and read on the AI tab; the run is filed under a placeholder
+     assessment on the chosen course, created on DELIVERY so a failed
+     run leaves nothing behind. From then on the placeholder is an
+     ordinary Grades row, so a mark entered on it asks the mark question.
+     Everything else is the Grades row's own handlers. */
+  const liveAssessment = (id) =>
+    (((dataRef.current.semesters[dataRef.current.semester] || {}).assessments || []).find((x) => x.id === id && !x.deletedAt)) || null;
+  const draftAssessment =
+    (sem.assessments || []).find((x) => x.id === essayDraft.id && !x.deletedAt) ||
+    placeholderAssessment({ id: essayDraft.id, course: essayDraft.course, date: "", copy: ESSAY_COPY });
+  const draftHandlers = essay
+    ? {
+        onDelivered: (x) => {
+          let a = liveAssessment(essayDraft.id);
+          if (!a) {
+            a = placeholderAssessment({
+              id: essayDraft.id,
+              course: essayDraft.course,
+              date: new Date().toLocaleDateString("en-AU", { day: "numeric", month: "short" }),
+              copy: ESSAY_COPY,
+            });
+            addItem("assessments", a);
+          }
+          essay.onDelivered(a, x);
+        },
+        onRate: (x) => essay.onRate(draftAssessment, x),
+        onSave: (x) => essay.onSave(liveAssessment(essayDraft.id) || draftAssessment, x),
+        onRewrite: (x) => essay.onRewrite(liveAssessment(essayDraft.id) || draftAssessment, x),
+        onCourse: (course) => {
+          setEssayDraft((d) => ({ ...d, course }));
+          if (liveAssessment(essayDraft.id)) patchItem("assessments", essayDraft.id, { course });
+        },
+        /* Closed is dismissed: the next draft is a new one. */
+        onClose: () => setEssayDraft((d) => ({ id: uid(), course: d.course })),
+      }
+    : null;
 
   const theme = THEMES[data.theme] || THEMES.teal;
   const focused = focusedCourse && sem.courses.some((c) => c.name === focusedCourse) ? focusedCourse : null;
@@ -6620,7 +6650,22 @@ export default function PlannerApp() {
 
         {tab === "ai-notes" && essay && (
           <Section icon={FileText} title={ESSAY_COPY.entry.title} subtitle={ESSAY_COPY.entry.subtitle}>
-            <EssayDraftEntry courses={sem.courses} assessments={sem.assessments} onOpen={openEssayDraft} />
+            <EssayDraftCard courses={sem.courses} course={essayDraft.course} onCourse={draftHandlers.onCourse}>
+              <EssayFeedbackPanel
+                key={essayDraft.id}
+                alwaysOpen
+                session={essay.session}
+                assessment={draftAssessment}
+                allowanceApi={essay.allowanceApi}
+                optIn={essay.optIn}
+                onDelivered={draftHandlers.onDelivered}
+                onRate={draftHandlers.onRate}
+                onSave={draftHandlers.onSave}
+                onRewrite={draftHandlers.onRewrite}
+                onClose={draftHandlers.onClose}
+                hold={essay.hold}
+              />
+            </EssayDraftCard>
           </Section>
         )}
 

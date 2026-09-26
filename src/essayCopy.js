@@ -30,21 +30,17 @@ export const ESSAY_COPY = {
   reloadLoses: RELOAD_LOSES,
   rowAction: "Get feedback on a draft",
 
-  /* The AI tab's door into the panel on the Grades row. */
+  /* The AI tab's draft card: one optional course, then the draft. */
   entry: {
     title: "Feedback on a draft",
     subtitle: "Paste an essay before you submit it and see what to work on",
-    courseLabel: "Which course",
-    assessmentLabel: "Which assessment",
-    newAssessment: "A new assessment…",
-    newTitleLabel: "What is it",
-    newTitlePlaceholder: "Essay 1",
-    newWeightLabel: "Worth (% of the unit)",
-    newWeightPlaceholder: "30",
-    go: "Open feedback",
-    where: "It opens on that assessment in Courses → Grades, so when your mark comes back it sits next to the feedback.",
-    noneYet: "No assessments for this course yet — add the one you're writing.",
+    courseLabel: "Course (optional)",
+    where: "The feedback is kept under this course in Courses → Grades, so if you enter your mark there later we can ask how we did.",
   },
+  /* The assessment a run from the AI tab is filed under. */
+  placeholderTitle: (date) => `Essay draft, ${date}`,
+  rowNoWeight: "no weight",
+  noWeightsCourse: "Nothing here has a weight yet, so there's nothing to work out. Add the unit's assessments with their weights above.",
 
   /* The ? on the panel. Three steps, in the order a student meets them. */
   help: {
