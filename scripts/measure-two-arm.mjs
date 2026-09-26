@@ -59,9 +59,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT, callVision } from "./lib/photo-calls.mjs";
-import { productionModel } from "./lib/production-model.mjs";
+import { productionModel, productionCeiling } from "./lib/production-model.mjs";
 import { ARMS, userMessage } from "./lib/essay-arms.mjs";
-import { DEFICIENCIES, measurePoint, refusePoint, quoteVariety, essayFeedbackSchema } from "../src/essayPoints.js";
+import { DEFICIENCIES, measurePoint, refusePoint, quoteVariety, essayFeedbackSchema, MATCH_UNITS } from "../src/essayPoints.js";
+import { normaliseWords, longestNovelRun, quotedSpans, gramSet } from "../src/noWriting.js";
 
 const argv = process.argv.slice(2);
 const opt = (n, d = null) => {
@@ -105,6 +106,11 @@ const criteria = fs.readFileSync(rubricFile, "utf8");
    so this is the call site that changes if that ever stops being
    true. */
 const model = opt("--model") || (await productionModel({ hasImages: false, task: "essay" }));
+/* THE CEILING THE ENDPOINT SHIPS WITH, read from ai-text/config.ts.
+   This was 2,000, typed here, while the endpoint sends 4,000 to a
+   reasoning model whose reasoning tokens count against it: replies the
+   endpoint would accept were cut off here and counted as malformed. */
+const maxTokens = Number(opt("--max-tokens", String(await productionCeiling("essay"))));
 
 console.log("=".repeat(72));
 console.log("TWO-ARM — does the structure separate description from ghostwriting?");
@@ -112,6 +118,7 @@ console.log("=".repeat(72));
 console.log(`model        ${model}`);
 console.log(`arms         ${Object.values(ARMS).map((a) => `${a.id} (${a.what})`).join("\n             ")}`);
 console.log(`runs         ${runsPerArm} per arm  (${runsPerArm * 2} provider calls)`);
+console.log(`ceiling      ${maxTokens} output tokens (the endpoint's MAX_TOKENS.essay unless --max-tokens)`);
 console.log(`deficiencies ${DEFICIENCIES.length} in the closed set`);
 console.log(`text         ${showText ? "SHOWN (--show-text)" : "withheld — the quote field is the student's own words"}`);
 
@@ -125,6 +132,12 @@ if (dryRun) {
 const measured = { constrained: [], adversarial: [] };
 const perRun = { constrained: [], adversarial: [] };
 const malformed = { constrained: 0, adversarial: 0 };
+/* Cut off at the ceiling, counted apart from malformed: the fix for one
+   is the ceiling and for the other is the prompt. */
+const truncated = { constrained: 0, adversarial: 0 };
+/* The opening sentence of each reply, measured like a note: it is free
+   prose the endpoint returns, and the window is applied to it too. */
+const sentences = { constrained: [], adversarial: [] };
 
 for (const arm of Object.values(ARMS)) {
   for (let run = 1; run <= runsPerArm; run++) {
@@ -136,7 +149,7 @@ for (const arm of Object.values(ARMS)) {
         { role: "system", content: arm.system },
         { role: "user", content: userMessage({ essay, criteria }) },
       ],
-      maxTokens: 2000,
+      maxTokens,
       /* THE STRICT SCHEMA, for both arms. `deficiency-unknown` was 84 of
          318 constrained refusals on 24 September — a quarter of the
          operating characteristic measuring the model's paraphrasing
@@ -149,11 +162,19 @@ for (const arm of Object.values(ARMS)) {
       console.error(`  ${arm.id} run ${run} failed: ${error}`);
       continue;
     }
+    if (json?.choices?.[0]?.finish_reason === "length") {
+      truncated[arm.id]++;
+      console.error(`  ${arm.id} run ${run}: cut off at the ${maxTokens}-token ceiling`);
+      continue;
+    }
     let points;
+    let sentence = "";
     try {
       /* The schema nests the points under \`reading\` since the per-genre
          branches (essaySchema.js). */
-      points = JSON.parse(json.choices[0].message.content).reading?.points;
+      const reply = JSON.parse(json.choices[0].message.content);
+      points = reply.reading?.points;
+      sentence = typeof reply.overall?.sentence === "string" ? reply.overall.sentence : "";
       if (!Array.isArray(points)) throw new Error("no points array");
     } catch (e) {
       malformed[arm.id]++;
@@ -163,6 +184,18 @@ for (const arm of Object.values(ARMS)) {
     const ms = points.map((point) => ({ ...measurePoint({ point, essay, criteria }), arm: arm.id, run }));
     measured[arm.id].push(...ms);
     perRun[arm.id].push(ms);
+    const sourceWords = normaliseWords(`${essay}\n${criteria}`);
+    sentences[arm.id].push({
+      words: normaliseWords(sentence).length,
+      /* Quoted spans of 3+ words in neither the essay nor the criteria:
+         the endpoint refuses the reply on any. A count, never the text. */
+      offered: quotedSpans(sentence).filter((sp) => {
+        const w = normaliseWords(sp);
+        return w.length >= 3 && !gramSet(sourceWords, w.length).has(w.join(" "));
+      }).length,
+      novel: Object.fromEntries(MATCH_UNITS.map((k) => [k, longestNovelRun(sentence, `${essay}\n${criteria}`, { matchUnit: k })])),
+      run,
+    });
   }
 }
 
@@ -330,6 +363,6 @@ if (jsonOut) {
     : Object.fromEntries(
         Object.entries(measured).map(([k, v]) => [k, v.map(({ quoteNormalised, ...rest }) => rest)])
       );
-  fs.writeFileSync(jsonOut, JSON.stringify({ model, redacted: !showText, malformed, measured: forFile }, null, 2));
+  fs.writeFileSync(jsonOut, JSON.stringify({ model, maxTokens, redacted: !showText, malformed, truncated, measured: forFile, sentences }, null, 2));
   console.log(`  raw measurements written to ${jsonOut}\n`);
 }

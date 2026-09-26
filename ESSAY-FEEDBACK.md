@@ -504,6 +504,83 @@ measurement, **and it must be measured before it ships** — the
 distribution lesson from the ink work: a threshold sized to an anecdote
 is sized to the wrong thing.
 
+### THE THRESHOLDS, AND THE RULE THEY ARE READ BY (Jared, 25 September 2026)
+
+`ESSAY_NO_WRITING` in `ai-text/config.ts` holds four numbers, and until
+they are set the essay task refuses before any spend. They are read off
+the no-writing harness run on **gpt-5.6-luna**, the model that ships,
+never on another model's output, and never guessed:
+
+| threshold | what it refuses | read from |
+|---|---|---|
+| `maxNoteWords` | a note long enough to hold a paragraph | the constrained arm's note-length **p99, plus a margin** |
+| `minQuoteWords` | a quote too short to locate anything | the **shortest quote that still locates uniquely** in the constrained arm |
+| `window` | a run of new prose that long, not in the essay or the criteria | the constrained arm's **longest novel run**, with margin, so analysis in a note is never mistaken for a rewrite |
+| `matchUnit` | the n-gram a word must share with the source to count as "not new" | the harness's own setting, the one the distribution was measured at |
+
+**THE RULE: at the chosen settings, the constrained arm (the prompt we
+ship) must refuse at most 2% of its legitimate points.** Every threshold
+is taken from the constrained arm's own distribution, so the settings
+protect real feedback first.
+
+**WHERE THE TABLE SHOWS NO SEPARATION FROM THE ADVERSARIAL ARM, IT IS
+SAID, and the thresholds are still set to protect legitimate feedback.**
+On gpt-4o-mini there was none: the adversarial arm offered almost no
+wording, so no cell separated the two. When that holds on Luna too, the
+length and window thresholds are guards against size, not against
+ghostwriting, and **the code-side offered-wording refusal is the
+ghostwriting control**: any quoted span in a note that is not in the
+essay or the criteria refuses the whole reply (`_shared/essayReply.js`).
+Nothing in the numbers pretends to be more than that.
+
+### THE SETTINGS, read off Luna (ASAP sets 1, 2 and 8, 25 September 2026)
+
+Read from the two-arm harness on `claude/essay-thresholds`: the shipped
+prompt, at the shipped 4,000-token ceiling. Every figure comes from the
+constrained arm. The adversarial figure sits beside it only to show
+whether the two arms separate.
+
+| threshold | setting | constrained | adversarial | why this value |
+|---|---|---|---|---|
+| `maxNoteWords` | **30** | max 27, p99 23 | p99 71 | above the constrained max with margin |
+| `minQuoteWords` | **3** | 3 words: 100% occur once; 2: 80%; 1: 33% | — | the shortest length that always locates one place |
+| `window` | **30** | none can reach it: a note's novel run is at most its length, max 27 | 4% | at 25 it refused 2 of 72 constrained replies (2.8%), over the rule |
+| `matchUnit` | **4** | — | — | the unit the window row was read at |
+| `maxSentenceWords` | **50** | max 47 | — | above the constrained max; the opening sentence is one sentence |
+
+**THE WINDOW APPLIES TO NOTES, NEVER TO THE OPENING SENTENCE.** The
+sentence is the model's own summary, so every word of it is new prose:
+its longest novel run on Luna was 29-42 words at unit 4 (p50 33). The
+first gate run applied the 25-word window to it and refused 47 of 72
+constrained replies (65.3%). No window could fix that without also
+switching the window off for notes. So the sentence gets its 50-word cap
+and nothing else, in the endpoint and the harness alike.
+
+**TWO RATES, BECAUSE THE ENDPOINT HAS TWO KINDS OF REFUSAL.** A point
+whose quote is too short, or is not in the essay, is DROPPED and the
+rest of the reply stands. A note or opening sentence that breaks a
+length, window or offered-wording rule REFUSES THE WHOLE REPLY, which is
+billed. So the 2% rule is applied to whole replies: **at these settings
+the constrained arm may have at most 2% of its replies refused** (Jared's
+read of the Luna run is 0%). The point-drop rate is reported beside it,
+and the harness's exit code follows the reply rule. About 5% of the constrained points are dropped,
+all of them 1-2 word quotes or quotes not in the essay. The prompt now
+asks for at least three words, so the short-quote drops should shrink.
+**That prompt line was added after the measurement**: the drop rate
+under it is not yet measured, and the next run is what measures it.
+
+**NO SEPARATION, AGAIN, SAID PLAINLY.** The adversarial arm's note
+lengths overlap the constrained arm's, and at 30 the window refuses 4%
+of the adversarial arm's notes against none of the constrained. That is not a
+detector. As on gpt-4o-mini, these settings are guards on SIZE, set so
+legitimate feedback is never refused. The ghostwriting control is the
+offered-wording refusal: any quoted span of three or more words in a
+note or in the opening sentence that appears in neither the essay nor
+the criteria refuses the reply (`_shared/essayReply.js`). The harness's old gate, which required
+a cell refusing at most 10% of the constrained arm and at least 90% of
+the adversarial arm, tested a claim this feature no longer makes, and
+it has been retired.
+
 ### What happens on a refusal, and it costs money
 
 **The refusal is BILLED**, under its own code, and the copy says so.

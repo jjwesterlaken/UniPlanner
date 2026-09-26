@@ -31,7 +31,7 @@
    would be worse than a marker, because a default works.
    ================================================================== */
 
-import { normaliseWords, gramSet, quotedSpans } from "./noWriting.js";
+import { normaliseWords, gramSet, quotedSpans, longestNovelRun } from "./noWriting.js";
 
 /**
  * The closed set. A point says WHICH KIND of problem it found; the
@@ -72,6 +72,9 @@ export {
 import { DEFICIENCIES } from "../supabase/functions/_shared/essaySchema.js";
 
 const isFinitePositive = (v) => Number.isInteger(v) && v > 0;
+
+/** The match units the harness measures new-prose runs at. */
+export const MATCH_UNITS = Object.freeze([3, 4, 5, 6]);
 
 const required = (name, value) => {
   if (!isFinitePositive(value)) {
@@ -125,9 +128,32 @@ export function measurePoint({ point = {}, essay = "", criteria = "" } = {}) {
     if (!gramSet(sourceWords, w.length).has(w.join(" "))) offered.push(w.length);
   }
 
+  /* HOW MANY TIMES the quote occurs in the essay. A quote that occurs
+     once locates one place; one that occurs twice locates nothing in
+     particular. This is what "the shortest quote that still locates
+     uniquely" is read from. Counted over the normalised essay, the same
+     text the verbatim check reads. */
+  let quoteOccurrences = 0;
+  if (verbatim) {
+    const needle = ` ${quoteWords.join(" ")} `;
+    const hay = ` ${essayJoined} `;
+    for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + 1)) quoteOccurrences += 1;
+  }
+
+  /* THE LONGEST RUN OF NEW PROSE in the note, at each candidate match
+     unit: the number `window` is read from. A note is the model's own
+     analysis, so it always has SOME new prose; the question is how long
+     a run legitimate feedback needs, which only the constrained arm's
+     distribution can say. Numbers only, never the text. */
+  const noteNovel = Object.fromEntries(
+    MATCH_UNITS.map((k) => [k, longestNovelRun(note, `${essay}\n${criteria}`, { matchUnit: k })])
+  );
+
   return {
     quoteWords: quoteWords.length,
     quoteVerbatim: verbatim,
+    quoteOccurrences,
+    noteNovel,
     quotePosition: position,
     quoteNormalised: quoteWords.join(" "),
     noteWords: normaliseWords(note).length,

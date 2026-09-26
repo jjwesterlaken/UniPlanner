@@ -9,7 +9,7 @@
    Nothing here prints text. Every field it touches is a number or an
    enum value; the pooled measurements arrive already redacted. */
 
-import { DEFICIENCIES, refusePoint, quoteVariety } from "../../src/essayPoints.js";
+import { DEFICIENCIES, refusePoint, quoteVariety, MATCH_UNITS } from "../../src/essayPoints.js";
 
 const pct = (xs, p) => {
   const s = [...xs].sort((a, b) => a - b);
@@ -19,113 +19,203 @@ const share = (xs, f) => (xs.length ? ((xs.filter(f).length / xs.length) * 100).
 
 export const QUOTE_FLOORS = [3, 4, 5, 6, 8];
 export const NOTE_CAPS = [12, 16, 20, 25, 30, 40, 60];
+export const WINDOWS = [6, 8, 10, 12, 15, 20, 25, 30, 40];
 
-/* ------------------------------------------------------------------
-   THE SCOPE CONTROL. Nothing downstream of this measurement may be
-   read until it passes, and it is a REFUSAL rather than a warning
-   because the whole experiment is a comparison between two
-   populations and every failure below leaves a comparison that cannot
-   have been made.
+/* THE RULE THE THRESHOLDS ARE READ BY (ESSAY-FEEDBACK.md): at the
+   chosen settings the constrained arm may lose at most this share of
+   its points. It is a property of the SETTINGS, so it is computed here
+   from the pooled numbers and never from a hand count. */
+export const MAX_LEGITIMATE_REFUSAL = 0.02;
 
-   THREE WAYS A RUN SAYS NOTHING, and each reports success on its own:
-
-   1. EITHER ARM IS EMPTY. A separation statistic over an empty
-      population is not a small number, it is no number -- and the
-      printed table would show `0 points` beside percentages computed
-      from nothing, which reads like a result. The adversarial arm is
-      the one that empties in practice: it is the arm a provider is
-      most likely to refuse outright, and its emptiness would look
-      exactly like "the constraint worked".
-
-   2. THE TWO ARMS ARE IDENTICAL. If the adversarial prompt produced
-      the same population as the constrained one, the arms are not
-      discriminating and no threshold read off them means anything.
-      That is the colour-coincidence class: a comparison between two
-      things that are the same passes every test and separates
-      nothing.
-
-   3. NO CANDIDATE VALUE SEPARATES THEM ANYWHERE. The operating
-      characteristic can be printed in full and still have no row where
-      the constrained arm is near zero and the adversarial arm is near
-      one hundred. Printing it and letting a person find that out is
-      how a run gets read as "we just need a different threshold".
-
-   IT RETURNS THE VERDICT rather than exiting, so the caller decides
-   what a failure costs and a test can drive every branch without a
-   provider, a key or a corpus. */
-export const SCOPE_CONTROL = {
-  /* A population smaller than this cannot support a percentile, let
-     alone a separation between two of them. Deliberately low: the
-     point is to catch EMPTY and NEARLY empty, not to legislate a
-     sample size, which is the operator's judgement and is printed. */
-  minPointsPerArm: 10,
-  /* The separation a candidate threshold must reach to count as one:
-     the constrained arm refused at most this often, the adversarial
-     arm refused at least this often. */
-  maxConstrainedRefusal: 0.1,
-  minAdversarialRefusal: 0.9,
-};
+/* Is one measured point refused at these four settings? The endpoint's
+   order: quote not found, quote too short, note too long, wording
+   offered, then the novelty window. A point measured before noteNovel
+   existed has no window reading, and that is an error rather than a
+   pass: a threshold must not be validated over data that cannot fail
+   it. */
+export function pointRefused(m, { minQuoteWords, maxNoteWords, window, matchUnit }) {
+  if (!refusePoint(m, { minQuoteWords, maxNoteWords }).ok) return true;
+  const run = m.noteNovel && m.noteNovel[matchUnit];
+  if (!Number.isInteger(run)) throw new Error(`a point has no novel-run reading at matchUnit ${matchUnit}; re-run the harness`);
+  return run >= window;
+}
 
 /**
- * Does this run support any claim at all? Returns
- * `{ ok, failures: [...] }` — never throws, never exits.
- *
- * `separates` is passed in rather than recomputed here: the caller
- * already builds the operating characteristic, and recomputing it
- * would be two implementations of one rule to keep in step.
+ * What these four settings cost each arm. Two denominators, because the
+ * endpoint has two kinds of refusal: a POINT is dropped, while a note
+ * or opening sentence that breaks the no-writing rule refuses the WHOLE
+ * reply. The 2% rule is stated over points; the reply rate is printed
+ * beside it because it is what a student would actually meet.
  */
-export function scopeControl(by, { separates = null } = {}) {
+export function evaluateSettings(results, sentences, settings) {
+  const out = {};
+  for (const id of ["constrained", "adversarial"]) {
+    const pts = results.filter((r) => r.arm === id);
+    const refused = pts.filter((m) => pointRefused(m, settings)).length;
+    const sens = (sentences && sentences[id]) || [];
+    const sentRefused = sens.filter((x) => {
+      if (!Number.isInteger(x.words)) throw new Error("a sentence has no reading; re-run the harness");
+      return Number.isInteger(settings.maxSentenceWords) && x.words > settings.maxSentenceWords;
+    }).length;
+    out[id] = {
+      points: pts.length,
+      pointsRefused: refused,
+      pointRate: pts.length ? refused / pts.length : null,
+      sentences: sens.length,
+      sentencesRefused: sentRefused,
+      sentenceRate: sens.length ? sentRefused / sens.length : null,
+    };
+  }
+  out.meetsRule = out.constrained.pointRate !== null && out.constrained.pointRate <= MAX_LEGITIMATE_REFUSAL;
+  return out;
+}
+
+/* How often a quote of each length occurs exactly ONCE in its essay,
+   over verbatim quotes. The floor is the shortest length that still
+   locates a single place. */
+export function quoteUniqueness(points) {
+  const rows = new Map();
+  for (const m of points) {
+    if (!m.quoteVerbatim || !Number.isInteger(m.quoteOccurrences)) continue;
+    const r = rows.get(m.quoteWords) || { words: m.quoteWords, n: 0, unique: 0 };
+    r.n += 1;
+    if (m.quoteOccurrences === 1) r.unique += 1;
+    rows.set(m.quoteWords, r);
+  }
+  return [...rows.values()].sort((a, b) => a.words - b.words);
+}
+
+/* ------------------------------------------------------------------
+   THE ONE THING THAT MAKES A RUN SAY NOTHING: too few constrained
+   points. The claim this run supports is about the prompt that ships,
+   so the constrained arm is the population it rests on. A rate over
+   an empty population is no number, and it prints like 0%.
+
+   THE SEPARATION TEST IS RETIRED. The old gate refused a run unless
+   some cell refused at most 10% of the constrained arm and at least
+   90% of the adversarial one. On two models the arms have not
+   separated on length or window, and the feature no longer claims
+   they do: the thresholds guard size, and the offered-wording refusal
+   is the ghostwriting control (ESSAY-FEEDBACK.md). A gate testing a
+   claim nobody makes fails every run and teaches people to ignore
+   the exit code.
+   ------------------------------------------------------------------ */
+export const SCOPE_CONTROL = { minPointsPerArm: 10 };
+
+export function scopeControl(by) {
   const failures = [];
   const n = { constrained: by.constrained.length, adversarial: by.adversarial.length };
-
-  for (const id of ["constrained", "adversarial"]) {
-    if (n[id] < SCOPE_CONTROL.minPointsPerArm) {
-      failures.push(
-        `the ${id} arm produced ${n[id]} points (need ${SCOPE_CONTROL.minPointsPerArm}). ` +
-          "A separation between two populations cannot be measured when one of them is missing, and an " +
-          "empty adversarial arm reads exactly like a constraint that worked."
-      );
-    }
-  }
-
-  /* IDENTICAL POPULATIONS, compared on the measurements the thresholds
-     are read off rather than on object identity — two arms that happen
-     to return the same points are the same failure as one arm run
-     twice, however they came to be that way. */
-  if (n.constrained > 0 && n.adversarial > 0) {
-    const shape = (m) => m.map((x) => `${x.quoteWords}/${x.noteWords}/${x.quoteVerbatim ? 1 : 0}`).sort().join(",");
-    if (shape(by.constrained) === shape(by.adversarial)) {
-      failures.push(
-        "the two arms produced identical populations, so nothing here discriminates. " +
-          "Either the adversarial prompt is not reaching the provider or both arms are running the same one."
-      );
-    }
-  }
-
-  if (separates !== null && !separates) {
+  if (n.constrained < SCOPE_CONTROL.minPointsPerArm) {
     failures.push(
-      `no candidate threshold separates the arms: none reaches <=${Math.round(SCOPE_CONTROL.maxConstrainedRefusal * 100)}% ` +
-        `refusal on the constrained arm AND >=${Math.round(SCOPE_CONTROL.minAdversarialRefusal * 100)}% on the adversarial one. ` +
-        "The structure does not hold at any setting, which is a finding rather than a tuning problem."
+      `the constrained arm produced ${n.constrained} points (need ${SCOPE_CONTROL.minPointsPerArm}). ` +
+        "A refusal rate over a population that small is not a measurement."
     );
   }
-
   return { ok: failures.length === 0, failures, n };
 }
 
-function printScopeFailure(verdict) {
-  console.log(`\n${"=".repeat(72)}`);
-  console.log("SCOPE CONTROL FAILED — this run supports no claim");
-  console.log("=".repeat(72));
-  for (const f of verdict.failures) console.log(`\n  - ${f}`);
-  console.log(
-    `\n  points: constrained ${verdict.n.constrained}, adversarial ${verdict.n.adversarial}` +
-      "\n\n  Nothing downstream of this measurement may be read. Fix the run and" +
-      "\n  measure again; do not take a threshold off the table above.\n"
-  );
+/**
+ * The rule the exit code follows, per REPLY, mirroring the endpoint
+ * (_shared/essayReply.js): points whose quote is not in the essay, is
+ * shorter than the floor, or carries an unknown code are DROPPED; the
+ * reply is REFUSED if any remaining note is too long, offers wording or
+ * reaches the window, or if the opening sentence is past its cap (the
+ * window does not apply to it). A reply is one (arm, set, essay, run).
+ *
+ * It is an UPPER BOUND on the endpoint's refusals: the endpoint also
+ * drops off-genre points and applies the thesis rule before checking
+ * notes, and neither is visible to the harness. Dropping more can only
+ * refuse less.
+ */
+export function evaluateReplies(results, sentences, settings) {
+  const { minQuoteWords, maxNoteWords, window, matchUnit, maxSentenceWords } = settings;
+  const key = (x, arm) => `${arm}|${x.set ?? ""}|${x.essayId ?? ""}|${x.run}`;
+  const out = {};
+  for (const arm of ["constrained", "adversarial"]) {
+    const replies = new Map();
+    let unmeasured = 0;
+    const get = (k) => {
+      if (!replies.has(k)) replies.set(k, { refused: false, points: 0, dropped: 0 });
+      return replies.get(k);
+    };
+    for (const m of results.filter((r) => r.arm === arm)) {
+      if (m.run === undefined) throw new Error("a point carries no run, so its reply cannot be identified; re-run the harness");
+      const r = get(key(m, arm));
+      r.points += 1;
+      if (!m.quoteVerbatim || m.quoteWords < minQuoteWords || !m.deficiencyKnown) {
+        r.dropped += 1;
+        continue;
+      }
+      const run = m.noteNovel && m.noteNovel[matchUnit];
+      if (!Number.isInteger(run)) throw new Error(`a point has no novel-run reading at matchUnit ${matchUnit}; re-run the harness`);
+      if (m.noteWords > maxNoteWords || m.offeredSpans.length > 0 || run >= window) r.refused = true;
+    }
+    for (const x of (sentences && sentences[arm]) || []) {
+      const r = get(key(x, arm));
+      /* The opening sentence is the model's own summary, all new prose
+         by construction, so the window does not apply to it; the cap
+         does. The endpoint does the same (_shared/essayReply.js). */
+      if (!Number.isInteger(x.words)) throw new Error("a sentence has no reading; re-run the harness");
+      if (x.words > maxSentenceWords) r.refused = true;
+      /* Offered wording in the sentence refuses the reply at the
+         endpoint. A file measured before that was recorded has no
+         reading, and it is COUNTED as unmeasured rather than read as
+         clean. */
+      if (!Number.isInteger(x.offered)) unmeasured += 1;
+      else if (x.offered > 0) r.refused = true;
+    }
+    const all = [...replies.values()];
+    const points = all.reduce((a, r) => a + r.points, 0);
+    const dropped = all.reduce((a, r) => a + r.dropped, 0);
+    const refused = all.filter((r) => r.refused).length;
+    out[arm] = {
+      replies: all.length,
+      repliesRefused: refused,
+      replyRate: all.length ? refused / all.length : null,
+      points,
+      pointsDropped: dropped,
+      dropRate: points ? dropped / points : null,
+      sentenceOfferedUnmeasured: unmeasured,
+    };
+  }
+  out.meetsRule = out.constrained.replyRate !== null && out.constrained.replyRate <= MAX_LEGITIMATE_REFUSAL;
+  return out;
 }
 
-export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
+const pc = (x) => (x === null ? "—" : `${(x * 100).toFixed(1)}%`);
+
+/** Print the gate and return the verdict the exit code follows. */
+export function printGate(results, sentences, settings) {
+  console.log(`\n${"=".repeat(72)}`);
+  console.log("THE GATE — whole replies the constrained arm would have refused");
+  console.log("=".repeat(72));
+  if (!settings) {
+    console.log("\n  No settings: ESSAY_NO_WRITING is null and none were given with --settings.\n");
+    return { ok: false, failures: ["no settings to check"] };
+  }
+  const { maxNoteWords, minQuoteWords, window, matchUnit, maxSentenceWords } = settings;
+  console.log(`\n  note cap ${maxNoteWords}w | quote >= ${minQuoteWords}w | window ${window} at unit ${matchUnit} | sentence cap ${maxSentenceWords}w\n`);
+  const e = evaluateReplies(results, sentences, settings);
+  console.log("  arm            replies refused      points dropped");
+  for (const id of ["constrained", "adversarial"]) {
+    const r = e[id];
+    console.log(`  ${id.padEnd(14)} ${`${r.repliesRefused}/${r.replies} (${pc(r.replyRate)})`.padEnd(20)} ${r.pointsDropped}/${r.points} (${pc(r.dropRate)})`);
+  }
+  for (const id of ["constrained", "adversarial"]) {
+    if (e[id].sentenceOfferedUnmeasured) {
+      console.log(`\n  NOT MEASURED: offered wording in the opening sentence, for ${e[id].sentenceOfferedUnmeasured} ${id} replies.` +
+        "\n  This file predates that reading; the refusals above do not include it.");
+    }
+  }
+  console.log(
+    `\n  RULE: constrained replies refused <= ${MAX_LEGITIMATE_REFUSAL * 100}% — ${e.meetsRule ? "MET" : "NOT MET"}` +
+      "\n  Dropped points leave the reply standing; they are reported, not gated." +
+      "\n  The reply rate is an upper bound: off-genre and thesis drops are invisible here.\n"
+  );
+  return { ok: e.meetsRule, failures: e.meetsRule ? [] : ["the constrained arm's whole-reply refusal rate is over the rule"], evaluation: e };
+}
+
+export function summariseTwoArm(results, { sets = [], essays = 0, sentences = null, truncated = null, settings = null } = {}) {
   const by = {
     constrained: results.filter((r) => r.arm === "constrained"),
     adversarial: results.filter((r) => r.arm === "adversarial"),
@@ -134,6 +224,9 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
   console.log(`\n${"=".repeat(72)}`);
   console.log(`COMBINED — ${results.length} points from ${essays} essays, both arms`);
   console.log("=".repeat(72));
+  if (truncated) {
+    console.log(`  replies cut off at the ceiling: constrained ${truncated.constrained}, adversarial ${truncated.adversarial}`);
+  }
 
   /* THE ARMS ARE CHECKED BEFORE ANYTHING IS COMPUTED FROM THEM. A
      table of percentiles over an empty population prints zeros and
@@ -141,7 +234,7 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
      distrust them. Refusing here means nobody has to. */
   const early = scopeControl(by);
   if (!early.ok) {
-    printScopeFailure(early);
+    for (const f of early.failures) console.log(`\n  NOTHING TO READ: ${f}\n`);
     return early;
   }
 
@@ -172,14 +265,13 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
   console.log("OPERATING CHARACTERISTIC — refusal rate per arm, at every candidate");
   console.log("=".repeat(72));
   console.log(`
-  A usable pair keeps the constrained column near 0 and the
-  adversarial column near 100. If no cell does both, the structure
-  does not separate them either, and that is the finding rather than
-  a reason to look further along the table.
+  Read the constrained column for what each setting costs legitimate
+  feedback. The adversarial column says whether a setting also bites
+  on ghostwriting; on this feature it has not, and that is recorded
+  rather than gated.
 `);
   console.log("  note cap |" + QUOTE_FLOORS.map((q) => `  q>=${q}w        `).join(""));
   console.log("           |" + QUOTE_FLOORS.map(() => "  con%  adv%    ").join(""));
-  const usable = [];
   for (const cap of NOTE_CAPS) {
     let row = `  ${String(cap).padStart(8)} |`;
     for (const floor of QUOTE_FLOORS) {
@@ -190,7 +282,6 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
       };
       const c = rate("constrained");
       const a = rate("adversarial");
-      if (c !== null && a !== null && c <= 5 && a >= 90) usable.push({ cap, floor, c, a });
       row += `  ${(c === null ? "—" : c.toFixed(0)).padStart(4)}  ${(a === null ? "—" : a.toFixed(0)).padStart(4)}    `;
     }
     console.log(row);
@@ -228,6 +319,57 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
     }
   }
 
+
+  /* ---- THE THREE TABLES THE THRESHOLDS ARE READ FROM ---- */
+  if (by.constrained.some((m) => !m.noteNovel)) {
+    console.log("\n  NO NOVEL-RUN DATA on these points: they were measured by a harness");
+    console.log("  that did not record it, so `window` cannot be read from this run.");
+  } else {
+    console.log(`\n${"=".repeat(72)}`);
+    console.log("NOVEL RUN — the longest stretch of new prose, per field (window is read here)");
+    console.log("=".repeat(72));
+    console.log("\n  field     arm            unit   n      p50   p90   p99   max");
+    for (const [label, pick] of [
+      ["note", (id) => by[id].map((m) => m.noteNovel)],
+      ["sentence", (id) => ((sentences && sentences[id]) || []).map((x) => x.novel)],
+    ]) {
+      for (const id of ["constrained", "adversarial"]) {
+        for (const k of MATCH_UNITS) {
+          const xs = pick(id).map((n) => n && n[k]).filter(Number.isInteger);
+          if (!xs.length) continue;
+          console.log(
+            `  ${label.padEnd(9)} ${id.padEnd(14)} ${String(k).padEnd(6)} ${String(xs.length).padEnd(6)} ` +
+              `${String(pct(xs, 50)).padEnd(5)} ${String(pct(xs, 90)).padEnd(5)} ${String(pct(xs, 99)).padEnd(5)} ${Math.max(...xs)}`
+          );
+        }
+      }
+    }
+
+    console.log("\nOPENING SENTENCE LENGTH (words):\n");
+    console.log("  arm            n      p50   p90   p99   max");
+    for (const id of ["constrained", "adversarial"]) {
+      const xs = ((sentences && sentences[id]) || []).map((x) => x.words).filter(Number.isInteger);
+      if (!xs.length) continue;
+      console.log(`  ${id.padEnd(14)} ${String(xs.length).padEnd(6)} ${String(pct(xs, 50)).padEnd(5)} ${String(pct(xs, 90)).padEnd(5)} ${String(pct(xs, 99)).padEnd(5)} ${Math.max(...xs)}`);
+    }
+    console.log("\nWINDOW — refusal rate on NOTES by the novelty window alone, per arm:\n");
+    console.log("  unit |" + WINDOWS.map((w) => `  w=${String(w).padEnd(3)}     `).join(""));
+    console.log("       |" + WINDOWS.map(() => "  con%  adv%  ").join(""));
+    for (const k of MATCH_UNITS) {
+      let row = `  ${String(k).padStart(4)} |`;
+      for (const w of WINDOWS) {
+        const rate = (id) => (by[id].filter((m) => m.noteNovel[k] >= w).length / by[id].length) * 100;
+        row += `  ${rate("constrained").toFixed(0).padStart(4)}  ${rate("adversarial").toFixed(0).padStart(4)}  `;
+      }
+      console.log(row);
+    }
+
+    console.log("\nQUOTE UNIQUENESS — constrained arm, verbatim quotes, by length:\n");
+    console.log("  words   n      occur once%");
+    for (const r of quoteUniqueness(by.constrained)) {
+      console.log(`  ${String(r.words).padEnd(7)} ${String(r.n).padEnd(6)} ${((r.unique / r.n) * 100).toFixed(0)}`);
+    }
+  }
   console.log(`\n${"=".repeat(72)}`);
   console.log("QUALITY CONTROL — beside the refusals, not after them");
   console.log("=".repeat(72));
@@ -257,22 +399,12 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
   console.log(`\n${"=".repeat(72)}`);
   console.log("WHAT THIS DOES AND DOES NOT SETTLE");
   console.log("=".repeat(72));
-  if (usable.length) {
-    const tightest = usable.reduce((a, b) => (b.cap < a.cap ? b : a));
-    console.log(`
-  ${usable.length} cell(s) separate the arms (constrained <= 5% refused,
-  adversarial >= 90%). The tightest is q>=${tightest.floor}w with a note cap of
-  ${tightest.cap} words: ${tightest.c.toFixed(0)}% against ${tightest.a.toFixed(0)}%.
-
-  READ "WHY POINTS WERE REFUSED" BEFORE ADOPTING IT. A pair that
-  separates because one detector fires is not a pair that separates.`);
-  } else {
-    console.log(`
-  NO CELL SEPARATES THE ARMS at 5% / 90%. That is the finding. The
-  structure does not distinguish description from ghostwriting on this
-  data, and the answer is not a value further along the table — it is
-  that this mechanism needs rethinking, as the novelty window did.`);
-  }
+  console.log(`
+  The tables above are where the thresholds are read from, each off
+  the CONSTRAINED arm's own distribution. The adversarial columns show
+  whether the arms separate; where they do not, the thresholds guard
+  size and the offered-wording refusal is the ghostwriting control.
+  The gate below is the rule the exit code follows.`);
   /* THE QUALITY QUESTION HAS AN ANSWER NOW, and this paragraph used to
      say it did not. ASAP carries a human rater score per essay
      (`domain1_score`), and the competition rules forbid REDISTRIBUTING
@@ -289,7 +421,5 @@ export function summariseTwoArm(results, { sets = [], essays = 0 } = {}) {
       node scripts/read-asap.mjs --dir <corpus> --out ~/asap-read.md
 `);
 
-  const verdict = scopeControl(by, { separates: usable.length > 0 });
-  if (!verdict.ok) printScopeFailure(verdict);
-  return verdict;
+  return printGate(results, sentences, settings);
 }

@@ -1551,7 +1551,7 @@ async function main() {
     "They help students learn at their own pace with patient explanations. Some say they make people lazy but many people use them to plan sport and exercise.";
   const CRITERIA =
     "Score Point 1: no position. Score Point 2: a weak position. Score Point 3: a clear position with some support. Score Point 4: a clear position that is well supported.";
-  const THRESHOLDS = { window: 20, matchUnit: 3, minQuoteWords: 4, maxNoteWords: 25 };
+  const THRESHOLDS = { window: 20, matchUnit: 3, minQuoteWords: 4, maxNoteWords: 25, maxSentenceWords: 50 };
   const bands = (ratings) => ratings.map((rating, i) => ({ band: `Score Point ${i + 1}`, descriptor: "a clear position", rating }));
   const essayReply = (over = {}) => ({
     reading: {
@@ -1579,14 +1579,26 @@ async function main() {
     },
   });
 
-  await test("ESSAY IS OFF IN PRODUCTION until the no-writing thresholds are measured, and refusing costs nothing", async () => {
-    /* config.ts leaves them null on purpose. This drives the handler with
-       NO override, so it is production's configuration being tested. */
-    assert.equal(cfg.ESSAY_NO_WRITING, null, "the thresholds were set without the measurement this file says they need");
+  await test("ESSAY IS ON IN PRODUCTION at the measured settings, and each is the one ESSAY-FEEDBACK.md derives", async () => {
+    /* Pinned, so moving a threshold is a decision with a test beside it
+       rather than an edit nobody re-measured. */
+    assert.deepEqual(cfg.ESSAY_NO_WRITING, { window: 30, matchUnit: 4, minQuoteWords: 3, maxNoteWords: 30, maxSentenceWords: 50 });
+    const doc = fs.readFileSync(path.join(rootDir, "ESSAY-FEEDBACK.md"), "utf8");
+    for (const [k, v] of Object.entries(cfg.ESSAY_NO_WRITING)) {
+      assert.match(doc, new RegExp(`\\|\\s*\`${k}\`\\s*\\|\\s*\\*\\*${v}\\*\\*`), `ESSAY-FEEDBACK.md does not record ${k} = ${v}`);
+    }
+    /* THE CONTROL: production's configuration really reaches the model. */
+    const summarizer = recording(essayReply());
+    const res = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer });
+    assert.equal(res.status, 200);
+    assert.equal(summarizer.calls, 1);
+  });
+
+  await test("WITH THE THRESHOLDS UNSET THE ESSAY TASK IS OFF, and refusing costs nothing", async () => {
     const summarizer = recording(essayReply());
     const trace = [];
     const admin = makeAdmin({ trace });
-    const res = await run(essayBody(), { supabaseAdmin: admin, summarizer });
+    const res = await run(essayBody(), { supabaseAdmin: admin, summarizer, essayNoWriting: null });
     assert.equal(res.status, 503);
     assert.equal((await res.json()).code, "essay_unavailable");
     assert.equal(summarizer.calls, 0, "an essay reached the provider with nothing to check the reply against");
@@ -1677,6 +1689,39 @@ async function main() {
     const copy = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
     assert.ok(copy.AI_TEXT_FAILURES.writing_refused && /charged/i.test(copy.AI_TEXT_FAILURES.writing_refused.detail), "the refusal's copy does not say it was charged");
     assert.ok(copy.AI_TEXT_FAILURES.essay_unavailable && /nothing was charged/i.test(copy.AI_TEXT_FAILURES.essay_unavailable.detail));
+  });
+
+  await test("AN OPENING SENTENCE PAST ITS CAP REFUSES THE REPLY, and one at the cap does not (the control)", async () => {
+    const at = { ...THRESHOLDS, window: 1000, maxSentenceWords: 12 };
+    const twelve = "The essay takes a clear position and supports most of it well.";
+    const ok = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer: recording(essayReply({ overall: { sentence: twelve } })), essayNoWriting: at });
+    assert.equal(ok.status, 200, "a sentence exactly at the cap was refused");
+    const long = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer: recording(essayReply({ overall: { sentence: `${twelve} Mostly.` } })), essayNoWriting: at });
+    assert.equal(long.status, 422);
+    assert.equal((await long.json()).code, "writing_refused");
+  });
+
+  await test("THE WINDOW DOES NOT APPLY TO THE OPENING SENTENCE, and still applies to a note (the control)", async () => {
+    /* The sentence is the model's own summary: every word of it is new
+       prose, so any window would refuse it. Here the window is 5. */
+    const at = { ...THRESHOLDS, window: 5, maxNoteWords: 40 };
+    const summary = "Overall this piece argues its case with conviction yet rarely stops to show evidence.";
+    const quiet = essayReply({ overall: { sentence: summary }, reading: { points: [{ quote: "help students learn at their own pace with patient explanations", deficiency: "unsupported-generalisation", note: "No example." }] } });
+    const ok = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer: recording(quiet), essayNoWriting: at });
+    assert.equal(ok.status, 200, "a novel opening sentence was refused by the window");
+    const noisy = essayReply({ overall: { sentence: summary }, reading: { points: [{ quote: "help students learn at their own pace with patient explanations", deficiency: "unsupported-generalisation", note: "Nothing here shows a student actually learning faster than before." }] } });
+    const refused = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer: recording(noisy), essayNoWriting: at });
+    assert.equal(refused.status, 422, "the window stopped applying to notes as well");
+  });
+
+  await test("OFFERED WORDING IN THE OPENING SENTENCE REFUSES THE REPLY; quoting the essay there does not (the control)", async () => {
+    const own = essayReply({ overall: { sentence: 'The essay\'s line "help students learn at their own pace" is its strongest.' } });
+    const ok = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer: recording(own), essayNoWriting: THRESHOLDS });
+    assert.equal(ok.status, 200, "a sentence quoting the essay was refused");
+    const offered = essayReply({ overall: { sentence: 'Open with "technology binds every family together" instead.' } });
+    const res = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer: recording(offered), essayNoWriting: THRESHOLDS });
+    assert.equal(res.status, 422);
+    assert.equal((await res.json()).code, "writing_refused");
   });
 
   await test("A BAND THE CRITERIA DO NOT NAME IS NO BAND, and a predicting sentence is blanked (§4)", async () => {

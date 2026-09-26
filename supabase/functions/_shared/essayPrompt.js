@@ -67,6 +67,7 @@ ${codesByGenre}
                 one to say that a criterion is met or has nothing to report.
     quote       A span copied VERBATIM from the student's essay, word for word, locating exactly where
                 the problem is. Copy it exactly as written; do not paraphrase, correct or shorten it.
+                At least three words: a shorter span occurs in too many places to locate one.
     deficiency  EXACTLY ONE code from the genre's list above. What each code means:
 ${codeMeanings}
     note        ${"{{NOTE}}"}
