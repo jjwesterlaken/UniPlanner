@@ -189,8 +189,18 @@ const serialisedLength = (value) => {
  * column fail free rather than after money is spent. See migration
  * 0006.
  */
-export function checkTextAllowance({ task, creditsUsed, taskCredits, monthlyLimit }) {
-  const cost = taskCredits[task] || 0;
+export function checkTextAllowance({ task, creditsUsed, taskCredits, monthlyLimit, photoPages = 0, photoBatchCredits = null }) {
+  /* A REQUEST CARRYING PHOTOGRAPHS IS PRICED AS A PHOTO BATCH, never
+     as the task's text weight. For weeks it was not: the screens said
+     PHOTO_BATCH_CREDITS (18) and this charged taskCredits.summarise
+     (3), because the batch price was derived and mirrored and never
+     passed here. So a photo request with no batch price REFUSES TO
+     PRICE rather than falling back to the text weight, which is the
+     silent path that under-charged. */
+  if (photoPages > 0 && !(Number.isInteger(photoBatchCredits) && photoBatchCredits > 0)) {
+    throw new Error("a photo request reached pricing with no photo batch price");
+  }
+  const cost = photoPages > 0 ? photoBatchCredits : taskCredits[task] || 0;
   const projected = (creditsUsed || 0) + cost;
   if (projected > monthlyLimit) {
     return {

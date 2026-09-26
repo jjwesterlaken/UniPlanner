@@ -839,7 +839,7 @@ async function main() {
   const IMG = "data:image/jpeg;base64," + "A".repeat(120);
   const SUMMARY_OK = { overview: "o", keyPoints: ["k"], terms: [], assessable: [], openQuestions: [] };
 
-  await test("a photo batch is relayed as vision content, priced exactly like a text chunk", async () => {
+  await test("a photo batch is relayed as vision content, and charged as a PHOTO BATCH, not a text chunk", async () => {
     const admin = makeAdmin();
     let messages = null;
     const res = await run(
@@ -854,9 +854,45 @@ async function main() {
     assert.ok(imgs.every((c) => c.image_url.url === IMG));
     const sys = messages.find((m) => m.role === "system");
     assert.match(sys.content, /NOT CLEARLY LEGIBLE, DO NOT GUESS/, "the legibility refusal left the prompt");
-    // Billed as ONE summarise -- the same weight as one text chunk.
+    /* CHARGED AS A PHOTO BATCH. This line said 3 — one text chunk —
+       from when the photo price was deliberately held there, and it
+       kept saying so after the price was re-derived to 18 and every
+       screen quoted 18. The handler charged 3 and this test agreed. */
     const bill = admin.seen.find((x) => x.op === "rpc");
-    assert.equal(bill.payload.p_credits, 3, "a photo batch is not priced as one summarise");
+    assert.equal(bill.payload.p_credits, cfg.PHOTO_BATCH_CREDITS, "a photo batch was not charged the photo batch price");
+    assert.notEqual(bill.payload.p_credits, cfg.TASK_CREDITS.summarise, "a photo batch was charged as a text chunk");
+  });
+
+  await test("THE CHARGE IS WHAT THE SCREENS SAY: the handler's real bill for one batch equals the estimate the student is shown", async () => {
+    /* Derived on both sides, so the two cannot drift apart: the server
+       side is the RPC the real handler makes, the client side is the
+       estimate the reading screen renders before the first photo, read
+       from the module that renders it. Two constants agreeing was the
+       old guard, and it was green while the handler charged neither. */
+    const { estimatePhotos } = await import(toUrl(path.join(rootDir, "src/readingChunks.js")));
+    const limits = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    const shown = estimatePhotos(4).credits;
+    assert.ok(Number.isInteger(shown) && shown > 0, `the screen's estimate for one batch is ${shown}`);
+    const charged = {};
+    for (const outcome of ["delivered", "pages_unreadable"]) {
+      const admin = makeAdmin();
+      const reply = outcome === "delivered" ? SUMMARY_OK : { unreadable: [2] };
+      await run({ task: "summarise", images: [IMG, IMG, IMG, IMG] }, { supabaseAdmin: admin, summarizer: { complete: async () => JSON.stringify(reply) } });
+      const bill = admin.seen.find((x) => x.op === "rpc" && x.payload && "p_credits" in x.payload);
+      assert.ok(bill, `no bill on the ${outcome} path, so there is nothing to compare`);
+      charged[outcome] = bill.payload.p_credits;
+    }
+    assert.equal(charged.delivered, shown, `the screen says ${shown} for a batch and the handler charged ${charged.delivered}`);
+    assert.equal(charged.pages_unreadable, shown, `a refused batch is billed, and it charged ${charged.pages_unreadable} against the ${shown} shown`);
+    assert.equal(limits.PHOTO_BATCH_CREDITS, cfg.PHOTO_BATCH_CREDITS, "the client mirror and the server constant disagree");
+  });
+
+  await test("a photo request with no batch price REFUSES to be priced, rather than falling back to the text weight", async () => {
+    const guards = await import(toUrl(path.join(rootDir, "supabase/functions/ai-text/guards.js")));
+    const base = { task: "summarise", creditsUsed: 0, taskCredits: { summarise: 3 }, monthlyLimit: 900 };
+    assert.throws(() => guards.checkTextAllowance({ ...base, photoPages: 4 }), /no photo batch price/);
+    assert.equal(guards.checkTextAllowance({ ...base, photoPages: 4, photoBatchCredits: 18 }).cost, 18);
+    assert.equal(guards.checkTextAllowance({ ...base }).cost, 3, "a text request is priced by its task");
   });
 
   await test("a trial account is refused the pages past its cap, having spent nothing", async () => {

@@ -34,6 +34,7 @@ import { checkRewriteSpan } from "../_shared/essayRewrite.js";
 import { openaiTextAdapter } from "./openai.ts";
 import {
   TASKS,
+  PHOTO_BATCH_CREDITS,
   MAX_TOKENS,
   MAX_INPUT_CHARS,
   PHOTOS_PER_CHUNK,
@@ -291,6 +292,10 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       creditsUsed,
       taskCredits: TASK_CREDITS,
       monthlyLimit: spent.limit,
+      /* The screens quote PHOTO_BATCH_CREDITS for a batch; this is what
+         makes the server charge it. */
+      photoPages,
+      photoBatchCredits: PHOTO_BATCH_CREDITS,
     });
     if (!allowance.ok) {
       logStage(stage, { rejected: allowance.code });
