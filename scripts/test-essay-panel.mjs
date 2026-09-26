@@ -231,6 +231,11 @@ fs.writeFileSync(
     "  globalThis.__calls = [...(globalThis.__calls || []), args];\n" +
     "  if (globalThis.__gate) await globalThis.__gate;\n" +
     "  if (args.task === 'rewrite') return { allowanceUsed: 0.2, result: { rewrite: 'Everyone can be helped by computers.' } };\n" +
+    "  if (args.task === 'criteria') {\n" +
+    "    if (globalThis.__criteriaReply && globalThis.__criteriaReply.code) { const e = new Error('x'); e.code = globalThis.__criteriaReply.code; e.body = globalThis.__criteriaReply; throw e; }\n" +
+    "    globalThis.__downscaled = (globalThis.__downscaled || 0);\n" +
+    "    return { allowanceUsed: 0.3, result: { criteria: 'High Distinction: Sustained original argument.\\nPass: An argument is present.' } };\n" +
+    "  }\n" +
     "  return { allowanceUsed: 0.15, result: globalThis.__result };\n" +
     "};\n"
 );
@@ -313,6 +318,18 @@ const bundle = await build({
         /* THE REWRITE FLAG, ON FOR THE PROBE ONLY. Production ships it
            false (asserted below); the probe needs the path it will
            take the day it is flipped. */
+        /* jsdom has no canvas, so the downscaler is the one piece stubbed:
+           it returns a data URL of the shape the real one produces. */
+        b.onLoad({ filter: /aiText\.jsx$/ }, (args) => ({
+          contents: fs
+            .readFileSync(args.path, "utf8")
+            .replace(
+              "export async function downscalePhoto(file, { maxEdge = 1024, quality = 0.8 } = {}) {",
+              'export async function downscalePhoto(file, { maxEdge = 1024, quality = 0.8 } = {}) {\n  globalThis.__edges = [...(globalThis.__edges || []), maxEdge];\n  return "data:image/jpeg;base64,QUJD";'
+            ),
+          loader: "jsx",
+          resolveDir: path.dirname(args.path),
+        }));
         b.onLoad({ filter: /essayFeedback\.js$/ }, (args) => ({
           contents: fs
             .readFileSync(args.path, "utf8")
@@ -687,6 +704,116 @@ await test("AN UNSAVED RESULT IS LOST ON RELOAD, and both the opt-in and the ? s
   const optIn = q(host, "[data-essay-opt-in]");
   assert.ok(optIn, "no opt-in rendered, so this proves nothing");
   assert.ok(optIn.textContent.includes(ESSAY_COPY.reloadLoses), "the opt-in does not say an unsaved result is lost on reload");
+});
+
+/* ---------------- marking criteria from a photo ---------------- */
+
+const pick = (input, n) => {
+  const files = Array.from({ length: n }, (_, i) => new win.File(["x"], `p${i}.jpg`, { type: "image/jpeg" }));
+  Object.defineProperty(input, "files", { value: files, configurable: true });
+  input.dispatchEvent(new win.Event("change", { bubbles: true }));
+};
+
+await test("PHOTOGRAPH YOUR CRITERIA: the photos go as one criteria batch, and the transcription lands in the box, editable", async () => {
+  win.__calls = [];
+  win.__criteriaReply = null;
+  const { host } = win.__mount([essayRow()]);
+  await tick();
+  q(host, "[data-essay-open]").click();
+  await tick();
+  const { TASK_CREDITS } = await import("../src/aiTextLimits.js");
+  assert.ok(TASK_CREDITS.criteria > 0, "the criteria batch has no price, so the line below proves nothing");
+  assert.equal(q(host, "[data-criteria-photo-cost]").textContent, ESSAY_COPY.criteriaPhoto.cost(TASK_CREDITS.criteria, 4), "the criteria batch's own price is not shown before the tap");
+  pick(q(host, "[data-criteria-photo-input]"), 2);
+  await tick();
+  await tick();
+  assert.equal(win.__calls.length, 1);
+  assert.equal(win.__calls[0].task, "criteria");
+  assert.equal(win.__calls[0].payload.images.length, 2);
+  assert.ok(!("text" in win.__calls[0].payload), "the criteria batch carried text");
+  const box = q(host, "[data-essay-criteria]");
+  assert.match(box.value, /High Distinction: Sustained original argument\./, "the transcription did not reach the box");
+  assert.equal(box.readOnly, false, "the transcription is not editable");
+  assert.ok(q(host, "[data-criteria-photo-done]"), "no prompt to check it against the original");
+  type(box, box.value + "\nCredit: A clear argument.");
+  await tick();
+  assert.match(q(host, "[data-essay-criteria]").value, /Credit: A clear argument\./, "an edit to the transcription did not stick");
+});
+
+await test("A SECOND BATCH APPENDS rather than replacing what is already in the box", async () => {
+  win.__calls = [];
+  const { host } = win.__mount([essayRow()]);
+  await tick();
+  q(host, "[data-essay-open]").click();
+  await tick();
+  type(q(host, "[data-essay-criteria]"), "Criterion 1: pasted by hand.");
+  await tick();
+  pick(q(host, "[data-criteria-photo-input]"), 1);
+  await tick();
+  await tick();
+  const v = q(host, "[data-essay-criteria]").value;
+  assert.ok(v.startsWith("Criterion 1: pasted by hand."), "the pasted criteria were overwritten");
+  assert.match(v, /High Distinction/);
+});
+
+await test("MORE THAN FOUR PHOTOS is refused before anything is sent, and an unreadable photo is named", async () => {
+  win.__calls = [];
+  const { host } = win.__mount([essayRow()]);
+  await tick();
+  q(host, "[data-essay-open]").click();
+  await tick();
+  pick(q(host, "[data-criteria-photo-input]"), 5);
+  await tick();
+  assert.equal(win.__calls.length, 0, "five photos were sent");
+  assert.ok(host.textContent.includes(ESSAY_COPY.criteriaPhoto.tooMany(4)));
+  win.__criteriaReply = { ok: false, code: "pages_unreadable", pages: [2] };
+  pick(q(host, "[data-criteria-photo-input]"), 3);
+  await tick();
+  await tick();
+  const err = q(host, "[data-criteria-photo-error]");
+  assert.ok(err && err.textContent === ESSAY_COPY.criteriaPhoto.unreadable([2]), `the unreadable photo was not named: ${err && err.textContent}`);
+  assert.equal(q(host, "[data-essay-criteria]").value, "", "a refused batch put something in the box");
+  win.__criteriaReply = null;
+});
+
+await test("CRITERIA PHOTOS LEAVE AT THE SIZE THEIR PRICE WAS MEASURED AT", async () => {
+  win.__calls = [];
+  win.__edges = [];
+  const { CRITERIA_PHOTO_MAX_EDGE } = await import("../src/aiTextLimits.js");
+  assert.ok(Number.isInteger(CRITERIA_PHOTO_MAX_EDGE) && CRITERIA_PHOTO_MAX_EDGE > 0, "no criteria photo size");
+  const { host } = win.__mount([essayRow()]);
+  await tick();
+  q(host, "[data-essay-open]").click();
+  await tick();
+  pick(q(host, "[data-criteria-photo-input]"), 2);
+  await tick();
+  await tick();
+  assert.ok(win.__edges.length === 2, `${win.__edges.length} photos were downscaled, not 2`);
+  assert.ok(win.__edges.every((e) => e === CRITERIA_PHOTO_MAX_EDGE), `downscaled at ${win.__edges.join(", ")}, not ${CRITERIA_PHOTO_MAX_EDGE}`);
+});
+
+await test("A PARTIAL TRANSCRIPTION IS SHOWN AS PARTIAL: what was read goes in the box, the missed parts are named, and it is not called done", async () => {
+  win.__calls = [];
+  win.__criteriaReply = { ok: false, code: "criteria_partial", criteria: "Argument\nHigh Distinction: A sustained", missed: ["photo 1, bottom half"] };
+  const { host } = win.__mount([essayRow()]);
+  await tick();
+  q(host, "[data-essay-open]").click();
+  await tick();
+  pick(q(host, "[data-criteria-photo-input]"), 1);
+  await tick();
+  await tick();
+  assert.equal(q(host, "[data-essay-criteria]").value, "Argument\nHigh Distinction: A sustained", "what WAS read did not reach the box");
+  const note = q(host, "[data-criteria-photo-partial]");
+  assert.ok(note, "a partial transcription was not marked partial");
+  assert.equal(note.textContent, ESSAY_COPY.criteriaPhoto.partial(["photo 1, bottom half"]));
+  assert.equal(q(host, "[data-criteria-photo-done]"), null, "a partial transcription was presented as done");
+  assert.match(ESSAY_COPY.criteriaPhoto.partial(["x"]), /nothing was charged/i);
+  /* A whole batch afterwards clears the partial mark. */
+  win.__criteriaReply = null;
+  pick(q(host, "[data-criteria-photo-input]"), 1);
+  await tick();
+  await tick();
+  assert.equal(q(host, "[data-criteria-photo-partial]"), null, "a later complete batch left the partial mark up");
 });
 
 await test("nothing above logged a React error", () => {

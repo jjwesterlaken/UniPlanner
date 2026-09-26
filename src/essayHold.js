@@ -45,6 +45,12 @@ export const blankEntry = () => ({
      the button again, which would charge a second read. */
   pending: false,
   rewritePending: null,
+  /* Marking criteria from a photo in flight, and whether the box holds
+     a transcription the student should check. */
+  criteriaPending: false,
+  criteriaFromPhoto: false,
+  /* The parts a partial transcription missed, until the next batch. */
+  criteriaPartial: null,
 });
 
 export function createEssayHold() {

@@ -16,9 +16,11 @@
    ================================================================== */
 
 import { useState, useRef, useSyncExternalStore } from "react";
-import { Sparkles, X, Check, FileText } from "lucide-react";
-import { AiActionFrame, useTask } from "./aiText.jsx";
-import { TASK_CREDITS, ESSAY_MAX_CHARS } from "./aiTextLimits.js";
+import { Sparkles, X, Check, FileText, Camera } from "lucide-react";
+import { AiActionFrame, useTask, downscalePhoto } from "./aiText.jsx";
+import { AI_TEXT_FAILURES } from "./aiTextCopy.js";
+import { PHOTOS_PER_CHUNK } from "./readingChunks.js";
+import { TASK_CREDITS, ESSAY_MAX_CHARS, CRITERIA_PHOTO_ENABLED, CRITERIA_PHOTO_MAX_EDGE } from "./aiTextLimits.js";
 import { ESSAY_COPY } from "./essayCopy.js";
 import { orderedPoints, reasonsFor, RATINGS, MAX_COMMENT_CHARS, ESSAY_REWRITE_ENABLED, aiUseText } from "./essayFeedback.js";
 import { createEssayHold } from "./essayHold.js";
@@ -353,6 +355,23 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
               <label className={labelCls}>{ESSAY_COPY.criteriaLabel}</label>
               <textarea data-essay-criteria className={inputCls} rows={4} spellCheck={false} value={criteria} onChange={(e) => setCriteria(e.target.value)} />
               <p className="mt-0.5 text-xs text-stone-500">{ESSAY_COPY.criteriaHint}</p>
+              {CRITERIA_PHOTO_ENABLED && (
+                <CriteriaPhoto
+                  session={session}
+                  allowanceApi={allowanceApi}
+                  pending={held.criteriaPending}
+                  setPending={(v) => put({ criteriaPending: v })}
+                  onText={(text, missed = null) =>
+                    put((cur) => ({
+                      criteria: !text ? cur.criteria : cur.criteria.trim() ? `${cur.criteria.trimEnd()}\n\n${text}` : text,
+                      criteriaFromPhoto: true,
+                      criteriaPartial: missed,
+                    }))
+                  }
+                  filled={held.criteriaFromPhoto}
+                  partial={held.criteriaPartial}
+                />
+              )}
             </div>
             <p className="text-xs text-stone-500">{ESSAY_COPY.cost(TASK_CREDITS.essay)}</p>
             {local && <p className="text-xs text-amber-800">{local}</p>}
@@ -475,6 +494,81 @@ export function EssayHelp() {
         ))}
       </ol>
       <p data-essay-help-note className="mt-2 text-xs text-stone-500">{ESSAY_COPY.help.note}</p>
+    </div>
+  );
+}
+
+/**
+ * Marking criteria from a photo. Up to PHOTOS_PER_CHUNK images, sent as
+ * one `criteria` batch, and the transcription lands in the criteria box
+ * as ordinary editable text. The essay stays paste-only.
+ *
+ * The pending flag and the result go through the hold, like a read: a
+ * batch that lands while the student is on another tab still fills the
+ * box, and a remounted panel does not offer the button a second time.
+ */
+function CriteriaPhoto({ session, allowanceApi, pending, setPending, onText, filled, partial = null }) {
+  const c = ESSAY_COPY.criteriaPhoto;
+  const { run, busy, error, errorDetailRef } = useTask(session, allowanceApi.applyFraction);
+  const [local, setLocal] = useState(null);
+  const [unreadable, setUnreadable] = useState(null);
+  const working = busy || pending;
+
+  const send = async (fileList) => {
+    setLocal(null);
+    setUnreadable(null);
+    const files = [...fileList].filter((f) => f && /^image\//.test(f.type || "image/"));
+    if (files.length === 0) return;
+    if (files.length > PHOTOS_PER_CHUNK) return setLocal(c.tooMany(PHOTOS_PER_CHUNK));
+    setPending(true);
+    try {
+      const images = [];
+      for (const f of files) images.push(await downscalePhoto(f, { maxEdge: CRITERIA_PHOTO_MAX_EDGE }));
+      const out = await run("criteria", { images });
+      if (out && out.criteria) onText(out.criteria, null);
+      else {
+        const detail = errorDetailRef.current;
+        if (detail && Array.isArray(detail.pages)) setUnreadable(detail.pages);
+        /* PARTIAL: what was read goes in the box, marked incomplete. */
+        if (detail && detail.code === "criteria_partial") onText(typeof detail.criteria === "string" ? detail.criteria : "", Array.isArray(detail.missed) ? detail.missed : []);
+      }
+    } catch (e) {
+      setLocal(AI_TEXT_FAILURES.server_error ? AI_TEXT_FAILURES.server_error.title : null);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const failure = error && error !== "pages_unreadable" && error !== "criteria_partial" ? AI_TEXT_FAILURES[error] : null;
+  return (
+    <div data-criteria-photo className="mt-2 space-y-1">
+      <label className={`${btnGhost} cursor-pointer ${working ? "pointer-events-none opacity-40" : ""}`}>
+        <Camera size={14} /> {working ? c.working : c.button}
+        {/* No `capture`: it would hide the photo library and files (see
+            the readings picker). Images only; the essay is never a photo. */}
+        <input
+          data-criteria-photo-input
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          disabled={working}
+          onChange={(e) => {
+            send(e.target.files || []);
+            e.target.value = "";
+          }}
+        />
+      </label>
+      <p data-criteria-photo-cost className="text-xs text-stone-500">{c.cost(TASK_CREDITS.criteria, PHOTOS_PER_CHUNK)}</p>
+      {partial && !working && <p data-criteria-photo-partial className="text-xs text-amber-800">{c.partial(partial)}</p>}
+      {filled && !partial && !working && <p data-criteria-photo-done className="text-xs text-stone-600">{c.done}</p>}
+      {unreadable && <p data-criteria-photo-error className="text-xs text-amber-800">{c.unreadable(unreadable)}</p>}
+      {failure && (
+        <p data-criteria-photo-error className="text-xs text-amber-800">
+          {failure.title} {typeof failure.detail === "string" ? failure.detail : ""}
+        </p>
+      )}
+      {local && <p className="text-xs text-amber-800">{local}</p>}
     </div>
   );
 }

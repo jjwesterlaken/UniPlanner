@@ -817,6 +817,97 @@ secondary button, with its cost on its own line beneath — because
 text read as a caption. Grace can restyle it; a test holds that it is a
 bordered, padded button with the cost outside its label.
 
+### Marking criteria from a photo (Jared, 27 September 2026)
+
+The criteria box has a **Photograph your criteria** button: up to four
+photos or screenshots, sent as one `criteria` batch, and the result
+lands in the box as ordinary editable text for the student to check
+against the original. **The essay stays paste-only**: the endpoint
+refuses photos on the essay task, and refuses text on this one.
+
+**A transcription, not a summary, and that is why it is its own
+task.** The existing photo path summarises a reading. The essay's band
+check reads the criteria's **own band names** ("reads like a Credit"),
+so a paraphrased band is one the feedback can no longer name. The
+prompt says word for word, keeps every band name exactly as written,
+and lays a table out as `<band>: <descriptor>` lines under each
+criterion.
+
+**Priced from its own measurement, not borrowed (Jared, 27 September
+2026).** `MEASURED_CRITERIA_BATCH_INPUT_TOKENS` in `ai-text/config.ts`
+is the bill for four photos, and `TASK_CREDITS.criteria` is derived
+from it the way every weight is. It is **4,263 → 18 credits**, equal to
+a reading's 18 because the two measured inputs (4,263 and 4,234) fall
+in the same band, not because one borrows the other.
+
+**How 4,263 was measured**, because one term came from a different
+size. `--diagnose` on two real rubric photos gave the prompt's share
+from a one-photo and a two-photo call at 1,536: **423 tokens on both
+photos**, which is what shows it does not depend on the image. The
+densest photo, a phone photo of a printed page, was 1,383 at 1,024, so
+one photo is 960 and four photos are 423 + 4 × 960 = 4,263. The typed
+table screenshot was 607. Nothing in that is modelled.
+
+**The first measurement's alarm was not a defect, and the control is
+why that is known.** A phone photo came back as two bullet points
+"from a page with far more text". Two explanations fit: the 1,024px
+downscale had left the rest illegible, or the page held no more
+criteria than that. `--diagnose` ran the criteria prompt and a
+read-everything control at 1,024 and 1,536. The page read the same at
+both sizes (213 and 225 words), and it was task description and
+learning outcomes, **no marking criteria at all**. The criteria prompt
+returns nothing for it, which is `no_criteria_found`, free, and right.
+Jared confirmed against the original that page 1 ends at those two
+bullets.
+
+**So criteria photos go at 1,024, the reading size (Jared's ruling).**
+Resolution was not the limit and 1,536 doubled the input tokens.
+`CRITERIA_PHOTO_MAX_EDGE` holds it, and the measurement script reads
+it, so a change of size is a change of price that gets measured.
+
+**The completeness report stays, because it is right on its own.** The
+schema carries `complete` and `missed`, and the model is told never to
+guess. A reply that is not `complete: true` with nothing missed is
+`criteria_partial`, and **a missing verdict is not a yes**. What was
+read goes into the box marked incomplete, with the missed parts named.
+**A partial is free, unlike `pages_unreadable`**: an illegible photo is
+billed because its cause is the student's photograph, while a partial
+read may be caused by our own downscale, and the server cannot tell the
+two apart. Completeness is still the model's self-report; the field
+makes an honest report possible, not certain.
+
+**The switch.** The task refuses `criteria_unavailable` free before the
+allowance read while the constant is null, and the client draws the
+button only when `CRITERIA_PHOTO_ENABLED` is set, with a test holding
+the two in agreement (the example rewrite's shape). The handler prices
+every photo request per task (`photoBatchCreditsFor`), so a criteria
+batch and a reading's batch never borrow each other's figure.
+
+**Outcomes otherwise follow the existing rules:** an illegible photo
+is `pages_unreadable` and billed, as for a reading; no criteria in the
+photos is `no_criteria_found` and free; an unusable reply is
+`ai_failed` and free. The photos count against the trial's eight-page
+photo cap like any photographed page.
+
+**Consent: the page-photos material type, no bump (ruled).** The route
+`ai-text:criteria` maps to `page-photos`, so the fingerprint and the
+version do not move. The policy's "text or photos you supply" covers
+it; its "photos of pages you are studying" is a looser fit, and is
+worth Grace's eye on the next policy pass.
+
+**NOT MEASURED.** `scripts/measure-criteria-photos.mjs` runs the
+shipped prompt, model, ceiling and downscale against real photos and
+reports word recall and precision against a typed truth, **every band
+name not reproduced verbatim**, the input tokens a rubric really costs
+against the reading batch the price is derived from, and truncation
+headroom. The ceiling and the prompt move on what it prints.
+
+**And a gap on the same path, fixed with it.** `callAiText` never put
+the response body on the error it threw, so the unreadable page list
+the reading screen reads from `err.body` never arrived: a student was
+told pages could not be read, never which. The body rides on the error
+now, and a test drives the real client against the server's shape.
+
 ### Consent: the same gate, through `AiActionFrame`
 
 All five text features render their controls through `AiActionFrame`,

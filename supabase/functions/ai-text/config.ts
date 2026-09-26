@@ -44,7 +44,7 @@ import {
 
 export const SUMMARY_PROVIDER = "openai";
 
-export const TASKS = ["practice", "explain", "weakspots", "summarise", "merge", "essay", "rewrite"] as const;
+export const TASKS = ["practice", "explain", "weakspots", "summarise", "merge", "essay", "rewrite", "criteria"] as const;
 export type Task = (typeof TASKS)[number];
 
 /* ---------- output ceilings, one justification each ----------
@@ -99,6 +99,15 @@ export const MAX_TOKENS: Record<Task, number> = {
      use, priced by the same rule as every task. measure-rewrite.mjs
      prints the real completion tokens, and the ceiling moves on that. */
   rewrite: 1500,
+
+  /* MARKING CRITERIA FROM A PHOTO (Jared, 27 September 2026): a
+     rubric transcribed verbatim so the essay's band check can read the
+     criteria's own band names. MEASURED on three rubrics (27 September
+     2026): the densest, three PDF pages of task and criteria, produced
+     940 output tokens; a four-photo batch of that density is ~1,250.
+     2,000 keeps truncation, which the adapter turns into a hard error,
+     well out of reach for a batch of four. */
+  criteria: 2000,
 };
 
 /* ---------- input caps ----------
@@ -130,6 +139,11 @@ export const MAX_INPUT_CHARS: Record<Task, number> = {
      too, but only so the server can check scope, and is capped by
      MAX_INPUT_CHARS.essay; it is never sent on, so it is not priced. */
   rewrite: 2_000,
+  /* PHOTOGRAPHS ONLY, never text, so its input is bounded by the image
+     limits below (PHOTOS_PER_CHUNK of MAX_IMAGE_BASE64_CHARS each) and
+     this cap is never compared with anything. Set to that product so
+     the "every task has an input cap" test says something true. */
+  criteria: 4 * 700_000,
 };
 
 /* ---------- photographed pages ----------
@@ -265,14 +279,54 @@ export const ratesForTask = (task: Task) => {
   return rates;
 };
 
+/* THE PHOTO-ONLY TASKS carry no text, so text caps mean nothing for
+   them; each is priced from its OWN measured batch input at the vision
+   model's rates, plus its output ceiling.
+
+   MARKING CRITERIA ARE NOT PRICED FROM A READING'S BATCH (Jared, 27
+   September 2026: "derive the criteria task's own credits from these
+   measurements rather than borrowing 18").
+
+   MEASURED, 27 September 2026, with scripts/measure-criteria-photos.mjs
+   --diagnose on two real rubric photos, at 1,024px (CRITERIA_PHOTO_MAX_
+   EDGE, the reading size, by ruling: resolution was not the limit and
+   1,536 doubled the input). The PROMPT's share, read off a one-photo
+   and a two-photo call, was 423 tokens on BOTH photos, which is what
+   licenses using it at another size: it does not depend on the image.
+   The densest photo, a phone photo of a printed page, was 1,383 at
+   1,024, so one photo is 960 and a four-photo batch 423 + 4 x 960 =
+   4,263. The typed-table screenshot was 607. Re-measure with the same
+   command when the prompt or the size moves: at detail "original" an
+   image's bill does not extrapolate (_shared/model.ts). */
+export const MEASURED_CRITERIA_BATCH_INPUT_TOKENS: number | null = 4263;
+export const CRITERIA_PHOTO_ON = Number.isInteger(MEASURED_CRITERIA_BATCH_INPUT_TOKENS) && (MEASURED_CRITERIA_BATCH_INPUT_TOKENS as number) > 0;
+
+export const PHOTO_ONLY_TASKS: readonly Task[] = ["criteria"];
+const photoBatchInputTokens = (task: Task) => (task === "criteria" ? MEASURED_CRITERIA_BATCH_INPUT_TOKENS : null);
+
 /** What one call of `task` costs us, at its own input and output caps. */
 export const usdForTask = (task: Task) =>
-  (MAX_INPUT_CHARS[task] / CHARS_PER_TOKEN) * (ratesForTask(task).in / 1_000_000) +
-  MAX_TOKENS[task] * (ratesForTask(task).out / 1_000_000);
+  PHOTO_ONLY_TASKS.includes(task)
+    ? (photoBatchInputTokens(task) ?? NaN) * (VISION_USD_PER_1M_INPUT / 1_000_000) +
+      MAX_TOKENS[task] * (VISION_USD_PER_1M_OUTPUT / 1_000_000)
+    : (MAX_INPUT_CHARS[task] / CHARS_PER_TOKEN) * (ratesForTask(task).in / 1_000_000) +
+      MAX_TOKENS[task] * (ratesForTask(task).out / 1_000_000);
 
+
+
+/* A task switched off (its measured input still null) has no cost to
+   derive from, so it is priced 0 and nothing can be charged for it; the
+   handler refuses it before the allowance read regardless. */
 export const TASK_CREDITS: Record<Task, number> = Object.fromEntries(
-  TASKS.map((task) => [task, creditsFor(usdForTask(task))])
+  TASKS.map((task) => [task, Number.isFinite(usdForTask(task)) ? creditsFor(usdForTask(task)) : 0])
 ) as Record<Task, number>;
+
+/* What a request CARRYING PHOTOS is charged, per task. A reading's
+   batch and a criteria batch are different bills at different
+   resolutions, so neither borrows the other's. Read by the handler;
+   PHOTO_BATCH_CREDITS is defined below and filled in there. */
+export const photoBatchCreditsFor = (task: Task): number | null =>
+  task === "summarise" ? PHOTO_BATCH_CREDITS : task === "criteria" ? (CRITERIA_PHOTO_ON ? TASK_CREDITS.criteria : null) : null;
 
 /* ---------- essay feedback: the two things that must be true first ----------
 

@@ -279,6 +279,10 @@ export const MATERIAL_ROUTES = {
   "ai-text:summarise": ["own-notes-and-cards", "pasted-reading"],
   // Photographs of pages, selected inside `summarise` by the body.
   "ai-text:summariseImages": ["page-photos"],
+  /* Marking criteria from a photograph (Jared, 27 September 2026):
+     photographs of pages, under the same promise as a photographed
+     reading — relayed, never stored. RULED: no consent bump. */
+  "ai-text:criteria": ["page-photos"],
   /* DERIVED, NOT NEW. `merge` sends the section summaries this endpoint
      produced from a pasted reading — so what goes out is the reading's
      content in our words, to the same company, under the same promise.

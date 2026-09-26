@@ -45,7 +45,26 @@ export const TASK_CREDITS = {
   essay: 9,
   /* One example rewrite of one passage, on the same model. */
   rewrite: 3,
+  /* Marking criteria from up to four photos, priced from its OWN
+     measured batch (ai-text/config.ts): 4,263 input tokens, 27 September
+     2026. Equal to a reading's 18 because the two measured inputs fall
+     in the same band, not because one borrows the other. */
+  criteria: 18,
 };
+
+/* THE CLIENT HALF OF THE CRITERIA-PHOTO SWITCH, the rewrite's shape.
+   The server refuses `criteria` until MEASURED_CRITERIA_BATCH_INPUT_TOKENS
+   is set; this decides only whether the button is DRAWN. A test holds
+   the two in agreement, and holds TASK_CREDITS.criteria to the server's. */
+export const CRITERIA_PHOTO_ENABLED = true;
+
+/* The size criteria photos leave the device at, and the size their
+   price was measured at: the reading size, 1024 (Jared, 27 September
+   2026). 1536 was tried when a phone photo came back as two bullets;
+   the diagnosis showed the page was simply all task description, the
+   same words were legible at both sizes, and 1536 doubled the input.
+   Read by the measurement script, so a change here is measured. */
+export const CRITERIA_PHOTO_MAX_EDGE = 1024;
 
 /* MAX_INPUT_CHARS.essay in ai-text/config.ts: the draft and the
    criteria together. Mirrored so the panel refuses a paste the server

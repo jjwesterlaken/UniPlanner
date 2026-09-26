@@ -47,7 +47,11 @@ export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, 
      original -- the client never sends one, so over-length means a
      hand-built request. */
   const images = Array.isArray(body.images) ? body.images : null;
-  if (images && task !== "summarise") return bad("images are only accepted for summarise");
+  /* `criteria` is marking criteria from a photograph, and it is
+     photographs or nothing: the essay stays paste-only, and a rubric
+     that can be pasted is pasted into the essay request itself. */
+  if (task === "criteria" && !images) return bad("images are required for this task");
+  if (images && task !== "summarise" && task !== "criteria") return bad("images are only accepted for summarise and criteria");
   if (images && text) return bad("one medium per request: text or images, not both");
   if (images) {
     if (images.length < 1) return bad("images is empty");

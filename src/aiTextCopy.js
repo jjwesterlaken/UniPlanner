@@ -92,6 +92,22 @@ export const AI_TEXT_FAILURES = {
      of eight must know the resubmit costs before they send it. The
      page numbers are interpolated by the panel, which is the only place
      that knows them. */
+  /* Marking criteria from a photo found none in the photos. Free:
+     nothing usable came back. */
+  criteria_unavailable: {
+    title: "Photographing criteria isn't available yet.",
+    detail: "Nothing was charged. Paste the criteria into the box instead.",
+  },
+  /* The criteria box shows its own, fuller sentence naming the parts
+     missed (essayCopy.js); this is the generic fallback. */
+  criteria_partial: {
+    title: "Only part of your criteria could be read.",
+    detail: "Nothing was charged. Retake the photo closer, flat and in good light, and try again.",
+  },
+  no_criteria_found: {
+    title: "We couldn't find marking criteria in those photos.",
+    detail: "Nothing was charged. Photograph the rubric or marking criteria themselves, or paste them instead.",
+  },
   pages_unreadable: {
     title: "Some pages couldn't be read clearly.",
     detail:
