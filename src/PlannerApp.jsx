@@ -112,6 +112,19 @@ import {
   Settings,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView, useRecordingSession, RecordingIndicator } from "./aiNotes.jsx";
+import { EssayFeedbackPanel, MarkCompareAsk } from "./essayPanel.jsx";
+import {
+  optInNeeded,
+  ESSAY_OPT_IN_VERSION,
+  showMarkCompare,
+  deliveredRow,
+  ratedRow,
+  onMarkRow,
+  essayNoteFields,
+} from "./essayFeedback.js";
+import { recordFeedback } from "./essayFeedbackStore.js";
+import { ESSAY_COPY } from "./essayCopy.js";
+import { TASK_CREDITS } from "./aiTextLimits.js";
 import {
   PracticePanel,
   WeakSpotsExplain,
@@ -4455,7 +4468,7 @@ const ASSESSMENT_KINDS = [
   { id: "other", label: "Other" },
 ];
 
-function Grades({ assessments, courses, addItem, patchItem, removeItem, focused, rule = DEFAULT_ROUNDING }) {
+export function Grades({ assessments, courses, addItem, patchItem, removeItem, focused, rule = DEFAULT_ROUNDING, essay = null }) {
   const blank = { course: "", title: "", w: "", mark: "", kind: "assignment", due: "", hurdle: "" };
   const [form, setForm] = useState(blank);
   const [targets, setTargets] = useState({}); // course -> band code the student is aiming at
@@ -4545,6 +4558,7 @@ function Grades({ assessments, courses, addItem, patchItem, removeItem, focused,
             onTarget={(code) => setTargets({ ...targets, [course]: code })}
             patchItem={patchItem}
             removeItem={removeItem}
+            essay={essay}
           />
         ))
       )}
@@ -4552,7 +4566,12 @@ function Grades({ assessments, courses, addItem, patchItem, removeItem, focused,
   );
 }
 
-function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeItem }) {
+function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeItem, essay = null }) {
+  /* Which mark field has focus, so the ask waits until typing stops;
+     and which rows were just answered, so the thanks outlives the
+     flag that removes the ask (the recovery card's `gone` lesson). */
+  const [editingMark, setEditingMark] = useState(null);
+  const [answered, setAnswered] = useState(() => new Set());
   const summary = useMemo(() => summarise(list), [list]);
   const best = useMemo(() => bestReachableBand(list, rule), [list, rule]);
   const bandCode = target || best.code;
@@ -4576,7 +4595,8 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
 
       <ul className="mb-3 flex flex-col gap-1">
         {list.map((a) => (
-          <li key={a.id} className="flex items-center gap-2 rounded-lg border border-stone-100 px-3 py-2 text-sm">
+          <li key={a.id} className="rounded-lg border border-stone-100 text-sm">
+          <div className="flex items-center gap-2 px-3 py-2">
             <span className="flex-1 truncate text-stone-800">
               {a.title}
               {a.kind === "exam" && <span className="ml-1.5 text-xs text-stone-400">exam</span>}
@@ -4592,11 +4612,36 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
               onChange={(e) =>
                 patchItem("assessments", a.id, e.target.value === "" ? { mark: null } : { mark: Number(e.target.value) })
               }
+              onFocus={() => setEditingMark(a.id)}
+              onBlur={() => setEditingMark(null)}
               aria-label={`Mark for ${a.title}`}
             />
             <button className={iconBtn} onClick={() => removeItem("assessments", a.id)} aria-label={`Remove ${a.title}`}>
               <Trash2 size={15} />
             </button>
+          </div>
+          {essay && (
+            <div className="px-3 pb-2">
+              <EssayFeedbackPanel
+                session={essay.session}
+                assessment={a}
+                allowanceApi={essay.allowanceApi}
+                optIn={essay.optIn}
+                onDelivered={(x) => essay.onDelivered(a, x)}
+                onRate={(x) => essay.onRate(a, x)}
+                onSave={(x) => essay.onSave(a, x)}
+              />
+            </div>
+          )}
+          {essay && (showMarkCompare(a, { editing: editingMark === a.id }) || answered.has(a.id)) && (
+            <MarkCompareAsk
+              onAnswer={(x) => {
+                setAnswered((s) => new Set(s).add(a.id));
+                essay.onMarkAnswer(a, x);
+              }}
+              onDismiss={() => essay.onMarkDismiss(a)}
+            />
+          )}
           </li>
         ))}
       </ul>
@@ -5671,6 +5716,7 @@ export default function PlannerApp() {
      two of them. */
   const textAllowance = useTextAllowance(session, aiConsent);
 
+
   /* Store the ATTEMPT, never the questions -- see practice.js. Pruned on
      the way in, because this collection grows with use and
      purgeOldTombstones only runs on sync: a signed-out student would
@@ -6115,6 +6161,89 @@ export default function PlannerApp() {
     return inheritedRounding(settings, others);
   }, [settings, data.semesters, data.semester]);
 
+  /* ESSAY FEEDBACK, declared BELOW `rounding` because it reads it
+     eagerly: above it, every render threw a TDZ ReferenceError, the
+     smoke test's second catch. Wired here because this is where the data, the
+     Supabase client and the session already are. One object reaches the
+     Grades rows; nothing in between reads it.
+
+     Every capture write is FIRE AND FORGET: a feedback row is how we
+     learn, and it must never take down a result the student just paid
+     for. recordFeedback cannot throw. */
+  const essayTier = textAllowance.allowance && !textAllowance.allowance.unavailable ? textAllowance.allowance.tier || null : null;
+  const essay = session
+    ? {
+        session,
+        allowanceApi: textAllowance,
+        rule: rounding,
+        optIn: {
+          needed: optInNeeded(data.meta),
+          accept: () =>
+            setData((d) => ({
+              ...d,
+              meta: { ...(d.meta || {}), essayOptIn: { version: ESSAY_OPT_IN_VERSION, at: nowISO() }, updatedAt: nowISO() },
+            })),
+        },
+        onDelivered: (assessment, { result, runId }) => {
+          /* A TIMESTAMP, NOT A NOTE ID (ESSAY-FEEDBACK.md): the fact that
+             we gave feedback outlives any note the student bins. */
+          patchItem("assessments", assessment.id, { essayFeedbackAt: nowISO() });
+          recordFeedback({
+            supabaseClient: supabase,
+            row: deliveredRow({ id: uid(), userId: session.user.id, assessmentId: assessment.id, runId, result, tier: essayTier, credits: TASK_CREDITS.essay }),
+          });
+        },
+        onRate: (assessment, { result, runId, rating, reasons, comment, sendComment, rewriteRequested }) =>
+          recordFeedback({
+            supabaseClient: supabase,
+            row: ratedRow({
+              id: uid(),
+              userId: session.user.id,
+              assessmentId: assessment.id,
+              runId,
+              result,
+              rating,
+              reasons,
+              comment,
+              sendComment,
+              rewriteRequested,
+              tier: essayTier,
+              credits: TASK_CREDITS.essay,
+            }),
+          }).then((r) => !!r.ok),
+        onSave: (assessment, { result }) => {
+          const id = uid();
+          let page = { id, ...essayNoteFields({ result, assessment, copy: ESSAY_COPY, pageId: id }), folderId: null };
+          /* Filed into the course's folder like a recording or a
+             reading summary, in its own try: a folder is a convenience
+             and must never take down work just paid for. */
+          try {
+            const { folderId, newFolder } = folderForRecording({
+              folders: (dataRef.current.semesters[dataRef.current.semester] || {}).folders || [],
+              course: assessment.course || "",
+              uid,
+              nowISO,
+            });
+            if (newFolder) addItem("folders", newFolder);
+            if (folderId) page = { ...page, folderId };
+          } catch (e) {
+            /* filed nowhere, saved anyway */
+          }
+          addItem("pages", page);
+        },
+        /* ONCE MEANS ONCE, answered or dismissed; bumping updatedAt
+           (patchItem does) is what stops a second device asking again. */
+        onMarkAnswer: (assessment, { rating, reasons, shareMark }) => {
+          patchItem("assessments", assessment.id, { markCompareAsked: nowISO() });
+          recordFeedback({
+            supabaseClient: supabase,
+            row: onMarkRow({ id: uid(), userId: session.user.id, assessment, rating, reasons, shareMark, rule: rounding }),
+          });
+        },
+        onMarkDismiss: (assessment) => patchItem("assessments", assessment.id, { markCompareAsked: nowISO() }),
+      }
+    : null;
+
   const theme = THEMES[data.theme] || THEMES.teal;
   const focused = focusedCourse && sem.courses.some((c) => c.name === focusedCourse) ? focusedCourse : null;
   const themeVars = themeVarsFor(theme, resolvedMode);
@@ -6291,6 +6420,7 @@ export default function PlannerApp() {
             </Section>
             <Section icon={Target} title="Grades" subtitle="What you've got, and what you still need" help="grades">
               <Grades
+                essay={essay}
                 assessments={sem.assessments}
                 courses={sem.courses}
                 addItem={addItem}
