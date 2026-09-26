@@ -556,6 +556,19 @@ constrained replies (65.3%). No window could fix that without also
 switching the window off for notes. So the sentence gets its 50-word cap
 and nothing else, in the endpoint and the harness alike.
 
+**THE MEASURED GATE, at these settings** (Jared's `--summarise` run on
+the Luna `thresholds.json`, 26 September 2026):
+
+| arm | whole replies refused | points dropped |
+|---|---|---|
+| constrained | **0 / 72** | 19 / 349 (5.4%) |
+| adversarial | 26 / 72 | 8 / 382 |
+
+**Offered wording in the opening sentence is NOT MEASURED** by that
+figure: the file predates the sentence reading, and the harness says so
+rather than counting those 72 sentences as clean. It is measured by the
+next fresh run.
+
 **TWO RATES, BECAUSE THE ENDPOINT HAS TWO KINDS OF REFUSAL.** A point
 whose quote is too short, or is not in the essay, is DROPPED and the
 rest of the reply stands. A note or opening sentence that breaks a
@@ -1014,6 +1027,17 @@ no `delivered` row, so the denominator undercounts. That is the safe
 direction — it under-reports our coverage rather than over-reporting
 our accuracy — and it is the same trade as the row orphaned by a crash
 in `aiNotesStore`.
+
+**CORRECTED IN 0023: A RUN HAS ITS OWN ID.** The design above made
+`(user_id, assessment_id, occasion)` unique, which refuses the SECOND
+`delivered` row when a student runs feedback on a redraft of the same
+assessment, so the denominator undercounts exactly the students using
+the feature most, and a per-result rating would have nowhere to live.
+0023 adds a third occasion, `rated` (the "Was this useful?" answer on
+every result), and a client-minted `run_id`: `delivered` and `rated`
+are once per RUN, `on_mark` is once per ASSESSMENT. The queries below
+still hold, reading `on_mark` joined to any `delivered` row for the
+same assessment.
 
 **INSERT-ONLY, THREE POLICIES, THE `ai_notes` SHAPE.** Select, insert,
 delete; no update policy and therefore no client update path to get

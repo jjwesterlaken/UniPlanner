@@ -885,6 +885,14 @@ async function run() {
        to say that rather than list it as deleted. The two documents make
        different promises about the two tables and both are true, which
        is the ai_notes/ai_notes_requests distinction one pair over. */
+    /* Essay-feedback quality records (0023): ours to learn from, but
+       they can hold the student's words (an opt-in comment) and their
+       mark (an opt-in tick), so both documents name them and the policy
+       says the two conditions. */
+    assessment_feedback: {
+      privacy: /record of how essay feedback did[\s\S]*?only sent if you tick[\s\S]*?only if you tick to share/i,
+      deletion: /record of how essay feedback did/i,
+    },
     function_errors: {
       privacy: /record of the failure[\s\S]*?no identifier for\s+your account/i,
       deletion: /record of failures on our own servers/i,
