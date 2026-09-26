@@ -460,6 +460,72 @@ async function run() {
     });
   }
 
+  /* THE AI TAB'S "Feedback on a draft" CARD, CLICKED THROUGH, in the
+     real app. The claim is about wiring across two tabs — the card on
+     one, the panel on another, joined through PlannerApp's state — so
+     it is made here, from the built bundle, by pressing the controls,
+     rather than by mounting the pieces beside a restated copy of the
+     glue. A new assessment is created (the planner is seeded with none)
+     and the student lands on the Courses tab with that row's panel
+     OPEN: its opt-in, since this account has not opted in. */
+  await test("THE AI TAB'S DRAFT CARD CREATES THE ASSESSMENT AND OPENS ITS PANEL ON THE GRADES ROW", async () => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+    await page.addInitScript(
+      ({ ref, userId, tabKey, consent }) => {
+        const hour = Math.floor(Date.now() / 1000) + 3600;
+        localStorage.setItem(
+          `sb-${ref}-auth-token`,
+          JSON.stringify({
+            access_token: "test-token",
+            token_type: "bearer",
+            expires_at: hour,
+            expires_in: 3600,
+            refresh_token: "test-refresh",
+            user: { id: userId, email: "render-probe@example.test", aud: "authenticated", role: "authenticated" },
+          })
+        );
+        localStorage.setItem("uni-planner-mode", "light");
+        if (!sessionStorage.getItem("seeded")) {
+          sessionStorage.setItem("seeded", "1");
+          localStorage.setItem(tabKey, "ai-notes");
+          localStorage.setItem("uni-planner-v1", JSON.stringify({ semester: "Semester 1", semesters: {}, meta: consent }));
+        }
+      },
+      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consent: CONSENTED_META }
+    );
+    await page.route(`${SUPABASE_HOST}/**`, async (route) => {
+      const url = route.request().url();
+      if (url.includes("/auth/v1/user")) return route.fulfill(json({ id: USER_ID, email: "render-probe@example.test" }));
+      if (url.includes("/auth/v1/")) return route.fulfill(json({ access_token: "test-token", user: { id: USER_ID } }));
+      if (url.includes("/rest/v1/profiles")) return route.fulfill(json(PROFILE_ROW));
+      if (url.includes("/rest/v1/ai_usage")) return route.fulfill(json({ user_id: USER_ID, credits_used: 12 }));
+      return route.fulfill(json([]));
+    });
+    await page.goto("file://" + path.join(OUT, "index.html"));
+    await page.waitForSelector("[data-essay-entry]", { timeout: 15_000 });
+    const before = await page.locator("[data-essay-panel], [data-essay-opt-in]").count();
+    await page.fill("[data-essay-entry-title]", "Draft Essay Probe");
+    await page.fill("[data-essay-entry-weight]", "35");
+    await page.click("[data-essay-entry-go]");
+    await page.waitForSelector("[data-essay-opt-in], [data-essay-panel]", { timeout: 5_000 });
+    const out = await page.evaluate((tabKey) => ({
+      tab: localStorage.getItem(tabKey),
+      entryStillShown: !!document.querySelector("[data-essay-entry]"),
+      rowHasTitle: document.body.innerText.includes("Draft Essay Probe"),
+      openPanels: document.querySelectorAll("[data-essay-opt-in], [data-essay-panel]").length,
+    }), TAB_KEY);
+    await ctx.close();
+    assert.deepEqual(errors, [], `the click-through threw:\n        ${errors.join("\n        ")}`);
+    assert.equal(before, 0, "a panel was already open on the AI tab, so opening one proves nothing");
+    assert.equal(out.entryStillShown, false, "still on the AI tab after pressing the card's button");
+    assert.equal(out.tab, "courses", `landed on "${out.tab}", not the Courses tab where the Grades row lives`);
+    assert.ok(out.rowHasTitle, "the new assessment is not on the Grades list");
+    assert.equal(out.openPanels, 1, `${out.openPanels} essay panels open; the card should open exactly its own row's`);
+  });
+
   await test("every tab was actually visited, so none of the above passed over nothing", () => {
     assert.deepEqual(visited, ids, `visited ${visited.length} of ${ids.length} tabs`);
   });

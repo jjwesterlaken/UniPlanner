@@ -729,6 +729,37 @@ already lives.
 and a reading summary do, **inside its own `try`** — a folder is a
 convenience and must never take down work just paid for.
 
+### And a door on the AI tab, which is not a second panel (Jared, 26 September 2026)
+
+"Not the AI tab" was about where the PANEL lives, and it still lives
+on the row. The AI tab is where a student looks for AI features, so it
+now carries a **"Feedback on a draft" card** that asks which course and
+assessment the draft is for — creating the assessment when they have
+not added it yet, with the title and weight the Grades form already
+requires — and then takes them to the Courses tab with that row's
+panel open.
+
+**It is a door, not a copy**, because the mark loop depends on it: the
+comparison is a render condition on the assessment item, so feedback
+given anywhere but on that item could never be joined to its mark. The
+card sends nothing and holds no essay text, so it needs no consent of
+its own; the panel it opens does the gate and the opt-in exactly as
+before. `resolveEssayEntry` in `essayFeedback.js` decides what a choice
+means (a live row, or a complete new one, or nothing), and
+`test-rendered-tabs.mjs` presses the card in the real app and requires
+exactly that row's panel open on the Courses tab.
+
+**FOR GRACE: "Grades" now holds pre-submission work.** A draft is
+reviewed on the Grades row before there is anything to grade, so the
+section's name describes half of what it does. It may want a different
+label; the card's own sentence ("It opens on that assessment in
+Courses → Grades…") names it today and moves with it.
+
+The panel also carries the app's **?** (`HelpButton`, the same
+control), with three steps in `essayCopy.js`: paste before you submit;
+get pointed at problems and ask for an example rewrite of one passage;
+tell us how we did when the mark comes back.
+
 ### Consent: the same gate, through `AiActionFrame`
 
 All five text features render their controls through `AiActionFrame`,

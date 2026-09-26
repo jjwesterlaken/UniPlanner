@@ -236,3 +236,31 @@ export function aiUseText({ assessment, copy, formatDate }) {
   if (entries.length === 0) lines.push(copy.recordEmpty);
   return lines.join("\n");
 }
+
+/* ---------- the AI tab's entry point (Jared, 26 September 2026) ----------
+
+   "Feedback on a draft" on the AI tab asks which course and assessment
+   the draft is for, and then opens THE SAME panel on that Grades row:
+   the mark the comparison asks about lives on that item, so the
+   feedback has to be attached there or the mark loop cannot join them.
+
+   This decides what the choice means. An existing assessment must be a
+   live one; a new one needs a title and a weight, the same two things
+   the Grades form requires, because an assessment with no weight is one
+   the grade maths cannot use and the student would have to come back
+   and fix. Anything else is null and nothing happens. */
+export const ENTRY_KIND = "assignment";
+
+export function resolveEssayEntry(choice, { uid, assessments = [] }) {
+  if (!choice) return null;
+  if (choice.assessmentId) {
+    const a = assessments.find((x) => x && x.id === choice.assessmentId && !x.deletedAt);
+    return a ? { id: a.id, course: a.course || "" } : null;
+  }
+  const title = String(choice.title || "").trim();
+  const w = Number(choice.w);
+  if (!title || !Number.isFinite(w) || w <= 0) return null;
+  const course = choice.course || "";
+  const create = { id: uid(), course, title, w, kind: ENTRY_KIND };
+  return { id: create.id, course, create };
+}

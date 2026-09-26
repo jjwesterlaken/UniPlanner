@@ -15,13 +15,13 @@
    a property of where this state can reach.
    ================================================================== */
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Sparkles, X, Check, FileText } from "lucide-react";
 import { AiActionFrame, useTask } from "./aiText.jsx";
 import { TASK_CREDITS, ESSAY_MAX_CHARS } from "./aiTextLimits.js";
 import { ESSAY_COPY } from "./essayCopy.js";
 import { orderedPoints, reasonsFor, RATINGS, MAX_COMMENT_CHARS, ESSAY_REWRITE_ENABLED, aiUseText } from "./essayFeedback.js";
-import { btnPrimary, btnGhost, inputCls, labelCls, uid } from "./PlannerApp.jsx";
+import { btnPrimary, btnGhost, inputCls, labelCls, uid, HelpButton, CourseSelect } from "./PlannerApp.jsx";
 
 /**
  * The opt-in, once per account, before first use. Declining is not
@@ -241,7 +241,7 @@ function FeedbackCapture({ onSend, rewriteRequested = false }) {
  * Supabase client, so nothing here is relayed through a component that
  * only passes it on (the `folders` ReferenceError).
  */
-export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, onDelivered, onRate, onSave, onRewrite = null }) {
+export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, onDelivered, onRate, onSave, onRewrite = null, requestOpen = false, onOpened = null }) {
   const { applyFraction } = allowanceApi;
   const { run, busy, error } = useTask(session, applyFraction);
   /* One passage at a time: a second request waits for the first. The
@@ -255,6 +255,24 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
   const [runId, setRunId] = useState(null);
   const [saved, setSaved] = useState(false);
   const [local, setLocal] = useState(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  /* The AI tab's card asked for this row: open, bring it on screen, and
+     say so, so the request is consumed rather than reopening the panel
+     on every later visit. The scroll waits for the open render. */
+  const anchor = useRef(null);
+  const scrollPending = useRef(false);
+  useEffect(() => {
+    if (!requestOpen) return;
+    setOpen(true);
+    scrollPending.current = true;
+    if (onOpened) onOpened();
+  }, [requestOpen]);
+  useEffect(() => {
+    if (!open || !scrollPending.current) return;
+    scrollPending.current = false;
+    const el = anchor.current;
+    if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [open]);
 
   if (!open) {
     return (
@@ -277,12 +295,18 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
   };
 
   const header = (
-    <div className="flex items-center justify-between">
-      <span className="text-sm font-semibold text-stone-700">{ESSAY_COPY.panelTitle}</span>
+    <>
+    <div ref={anchor} className="flex items-center justify-between gap-2">
+      <span className="flex-1 text-sm font-semibold text-stone-700">{ESSAY_COPY.panelTitle}</span>
+      {/* The app's ? control; the three steps live in essayCopy.js
+          beside the rest of the panel's wording. */}
+      <HelpButton title={ESSAY_COPY.help.title} open={helpOpen} onToggle={() => setHelpOpen((v) => !v)} />
       <button className={btnGhost} onClick={close} aria-label={ESSAY_COPY.close}>
         <X size={14} />
       </button>
     </div>
+    {helpOpen && <EssayHelp />}
+    </>
   );
 
   if (optIn.needed) {
@@ -421,6 +445,83 @@ export function MarkCompareAsk({ onAnswer, onDismiss }) {
           {c.send}
         </button>
       </div>
+    </div>
+  );
+}
+
+/* The panel's ? — the same look as HelpPanel, with its three steps
+   read from essayCopy.js. */
+export function EssayHelp() {
+  return (
+    <div className="rounded-xl border border-stone-200 bg-surface p-3 text-sm text-stone-700" data-help-panel="essay">
+      <ol className="list-decimal space-y-1 pl-5">
+        {ESSAY_COPY.help.steps.map((step) => (
+          <li key={step}>{step}</li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+const NEW = "__new__";
+
+/**
+ * "Feedback on a draft", on the AI tab. It chooses a Grades row and
+ * hands over; it sends nothing and holds no essay text, so it needs no
+ * consent of its own — the panel it opens does that.
+ */
+export function EssayDraftEntry({ courses, assessments, onOpen }) {
+  const c = ESSAY_COPY.entry;
+  const [course, setCourse] = useState(() => (courses[0] ? courses[0].name : ""));
+  const live = (assessments || []).filter((a) => a && !a.deletedAt && (a.course || "") === course);
+  const [picked, setPicked] = useState("");
+  const [title, setTitle] = useState("");
+  const [w, setW] = useState("");
+  /* No assessment for this course yet means the only choice is a new
+     one, so the form opens on it rather than on an empty select. */
+  const choice = live.some((a) => a.id === picked) ? picked : live.length ? live[0].id : NEW;
+  const creating = choice === NEW;
+  const ready = creating ? !!title.trim() && Number(w) > 0 : true;
+
+  const go = () => {
+    if (!ready) return;
+    onOpen(creating ? { course, title, w } : { assessmentId: choice });
+  };
+
+  return (
+    <div data-essay-entry className="space-y-2 rounded-xl border border-stone-200 bg-surface p-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <label className={labelCls}>{c.courseLabel}</label>
+          <CourseSelect courses={courses} value={course} onChange={(v) => { setCourse(v); setPicked(""); }} />
+        </div>
+        <div>
+          <label className={labelCls}>{c.assessmentLabel}</label>
+          <select data-essay-entry-assessment className={inputCls} value={choice} onChange={(e) => setPicked(e.target.value)}>
+            {live.map((a) => (
+              <option key={a.id} value={a.id}>{a.title}</option>
+            ))}
+            <option value={NEW}>{c.newAssessment}</option>
+          </select>
+        </div>
+      </div>
+      {creating && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {live.length === 0 && <p className="text-xs text-stone-500 sm:col-span-2">{c.noneYet}</p>}
+          <div>
+            <label className={labelCls}>{c.newTitleLabel}</label>
+            <input data-essay-entry-title className={inputCls} placeholder={c.newTitlePlaceholder} value={title} onChange={(e) => setTitle(e.target.value)} />
+          </div>
+          <div>
+            <label className={labelCls}>{c.newWeightLabel}</label>
+            <input data-essay-entry-weight className={inputCls} type="number" inputMode="decimal" placeholder={c.newWeightPlaceholder} value={w} onChange={(e) => setW(e.target.value)} />
+          </div>
+        </div>
+      )}
+      <p className="text-xs text-stone-500">{c.where}</p>
+      <button data-essay-entry-go className={btnPrimary} onClick={go} disabled={!ready}>
+        <FileText size={16} /> {c.go}
+      </button>
     </div>
   );
 }

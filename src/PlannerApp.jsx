@@ -112,7 +112,7 @@ import {
   Settings,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView, useRecordingSession, RecordingIndicator } from "./aiNotes.jsx";
-import { EssayFeedbackPanel, MarkCompareAsk } from "./essayPanel.jsx";
+import { EssayFeedbackPanel, MarkCompareAsk, EssayDraftEntry } from "./essayPanel.jsx";
 import {
   optInNeeded,
   ESSAY_OPT_IN_VERSION,
@@ -124,6 +124,7 @@ import {
   withAiUse,
   feedbackEntry,
   rewriteEntry,
+  resolveEssayEntry,
 } from "./essayFeedback.js";
 import { recordFeedback } from "./essayFeedbackStore.js";
 import { ESSAY_COPY } from "./essayCopy.js";
@@ -546,8 +547,11 @@ const editBox = "rounded-xl border border-stone-300 bg-stone-50 p-3";
    The copy lives in helpText.js under two rules it is written to
    (worked example, and say what it costs); this component only
    decides where it appears. */
-function HelpButton({ topic, open, onToggle }) {
-  const t = HELP_TOPICS[topic];
+export function HelpButton({ topic, open, onToggle, title: titleProp = null }) {
+  /* `title` is for a ? whose copy lives beside its own feature rather
+     than in helpText.js (the essay panel's, in essayCopy.js) — the same
+     control, so one pattern across the app. */
+  const t = titleProp ? { title: titleProp } : HELP_TOPICS[topic];
   if (!t) return null;
   return (
     <button
@@ -4634,6 +4638,8 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
                 onRate={(x) => essay.onRate(a, x)}
                 onSave={(x) => essay.onSave(a, x)}
                 onRewrite={(x) => essay.onRewrite(a, x)}
+                requestOpen={essay.openFor === a.id}
+                onOpened={essay.onOpened}
               />
             </div>
           )}
@@ -5143,6 +5149,10 @@ export default function PlannerApp() {
   }, [mode, resolvedMode]);
   const [themeOpen, setThemeOpen] = useState(false);
   const [focusedCourse, setFocusedCourse] = useState(null);
+  /* The assessment whose essay panel the AI tab's "Feedback on a draft"
+     card asked to open. Consumed by the row once it has opened, so a
+     later visit to Courses does not reopen it. */
+  const [essayOpenFor, setEssayOpenFor] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
   /* THE APP OPENS WITH WHAT IS ON THE DEVICE, not with "signed out".
 
@@ -6180,6 +6190,8 @@ export default function PlannerApp() {
         session,
         allowanceApi: textAllowance,
         rule: rounding,
+        openFor: essayOpenFor,
+        onOpened: () => setEssayOpenFor(null),
         optIn: {
           needed: optInNeeded(data.meta),
           accept: () =>
@@ -6257,6 +6269,21 @@ export default function PlannerApp() {
         },
       }
     : null;
+
+  /* THE AI TAB'S DOOR INTO THE SAME PANEL (Jared, 26 September 2026).
+     The panel stays on the Grades row, because the mark it asks about
+     lives on that item and the mark loop is a render condition there;
+     this only chooses the row, creating it when the student has not
+     added the assessment yet, and takes them to it. It sends nothing:
+     the panel behind it does its own consent and opt-in. */
+  const openEssayDraft = (choice) => {
+    const target = resolveEssayEntry(choice, { uid, assessments: sem.assessments });
+    if (!target) return;
+    if (target.create) addItem("assessments", target.create);
+    if (focused && focused !== target.course) setFocusedCourse(null);
+    setEssayOpenFor(target.id);
+    setTab("courses");
+  };
 
   const theme = THEMES[data.theme] || THEMES.teal;
   const focused = focusedCourse && sem.courses.some((c) => c.name === focusedCourse) ? focusedCourse : null;
@@ -6576,6 +6603,12 @@ export default function PlannerApp() {
           // slower, splitting AI notes into their own table/row is the fix.
           <Section icon={Mic} title="AI lecture notes" subtitle="Record a lecture and get an AI-generated summary and study cards" help="aiNotes">
             <AiNotesPanel session={session} backend={backend} courses={sem.courses} data={data} setData={setData} recording={recording} textAllowance={textAllowance} onSummariseReading={summariseReading} onOpenSummary={openSummaryNote} />
+          </Section>
+        )}
+
+        {tab === "ai-notes" && essay && (
+          <Section icon={FileText} title={ESSAY_COPY.entry.title} subtitle={ESSAY_COPY.entry.subtitle}>
+            <EssayDraftEntry courses={sem.courses} assessments={sem.assessments} onOpen={openEssayDraft} />
           </Section>
         )}
 
