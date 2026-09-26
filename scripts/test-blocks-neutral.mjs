@@ -226,9 +226,45 @@ function boot(js, pages) {
 
 const settle = (ms = 160) => new Promise((r) => setTimeout(r, ms));
 
+/* WAIT FOR THE SAVE INDICATOR ON A CONDITION, NOT A CLOCK.
+
+   After a load the planner writes itself once: the header reads
+   "Saving…" until the write resolves, then flips to "Saved" on a 300ms
+   timer (PlannerApp's save effect). A fixed wait raced that timer, so
+   under load one build was captured at "Saving…" and the other at
+   "Saved", and the comparison failed on a difference between two
+   moments rather than between two builds. That flaked, and a guard
+   that flakes is ignored the day it is right.
+
+   So this polls until the indicator is off "Saving…" and has STAYED off
+   for longer than that timer, and throws if it never does. A timeout is
+   a failure with a reason, never a pass. */
+/* READ FROM THE SAVE EFFECT ITSELF, not restated: a longer timer in
+   PlannerApp would otherwise make this wait silently too short again. */
+const SAVE_TIMER_MS = (() => {
+  const app = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+  const m = app.match(/setTimeout\(\(\) => setSaveState\("saved"\),\s*(\d+)\)/);
+  if (!m) throw new Error("could not find the Saved timer in PlannerApp's save effect; the settle wait below would be guessing");
+  return Number(m[1]);
+})();
+const saving = (dom) => (dom.window.document.getElementById("root").textContent || "").includes("Saving…");
+async function settleSave(dom, { quietMs = SAVE_TIMER_MS + 150, timeoutMs = 8000 } = {}) {
+  const started = Date.now();
+  let quietSince = saving(dom) ? null : Date.now();
+  while (Date.now() - started < timeoutMs) {
+    await settle(20);
+    if (saving(dom)) quietSince = null;
+    else if (quietSince === null) quietSince = Date.now();
+    else if (Date.now() - quietSince >= quietMs) return;
+  }
+  throw new Error(`the save indicator never settled within ${timeoutMs}ms, so there is no stable page to compare`);
+}
+
 /* The HTML, plus what was drawn on any canvas in it (there should be
    none — see checkNoCanvas). */
 const snap = (dom) => {
+  /* A capture of a transient state is not a capture of the build. */
+  if (saving(dom)) throw new Error("snapshot taken while the header still reads Saving… — settleSave was skipped");
   const root = dom.window.document.getElementById("root");
   const ink = [...root.querySelectorAll("canvas")]
     .map((c, i) => `canvas#${i} ${c.width}x${c.height}\n${dom.window.__traceOf(c).join("\n")}`)
@@ -253,6 +289,7 @@ async function captureReading(js, pages) {
   const dom = boot(js, pages);
   await settle(300);
   await openNotes(dom);
+  await settleSave(dom);
 
   const shots = { list: snap(dom) };
   const rows = buttons(dom, "Expand note");
@@ -281,6 +318,7 @@ async function captureEditor(js, pages, index) {
   const dom = boot(js, pages);
   await settle(300);
   await openNotes(dom);
+  await settleSave(dom);
   buttons(dom, "Expand note")[index].click();
   await settle();
   const edit = named(dom, "Edit");
