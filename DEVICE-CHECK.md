@@ -1,6 +1,7 @@
-# Device check for 1.2 — Grace
+# Device check for 1.3 — Grace
 
-Everything merged since 1.1.0 that a phone can actually show. Grouped
+Everything merged since 1.1.0 that a phone can actually show, and the
+new essay feedback in §8. Grouped
 by screen, one line each, and each says **what you should see** — so a
 step that looks right but says the wrong thing is still a fail.
 
@@ -11,10 +12,10 @@ them and are marked accordingly. If a step says [web] and you are in
 the installed app, skip it.
 
 **[†] marks a step that depends on a pull request that has NOT merged
-yet** — #115 for the feedback link, #112 for the platform-aware refund
-line. If the build you are holding predates them, the step will fail
-correctly and is not a bug. Check with Jared which build you have
-before reporting one of those.
+yet** — #150 for the essay panel, #151 for the example rewrite. If the
+build you are holding predates them, the step will fail correctly and
+is not a bug. Check with Jared which build you have before reporting one
+of those.
 
 **Before you start:** Account tab, bottom of the screen — note the
 **version** (twelve characters). Every bug report needs it, and if two
@@ -103,9 +104,10 @@ they are on the same one. Sign in; most of this needs an account.
 
 ## 6. Account
 
-- [ ] **Bottom of the tab:** the version. **[†]** Under it there should
-      be *"Something not working? Get in touch — quote the version
-      above."*, linking to the support page.
+- [ ] **Bottom of the tab:** the version. Under it: *"Found a problem, or
+      have an idea? Tell us"*. **[app] on iPhone** it opens Mail with the
+      version and platform already in it; on Android and on the web it
+      goes to the support page and asks you to quote the version.
 - [ ] **The plan panel** should show your plan by name, the privacy
       policy link, and a terms link.
 - [ ] **[app]** The plan you are on should still show. Whether there are
@@ -119,12 +121,10 @@ they are on the same one. Sign in; most of this needs an account.
 - [ ] **[web]** There should be six plan buttons. Tap one while signed
       in: it must reach Stripe's checkout, **not** "Please sign in
       again." Back out without paying.
-- [ ] The refund line should say credits already spent stay spent.
-      **[†]** It should also differ by surface: **[web]** *"the plan
-      ends straight away"*, **[app]** *"the plan ends once the store
-      tells us about the refund"* with no timing promised. Until that
-      lands, both surfaces say "straight away", which is only true on
-      the web.
+- [ ] The refund line should say credits already spent stay spent, and
+      differ by surface: **[web]** *"the plan ends straight away"*,
+      **[app]** *"the plan ends once the store tells us about the
+      refund"* with no timing promised.
 - [ ] **Backup panel:** the size of your planner, on every visit.
 - [ ] **Archive:** signed out it should name the tool and say an account
       is needed; signed in, a failed load must read *"couldn't load"*,
@@ -143,6 +143,68 @@ they are on the same one. Sign in; most of this needs an account.
       one month's credits**, `/support` mentions **180 / 600**.
 - [ ] **A reset-password email link**, opened on the phone, should land
       on a screen that lets you set a new password.
+
+## 8. Essay feedback  **[†] #150, #151**
+
+Courses tab → **Grades** → add an assessment (a title and a weight is
+enough). Every step below happens on that assessment's row. **Use your
+own account, not the reviewer account** — its consent is deliberately
+untouched for Apple. The order matters: a student meets the screens in
+this order.
+
+- [ ] **The consent screen first.** Tapping **Get feedback on a draft**
+      the first time should show the AI consent screen (v8) if you have
+      not agreed since it changed. It must say an essay is sent **exactly
+      as written, including your name and student ID**, and that we do
+      not remove anything. Screenshot it.
+- [ ] **Then the essay opt-in.** A short list: it can be wrong and your
+      marker's judgement counts; your unit's rules on AI help apply; it
+      can show an example rewrite of one passage and puts nothing into
+      your essay; we check it against real marks and **will ask once how
+      we did when your mark comes back**; and we ask after each read
+      whether it was useful. There should be **no** "use at your own
+      risk". **Not now** closes it; opening the panel again asks again.
+      Screenshot it.
+- [ ] **One real run.** Paste a real draft and real criteria. Before it
+      runs you should see **"One read costs 9 credits."** What comes
+      back: if your criteria name bands, *"Against the criteria you
+      pasted, this reads like a …"* **with the paragraph under it saying
+      it is not a prediction of your mark** — the band must never
+      appear without that paragraph. Then points, **"Worth working on
+      first"** before **"Smaller things"**, each quoting your own words.
+      The real question: do the points name things a marker would care
+      about? Say which ones don't.
+- [ ] **Opening it again does not re-ask** the consent or the opt-in.
+- [ ] **Save to notes** files it into that course's folder, and the saved
+      note carries the not-a-prediction paragraph under the band.
+- [ ] **"Was this useful?"** Pick **Partly**: reasons appear. The comment
+      box stays closed until you tick **Also send a comment**, and when
+      open it says it is only sent on the tick and trains nothing. Send
+      it: you should see a thank-you.
+- [ ] **The example rewrite.** Each point has **Show an example rewrite ·
+      An example costs 3 credits.** It should come back **beside** your
+      passage, labelled, with a line saying it isn't put into your essay
+      and your unit's rules apply. Nothing in your essay or notes
+      changes. Check the example **adds nothing your essay didn't say** —
+      no new name, number or source — and say if it does. If it is ever
+      refused ("went outside your passage"), the message must say
+      **nothing was charged**, and your credits must not move.
+      Afterwards **Your AI-use record** on that panel should list it,
+      with **none of your essay's words in it**, and Copy should copy it.
+- [ ] **The mark question must NOT appear yet** — nothing is marked.
+- [ ] **Type a mark** into that assessment's mark box. While you are
+      typing, nothing appears. Tap away: *"Your mark is in. How did our
+      feedback compare to your marker's?"* Answer with the share tick
+      **off**. It thanks you and **never asks again** on that assessment —
+      check after force-quitting, and on a second device after a sync.
+- [ ] **On a second assessment**, run feedback, enter a mark, and tap
+      **Don't ask**. It never comes back either.
+- [ ] **An assessment you never ran feedback on**, with a mark: no
+      question, ever.
+
+Jared checks the database half of this from the dashboard: a
+`delivered` row per run, a `rated` row per answer, `on_mark` rows with
+`mark` and `band` null when the tick was off.
 
 ---
 

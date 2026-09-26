@@ -978,11 +978,15 @@ the feature, because that is the order a student meets them in.
     comments point at things a marker would care about, which is the
     same question Grace's ASAP sheet asks and the first time it is
     being asked of a phone-sized screen.
-13. **One example rewrite — the refusal, not the feature.** Ask it for
-    something that would require rewriting a sentence. It must refuse,
-    and the refusal must say what it is doing instead. This is the one
-    step that checks a guarantee rather than a screen, and a run that
-    quietly complies is a release blocker rather than a note.
+13. **One example rewrite, if it is switched on in the build.** Written
+    first as "the refusal, not the feature", which the 18 September
+    ruling reversed: an example rewrite of ONE passage a comment pointed
+    at is now the feature, on request, beside the student's own. Check
+    that it stays inside that passage, adds no fact the essay did not
+    have, is shown side by side, changes nothing in the essay or notes,
+    and lands in the AI-use record with no essay text. The comments
+    themselves must still offer no wording. DEVICE-CHECK.md §8 has the
+    step as Grace runs it.
 14. **The disclosure record.** After the run, confirm the consent
     version recorded on the account is v8 and that re-opening the
     feature does NOT re-prompt. A screen that re-asks every time trains
