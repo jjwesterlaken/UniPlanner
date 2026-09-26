@@ -196,7 +196,7 @@ function FailureNotice({ code, allowance }) {
    rather than a target and the bill falls with what we send. 1024 is
    what both gates were measured at; moving it invalidates
    MEASURED_PHOTO_BATCH_INPUT_TOKENS and therefore the price. */
-async function downscalePhoto(file, { maxEdge = 1024, quality = 0.8 } = {}) {
+export async function downscalePhoto(file, { maxEdge = 1024, quality = 0.8 } = {}) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((resolve, reject) => {

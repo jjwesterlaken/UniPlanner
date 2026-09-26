@@ -566,10 +566,19 @@ async function main() {
        full-length summarise is the dearest of the five that run on
        SUMMARY_MODEL, and essay, on a reasoning model with a 4,000-token
        ceiling, is the dearest of all. */
-    const onSummary = cfg.TASKS.filter((t) => t !== "essay");
-    assert.equal(Math.min(...cfg.TASKS.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.explain);
+    /* The ordering is about TEXT tasks. A photo-only task is priced as
+       a photo batch, which is dearer than any of them by design. */
+    const text = cfg.TASKS.filter((t) => !cfg.PHOTO_ONLY_TASKS.includes(t));
+    assert.ok(cfg.PHOTO_ONLY_TASKS.length >= 1 && text.length >= 5, "the task split is reading the wrong list");
+    const onSummary = text.filter((t) => t !== "essay");
+    assert.equal(Math.min(...text.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.explain);
     assert.equal(Math.max(...onSummary.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.summarise);
-    assert.equal(Math.max(...cfg.TASKS.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.essay);
+    assert.equal(Math.max(...text.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.essay);
+    /* And every photo-only task is exactly a photo batch (ruling, 27
+       September 2026: "priced the same, 18 per batch"). */
+    for (const t of cfg.PHOTO_ONLY_TASKS) {
+      assert.equal(cfg.TASK_CREDITS[t], cfg.PHOTO_BATCH_CREDITS, `${t} is not priced as a photo batch`);
+    }
   });
 
   await test("THE PHOTO BATCH PRICE IS HELD, and says what unblocks it", async () => {
@@ -996,6 +1005,121 @@ async function main() {
     assert.equal(body.code, "pages_unreadable");
     assert.deepEqual(body.pages, [1, 3], "the pages the student can act on never reached them");
     assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 1, "the refusal was not billed — billing follows spend");
+  });
+
+  await test("A REFUSAL'S BODY REACHES THE CALLER: the unreadable page list is on the error the client throws", async () => {
+    /* useTask reads err.body for the page list, and for as long as the
+       photo refusal existed nothing set it. Driven through the real
+       client with a fake fetch answering the server's real shape. */
+    const client = await import(toUrl(path.join(rootDir, "src/aiTextClient.js")));
+    const consent = await import(toUrl(path.join(rootDir, "src/aiConsentState.js")));
+    const { AI_CONSENT_VERSION, buildConsentPatch } = await import(toUrl(path.join(rootDir, "src/aiNotesLogic.js")));
+    consent.recordConsentState(buildConsentPatch(AI_CONSENT_VERSION, () => "2026-09-27T00:00:00Z"));
+    assert.equal(consent.consentRefusal(), null, "the consent mirror did not take, so this would test the refusal instead");
+    const fetchImpl = async () => ({ ok: false, status: 422, json: async () => ({ ok: false, stage: "parse", code: "pages_unreadable", error: "x", pages: [2, 4] }) });
+    let caught = null;
+    try {
+      await client.callAiText({ token: "t", task: "summarise", payload: { images: [IMG] }, fetchImpl });
+    } catch (e) {
+      caught = e;
+    }
+    assert.ok(caught, "the refusal did not throw");
+    assert.equal(caught.code, "pages_unreadable");
+    assert.deepEqual(caught.body && caught.body.pages, [2, 4], "THE PAGE LIST NEVER REACHES THE SCREEN");
+    consent.recordConsentState({});
+  });
+
+  /* ---------- marking criteria from a photo (27 September 2026) ---------- */
+
+  await test("CRITERIA IS PHOTOS OR NOTHING, and the essay stays paste-only", async () => {
+    for (const [body, why] of [
+      [{ task: "criteria" }, "criteria with no photos"],
+      [{ task: "criteria", text: "Pass: ..." }, "criteria as pasted text"],
+      [{ task: "criteria", images: [IMG], text: "x" }, "criteria with both media"],
+      [{ task: "essay", text: "my essay", criteria: "Pass", images: [IMG] }, "an essay with photos"],
+      [{ task: "criteria", images: [IMG, IMG, IMG, IMG, IMG] }, "five photos in one batch"],
+    ]) {
+      const admin = makeAdmin();
+      const trace = [];
+      const res = await run(body, { supabaseAdmin: admin, summarizer: okSummarizer({ criteria: "x" }, trace) });
+      assert.equal(res.status, 400, `${why} was accepted`);
+      assert.ok(!trace.includes("provider:call"), `${why} reached the provider`);
+    }
+  });
+
+  await test("CRITERIA FROM A PHOTO: relayed as vision under the transcription prompt, returned verbatim, charged as a photo batch", async () => {
+    const admin = makeAdmin();
+    let messages = null;
+    let hasImages = null;
+    const rubric = "Argument\nHigh Distinction: A sustained, original argument.\nPass: An argument is present.";
+    const res = await run(
+      { task: "criteria", images: [IMG, IMG] },
+      { supabaseAdmin: admin, summarizer: { complete: async (args) => ((messages = args.messages), (hasImages = args.hasImages), JSON.stringify({ criteria: rubric })) } }
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.result, { criteria: rubric }, "the transcription was altered on the way back");
+    assert.equal(hasImages, true, "the adapter was not told this is a photo request, so it would pick the text model");
+    const sys = messages.find((m) => m.role === "system").content;
+    assert.match(sys, /word for word/i);
+    assert.match(sys, /do not summarise/i, "the prompt no longer forbids summarising, which is the difference from a reading");
+    assert.match(sys, /band or grade name exactly as written/i, "the band names the essay check reads are not protected");
+    assert.match(sys, /NOT CLEARLY LEGIBLE, DO NOT GUESS/);
+    const imgs = messages.find((m) => m.role === "user").content.filter((c) => c.type === "image_url");
+    assert.ok(imgs.length === 2, `${imgs.length} images reached the provider, not the 2 sent`);
+    assert.ok(imgs.every((c) => c.image_url.detail === "original"), "small print sent at a resizing detail level");
+    const bill = admin.seen.find((x) => x.op === "rpc" && x.payload && "p_credits" in x.payload);
+    assert.equal(bill.payload.p_credits, cfg.PHOTO_BATCH_CREDITS, "criteria photos were not charged as a photo batch");
+  });
+
+  await test("CRITERIA OUTCOMES: illegible is billed like a reading, no criteria and unusable output are free", async () => {
+    const outcome = async (reply) => {
+      const admin = makeAdmin();
+      const res = await run({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: { complete: async () => reply } });
+      const body = await res.json();
+      return { status: res.status, code: body.code, billed: admin.seen.some((x) => x.op === "rpc" && x.payload && "p_credits" in x.payload), body };
+    };
+    const unreadable = await outcome(JSON.stringify({ unreadable: [1] }));
+    assert.equal(unreadable.code, "pages_unreadable");
+    assert.deepEqual(unreadable.body.pages, [1]);
+    assert.equal(unreadable.billed, true, "an illegible rubric photo is the photo's fault and is billed, as for a reading");
+    const none = await outcome(JSON.stringify({ criteria: "   " }));
+    assert.equal(none.code, "no_criteria_found");
+    assert.equal(none.billed, false, "photos with no criteria in them were charged");
+    const junk = await outcome("not json");
+    assert.equal(junk.code, "ai_failed");
+    assert.equal(junk.billed, false, "an unusable transcription was charged");
+    const words = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    assert.ok(words.AI_TEXT_FAILURES.no_criteria_found, "no_criteria_found has no wording");
+    assert.match(words.AI_TEXT_FAILURES.no_criteria_found.detail, /nothing was charged/i);
+  });
+
+  await test("CRITERIA PHOTOS COUNT AGAINST THE TRIAL'S PHOTO CAP, like any photographed page", async () => {
+    const cap = Number(
+      fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/photoCap.js"), "utf8").match(/MAX_FREE_PHOTO_PAGES\s*=\s*(\d+)/)?.[1] ||
+        fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/credits.ts"), "utf8").match(/MAX_FREE_PHOTO_PAGES\s*=\s*(\d+)/)[1]
+    );
+    assert.ok(cap > 0, "could not read the trial's photo cap");
+    const admin = makeAdmin({ tier: "free", photoPagesUsed: cap });
+    const trace = [];
+    const res = await run({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: okSummarizer({ criteria: "x" }, trace) });
+    assert.equal(res.status, 403, "a trial past its photo cap was allowed a criteria photo");
+    assert.ok(!trace.includes("provider:call"));
+  });
+
+  await test("THE CRITERIA MEASUREMENT SCRIPT reads the shipped configuration (dry run), and refuses to run with no photos", async () => {
+    const script = path.join(rootDir, "scripts/measure-criteria-photos.mjs");
+    const out = execFileSync(process.execPath, [script, "--dry-run"], { cwd: rootDir, encoding: "utf8" });
+    assert.match(out, new RegExp(`charged: ${cfg.PHOTO_BATCH_CREDITS} credits a batch`), "the dry run did not read the charged price");
+    assert.match(out, new RegExp(`ceiling ${cfg.MAX_TOKENS.criteria} output tokens`));
+    assert.match(out, /nothing was called and nothing was spent/);
+    let refused = false;
+    try {
+      execFileSync(process.execPath, [script], { cwd: rootDir, encoding: "utf8", stdio: "pipe", env: { ...process.env, OPENAI_API_KEY: "" } });
+    } catch {
+      refused = true;
+    }
+    assert.ok(refused, "the script ran with no key and no photos");
   });
 
   await test("ai-text has NO storage client, so photos cannot have a server-side home", async () => {

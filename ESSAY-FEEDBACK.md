@@ -817,6 +817,51 @@ secondary button, with its cost on its own line beneath — because
 text read as a caption. Grace can restyle it; a test holds that it is a
 bordered, padded button with the cost outside its label.
 
+### Marking criteria from a photo (Jared, 27 September 2026)
+
+The criteria box has a **Photograph your criteria** button: up to four
+photos or screenshots, sent as one `criteria` batch, and the result
+lands in the box as ordinary editable text for the student to check
+against the original. **The essay stays paste-only**: the endpoint
+refuses photos on the essay task, and refuses text on this one.
+
+**A transcription, not a summary, and that is why it is its own
+task.** The existing photo path summarises a reading. The essay's band
+check reads the criteria's **own band names** ("reads like a Credit"),
+so a paraphrased band is one the feedback can no longer name. The
+prompt says word for word, keeps every band name exactly as written,
+and lays a table out as `<band>: <descriptor>` lines under each
+criterion.
+
+**Priced as a photo batch, 18 credits for up to four photos, by
+ruling.** `criteria` is in `PHOTO_ONLY_TASKS`, whose weight is derived
+by the photo-batch formula at the same 2,000-token ceiling, and the
+handler charges `PHOTO_BATCH_CREDITS` for any request carrying photos
+(the #159 fix). Outcomes follow the existing rules: an illegible photo
+is `pages_unreadable` and billed, as for a reading, because the cause
+is the photograph; **no criteria in the photos** is `no_criteria_found`
+and free; an unusable reply is `ai_failed` and free. The photos count
+against the trial's eight-page photo cap like any photographed page.
+
+**Consent: the page-photos material type, no bump (ruled).** The route
+`ai-text:criteria` maps to `page-photos`, so the fingerprint and the
+version do not move. The policy's "text or photos you supply" covers
+it; its "photos of pages you are studying" is a looser fit, and is
+worth Grace's eye on the next policy pass.
+
+**NOT MEASURED.** `scripts/measure-criteria-photos.mjs` runs the
+shipped prompt, model, ceiling and downscale against real photos and
+reports word recall and precision against a typed truth, **every band
+name not reproduced verbatim**, the input tokens a rubric really costs
+against the reading batch the price is derived from, and truncation
+headroom. The ceiling and the prompt move on what it prints.
+
+**And a gap on the same path, fixed with it.** `callAiText` never put
+the response body on the error it threw, so the unreadable page list
+the reading screen reads from `err.body` never arrived: a student was
+told pages could not be read, never which. The body rides on the error
+now, and a test drives the real client against the server's shape.
+
 ### Consent: the same gate, through `AiActionFrame`
 
 All five text features render their controls through `AiActionFrame`,

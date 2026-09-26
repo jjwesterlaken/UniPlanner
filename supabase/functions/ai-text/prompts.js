@@ -170,6 +170,32 @@ const SYSTEM = {
      "no path that generates text from the assignment prompt rather than
      from their own writing" is held by what this message CAN carry. */
   rewrite: REWRITE_SYSTEM_PROMPT,
+
+  /* MARKING CRITERIA FROM A PHOTOGRAPH (Jared, 27 September 2026).
+     A TRANSCRIPTION, NOT A SUMMARY, and that is the whole difference
+     from summariseImages: the essay's band check reads the criteria's
+     OWN band names ("reads like a Distinction"), so a paraphrased band
+     is a band the feedback can no longer name. The result lands in the
+     criteria box, editable, for the student to check against the
+     original before anything is judged against it.
+
+     Photos only; the essay itself stays paste-only. Priced as a photo
+     batch. NOT MEASURED: scripts/measure-criteria-photos.mjs runs this
+     exact text against real photographs. */
+  criteria:
+    `${SHARED_RULES} The images are photographs or screenshots of the marking criteria (a rubric) for one university assessment. ` +
+    "Transcribe the criteria as plain text, word for word. " +
+    'Schema: {"criteria":string}. ' +
+    "Copy the wording exactly as it appears: do not summarise, shorten, reword, correct or add anything, " +
+    'and keep every band or grade name exactly as written (for example "High Distinction", "Credit", "Level 3"). ' +
+    "Keep the structure readable without the page layout: for a table, write each criterion's name on its own line, " +
+    'then one line per band in the order the page gives them, as "<band name>: <descriptor>", ' +
+    "and include any weighting or marks the page shows beside the criterion or band they belong to. " +
+    "Join words split across line ends. Leave out page furniture that is not part of the criteria " +
+    "(headers, footers, page numbers, logos). " +
+    'If the images contain no marking criteria, reply {"criteria":""}. ' +
+    "IF ANY IMAGE IS NOT CLEARLY LEGIBLE, DO NOT GUESS AT IT: instead reply with exactly " +
+    '{"unreadable":[numbers]} listing the 1-based positions of the illegible images, and nothing else.',
 };
 
 /**
@@ -240,6 +266,20 @@ export function buildMessages(task, body) {
     return [
       { role: "system", content: system },
       { role: "user", content: String(body.text || "") },
+    ];
+  }
+  if (task === "criteria") {
+    /* Same vision shape as a photographed reading, and the same
+       "original" detail: a rubric is small print in table cells. */
+    return [
+      { role: "system", content: system },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: `Photographs of the marking criteria, ${(body.images || []).length} image(s), in order:` },
+          ...(body.images || []).map((url) => ({ type: "image_url", image_url: { url, detail: "original" } })),
+        ],
+      },
     ];
   }
   if (task === "essay") {
@@ -349,11 +389,24 @@ export function parseTaskResult(task, raw, context = {}) {
      because it is a different fact from an unusable reply (ai_failed,
      free) -- the student can act on it (retake page 3), and it is the
      one parse-stage outcome still billed. */
-  if (task === "summarise" && Array.isArray(parsed.unreadable)) {
+  if ((task === "summarise" || task === "criteria") && Array.isArray(parsed.unreadable)) {
     const pages = parsed.unreadable.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 1);
-    const err = new Error(`summarise: pages unreadable (${pages.join(", ")})`);
+    const err = new Error(`${task}: pages unreadable (${pages.join(", ")})`);
     err.unreadablePages = pages.length ? pages : [1];
     throw err;
+  }
+
+  /* An empty transcription is the model saying the photos hold no
+     criteria. Its own marker, so the handler answers it under its own
+     free code rather than as an unusable reply. */
+  if (task === "criteria") {
+    const criteria = asString(parsed.criteria).trim();
+    if (!criteria) {
+      const err = new Error("criteria: no criteria in the photos");
+      err.noCriteria = true;
+      throw err;
+    }
+    return { criteria };
   }
 
   if (task === "explain") {

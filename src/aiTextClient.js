@@ -101,6 +101,12 @@ export async function callAiText({ token, task, payload = {}, fetchImpl = fetch 
     // becomes server_error rather than an empty message.
     err.code = (json && json.code) || "server_error";
     err.stage = json && json.stage;
+    /* THE BODY RIDES ON THE ERROR, because some refusals carry what the
+       student can act on: pages_unreadable names WHICH pages. useTask
+       has read err.body since the photo refusal shipped, and nothing
+       ever set it, so a student was told pages couldn't be read and
+       never which. */
+    err.body = json || null;
     throw err;
   }
   return json;

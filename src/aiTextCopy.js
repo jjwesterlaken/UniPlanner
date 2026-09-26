@@ -92,6 +92,12 @@ export const AI_TEXT_FAILURES = {
      of eight must know the resubmit costs before they send it. The
      page numbers are interpolated by the panel, which is the only place
      that knows them. */
+  /* Marking criteria from a photo found none in the photos. Free:
+     nothing usable came back. */
+  no_criteria_found: {
+    title: "We couldn't find marking criteria in those photos.",
+    detail: "Nothing was charged. Photograph the rubric or marking criteria themselves, or paste them instead.",
+  },
   pages_unreadable: {
     title: "Some pages couldn't be read clearly.",
     detail:

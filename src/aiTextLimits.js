@@ -45,6 +45,9 @@ export const TASK_CREDITS = {
   essay: 9,
   /* One example rewrite of one passage, on the same model. */
   rewrite: 3,
+  /* Marking criteria from up to four photos: priced as a photo batch
+     (PHOTO_BATCH_CREDITS below), by ruling. */
+  criteria: 18,
 };
 
 /* MAX_INPUT_CHARS.essay in ai-text/config.ts: the draft and the

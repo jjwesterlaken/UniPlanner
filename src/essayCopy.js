@@ -42,6 +42,22 @@ export const ESSAY_COPY = {
   rowNoWeight: "no weight",
   noWeightsCourse: "Nothing here has a weight yet, so there's nothing to work out. Add the unit's assessments with their weights above.",
 
+  /* Marking criteria from a photo, on the criteria box. The essay stays
+     paste-only; this fills the criteria box with editable text. */
+  criteriaPhoto: {
+    button: "Photograph your criteria",
+    working: "Reading your criteria…",
+    cost: (credits, photos) =>
+      `Up to ${photos} photos cost ${credits} credits. A screenshot counts as a photo. Pasting the criteria costs nothing extra.`,
+    done: "Check this against the original and fix anything it got wrong: the feedback is judged against exactly what's in the box.",
+    tooMany: (photos) => `Up to ${photos} photos at a time. Send the rest as a second batch.`,
+    unreadable: (pages) => {
+      const list = [].concat(pages);
+      const one = list.length === 1;
+      return `${one ? "Photo" : "Photos"} ${list.join(", ")} couldn't be read clearly. That attempt used some of your AI study help. Retake ${one ? "it" : "them"} in better light, closer up, and try again.`;
+    },
+  },
+
   /* The ? on the panel. Three steps, in the order a student meets them. */
   help: {
     title: "essay feedback",

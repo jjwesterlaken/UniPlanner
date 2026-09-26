@@ -359,6 +359,12 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       if ((err as { essayRefusal?: string }).essayRefusal === "writing") {
         return jsonResponse({ ok: false, stage, code: "writing_refused", error: "The feedback came back in a form we don't show." }, 422);
       }
+      /* NO CRITERIA IN THE PHOTOS: free, like the refusals above. The
+         student has nothing to use, and the fix (photograph the rubric,
+         not the task sheet) is theirs to try again. */
+      if ((err as { noCriteria?: boolean }).noCriteria) {
+        return jsonResponse({ ok: false, stage, code: "no_criteria_found", error: "We couldn't find marking criteria in those photos." }, 422);
+      }
       /* A legibility refusal is the ONE parse-stage outcome still billed
          (Jared, 26 September 2026): the model did what it was told, and
          the cause is the photograph, which the student can fix by

@@ -44,7 +44,7 @@ import {
 
 export const SUMMARY_PROVIDER = "openai";
 
-export const TASKS = ["practice", "explain", "weakspots", "summarise", "merge", "essay", "rewrite"] as const;
+export const TASKS = ["practice", "explain", "weakspots", "summarise", "merge", "essay", "rewrite", "criteria"] as const;
 export type Task = (typeof TASKS)[number];
 
 /* ---------- output ceilings, one justification each ----------
@@ -99,6 +99,17 @@ export const MAX_TOKENS: Record<Task, number> = {
      use, priced by the same rule as every task. measure-rewrite.mjs
      prints the real completion tokens, and the ceiling moves on that. */
   rewrite: 1500,
+
+  /* MARKING CRITERIA FROM A PHOTO (Jared, 27 September 2026): a
+     rubric transcribed verbatim so the essay's band check can read the
+     criteria's own band names. A dense four-band, six-criterion rubric
+     is ~900 words, ~1,200 tokens; four photographs of one is the most a
+     batch can carry. The SAME ceiling as a photographed reading on
+     purpose: the ruling is "priced the same, 18 per batch", and this
+     ceiling is what makes the derivation land there (TASK_CREDITS
+     below). NOT MEASURED — scripts/measure-criteria-photos.mjs prints
+     the real completion tokens, and this moves on that. */
+  criteria: 2000,
 };
 
 /* ---------- input caps ----------
@@ -130,6 +141,11 @@ export const MAX_INPUT_CHARS: Record<Task, number> = {
      too, but only so the server can check scope, and is capped by
      MAX_INPUT_CHARS.essay; it is never sent on, so it is not priced. */
   rewrite: 2_000,
+  /* PHOTOGRAPHS ONLY, never text, so its input is bounded by the image
+     limits below (PHOTOS_PER_CHUNK of MAX_IMAGE_BASE64_CHARS each) and
+     this cap is never compared with anything. Set to that product so
+     the "every task has an input cap" test says something true. */
+  criteria: 4 * 700_000,
 };
 
 /* ---------- photographed pages ----------
@@ -265,10 +281,20 @@ export const ratesForTask = (task: Task) => {
   return rates;
 };
 
+/* THE PHOTO-ONLY TASKS, priced by the photo-batch formula: the MEASURED
+   input of one batch at the vision model's rates, plus the task's own
+   output ceiling. Text caps mean nothing for a request that carries no
+   text. The handler charges PHOTO_BATCH_CREDITS for any request with
+   photographs (guards.js), and a test holds this weight equal to it. */
+export const PHOTO_ONLY_TASKS: readonly Task[] = ["criteria"];
+
 /** What one call of `task` costs us, at its own input and output caps. */
 export const usdForTask = (task: Task) =>
-  (MAX_INPUT_CHARS[task] / CHARS_PER_TOKEN) * (ratesForTask(task).in / 1_000_000) +
-  MAX_TOKENS[task] * (ratesForTask(task).out / 1_000_000);
+  PHOTO_ONLY_TASKS.includes(task)
+    ? MEASURED_PHOTO_BATCH_INPUT_TOKENS * (VISION_USD_PER_1M_INPUT / 1_000_000) +
+      MAX_TOKENS[task] * (VISION_USD_PER_1M_OUTPUT / 1_000_000)
+    : (MAX_INPUT_CHARS[task] / CHARS_PER_TOKEN) * (ratesForTask(task).in / 1_000_000) +
+      MAX_TOKENS[task] * (ratesForTask(task).out / 1_000_000);
 
 export const TASK_CREDITS: Record<Task, number> = Object.fromEntries(
   TASKS.map((task) => [task, creditsFor(usdForTask(task))])
