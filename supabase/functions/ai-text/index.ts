@@ -335,6 +335,17 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          subsidy for whatever made the model produce unusable output,
          which is exactly the case worth noticing. */
       logFailure(stage, err, { task });
+      /* THE EXAMPLE REWRITE IS CHARGED ONLY WHEN IT IS DELIVERED (Jared,
+         26 September 2026). A rewrite our own scope check refuses, or one
+         that will not parse, costs us about $0.0005 and costs the student
+         nothing: the check is ours, so its refusals are ours to absorb.
+         Returned BEFORE the billing below, which every other task keeps. */
+      if (task === "rewrite") {
+        if ((err as { essayRefusal?: string }).essayRefusal === "scope") {
+          return jsonResponse({ ok: false, stage, code: "rewrite_refused", error: "The example went outside the passage, so we didn't show it." }, 422);
+        }
+        return errorResponse(stage, "ai_failed", "The AI couldn't finish that. Please try again.", 502);
+      }
       const charged = await billAllowance(admin, { userId, profile, month, credits: allowance.cost });
       if (!charged.ok) logFailure("billing", charged.error, { task, cost: allowance.cost, after: "parse_failure" });
       /* THE PAGES COUNT WHEREVER THE CREDITS DO. The provider read them
@@ -352,12 +363,6 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          and under its own code, because it is a different fact from an
          unusable reply: the student can retry, and the copy says the
          retry charges again (ESSAY-FEEDBACK.md §3). */
-      /* THE REWRITE LEFT ITS PASSAGE, or added a fact. Billed, like every
-         generated reply, under its own code; the student is told the
-         attempt was charged and that trying again charges again. */
-      if ((err as { essayRefusal?: string }).essayRefusal === "scope") {
-        return jsonResponse({ ok: false, stage, code: "rewrite_refused", error: "The example went outside the passage, so we didn't show it." }, 422);
-      }
       if ((err as { essayRefusal?: string }).essayRefusal === "writing") {
         return jsonResponse({ ok: false, stage, code: "writing_refused", error: "The feedback came back in a form we don't show." }, 422);
       }

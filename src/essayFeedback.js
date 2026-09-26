@@ -188,9 +188,11 @@ export function essayNoteFields({ result, assessment, copy, pageId }) {
 /* THE CLIENT HALF OF A TWO-FLAG SWITCH. The server refuses the rewrite
    until ESSAY_REWRITE is set in ai-text/config.ts; this decides only
    whether the button is DRAWN. The order is forced: measure, set the
-   server's limits, deploy, THEN flip this. A button drawn over a server
-   that refuses is a control that fails after the tap. */
-export const ESSAY_REWRITE_ENABLED = false;
+   server's limits, deploy the functions, THEN let this reach students
+   (the web promote, the app build). A button drawn over a server that
+   refuses is a control that fails after the tap. ON since 26 September
+   2026, with the server's limits in the same change. */
+export const ESSAY_REWRITE_ENABLED = true;
 
 /* ---------- the AI-use record (Jared, 18 September 2026) ----------
 

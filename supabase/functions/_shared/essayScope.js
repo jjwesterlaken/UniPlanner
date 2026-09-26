@@ -98,6 +98,26 @@ function figures(text) {
  * candidate set — and the student's own source came back as a
  * fabrication. Fail towards not accusing. */
 
+const NUMBER_WORDS = Object.freeze({
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+  nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+  hundred: 100, thousand: 1000, million: 1000000, half: 50,
+});
+
+/** The digits for every number the text spells out, so "three" makes "3" known. */
+function spelledNumbers(text) {
+  const out = new Set();
+  for (const w of wordsOf(text)) {
+    if (Object.prototype.hasOwnProperty.call(NUMBER_WORDS, w)) {
+      const n = NUMBER_WORDS[w];
+      out.add(String(n));
+      out.add(`${n}%`);
+    }
+  }
+  return out;
+}
+
 /** Conservative: capitalised tokens that are NOT sentence-initial. */
 function candidateNames(text) {
   const s = String(text || "");
@@ -154,16 +174,29 @@ export function checkScope({ essay = "", span = "", rewrite = "", escapeRun = ES
         fact the student used elsewhere is theirs, and carrying it in
         is a scope problem (caught above) rather than a fabrication.
         Two different faults must not collapse into one code. */
-  const known = new Set([...figures(span), ...figures(essay)]);
-  const seen = new Set([...knownNames(span), ...knownNames(essay)]);
-  const invented = [
-    ...[...figures(rewrite)].filter((f) => !known.has(f)),
-    ...[...candidateNames(rewrite)].filter((n) => !seen.has(n) && !n.split(/\s+/).every((w) => seen.has(w))),
-  ];
+  /* WHAT THE STUDENT ALREADY WROTE, IN EVERY FORM A REWORDING PRODUCES.
+     Two misreadings found on 26 September 2026, both the Eisenstein
+     class (the student's own words read as invented):
+       - a word the essay has in lower case and the rewrite capitalises
+         ("the internet" -> "the Internet") was a new NAME, because the
+         known set held only words the essay capitalised;
+       - a number the essay spells out and the rewrite writes as a digit
+         ("three days" -> "3 days") was a new FIGURE.
+     So a name is new only if the word appears nowhere in the essay in
+     any case, and a figure is new only if neither its digits nor its
+     word appear. Fail towards not accusing. */
+  const known = new Set([...figures(span), ...figures(essay), ...spelledNumbers(`${span}\n${essay}`)]);
+  const seen = new Set([...knownNames(span), ...knownNames(essay), ...wordsOf(span), ...wordsOf(essay)]);
+  const newFigures = [...figures(rewrite)].filter((f) => !known.has(f));
+  const newNames = [...candidateNames(rewrite)].filter((n) => !seen.has(n) && !n.split(/\s+/).every((w) => seen.has(w)));
+  const invented = [...newFigures, ...newNames];
   if (invented.length > 0) {
     violations.push({
       kind: "fabricated-fact",
       detail: `introduces ${invented.join(", ")} — absent from both the span and the essay`,
+      /* Which KIND of thing, with no text: what a measurement may keep
+         when it must say what fired without keeping what was written. */
+      found: [...(newFigures.some((f) => f.startsWith("cite:")) ? ["citation"] : []), ...(newFigures.some((f) => !f.startsWith("cite:")) ? ["figure"] : []), ...(newNames.length ? ["name"] : [])],
     });
   }
 

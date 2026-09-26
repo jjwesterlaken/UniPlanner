@@ -1280,7 +1280,7 @@ at a time, on the student's request. Limits, enforced and tested:
 | rule | held by | refused |
 |---|---|---|
 | one sentence or one paragraph, never a section | `checkRewriteSpan`: verbatim in the essay, no paragraph break, at most `maxSpanWords`, at most `maxSpanShare` of the essay | **free**, before any spend (`span_too_long`) |
-| rework their wording, add no argument, fact, example or reference | the prompt, then `checkScope` (#142) over the reply: `escapes-span`, `fabricated-fact`, `exceeds-span` | **billed**, under `rewrite_refused` |
+| rework their wording, add no argument, fact, example or reference | the prompt, then `checkScope` (#142) over the reply: `escapes-span`, `fabricated-fact`, `exceeds-span` | **free**, under `rewrite_refused`: only a delivered rewrite is charged (Jared, 26 September 2026) |
 | side by side, nothing inserted | the panel renders both; nothing writes the example anywhere | — |
 | never from the assignment prompt | the model gets the passage and the point's note only; the essay reaches our server for the check and goes no further | — |
 
@@ -1297,20 +1297,42 @@ characters (passage, note, definition) and may write 1,500 tokens, which
 is headroom for the essay model's reasoning. That ceiling is a guess,
 and `measure-rewrite.mjs` prints real completion tokens.
 
-**Why it is OFF.** `checkScope`'s parameters were designed on a synthetic
-control and have never run on real rewrites, and a refused rewrite is
-billed. The essay thresholds showed what an unmeasured check costs: a
-window that looked reasonable refused 65% of legitimate replies once it
-met the real opening sentence. So `ESSAY_REWRITE` is null in
-`ai-text/config.ts` (the server refuses `rewrite_unavailable`, free) and
-`ESSAY_REWRITE_ENABLED` is false in `src/essayFeedback.js` (the button is
-not drawn). **Switch-on is the essay order:** run
+**THE MEASUREMENT, and the switch-on** (Jared's run, 26 September 2026:
+12 ASAP essays, 36 rewrites, on the essay model, at the shipped prompts
+and ceilings):
 
-    node scripts/measure-rewrite.mjs --dir <asap> --sets 1,2,8 --n 12 --keep <outside>/rewrites.json
+| | result |
+|---|---|
+| passages refused by the span rules | 0 |
+| cut off at 1,500 tokens | 0 (completion p50 89, max 380) |
+| cost | at most $0.00052 a rewrite |
+| escapes-span | 0 at every escape run >= 4 |
+| exceeds-span | 4/36 at ratio 1.5, 0 at 2.5 |
+| fabricated-fact | 1/36, whatever the settings |
 
-read the gate (at most 2% of the shipped prompt's rewrites refused at
-the chosen settings), set `ESSAY_REWRITE`, deploy the functions, and only
-then flip the client flag.
+The defaults (escape 6, ratio 1.5) refused 5/36: NOT MET. **Set: escape
+run 4, length ratio 2.5**, which leaves only the fabricated one, 1/36 =
+2.8%, ruled acceptable if it is a genuine invention.
+
+**Which it was cannot be read from the kept file**, by design: it holds
+numbers, and the token that fired may be the student's own word. So the
+matcher was probed for the Eisenstein class instead, and two misreadings
+turned up and were fixed in `essayScope.js`: a word the essay has in
+lower case that the rewrite capitalises ("internet" -> "Internet"), and a
+number the essay spells out that the rewrite writes as digits ("three" ->
+"3"). **The fix only widens what counts as the student's own, so the
+recount can only fall** from 1/36; the case the ruling does not cover is
+a third misreading nobody has found. The harness now records which KIND
+fired (figure, name, citation), never the token, so the next run says.
+
+**A refusal is not charged** (Jared, 26 September 2026): the check is
+ours, so its refusals are ours to absorb, at about $0.0005 each. A
+rewrite that will not parse is free too. Only a delivered rewrite costs
+the student its 3 credits.
+
+**Two flags, both on:** `ESSAY_REWRITE` in `ai-text/config.ts` (the
+server's limits) and `ESSAY_REWRITE_ENABLED` in `src/essayFeedback.js`
+(the button). The server went first, in the same change.
 
 **The claims changed in the same release** (LEGAL-REVIEW.md §5): Terms
 §2, the privacy policy's AI section and OpenAI row, the opt-in, and the

@@ -300,27 +300,33 @@ export const ESSAY_NO_WRITING: {
   maxSentenceWords: number;
 } | null = { window: 30, matchUnit: 4, minQuoteWords: 3, maxNoteWords: 30, maxSentenceWords: 50 };
 
-/* ---------- the example rewrite: its limits, and OFF until measured ----------
+/* ---------- the example rewrite: its limits, MEASURED ----------
 
    Jared's ruling, 18 September 2026 (_shared/essayRewrite.js has it in
    full). maxSpanWords and maxSpanShare are PRODUCT RULES — one sentence
    or one paragraph, never a section — chosen, not measured. escapeRun
-   and exceedsRatio are #142's scope-check parameters, and those are
-   DESIGN PARAMETERS OF A SYNTHETIC TEST: nobody has yet run them over
-   real rewrites, and a refused rewrite is billed. So this is null, the
-   task refuses with rewrite_unavailable before any spend, and it is
-   switched on the way the essay thresholds were: measure-rewrite.mjs on
-   the essay model, the constrained replies' refusal rate at these
-   settings at most 2%, the settings recorded in ESSAY-FEEDBACK.md.
+   and exceedsRatio are #142's scope-check parameters, READ OFF
+   measure-rewrite.mjs on the essay model (12 ASAP essays, 36 rewrites,
+   26 September 2026):
 
-   The proposed values, for that run:
-     { maxSpanWords: 120, maxSpanShare: 0.25, escapeRun: 6, exceedsRatio: 1.5 } */
+     no passage refused by the span rules; none cut off at 1,500 tokens
+     (completion p50 89, max 380); at most $0.00052 a rewrite
+     escapes-span  0 at every escape run >= 4
+     exceeds-span  4/36 at ratio 1.5, 0 at 2.5
+     fabricated    1/36, whatever the settings
+
+   So escape run 4 and ratio 2.5, which leave only the fabricated one:
+   1/36 = 2.8%, ruled acceptable if it is a genuine invention. Two
+   misreadings of the student's own words were then found and fixed in
+   essayScope.js (a word the essay has in lower case, a number it spells
+   out), which can only lower that count. ESSAY-FEEDBACK.md has the
+   rest. null switches the task off again, refusing before any spend. */
 export const ESSAY_REWRITE: {
   maxSpanWords: number;
   maxSpanShare: number;
   escapeRun: number;
   exceedsRatio: number;
-} | null = null;
+} | null = { maxSpanWords: 120, maxSpanShare: 0.25, escapeRun: 4, exceedsRatio: 2.5 };
 
 /* The first consent version that disclosed essay drafts. The server
    checks it for the essay task only, because the essay is the only

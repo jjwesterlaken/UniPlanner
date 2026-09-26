@@ -22,8 +22,9 @@
                       spend.
      no new facts     checkScope() over the reply (essayScope.js):
                       escapes-span, fabricated-fact, exceeds-span.
-                      Refused BILLED, under its own code: the tokens
-                      were generated.
+                      Refused FREE under rewrite_refused (Jared, 26
+                      September 2026): the check is ours, so a rewrite
+                      is charged only when one is delivered.
      side by side     the client only renders; nothing writes the
                       example into a note, the planner or the essay.
      not the prompt   the model is given the passage and the point's
@@ -95,8 +96,8 @@ export function rewriteSchema() {
 
 /**
  * The reply, checked before a student sees it. A reply outside its
- * scope throws `essayRefusal: "scope"`; the handler bills it under
- * `rewrite_refused`, because the tokens were generated.
+ * scope throws `essayRefusal: "scope"`; the handler answers it under
+ * `rewrite_refused` and charges nothing.
  */
 export function finishRewrite({ raw, essay, span, limits }) {
   let parsed;

@@ -3,7 +3,9 @@
 
    The example rewrite ships OFF (ESSAY_REWRITE is null in
    ai-text/config.ts) because #142's scope check has only ever run on
-   synthetic rewrites, and a refused rewrite is BILLED. This runs the
+   synthetic rewrites. (A refused rewrite is not charged to the student
+   since 26 September 2026, but it still costs us and disappoints them.)
+   This runs the
    real thing, the way the endpoint would, and reports how often the
    check would refuse what the SHIPPED prompt produces:
 
@@ -26,7 +28,8 @@
      node scripts/measure-rewrite.mjs --summarise "<file>" --settings 6,1.5,120,0.25
 
    --settings is escapeRun,exceedsRatio,maxSpanWords,maxSpanShare. The
-   default is PROPOSED below, the values config.ts names for this run.
+   default is PROPOSED below, which a test holds equal to ESSAY_REWRITE
+   in config.ts, so a run measures what ships.
    ================================================================== */
 
 import fs from "node:fs";
@@ -50,8 +53,8 @@ const opt = (n, d = null) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : d;
 };
 
-/* The values config.ts proposes for this run. */
-export const PROPOSED = Object.freeze({ escapeRun: 6, exceedsRatio: 1.5, maxSpanWords: 120, maxSpanShare: 0.25 });
+/* What ships: ESSAY_REWRITE in config.ts, held equal by a test. */
+export const PROPOSED = Object.freeze({ escapeRun: 4, exceedsRatio: 2.5, maxSpanWords: 120, maxSpanShare: 0.25 });
 
 function settingsFrom(arg) {
   if (!arg) return { ...PROPOSED };
@@ -73,6 +76,9 @@ export function recordFor({ essay, span, rewrite, spanOk, truncated, completion 
     truncated: false,
     completion,
     fabricated: base.violations.some((v) => v.kind === "fabricated-fact"),
+    /* Which kind fired (figure, name, citation), never the token: in a
+       misreading the token IS the student's own word. */
+    fabricatedKinds: (base.violations.find((v) => v.kind === "fabricated-fact") || {}).found || [],
     escapeFires: ESCAPE_RUNS.filter((k) => checkScope({ essay, span, rewrite, escapeRun: k, exceedsRatio: 1e9 }).violations.some((v) => v.kind === "escapes-span")),
     ratio: wordsOf(rewrite).length / Math.max(1, wordsOf(span).length),
   };
@@ -198,4 +204,4 @@ async function main() {
   process.exit(verdict.ok ? 0 : 1);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

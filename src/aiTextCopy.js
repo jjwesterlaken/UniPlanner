@@ -80,13 +80,14 @@ export const AI_TEXT_FAILURES = {
   },
 
   /* THE EXAMPLE WENT OUTSIDE ITS PASSAGE, or added something that wasn't
-     in the essay, so it was not shown. Both halves: charged, and a retry
-     charges again. */
+     in the essay, so it was not shown. NOT CHARGED (Jared, 26 September
+     2026): the check is ours, so its refusals are ours to absorb, and a
+     rewrite is charged only when one is delivered. */
   rewrite_refused: {
     title: "That example went outside your passage, so we didn't show it.",
     detail:
       "It reworked more than the passage you picked, or added something that isn't in your essay. " +
-      "That attempt was charged, and trying again will be charged again. Nothing you did caused this.",
+      "Nothing was charged, and you can try again. Nothing you did caused this.",
   },
 
   /* The legibility refusal on photographed pages. BOTH HALVES, by

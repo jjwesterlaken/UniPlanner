@@ -1805,12 +1805,22 @@ async function main() {
     assert.equal(limits.TASK_CREDITS.rewrite, cfg.TASK_CREDITS.rewrite);
   });
 
-  await test("THE REWRITE IS OFF IN PRODUCTION until its scope limits are measured, and refusing costs nothing", async () => {
-    assert.equal(cfg.ESSAY_REWRITE, null, "the scope limits were set without the measurement config.ts says they need");
+  await test("THE REWRITE IS ON AT THE MEASURED LIMITS, and each is the one ESSAY-FEEDBACK.md records", async () => {
+    assert.deepEqual(cfg.ESSAY_REWRITE, { maxSpanWords: 120, maxSpanShare: 0.25, escapeRun: 4, exceedsRatio: 2.5 });
+    const doc = fs.readFileSync(path.join(rootDir, "ESSAY-FEEDBACK.md"), "utf8");
+    assert.match(doc, /Set: escape\s+run 4, length ratio 2\.5/);
+    /* THE CONTROL: production's configuration really reaches the model. */
+    const summarizer = recording({ rewrite: "Students can learn at their own pace, with patient explanations." });
+    const res = await run(rewriteBody(), { supabaseAdmin: makeAdmin(), summarizer });
+    assert.equal(res.status, 200);
+    assert.equal(summarizer.calls, 1);
+  });
+
+  await test("WITH THE LIMITS UNSET THE REWRITE IS OFF, and refusing costs nothing", async () => {
     const summarizer = recording({ rewrite: SPAN });
     const trace = [];
     const admin = makeAdmin({ trace });
-    const res = await run(rewriteBody(), { supabaseAdmin: admin, summarizer });
+    const res = await run(rewriteBody(), { supabaseAdmin: admin, summarizer, essayRewrite: null });
     assert.equal(res.status, 503);
     assert.equal((await res.json()).code, "rewrite_unavailable");
     assert.equal(summarizer.calls, 0);
@@ -1854,7 +1864,7 @@ async function main() {
     assert.equal(body.result.rewrite, "They help students learn at their own pace, with patient explanations.");
   });
 
-  await test("A REWRITE THAT LEAVES ITS PASSAGE OR INVENTS A FACT IS REFUSED, BILLED, under its own code; an in-scope one is billed as a success", async () => {
+  await test("A REWRITE THAT LEAVES ITS PASSAGE OR INVENTS A FACT IS REFUSED FREE, under its own code; only a delivered one is billed", async () => {
     for (const [what, rewrite] of [
       ["escapes the span", "They help students learn at their own pace. Libraries now lend laptops to anyone who asks."],
       ["invents a figure", "In 2019, 73% of students learned at their own pace with patient explanations."],
@@ -1863,8 +1873,14 @@ async function main() {
       const res = await run(rewriteBody(), { supabaseAdmin: admin, summarizer: recording({ rewrite }), essayRewrite: REWRITE_LIMITS });
       assert.equal(res.status, 422, what);
       assert.equal((await res.json()).code, "rewrite_refused", what);
-      assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 1, `${what}: the generated tokens went unbilled`);
+      assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 0, `${what}: a refusal by our own check was charged to the student`);
     }
+    /* AND AN UNPARSEABLE REWRITE IS FREE TOO: charge only what is delivered. */
+    const garbled = makeAdmin();
+    const bad = await run(rewriteBody(), { supabaseAdmin: garbled, summarizer: { calls: 0, async complete() { return "not json"; } }, essayRewrite: REWRITE_LIMITS });
+    assert.equal(bad.status, 502);
+    assert.equal((await bad.json()).code, "ai_failed", "an unusable rewrite was reported as charged");
+    assert.equal(garbled.seen.filter((x) => x.op === "rpc").length, 0, "an unusable rewrite was billed");
     const admin = makeAdmin();
     const ok = await run(rewriteBody(), { supabaseAdmin: admin, summarizer: recording({ rewrite: "Students can learn at their own pace, with patient explanations." }), essayRewrite: REWRITE_LIMITS });
     assert.equal(ok.status, 200);

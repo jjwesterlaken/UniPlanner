@@ -451,13 +451,13 @@ await test("DISMISSED IS ANSWERED: the ask goes and does not return", async () =
   assert.equal(q(host, "[data-mark-compare]"), null);
 });
 
-await test("THE REWRITE BUTTON IS NOT DRAWN IN PRODUCTION until the server's limits are set", () => {
-  /* The client half of the two-flag switch. The probe flips it; this is
-     the assertion that production does not, and that the probe's flip
-     really found the line (or every rewrite test below is about a
-     button that never exists). */
-  assert.match(read("src/essayFeedback.js"), /export const ESSAY_REWRITE_ENABLED = false;/);
-  assert.match(read("supabase/functions/ai-text/config.ts"), /\} \| null = null;\n\n\/\* The first consent version/, "the server's rewrite limits are set, so the client flag is out of step");
+await test("THE TWO REWRITE FLAGS AGREE: the button is drawn only when the server's limits are set", () => {
+  /* A button over a server that refuses is a control that fails after
+     the tap; limits with no button are a feature nobody can reach. */
+  const client = /export const ESSAY_REWRITE_ENABLED = (true|false);/.exec(read("src/essayFeedback.js"));
+  const server = /export const ESSAY_REWRITE:[\s\S]*?\} \| null = (null|\{[^}]*\});/.exec(read("supabase/functions/ai-text/config.ts"));
+  assert.ok(client && server, "the flag or the limits moved, so this compares nothing");
+  assert.equal(client[1] === "true", server[1] !== "null", `client flag ${client[1]} but server limits ${server[1]}`);
 });
 
 await test("AN EXAMPLE REWRITE, CLICKED: one passage and its note go, side by side comes back, the record gains a line with no essay text", async () => {

@@ -75,6 +75,9 @@ export function printRewriteSummary(records, settings, { ceiling = null, usdPerR
     console.log(row);
   }
   console.log(`\n  fabricated-fact fired on ${e.byKind.fabricated} of ${e.judged} (does not depend on the settings)`);
+  const kinds = {};
+  for (const r of records) for (const k of r.fabricatedKinds || []) kinds[k] = (kinds[k] || 0) + 1;
+  if (Object.keys(kinds).length) console.log(`  what fired: ${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join(", ")} (kinds only, never the text)`);
 
   console.log(`\n${"=".repeat(72)}\nTHE GATE — rewrites the shipped prompt produced that would be refused\n${"=".repeat(72)}`);
   console.log(`\n  escape run ${settings.escapeRun} | length ratio ${settings.exceedsRatio} | span <= ${settings.maxSpanWords} words, <= ${settings.maxSpanShare} of the essay`);
