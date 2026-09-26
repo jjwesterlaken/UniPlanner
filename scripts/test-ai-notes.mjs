@@ -2870,6 +2870,28 @@ async function run() {
     assert.ok(csp.includes("script-src 'self'"), "script-src no longer restricts to self — external injection is back");
   });
 
+  await test("EVERY WORKFLOW PINS THE SUPABASE CLI TO A VERSION, never latest", () => {
+    /* "latest" is an API lookup, and on 26 September 2026 GitHub's rate
+       limit failed a deploy on exactly that lookup. Swept over every
+       workflow, not only the deploy one, so a second file installing
+       the CLI cannot reintroduce it. */
+    const dir = path.join(rootDir, ".github/workflows");
+    const files = fs.readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
+    assert.ok(files.length > 0, "no workflow files were found, so this checked nothing");
+    let installs = 0;
+    for (const f of files) {
+      const text = fs.readFileSync(path.join(dir, f), "utf8");
+      const re = /uses:\s*supabase\/setup-cli@[^\n]*\n\s*with:\s*\n\s*version:\s*([^\s#]+)/g;
+      for (const m of text.matchAll(re)) {
+        installs += 1;
+        assert.match(m[1], /^\d+\.\d+\.\d+$/, `${f} installs the Supabase CLI at "${m[1]}", which is resolved through a rate-limited API`);
+      }
+      const bare = (text.match(/uses:\s*supabase\/setup-cli@/g) || []).length;
+      assert.equal(bare, (text.match(re) || []).length, `${f} installs the Supabase CLI without naming a version`);
+    }
+    assert.ok(installs >= 1, "no workflow installs the Supabase CLI, so this checked nothing");
+  });
+
   await test("the deploy workflow ships BOTH functions", () => {
     /* It deployed only ai-notes for as long as ai-text existed, so
        every ai-text change needed a by-hand deploy nobody's checklist

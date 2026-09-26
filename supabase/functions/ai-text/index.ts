@@ -346,6 +346,14 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
         }
         return errorResponse(stage, "ai_failed", "The AI couldn't finish that. Please try again.", 502);
       }
+      /* AND THE SAME FOR ESSAY FEEDBACK'S NO-WRITING REFUSAL (Jared, 26
+         September 2026): "a refusal caused by our own model or checks
+         shouldn't cost the student, whatever the feature." The reply
+         offered wording and our check stopped it, so the student is not
+         charged. Returned before the billing below. */
+      if ((err as { essayRefusal?: string }).essayRefusal === "writing") {
+        return jsonResponse({ ok: false, stage, code: "writing_refused", error: "The feedback came back in a form we don't show." }, 422);
+      }
       const charged = await billAllowance(admin, { userId, profile, month, credits: allowance.cost });
       if (!charged.ok) logFailure("billing", charged.error, { task, cost: allowance.cost, after: "parse_failure" });
       /* THE PAGES COUNT WHEREVER THE CREDITS DO. The provider read them
@@ -359,13 +367,6 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          pages, because the student can act on it: retake page 3. The
          client copy states both halves -- this attempt used allowance,
          and the resubmit charges again as its own smaller batch. */
-      /* THE REPLY OFFERED WRITING. Billed, as every generated output is,
-         and under its own code, because it is a different fact from an
-         unusable reply: the student can retry, and the copy says the
-         retry charges again (ESSAY-FEEDBACK.md §3). */
-      if ((err as { essayRefusal?: string }).essayRefusal === "writing") {
-        return jsonResponse({ ok: false, stage, code: "writing_refused", error: "The feedback came back in a form we don't show." }, 422);
-      }
       const unreadable = (err as { unreadablePages?: number[] }).unreadablePages;
       if (Array.isArray(unreadable)) {
         return jsonResponse(
