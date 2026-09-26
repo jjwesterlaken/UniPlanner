@@ -214,7 +214,7 @@ const SEED = {
   meta: { updatedAt: "2026-08-01T00:00:00.000Z" },
 };
 
-async function walk(label, isConfigured) {
+async function walk(label, isConfigured, { foreignStorage = false } = {}) {
   const js = await bundleWith(isConfigured);
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
     runScripts: "outside-only",
@@ -237,6 +237,21 @@ async function walk(label, isConfigured) {
     removeEventListener() {},
   };
   w.localStorage.setItem("uni-planner-v1", JSON.stringify(SEED));
+  /* A `window.storage` put there by something else. `store` used to
+     prefer this name over localStorage unconditionally — a leftover
+     from the preview the app was first built in — and nothing sets it
+     today, which is a statement about this week's dependency tree:
+     `window.Capacitor` was set by a billing library's import. With one
+     present whose get finds nothing, the old store loaded an EMPTY
+     planner, and a signed-out student's notes were never read again. */
+  const foreignCalls = [];
+  if (foreignStorage) {
+    w.storage = {
+      get: async (k) => (foreignCalls.push(`get ${k}`), null),
+      set: async (k) => (foreignCalls.push(`set ${k}`), undefined),
+      delete: async (k) => (foreignCalls.push(`delete ${k}`), undefined),
+    };
+  }
 
   w.eval(js);
   await new Promise((r) => setTimeout(r, 400));
@@ -310,6 +325,14 @@ async function walk(label, isConfigured) {
   // claim -- "local only" must not be satisfied by saving nothing at all.
   const stored = w.localStorage.getItem("uni-planner-v1") || "";
   check(stored.includes("a private thing to do") || stored.includes("Osmosis"), `${label}: the planner is saved locally`);
+  if (foreignStorage) {
+    /* SAVED TO localStorage SPECIFICALLY, and read from it: the seeded
+       note must still be there (an empty load would have replaced it
+       with a blank planner) AND the edit must have landed beside it. */
+    check(stored.includes("Osmosis"), `${label}: the planner that was on the device is the one that loaded`, "the seeded note is gone — the store read somewhere else and found nothing");
+    check(stored.includes("a private thing to do"), `${label}: the edit was written to localStorage`);
+    check(foreignCalls.length === 0, `${label}: a window.storage on the page is never read or written`, foreignCalls.join(", "));
+  }
   check(complaints.length === 0, `${label}: nothing logged a React error`, complaints[0]);
 
   /* THE ONE PERMITTED DESTINATION, added deliberately: when the app
@@ -342,6 +365,8 @@ await walk("demo mode (isConfigured false)", false);
 /* THE ONE THE QUESTION IS ABOUT: the real build, real Supabase details,
    no account. backend.isDemo is FALSE here. */
 await walk("SIGNED OUT on the real build", true);
+/* The same student, with a `window.storage` some other code set. */
+await walk("SIGNED OUT, with a window.storage on the page", true, { foreignStorage: true });
 
 /* ------------------------------------------------------------------ */
 /*  3. Nothing third-party is in the bundle to leak through           */
