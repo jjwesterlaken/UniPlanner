@@ -594,3 +594,52 @@ export function EssayDraftCard({ courses, course, onCourse, children }) {
     </div>
   );
 }
+
+/**
+ * On a draft filed from the AI tab: link it to the real assessment, so
+ * the mark entered there is joined to this feedback. A plain control;
+ * Grace restyles. The rules are linkPlaceholder in essayFeedback.js.
+ */
+export function PlaceholderLink({ placeholder, targets, onLink }) {
+  const c = ESSAY_COPY.link;
+  const [choice, setChoice] = useState("");
+  /* Linking tombstones this row, so the confirmation lives on the real
+     assessment's row (LinkedNote), which is where the student looks next. */
+  if (!targets.length) return <p data-placeholder-link-none className="px-3 pb-2 text-xs text-stone-500">{c.none}</p>;
+  return (
+    <div data-placeholder-link className="flex flex-wrap items-center gap-2 px-3 pb-2 text-xs text-stone-600">
+      <label htmlFor={`link-${placeholder.id}`}>{c.label}</label>
+      <select
+        id={`link-${placeholder.id}`}
+        data-placeholder-link-target
+        className="rounded border border-stone-200 bg-surface px-2 py-1 text-sm u-field"
+        value={choice}
+        onChange={(e) => setChoice(e.target.value)}
+      >
+        <option value="">{c.choose}</option>
+        {targets.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.title}
+          </option>
+        ))}
+      </select>
+      <button
+        data-placeholder-link-go
+        className={`${btnGhost} disabled:cursor-not-allowed disabled:opacity-40`}
+        disabled={!choice}
+        onClick={() => {
+          if (targets.some((x) => x.id === choice)) onLink(choice);
+        }}
+      >
+        {c.go}
+      </button>
+    </div>
+  );
+}
+
+/** On a real assessment with drafts linked to it: says so, lastingly. */
+export function LinkedNote({ assessment }) {
+  const n = Array.isArray(assessment && assessment.linkedFrom) ? assessment.linkedFrom.length : 0;
+  if (!n) return null;
+  return <p data-linked-note className="px-3 pb-2 text-xs text-stone-600">{ESSAY_COPY.link.linkedNote(n)}</p>;
+}

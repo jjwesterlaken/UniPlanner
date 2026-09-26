@@ -37,6 +37,17 @@ export const ESSAY_COPY = {
     courseLabel: "Course (optional)",
     where: "The feedback is kept under this course in Courses → Grades, so if you enter your mark there later we can ask how we did.",
   },
+  /* Linking a draft from the AI tab to the real assessment, on the
+     draft's own Grades row. */
+  link: {
+    label: "This draft is for",
+    choose: "Choose the assessment…",
+    go: "Link",
+    none: "Add the real assessment above, then link this draft to it so your mark and the feedback go together.",
+    /* On the real assessment's row, once a draft is linked to it. */
+    linkedNote: (n) =>
+      `Includes feedback from ${n === 1 ? "a draft" : `${n} drafts`} you linked. When you enter the mark here, we'll ask how the feedback compared.`,
+  },
   /* The assessment a run from the AI tab is filed under. */
   placeholderTitle: (date) => `Essay draft, ${date}`,
   rowNoWeight: "no weight",

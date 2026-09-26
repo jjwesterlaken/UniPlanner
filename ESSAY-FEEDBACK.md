@@ -763,11 +763,31 @@ app — the course dropdown, paste, run, result on the AI tab, the
 placeholder under the course, a mark, the question — and goes red
 naming the missing placeholder if the run is not filed.
 
-**Not built: linking a placeholder to a real assessment.** Today a
-student who later adds "Essay 1" with its weight has two rows, and the
-mark loop runs on whichever carries the mark. Moving a placeholder's
-feedback and AI-use record onto a real assessment is a small follow-up
-if Grace wants the control.
+**Linking a draft to the real assessment (Jared, 27 September 2026).**
+A draft's Grades row carries a plain control, "This draft is for [the
+assessment]", listing the live, real assessments of the same course; if
+there are none it says to add the real one first. Grace restyles it.
+Linking does three things (`linkPlaceholder` in `essayFeedback.js`):
+- it merges the draft's AI-use record into the real assessment's,
+  oldest first and still bounded;
+- it adds the draft's id to the real assessment's `linkedFrom`, bounded
+  at 20;
+- it tombstones the draft like any deleted assessment.
+
+The real row then says it includes feedback from a linked draft.
+
+**No migration, and nothing recorded is rewritten.** `assessment_feedback`
+is insert-only and the draft's `delivered` and `rated` rows name the
+draft's id. So when the mark is entered on the real assessment, the
+answer is recorded **once per id it covers** (`markAnswerIds`): the
+real assessment's own, if it had runs, and each linked draft's. The
+`on_mark` index is per assessment, so each is its own row and each
+joins to the runs that name it. A draft whose mark question was already
+answered or dismissed is not carried, since its `on_mark` row exists.
+`test-rendered-tabs.mjs` links, enters the mark and answers in the real
+app, and requires the answer recorded against the draft's id. With the
+answer recorded against the real id alone, it fails naming the
+difference.
 
 **FOR GRACE: "Grades" now holds pre-submission work.** A draft is
 reviewed on the Grades row before there is anything to grade, so the

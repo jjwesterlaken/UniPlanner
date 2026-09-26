@@ -58,7 +58,10 @@ export const optInNeeded = (meta) => {
  * whether that field has focus, and the ask waits until it does not.
  */
 export function showMarkCompare(a, { editing = false } = {}) {
-  return !!(a && isMarked(a) && a.essayFeedbackAt && !a.markCompareAsked && !editing);
+  /* Feedback of its own, or a draft linked to it (linkPlaceholder
+     below): either way there are runs for the mark to join. */
+  const fed = !!(a && (a.essayFeedbackAt || (Array.isArray(a.linkedFrom) && a.linkedFrom.length > 0)));
+  return !!(a && isMarked(a) && fed && !a.markCompareAsked && !editing);
 }
 
 const cleanReasons = (reasons, allowed = FEEDBACK_REASONS) =>
@@ -262,3 +265,52 @@ export function placeholderAssessment({ id, course = "", date, copy }) {
 
 /** Is this assessment weightless, so the grade maths skips it? */
 export const hasWeight = (a) => Number.isFinite(Number(a && a.w)) && Number(a.w) > 0;
+
+/* ---------- linking a draft to the real assessment (Jared, 27 September 2026) ----------
+
+   A run from the AI tab is filed under a placeholder ("Essay draft,
+   27 Sep"). When the student later adds the real assessment, the draft
+   can be LINKED to it, so the mark loop joins the feedback to the mark
+   that is actually entered.
+
+   NO MIGRATION, AND NO REWRITE OF WHAT WAS RECORDED. assessment_feedback
+   is insert-only and its rows name the placeholder's id. So the real
+   assessment carries `linkedFrom`, the placeholder ids, and when its
+   mark comes back the answer is recorded ONCE PER ID it covers: its own
+   (if it had feedback of its own) and each linked draft's. The
+   on_mark unique index is per assessment, so each is its own row and
+   each joins to the runs that name it.
+
+   What moves: the AI-use record (merged, oldest first, still bounded),
+   and the fact that feedback was given, via linkedFrom. What does not:
+   a draft whose mark question was already answered or dismissed has its
+   on_mark row already, so it is not carried (it would be recorded
+   twice, and the second would be refused by the index anyway). The
+   placeholder is then tombstoned, like any deleted assessment. */
+export const MAX_LINKED_DRAFTS = 20;
+
+export const isPlaceholder = (a) => !!(a && a.essayPlaceholder);
+
+/** The real assessments a placeholder can be linked to: same course, live, not themselves drafts. */
+export const linkTargets = (placeholder, assessments = []) =>
+  (assessments || []).filter(
+    (a) => a && !a.deletedAt && !isPlaceholder(a) && a.id !== (placeholder && placeholder.id) && (a.course || "") === ((placeholder && placeholder.course) || "")
+  );
+
+/** The patch to write on the real assessment when a draft is linked to it, or null if it cannot be. */
+export function linkPlaceholder(placeholder, target) {
+  if (!isPlaceholder(placeholder) || !target || isPlaceholder(target) || target.deletedAt) return null;
+  const carry = !!placeholder.essayFeedbackAt && !placeholder.markCompareAsked;
+  const drafts = [...new Set([...(Array.isArray(target.linkedFrom) ? target.linkedFrom : []), ...(carry ? [placeholder.id] : [])])].slice(-MAX_LINKED_DRAFTS);
+  const aiUse = [...(Array.isArray(target.aiUse) ? target.aiUse : []), ...(Array.isArray(placeholder.aiUse) ? placeholder.aiUse : [])]
+    .filter(Boolean)
+    .sort((x, y) => String(x.at).localeCompare(String(y.at)))
+    .slice(-MAX_AI_USE_ENTRIES);
+  return { linkedFrom: drafts, aiUse };
+}
+
+/** Did this assessment, or a draft linked to it, get feedback? The mark question's precondition. */
+export const hadFeedback = (a) => !!(a && (a.essayFeedbackAt || (Array.isArray(a.linkedFrom) && a.linkedFrom.length > 0)));
+
+/** The assessment ids a mark answer is recorded against: its own if it had feedback, and each linked draft. */
+export const markAnswerIds = (a) => [...new Set([...(a && a.essayFeedbackAt ? [a.id] : []), ...(a && Array.isArray(a.linkedFrom) ? a.linkedFrom : [])])];

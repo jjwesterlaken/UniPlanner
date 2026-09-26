@@ -112,7 +112,7 @@ import {
   Settings,
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView, useRecordingSession, RecordingIndicator } from "./aiNotes.jsx";
-import { EssayFeedbackPanel, MarkCompareAsk, EssayDraftCard } from "./essayPanel.jsx";
+import { EssayFeedbackPanel, MarkCompareAsk, EssayDraftCard, PlaceholderLink, LinkedNote } from "./essayPanel.jsx";
 import {
   optInNeeded,
   ESSAY_OPT_IN_VERSION,
@@ -126,6 +126,10 @@ import {
   rewriteEntry,
   placeholderAssessment,
   hasWeight,
+  isPlaceholder,
+  linkTargets,
+  linkPlaceholder,
+  markAnswerIds,
 } from "./essayFeedback.js";
 import { recordFeedback } from "./essayFeedbackStore.js";
 import { createEssayHold } from "./essayHold.js";
@@ -4615,6 +4619,10 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
               <Trash2 size={15} />
             </button>
           </div>
+          {essay && <LinkedNote assessment={a} />}
+          {essay && isPlaceholder(a) && (
+            <PlaceholderLink placeholder={a} targets={linkTargets(a, list)} onLink={(id) => essay.onLink(a, id)} />
+          )}
           {essay && (
             <div className="px-3 pb-2">
               <EssayFeedbackPanel
@@ -6257,10 +6265,30 @@ export default function PlannerApp() {
            (patchItem does) is what stops a second device asking again. */
         onMarkAnswer: (assessment, { rating, reasons, shareMark }) => {
           patchItem("assessments", assessment.id, { markCompareAsked: nowISO() });
-          recordFeedback({
-            supabaseClient: supabase,
-            row: onMarkRow({ id: uid(), userId: session.user.id, assessment, rating, reasons, shareMark, rule: rounding }),
-          });
+          /* ONE ROW PER ASSESSMENT THE ANSWER COVERS: this one's own
+             runs, and each draft linked to it (markAnswerIds). The rows
+             that recorded those runs name the draft's id, and they are
+             insert-only, so the answer goes to them rather than them
+             being moved. */
+          for (const id of markAnswerIds(assessment)) {
+            recordFeedback({
+              supabaseClient: supabase,
+              row: onMarkRow({ id: uid(), userId: session.user.id, assessment: { ...assessment, id }, rating, reasons, shareMark, rule: rounding }),
+            });
+          }
+        },
+        /* LINK A DRAFT TO THE REAL ASSESSMENT: carry its AI-use record and
+           the fact of its feedback onto the real row, then tombstone the
+           draft like any deleted assessment. Read from the CURRENT items. */
+        onLink: (placeholder, targetId) => {
+          const list = (dataRef.current.semesters[dataRef.current.semester] || {}).assessments || [];
+          const cur = list.find((x) => x.id === placeholder.id) || placeholder;
+          const target = list.find((x) => x.id === targetId && !x.deletedAt);
+          const patch = linkPlaceholder(cur, target);
+          if (!patch) return false;
+          patchItem("assessments", target.id, patch);
+          removeItem("assessments", cur.id);
+          return true;
         },
         onMarkDismiss: (assessment) => patchItem("assessments", assessment.id, { markCompareAsked: nowISO() }),
         /* THE AI-USE RECORD, no essay text: when, what kind, which
