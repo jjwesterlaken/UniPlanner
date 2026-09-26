@@ -55,11 +55,11 @@ export const inText = (span, text) => {
   return s.trim().length > 0 && phrase(text).includes(s);
 };
 
-const REQUIRED = ["window", "matchUnit", "minQuoteWords", "maxNoteWords"];
+const REQUIRED = ["window", "matchUnit", "minQuoteWords", "maxNoteWords", "maxSentenceWords"];
 
 /**
  * @param {{ raw: string, essay: string, criteria: string,
- *           thresholds: { window: number, matchUnit: number, minQuoteWords: number, maxNoteWords: number } }} args
+ *           thresholds: { window: number, matchUnit: number, minQuoteWords: number, maxNoteWords: number, maxSentenceWords: number } }} args
  */
 export function finishEssayReply({ raw, essay, criteria, thresholds }) {
   /* NO THRESHOLDS, NO ANSWER. They have no defaults anywhere in this
@@ -136,6 +136,9 @@ export function finishEssayReply({ raw, essay, criteria, thresholds }) {
       if (w.length >= 3 && !gramSet(source, w.length).has(w.join(" "))) violations.push({ kind: "wording-offered", index: i });
     }
   }
+  /* The opening sentence has its own length cap: it is one sentence of
+     judgement, and a paragraph there is the same signal a long note is. */
+  if (normaliseWords(o.sentence).length > thresholds.maxSentenceWords) violations.push({ kind: "sentence-too-long", index: kept.length });
   const prose = checkNoWriting({
     fields: [...kept.map((p) => p.note), o.sentence],
     essay,

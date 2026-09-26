@@ -146,3 +146,24 @@ export async function productionCeiling(task, { configSource = path.join(ROOT, "
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
+
+/**
+ * The no-writing thresholds the endpoint ships with, from the same
+ * config.ts the handler imports. null when the essay task is off. The
+ * harness checks the rule at THESE settings unless told otherwise, so a
+ * run measures the configuration that ships.
+ */
+export async function productionThresholds({ configSource = path.join(ROOT, "supabase/functions/ai-text/config.ts") } = {}) {
+  const { build } = await import("esbuild");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "prod-thresholds-"));
+  try {
+    const out = await build({ entryPoints: [configSource], bundle: true, format: "esm", platform: "neutral", write: false });
+    const file = path.join(tmp, "config.mjs");
+    fs.writeFileSync(file, out.outputFiles[0].text);
+    const mod = await import(pathToFileURL(file).href);
+    if (!("ESSAY_NO_WRITING" in mod)) throw new Error("ai-text/config.ts no longer exports ESSAY_NO_WRITING");
+    return mod.ESSAY_NO_WRITING;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}

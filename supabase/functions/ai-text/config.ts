@@ -262,16 +262,28 @@ export const TASK_CREDITS: Record<Task, number> = Object.fromEntries(
 
 /* ---------- essay feedback: the two things that must be true first ----------
 
-   THE NO-WRITING THRESHOLDS ARE NOT SET, and until they are the
-   endpoint refuses the essay task before it reads the allowance, so a
-   refusal costs nothing. They have no defaults anywhere, on purpose
-   (noWriting.js): the window a run of new prose is refused at, and the
-   shortest quote that locates anything, are to be read off
-   scripts/measure-no-writing.mjs on real Luna output, not guessed. The
-   #133 run could not size them (its adversarial arm had almost no
-   rewrites in it) and the #142 control is synthetic. Setting these four
-   numbers is what turns the feature on. */
-export const ESSAY_NO_WRITING: { window: number; matchUnit: number; minQuoteWords: number; maxNoteWords: number } | null = null;
+   THE NO-WRITING THRESHOLDS, read off the two-arm harness on the model
+   that ships (ASAP sets 1, 2 and 8, 25 September 2026), each from the
+   constrained arm's own distribution. ESSAY-FEEDBACK.md has the table
+   and the rule they are read by. Setting these is what turns the
+   feature on; null turns it off again, refusing before any spend.
+
+     maxNoteWords      30  constrained max 27, p99 23 (adversarial p99 71)
+     minQuoteWords      3  every 3-word quote located one place; 2-word 80%
+     window / unit  25/4   constrained 1% of notes, adversarial 11%
+     maxSentenceWords  50  constrained max 47
+
+   THE ARMS DO NOT SEPARATE on length or window, as on the previous
+   model: these guard size and protect legitimate feedback. The
+   ghostwriting control is the offered-wording refusal in
+   _shared/essayReply.js. */
+export const ESSAY_NO_WRITING: {
+  window: number;
+  matchUnit: number;
+  minQuoteWords: number;
+  maxNoteWords: number;
+  maxSentenceWords: number;
+} | null = { window: 25, matchUnit: 4, minQuoteWords: 3, maxNoteWords: 30, maxSentenceWords: 50 };
 
 /* The first consent version that disclosed essay drafts. The server
    checks it for the essay task only, because the essay is the only

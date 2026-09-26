@@ -533,6 +533,46 @@ ghostwriting control**: any quoted span in a note that is not in the
 essay or the criteria refuses the whole reply (`_shared/essayReply.js`).
 Nothing in the numbers pretends to be more than that.
 
+### THE SETTINGS, read off Luna (ASAP sets 1, 2 and 8, 25 September 2026)
+
+Read from the two-arm harness on `claude/essay-thresholds`: the shipped
+prompt, at the shipped 4,000-token ceiling. Every figure comes from the
+constrained arm. The adversarial figure sits beside it only to show
+whether the two arms separate.
+
+| threshold | setting | constrained | adversarial | why this value |
+|---|---|---|---|---|
+| `maxNoteWords` | **30** | max 27, p99 23 | p99 71 | above the constrained max with margin |
+| `minQuoteWords` | **3** | 3 words: 100% occur once; 2: 80%; 1: 33% | — | the shortest length that always locates one place |
+| `window` | **25** | 1% of notes reach it | 11% | 30 would be 0%; 25 keeps a ceiling the long notes approach |
+| `matchUnit` | **4** | — | — | the unit the window row was read at |
+| `maxSentenceWords` | **50** | max 47 | — | above the constrained max; the opening sentence is one sentence |
+
+**TWO RATES, BECAUSE THE ENDPOINT HAS TWO KINDS OF REFUSAL.** A point
+whose quote is too short, or is not in the essay, is DROPPED and the
+rest of the reply stands. A note or opening sentence that breaks a
+length, window or offered-wording rule REFUSES THE WHOLE REPLY, which is
+billed. So the 2% rule is applied to whole replies: **at these settings
+the constrained arm may have at most 2% of its replies refused** (Jared's
+read of the Luna run is 0%). The point-drop rate is reported beside it,
+and the harness's exit code follows the reply rule. About 5% of the constrained points are dropped,
+all of them 1-2 word quotes or quotes not in the essay. The prompt now
+asks for at least three words, so the short-quote drops should shrink.
+**That prompt line was added after the measurement**: the drop rate
+under it is not yet measured, and the next run is what measures it.
+
+**NO SEPARATION, AGAIN, SAID PLAINLY.** The adversarial arm's note
+lengths overlap the constrained arm's, and the window refuses 11% of
+the adversarial arm against 1% of the constrained. That is not a
+detector. As on gpt-4o-mini, these settings are guards on SIZE, set so
+legitimate feedback is never refused. The ghostwriting control is the
+offered-wording refusal: any quoted span of three or more words in a
+note that appears in neither the essay nor the criteria refuses the
+reply (`_shared/essayReply.js`). The harness's old gate, which required
+a cell refusing at most 10% of the constrained arm and at least 90% of
+the adversarial arm, tested a claim this feature no longer makes, and
+it has been retired.
+
 ### What happens on a refusal, and it costs money
 
 **The refusal is BILLED**, under its own code, and the copy says so.

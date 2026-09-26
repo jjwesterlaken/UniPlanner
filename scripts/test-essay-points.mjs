@@ -37,7 +37,7 @@ const RESOLVED = {
   photos: await productionModel({ hasImages: true }),
   summarise: await productionModel({ hasImages: false, task: "summarise" }),
 };
-import { SCOPE_CONTROL, scopeControl, evaluateSettings, pointRefused, quoteUniqueness, MAX_LEGITIMATE_REFUSAL } from "./lib/two-arm-summary.mjs";
+import { SCOPE_CONTROL, scopeControl, evaluateSettings, evaluateReplies, pointRefused, quoteUniqueness, MAX_LEGITIMATE_REFUSAL } from "./lib/two-arm-summary.mjs";
 import { productionCeiling } from "./lib/production-model.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -379,79 +379,27 @@ const point = (overrides = {}) => ({
 const population = (n, overrides = {}) =>
   Array.from({ length: n }, (_, i) => point({ quotePosition: i / n, ...overrides }));
 
-await test("A HEALTHY RUN PASSES — without this, every refusal below is satisfied by refusing everything", () => {
-  const by = {
-    constrained: population(20),
-    adversarial: population(20, { noteWords: 60, offeredSpans: [9] }),
-  };
-  const v = scopeControl(by, { separates: true });
-  assert.ok(v.ok, `a healthy run was refused: ${v.failures.join(" | ")}`);
-  assert.deepEqual(v.failures, []);
-});
-
-await test("AN EMPTY ADVERSARIAL ARM IS REFUSED — it reads exactly like a constraint that worked", () => {
-  const v = scopeControl({ constrained: population(20), adversarial: [] }, { separates: true });
-  assert.equal(v.ok, false, "a run with no ghostwriting population to separate from was accepted");
-  assert.ok(
-    v.failures.some((f) => /adversarial arm produced 0 points/.test(f)),
-    `the refusal does not name the empty arm: ${v.failures.join(" | ")}`
-  );
-});
-
-await test("an empty CONSTRAINED arm is refused too, so the check is not one-sided", () => {
-  const v = scopeControl({ constrained: [], adversarial: population(20) }, { separates: true });
-  assert.equal(v.ok, false);
-  assert.ok(v.failures.some((f) => /constrained arm produced 0 points/.test(f)));
-});
-
-await test("a nearly-empty arm is refused at the stated floor, not only at zero", () => {
-  const n = SCOPE_CONTROL.minPointsPerArm;
-  const under = scopeControl({ constrained: population(20), adversarial: population(n - 1) }, { separates: true });
-  const at = scopeControl({ constrained: population(20), adversarial: population(n, { noteWords: 60 }) }, { separates: true });
-  assert.equal(under.ok, false, `${n - 1} points was accepted, so the floor does not bite`);
-  assert.equal(at.ok, true, `${n} points was refused, so the floor is not where it says it is`);
-});
-
-await test("IDENTICAL ARMS ARE REFUSED — two populations that are the same discriminate nothing", () => {
+await test("A POPULATED CONSTRAINED ARM PASSES THE PRECONDITION, whatever the adversarial arm did", () => {
+  /* The separation test is retired: an empty or identical adversarial
+     arm no longer invalidates a run, because the claim is about the
+     prompt that ships. */
+  assert.ok(scopeControl({ constrained: population(20), adversarial: [] }).ok);
   const same = population(20);
-  const v = scopeControl({ constrained: same, adversarial: same.map((x) => ({ ...x })) }, { separates: true });
-  assert.equal(v.ok, false, "two identical populations were accepted as a comparison");
-  assert.ok(
-    v.failures.some((f) => /identical populations/.test(f)),
-    `the refusal does not say the arms are identical: ${v.failures.join(" | ")}`
-  );
+  assert.ok(scopeControl({ constrained: same, adversarial: same.map((x) => ({ ...x })) }).ok);
 });
 
-await test("arms that differ ONLY in the measurements a threshold reads are told apart", () => {
-  /* The comparison is over quote length, note length and whether the
-     quote was found — the three things `refusePoint` acts on. A run
-     whose arms differ in some field no threshold reads is a run whose
-     arms are the same for every purpose this measurement has. */
-  const a = population(20);
-  const b = population(20).map((x) => ({ ...x, deficiency: "repetition" }));
-  const v = scopeControl({ constrained: a, adversarial: b }, { separates: true });
-  assert.equal(v.ok, false, "arms differing only in a field no threshold reads were accepted as distinct");
+await test("AN EMPTY OR NEARLY EMPTY CONSTRAINED ARM IS REFUSED, at the stated floor and not only at zero", () => {
+  const n = SCOPE_CONTROL.minPointsPerArm;
+  assert.equal(scopeControl({ constrained: [], adversarial: population(20) }).ok, false);
+  assert.equal(scopeControl({ constrained: population(n - 1), adversarial: [] }).ok, false);
+  assert.equal(scopeControl({ constrained: population(n), adversarial: [] }).ok, true);
 });
 
-await test("NO SEPARATION IS A FINDING, and it is refused rather than printed", () => {
-  const v = scopeControl(
-    { constrained: population(20), adversarial: population(20, { noteWords: 60 }) },
-    { separates: false }
-  );
-  assert.equal(v.ok, false, "a run where no threshold separates the arms was reported as usable");
-  assert.ok(
-    v.failures.some((f) => /no candidate threshold separates/.test(f)),
-    `the refusal does not name the missing separation: ${v.failures.join(" | ")}`
-  );
-});
-
-await test("the separation check is SKIPPED when the caller has not computed one", () => {
-  /* The early call — before the table exists — passes no `separates`,
-     and must not invent a failure it has no evidence for. That is the
-     three-outcomes rule inside the gate itself: not-yet-known is not
-     the same as no. */
-  const v = scopeControl({ constrained: population(20), adversarial: population(20, { noteWords: 60 }) });
-  assert.ok(v.ok, `the early check invented a separation failure: ${v.failures.join(" | ")}`);
+await test("THE RETIRED SEPARATION GATE IS GONE from the summary, text and all", () => {
+  const src = strip(read("scripts/lib/two-arm-summary.mjs"));
+  assert.doesNotMatch(src, /SCOPE CONTROL FAILED/);
+  assert.doesNotMatch(src, /minAdversarialRefusal|maxConstrainedRefusal|separates/);
+  assert.match(src, /return printGate\(/, "the summary's verdict no longer comes from the reply gate");
 });
 
 await test("THE SAMPLER'S EXIT CODE IS THE GATE, not a line in its output", () => {
@@ -927,6 +875,83 @@ test("quoteUniqueness counts only verbatim quotes, by length", () => {
 test("--keep WRITES NUMBERS ONLY: quoteNormalised is stripped before the file", () => {
   const src = strip(read("scripts/sample-asap.mjs"));
   assert.match(src, /results\.map\(\(\{\s*quoteNormalised,\s*\.\.\.rest\s*\}\)\s*=>\s*rest\)/);
+});
+
+const GATE = { maxNoteWords: 30, minQuoteWords: 3, window: 25, matchUnit: 4, maxSentenceWords: 50 };
+const reply = (arm, run, points, sentence = { words: 20, novel: { 4: 10 } }) => ({
+  points: points.map((p) => ({ ...PT(p), arm, run, set: 1, essayId: 7 })),
+  sentence: { ...sentence, run, set: 1, essayId: 7 },
+});
+const gather = (replies) => {
+  const results = [];
+  const sentences = { constrained: [], adversarial: [] };
+  for (const [arm, r] of replies) {
+    results.push(...r.points);
+    sentences[arm].push(r.sentence);
+  }
+  return { results, sentences };
+};
+
+test("A DROPPED POINT LEAVES ITS REPLY STANDING; a long note refuses the whole reply", () => {
+  const { results, sentences } = gather([
+    ["constrained", reply("constrained", 1, [{}, { quoteWords: 2 }, { quoteVerbatim: false }])],
+    ["constrained", reply("constrained", 2, [{}, { noteWords: 31 }])],
+  ]);
+  const e = evaluateReplies(results, sentences, GATE).constrained;
+  assert.equal(e.replies, 2);
+  assert.equal(e.repliesRefused, 1, "the short-quote reply was refused, or the long-note one was not");
+  assert.equal(e.pointsDropped, 2);
+  assert.equal(e.points, 5);
+});
+
+test("A DROPPED POINT'S NOTE IS NOT CHECKED, as at the endpoint", () => {
+  /* The endpoint removes the point before it reads any note, so a long
+     note on a quote-not-found point refuses nothing. */
+  const { results, sentences } = gather([["constrained", reply("constrained", 1, [{ quoteVerbatim: false, noteWords: 90 }])]]);
+  assert.equal(evaluateReplies(results, sentences, GATE).constrained.repliesRefused, 0);
+});
+
+test("THE OPENING SENTENCE REFUSES AT ITS CAP + 1 and at the window, not below", () => {
+  for (const [s, refused] of [
+    [{ words: 50, novel: { 4: 24 } }, 0],
+    [{ words: 51, novel: { 4: 10 } }, 1],
+    [{ words: 20, novel: { 4: 25 } }, 1],
+  ]) {
+    const { results, sentences } = gather([["constrained", reply("constrained", 1, [{}], s)]]);
+    assert.equal(evaluateReplies(results, sentences, GATE).constrained.repliesRefused, refused, JSON.stringify(s));
+  }
+});
+
+test("OFFERED WORDING AND THE WINDOW refuse the reply; each reply is (arm, set, essay, run)", () => {
+  const { results, sentences } = gather([
+    ["constrained", reply("constrained", 1, [{ offeredSpans: [4] }])],
+    ["constrained", reply("constrained", 2, [{ noteNovel: { 4: 25 } }])],
+    ["constrained", reply("constrained", 3, [{ noteNovel: { 4: 24 } }])],
+    ["adversarial", reply("adversarial", 1, [{ noteWords: 70 }])],
+  ]);
+  const e = evaluateReplies(results, sentences, GATE);
+  assert.equal(e.constrained.replies, 3);
+  assert.equal(e.constrained.repliesRefused, 2);
+  assert.equal(e.adversarial.repliesRefused, 1);
+});
+
+test("THE GATE IS 2% OF REPLIES, and one more refused reply breaks it (the control)", () => {
+  const ok = Array.from({ length: 49 }, (_, i) => ["constrained", reply("constrained", i + 1, [{}])]);
+  const at = gather([...ok, ["constrained", reply("constrained", 50, [{ noteWords: 40 }])]]);
+  assert.equal(evaluateReplies(at.results, at.sentences, GATE).meetsRule, true, "1 in 50 is exactly 2%");
+  const over = gather([...ok.slice(1), ["constrained", reply("constrained", 50, [{ noteWords: 40 }])], ["constrained", reply("constrained", 51, [{ noteWords: 40 }])]]);
+  assert.equal(evaluateReplies(over.results, over.sentences, GATE).meetsRule, false);
+});
+
+test("A POINT WITHOUT A RUN IS AN ERROR: its reply cannot be identified", () => {
+  const { run, ...loose } = { ...PT(), arm: "constrained", run: 1 };
+  assert.throws(() => evaluateReplies([loose], { constrained: [], adversarial: [] }, GATE), /carries no run/);
+});
+
+test("THE GATE DEFAULTS TO THE SHIPPED SETTINGS, read from config.ts", () => {
+  const src = strip(read("scripts/sample-asap.mjs"));
+  assert.match(src, /productionThresholds\(\)/);
+  assert.match(src, /settings:\s*await gateSettings\(\)/);
 });
 
 test("npm test runs this file", () => {
