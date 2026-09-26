@@ -56,14 +56,14 @@ export const AI_TEXT_FAILURES = {
 
   /* THE FEEDBACK OFFERED WRITING, which the COMMENTS must never do (an
      example rewrite is a separate request the student makes), so it
-     was not shown. BOTH HALVES, the pages_unreadable rule: the attempt
-     was charged, because the tokens were generated, and a retry charges
-     again. And it is not the student's fault, which is said. */
+     was not shown. NOT CHARGED (Jared, 26 September 2026): our check
+     stopped it, so the refusal is ours to absorb. And it is not the
+     student's fault, which is said. */
   writing_refused: {
     title: "That feedback came back in a form we don't show.",
     detail:
       "It started suggesting wording for your essay rather than pointing at what to work on, so we stopped it. " +
-      "That attempt was charged, and trying again will be charged again. Nothing you did caused this.",
+      "Nothing was charged, and you can try again. Nothing you did caused this.",
   },
 
   /* THE EXAMPLE REWRITE IS OFF until its scope limits are measured, and

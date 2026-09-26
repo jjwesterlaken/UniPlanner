@@ -601,17 +601,28 @@ a cell refusing at most 10% of the constrained arm and at least 90% of
 the adversarial arm, tested a claim this feature no longer makes, and
 it has been retired.
 
-### What happens on a refusal, and it costs money
+### What happens on a refusal — and since 26 September 2026 it costs the student nothing
 
-**The refusal is BILLED**, under its own code, and the copy says so.
-That is not a choice — it is the rule the codebase already follows:
-output that cannot be used IS billed because the tokens were generated
-and charged (`pages_unreadable` is the precedent). Charging quietly is
-how a support ticket becomes a chargeback.
+**RULED (Jared, 26 September 2026): "a refusal caused by our own model
+or checks shouldn't cost the student, whatever the feature."** So
+`writing_refused` is answered BEFORE the billing step and charges
+nothing, as `rewrite_refused` already did. The copy says so: *nothing
+was charged, and you can try again*, plus the line that it is not the
+student's fault, because it is not.
 
-So the copy carries both halves: *this attempt was charged; try again
-and it charges again.* And the refusal should say what happened in a way
-that is not the student's fault, because it is not.
+**What this reverses, recorded so it is not re-derived.** This section
+used to say the refusal is billed, on the codebase's rule that output
+which cannot be used is billed because the tokens were generated. That
+rule was about honesty (charging quietly is how a support ticket becomes
+a chargeback) and the honesty half stands: the copy still says exactly
+what happened. What changed is who absorbs the cost of our own check
+firing. At Luna's rates that is a fraction of a cent a refusal.
+
+**Not covered by this ruling, and left billed as they were** until it is
+extended to them: `ai_failed_charged` (a reply that came back unusable,
+on any text task) and `pages_unreadable` (the model reporting a
+photographed page it could not read, which the student can fix by
+retaking it).
 
 ### And a wording guard, the readings shape
 

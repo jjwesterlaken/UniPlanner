@@ -13,10 +13,21 @@ jobs:
       - name: Get the code
         uses: actions/checkout@v4
 
+      # PINNED, NEVER "latest". Resolving "latest" asks GitHub's API for
+      # the newest release, and on 26 September 2026 that request hit
+      # the API's rate limit and failed the deploy before a single
+      # function was touched. A pinned version downloads without asking
+      # anything. 2.118.0 is the release that "latest" resolved to on
+      # the run that succeeded that same morning, so this changes
+      # nothing that has been deployed. Move it deliberately, in its
+      # own commit, and read the version line below after the next run.
       - name: Install the Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.118.0
+
+      - name: Record the CLI version
+        run: supabase --version
 
       # DERIVED FROM THE DIRECTORY, NOT ENUMERATED. This workflow named
       # only ai-notes for as long as ai-text existed, so every ai-text

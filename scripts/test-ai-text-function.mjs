@@ -1670,7 +1670,7 @@ async function main() {
     assert.equal(rpcs[0].payload.p_credits, 9, `billed ${rpcs[0].payload.p_credits}, not the ruled 9`);
   });
 
-  await test("A REPLY THAT OFFERS WRITING IS REFUSED, BILLED, under its own code", async () => {
+  await test("A REPLY THAT OFFERS WRITING IS REFUSED FREE, under its own code", async () => {
     const offering = essayReply({
       reading: {
         points: [
@@ -1686,9 +1686,10 @@ async function main() {
     const res = await run(essayBody(), { supabaseAdmin: admin, summarizer: recording(offering), essayNoWriting: THRESHOLDS });
     assert.equal(res.status, 422);
     assert.equal((await res.json()).code, "writing_refused");
-    assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 1, "generated tokens went unbilled");
+    assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 0, "a refusal by our own check was charged to the student");
     const copy = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
-    assert.ok(copy.AI_TEXT_FAILURES.writing_refused && /charged/i.test(copy.AI_TEXT_FAILURES.writing_refused.detail), "the refusal's copy does not say it was charged");
+    assert.ok(copy.AI_TEXT_FAILURES.writing_refused && /Nothing was charged/.test(copy.AI_TEXT_FAILURES.writing_refused.detail), "the refusal's copy does not say nothing was charged");
+    assert.doesNotMatch(copy.AI_TEXT_FAILURES.writing_refused.detail, /That attempt was charged|will be charged again/, "the copy still says the refusal was charged");
     assert.ok(copy.AI_TEXT_FAILURES.essay_unavailable && /nothing was charged/i.test(copy.AI_TEXT_FAILURES.essay_unavailable.detail));
   });
 
