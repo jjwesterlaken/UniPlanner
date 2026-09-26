@@ -108,6 +108,7 @@ export const ESSAY_COPY = {
      essay. */
   rewrite: {
     button: "Show an example rewrite",
+    working: "Writing an example…",
     cost: (credits) => `An example costs ${credits} credits.`,
     yours: "Your passage",
     example: "One way it could read",

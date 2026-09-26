@@ -11,11 +11,10 @@ browser, at `www.uniplannerapp.com`. A few things only exist on one of
 them and are marked accordingly. If a step says [web] and you are in
 the installed app, skip it.
 
-**[†] marks a step that depends on a pull request that has NOT merged
-yet** — #150 for the essay panel, #151 for the example rewrite. If the
-build you are holding predates them, the step will fail correctly and
-is not a bug. Check with Jared which build you have before reporting one
-of those.
+**Build 1.3.0 from `main` after the essay-persistence fix has merged**
+(the pull request after #155). Everything in §8 is in that build. If
+the version on the Account tab is older than the one Jared gives you,
+§8 will fail correctly and is not a bug.
 
 **Before you start:** Account tab, bottom of the screen — note the
 **version** (twelve characters). Every bug report needs it, and if two
@@ -144,10 +143,20 @@ they are on the same one. Sign in; most of this needs an account.
 - [ ] **A reset-password email link**, opened on the phone, should land
       on a screen that lets you set a new password.
 
-## 8. Essay feedback  **[†] #150, #151**
+## 8. Essay feedback
 
-Courses tab → **Grades** → add an assessment (a title and a weight is
-enough). Every step below happens on that assessment's row. **Use your
+There are two ways in, and both end on the same place:
+
+- [ ] **From the AI tab:** below the lecture notes there is a card,
+      **Feedback on a draft**. Pick a course, then an assessment — or
+      **A new assessment…**, which needs a title and a weight before the
+      button works. **Open feedback** should take you to the **Courses**
+      tab with that assessment's panel already open and on screen. A new
+      one should now be on the Grades list.
+- [ ] **From Courses → Grades**, on any assessment row: **Get feedback on
+      a draft**.
+
+Every step below happens on that assessment's row. **Use your
 own account, not the reviewer account** — its consent is deliberately
 untouched for Apple. The order matters: a student meets the screens in
 this order.
@@ -174,6 +183,22 @@ this order.
       first"** before **"Smaller things"**, each quoting your own words.
       The real question: do the points name things a marker would care
       about? Say which ones don't.
+- [ ] **The `?` beside the panel's title** opens three numbered steps
+      inline (paste before you submit; you're pointed at problems and
+      can ask for an example rewrite; tell us how we did when the mark
+      comes back), and closes again from the same `?`.
+- [ ] **THE RESULT SURVIVES LEAVING THE TAB — the bug from Jared's
+      run.** With a result on screen, tap **Study**, then **Courses**.
+      The result should still be there, **not** the empty form, and your
+      credits should have moved **once** (9), not twice. Then try it
+      **mid-run**: press **Read my draft** and switch tab immediately;
+      come back and it should either still be working (no button to
+      press again) or show the result. Never an empty form you could
+      pay for twice.
+- [ ] **Closing the panel (×) throws the result away**, and opening it
+      again starts empty. Force-quitting also loses an unsaved result —
+      that is deliberate (your essay is never stored); **Save to notes**
+      is how you keep one.
 - [ ] **Opening it again does not re-ask** the consent or the opt-in.
 - [ ] **Save to notes** files it into that course's folder, and the saved
       note carries the not-a-prediction paragraph under the band.
@@ -181,14 +206,18 @@ this order.
       box stays closed until you tick **Also send a comment**, and when
       open it says it is only sent on the tick and trains nothing. Send
       it: you should see a thank-you.
-- [ ] **The example rewrite.** Each point has **Show an example rewrite ·
-      An example costs 3 credits.** It should come back **beside** your
+- [ ] **The example rewrite.** Each point has a **button** — bordered,
+      obviously pressable — reading **Show an example rewrite**, with
+      **"An example costs 3 credits."** on a line underneath. If it
+      reads as a caption rather than a button, say so. It should come back **beside** your
       passage, labelled, with a line saying it isn't put into your essay
       and your unit's rules apply. Nothing in your essay or notes
       changes. Check the example **adds nothing your essay didn't say** —
       no new name, number or source — and say if it does. If it is ever
       refused ("went outside your passage"), the message must say
-      **nothing was charged**, and your credits must not move.
+      **nothing was charged**, and your credits must not move. The
+      same goes for a feedback read that is refused or comes back
+      unusable: the message says nothing was charged, and nothing is.
       Afterwards **Your AI-use record** on that panel should list it,
       with **none of your essay's words in it**, and Copy should copy it.
 - [ ] **The mark question must NOT appear yet** — nothing is marked.

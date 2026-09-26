@@ -526,6 +526,101 @@ async function run() {
     assert.equal(out.openPanels, 1, `${out.openPanels} essay panels open; the card should open exactly its own row's`);
   });
 
+  /* THE PRODUCTION BUG, 26 September 2026: a delivered essay result
+     vanished when the student left the Courses tab, and seeing it again
+     cost a second 9-credit read. The tab conditional unmounts the
+     panel, so this can only be shown in the real app, by switching
+     tabs through the real nav. The endpoint is intercepted, so the
+     request COUNT is measured rather than assumed. */
+  await test("A DELIVERED ESSAY RESULT SURVIVES LEAVING THE TAB: run, switch tab, come back, still there, one request", async () => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+    const now = new Date().toISOString();
+    await page.addInitScript(
+      ({ ref, userId, tabKey, meta, now }) => {
+        const hour = Math.floor(Date.now() / 1000) + 3600;
+        localStorage.setItem(
+          `sb-${ref}-auth-token`,
+          JSON.stringify({
+            access_token: "test-token",
+            token_type: "bearer",
+            expires_at: hour,
+            expires_in: 3600,
+            refresh_token: "test-refresh",
+            user: { id: userId, email: "render-probe@example.test", aud: "authenticated", role: "authenticated" },
+          })
+        );
+        localStorage.setItem("uni-planner-mode", "light");
+        if (!sessionStorage.getItem("seeded")) {
+          sessionStorage.setItem("seeded", "1");
+          localStorage.setItem(tabKey, "courses");
+          localStorage.setItem(
+            "uni-planner-v1",
+            JSON.stringify({
+              semester: "Semester 1",
+              semesters: { "Semester 1": { assessments: [{ id: "held-a1", course: "", title: "Held Essay Probe", w: 40, kind: "assignment", updatedAt: now }] } },
+              meta: { ...meta, essayOptIn: { version: 1, at: now } },
+            })
+          );
+        }
+      },
+      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, meta: CONSENTED_META, now }
+    );
+    let essayCalls = 0;
+    await page.route(`${SUPABASE_HOST}/**`, async (route) => {
+      const url = route.request().url();
+      if (url.includes("/functions/v1/ai-text")) {
+        essayCalls++;
+        return route.fulfill(
+          json({
+            ok: true,
+            allowanceUsed: 0.1,
+            result: {
+              genre: "argument",
+              band: "Credit",
+              bandTied: [],
+              sentence: "The argument is clear and the support is thin.",
+              points: [{ quote: "held draft text", deficiency: "claim-without-evidence", note: "Nothing supports this.", severity: "fundamental" }],
+              dropped: {},
+            },
+          })
+        );
+      }
+      if (url.includes("/auth/v1/user")) return route.fulfill(json({ id: USER_ID, email: "render-probe@example.test" }));
+      if (url.includes("/auth/v1/")) return route.fulfill(json({ access_token: "test-token", user: { id: USER_ID } }));
+      if (url.includes("/rest/v1/profiles")) return route.fulfill(json(PROFILE_ROW));
+      if (url.includes("/rest/v1/ai_usage")) return route.fulfill(json({ user_id: USER_ID, credits_used: 12 }));
+      return route.fulfill(json([]));
+    });
+    await page.goto("file://" + path.join(OUT, "index.html"));
+    await page.waitForSelector("[data-essay-open]", { timeout: 15_000 });
+    await page.click("[data-essay-open]");
+    await page.fill("[data-essay-text]", "This is the held draft text for the probe.");
+    await page.fill("[data-essay-criteria]", "Pass, Credit, Distinction, High Distinction");
+    await page.click("[data-essay-go]");
+    await page.waitForSelector("[data-essay-band]", { timeout: 5_000 });
+    const nav = (label) => page.locator("nav button", { hasText: label }).first();
+    await nav("Study").click();
+    await page.waitForTimeout(300);
+    const awayPanels = await page.locator("[data-essay-panel]").count();
+    await nav("Courses").click();
+    await page.waitForTimeout(500);
+    const back = await page.evaluate(() => ({
+      band: !!document.querySelector("[data-essay-band]"),
+      form: !!document.querySelector("[data-essay-text]"),
+      stored: localStorage.getItem("uni-planner-v1") || "",
+    }));
+    await ctx.close();
+    assert.deepEqual(errors, [], `the tab switch threw:\n        ${errors.join("\n        ")}`);
+    assert.equal(awayPanels, 0, "the panel stayed mounted on another tab, so this is not the switch that lost the result");
+    assert.ok(back.band, "THE RESULT WAS LOST TO A TAB SWITCH");
+    assert.equal(back.form, false, "came back to an empty form instead of the result");
+    assert.equal(essayCalls, 1, `${essayCalls} reads were sent; one was paid for`);
+    assert.ok(!back.stored.includes("held draft text"), "THE DRAFT OR ITS QUOTES REACHED THE STORED PLANNER");
+  });
+
   await test("every tab was actually visited, so none of the above passed over nothing", () => {
     assert.deepEqual(visited, ids, `visited ${visited.length} of ${ids.length} tabs`);
   });

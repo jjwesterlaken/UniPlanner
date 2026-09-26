@@ -42,6 +42,7 @@ import {
 import { ESSAY_COPY, copyCovers } from "../src/essayCopy.js";
 import { DEFICIENCIES, SEVERITY_LEVELS, PREDICTION_PATTERNS } from "../src/essayPoints.js";
 import { recordFeedback } from "../src/essayFeedbackStore.js";
+import { createEssayHold } from "../src/essayHold.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -227,6 +228,7 @@ fs.writeFileSync(
   "export const fetchTextAllowance = async () => ({ unavailable: true });\n" +
     "export const callAiText = async (args) => {\n" +
     "  globalThis.__calls = [...(globalThis.__calls || []), args];\n" +
+    "  if (globalThis.__gate) await globalThis.__gate;\n" +
     "  if (args.task === 'rewrite') return { allowanceUsed: 0.2, result: { rewrite: 'Everyone can be helped by computers.' } };\n" +
     "  return { allowanceUsed: 0.15, result: globalThis.__result };\n" +
     "};\n"
@@ -240,8 +242,9 @@ fs.writeFileSync(
 import { useState } from "react";
 import { Grades } from "../src/PlannerApp.jsx";
 import { EssayDraftEntry } from "../src/essayPanel.jsx";
+import { createEssayHold } from "../src/essayHold.js";
 const ALLOWANCE = { tier: "free", limit: 60, used: 0, remaining: 60, fraction: 0, perMonth: false };
-function Harness({ initial, optInNeeded, sink, openFor: openFor0 }) {
+function Harness({ initial, optInNeeded, sink, openFor: openFor0, hold = null }) {
   const [list, setList] = useState(initial);
   const [openFor, setOpenFor] = useState(openFor0);
   const [needed, setNeeded] = useState(optInNeeded);
@@ -254,6 +257,7 @@ function Harness({ initial, optInNeeded, sink, openFor: openFor0 }) {
     allowanceApi: { allowance: ALLOWANCE, applyFraction: () => {}, consent: { needed: false } },
     rule: "half-up",
     openFor,
+    hold,
     onOpened: () => { sink.opened += 1; setOpenFor(null); },
     optIn: { needed, accept: () => { sink.optedIn = true; setNeeded(false); } },
     onDelivered: (a, x) => { sink.delivered.push({ a, ...x }); patchItem("assessments", a.id, { essayFeedbackAt: "now" }); },
@@ -275,6 +279,21 @@ window.__mount = (initial, { optInNeeded = false, signedOut = false, openFor = n
   const sink = { patches: [], delivered: [], rated: [], saved: [], answers: [], dismissed: [], rewrites: [], optedIn: false, signedOut, opened: 0 };
   createRoot(host).render(<Harness initial={initial} optInNeeded={optInNeeded} sink={sink} openFor={openFor} />);
   return { host, sink };
+};
+/* A TAB SWITCH, modelled: the hold lives above a toggle that unmounts
+   and remounts Grades, exactly as PlannerApp's tab conditional does. */
+function Switcher({ initial, sink, hold }) {
+  const [shown, setShown] = useState(true);
+  window.__switch = () => setShown((v) => !v);
+  return shown ? <Harness initial={initial} optInNeeded={false} sink={sink} hold={hold} /> : <p>another tab</p>;
+}
+window.__mountHeld = (initial) => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const hold = createEssayHold();
+  const sink = { patches: [], delivered: [], rated: [], saved: [], answers: [], dismissed: [], rewrites: [], optedIn: false, signedOut: false, opened: 0 };
+  createRoot(host).render(<Switcher initial={initial} sink={sink} hold={hold} />);
+  return { host, sink, hold, switchTab: () => window.__switch() };
 };
 window.__mountEntry = (assessments) => {
   const host = document.createElement("div");
@@ -585,6 +604,129 @@ await test("THE ? SHOWS THE THREE STEPS FROM essayCopy.js, and hides them again"
   btn.click();
   await tick();
   assert.equal(q(host, '[data-help-panel="essay"]'), null);
+});
+
+/* ---------------- a run outlives a tab switch ---------------- */
+
+await test("THE HOLD keeps an entry per assessment, returns the same snapshot until it changes, and clears", () => {
+  const hold = createEssayHold();
+  let heard = 0;
+  const off = hold.subscribe(() => heard++);
+  const empty = hold.get("a1");
+  assert.equal(hold.get("a1"), empty, "a fresh snapshot per read re-renders for ever under useSyncExternalStore");
+  assert.equal(empty.result, null);
+  const next = hold.set("a1", { open: true, essay: "x" });
+  assert.equal(hold.get("a1"), next);
+  assert.equal(hold.get("a2"), empty, "one row's run leaked into another");
+  hold.set("a1", (cur) => ({ rewrites: { ...cur.rewrites, k: 1 } }));
+  assert.equal(hold.get("a1").essay, "x", "a functional patch dropped the rest of the entry");
+  hold.clear("a1");
+  assert.equal(hold.get("a1").open, false);
+  hold.set("a2", { open: true });
+  hold.clearAll();
+  assert.equal(hold.size(), 0);
+  assert.equal(heard, 5);
+  off();
+});
+
+await test("THE HOLD WRITES NOTHING DURABLE: no storage, no sync, and the panel reads it rather than its own state", () => {
+  const src = read("src/essayHold.js").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  for (const forbidden of [/localStorage/, /sessionStorage/, /indexedDB/, /setData/, /fetch\(/]) {
+    assert.doesNotMatch(src, forbidden, `essayHold.js reaches ${forbidden}; the draft and quotes must stay in memory`);
+  }
+  const panel = read("src/essayPanel.jsx");
+  const body = panel.slice(panel.indexOf("export function EssayFeedbackPanel"), panel.indexOf("export function MarkCompareAsk"));
+  assert.ok(body.length > 1000, "did not find the panel body");
+  for (const gone of ["useState(null);\n  const [runId", "setResult(", "setRewriteState("]) {
+    assert.ok(!body.includes(gone), `the panel holds "${gone}" in its own state again, which dies with a tab switch`);
+  }
+});
+
+const runThrough = async (host) => {
+  q(host, "[data-essay-open]").click();
+  await tick();
+  type(q(host, "[data-essay-text]"), "My draft about computers.");
+  type(q(host, "[data-essay-criteria]"), "Score Point 1 ... Score Point 4");
+  await tick();
+  q(host, "[data-essay-go]").click();
+};
+
+await test("A DELIVERED RESULT SURVIVES A TAB SWITCH: run, leave, come back, and it is still there, with no second request", async () => {
+  win.__calls = [];
+  const { host, sink, switchTab } = win.__mountHeld([essayRow()]);
+  await tick();
+  await runThrough(host);
+  await tick();
+  await tick();
+  assert.ok(q(host, "[data-essay-band]"), "no result before the switch, so the switch proves nothing");
+  switchTab();
+  await tick();
+  assert.equal(q(host, "[data-essay-panel]"), null, "the panel did not unmount, so this is not a tab switch");
+  switchTab();
+  await tick();
+  assert.ok(q(host, "[data-essay-band]"), "THE RESULT WAS LOST TO A TAB SWITCH");
+  assert.equal(q(host, "[data-essay-text]"), null, "came back to an empty form instead of the result");
+  assert.equal(win.__calls.length, 1, "the result was fetched again");
+  assert.equal(sink.delivered.length, 1);
+});
+
+await test("A RUN IN FLIGHT SURVIVES A TAB SWITCH: it lands while away, is shown on return, and the button is not offered meanwhile", async () => {
+  win.__calls = [];
+  let release;
+  win.__gate = new Promise((r) => (release = r));
+  const { host, sink, switchTab } = win.__mountHeld([essayRow()]);
+  await tick();
+  await runThrough(host);
+  await tick();
+  assert.equal(win.__calls.length, 1);
+  switchTab();
+  await tick();
+  switchTab();
+  await tick();
+  const go = q(host, "[data-essay-go]");
+  assert.ok(!go || go.disabled, "the read was offered again while one was in flight, which charges twice");
+  switchTab();
+  await tick();
+  release();
+  win.__gate = null;
+  await tick();
+  await tick();
+  assert.equal(sink.delivered.length, 1, "the run finished while away and was not recorded");
+  switchTab();
+  await tick();
+  assert.ok(q(host, "[data-essay-band]"), "THE RUN LANDED WHILE AWAY AND WAS LOST");
+  assert.equal(win.__calls.length, 1);
+});
+
+await test("CLOSING IS DISMISSING: the result and the drafts go, and reopening starts clean", async () => {
+  const { host, hold } = win.__mountHeld([essayRow()]);
+  await tick();
+  await runThrough(host);
+  await tick();
+  await tick();
+  q(host, 'button[aria-label="' + ESSAY_COPY.close + '"]').click();
+  await tick();
+  assert.equal(hold.size(), 0, "a dismissed run is still held");
+  q(host, "[data-essay-open]").click();
+  await tick();
+  assert.equal(q(host, "[data-essay-text]").value, "", "the dismissed draft came back");
+});
+
+await test("THE EXAMPLE REWRITE IS A BUTTON, with its cost on a line of its own", async () => {
+  const { host } = win.__mount([essayRow()]);
+  await tick();
+  await runThrough(host);
+  await tick();
+  await tick();
+  const btn = q(host, "[data-essay-rewrite]");
+  assert.ok(btn, "no rewrite control");
+  assert.equal(btn.tagName, "BUTTON");
+  assert.match(btn.className, /\bborder\b/, "the control has no border, so it reads as a caption");
+  assert.match(btn.className, /\bpx-3\b/, "the control has no padding, so it reads as a caption");
+  assert.equal(btn.textContent.trim(), ESSAY_COPY.rewrite.button, "the cost is inside the button's label again");
+  const cost = q(host, "[data-essay-rewrite-cost]");
+  assert.ok(cost && !btn.contains(cost), "the cost is not a separate line");
+  assert.equal(cost.textContent, ESSAY_COPY.rewrite.cost(3));
 });
 
 await test("nothing above logged a React error", () => {

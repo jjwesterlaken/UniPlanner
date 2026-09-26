@@ -127,6 +127,7 @@ import {
   resolveEssayEntry,
 } from "./essayFeedback.js";
 import { recordFeedback } from "./essayFeedbackStore.js";
+import { createEssayHold } from "./essayHold.js";
 import { ESSAY_COPY } from "./essayCopy.js";
 import { TASK_CREDITS } from "./aiTextLimits.js";
 import {
@@ -4639,6 +4640,7 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
                 onSave={(x) => essay.onSave(a, x)}
                 onRewrite={(x) => essay.onRewrite(a, x)}
                 requestOpen={essay.openFor === a.id}
+                hold={essay.hold}
                 onOpened={essay.onOpened}
               />
             </div>
@@ -5153,6 +5155,10 @@ export default function PlannerApp() {
      card asked to open. Consumed by the row once it has opened, so a
      later visit to Courses does not reopen it. */
   const [essayOpenFor, setEssayOpenFor] = useState(null);
+  /* Essay runs live here, above the tab switch, so a delivered result
+     survives leaving the Courses tab (essayHold.js). Memory only. */
+  const essayHoldRef = useRef(null);
+  if (!essayHoldRef.current) essayHoldRef.current = createEssayHold();
   const [confirmReset, setConfirmReset] = useState(false);
   /* THE APP OPENS WITH WHAT IS ON THE DEVICE, not with "signed out".
 
@@ -5488,6 +5494,11 @@ export default function PlannerApp() {
      produces exactly the delivery billing-webhook answers `no_account`
      to: a purchase attached to an account we do not have. */
   const signedInUserId = session && session.user ? session.user.id : null;
+  /* A held essay run is the signed-in student's pasted draft: it goes
+     when they sign out or another account signs in. */
+  useEffect(() => {
+    essayHoldRef.current.clearAll();
+  }, [signedInUserId]);
   useEffect(() => {
     if (signedInUserId) {
       configurePurchases({ session });
@@ -6191,6 +6202,7 @@ export default function PlannerApp() {
         allowanceApi: textAllowance,
         rule: rounding,
         openFor: essayOpenFor,
+        hold: essayHoldRef.current,
         onOpened: () => setEssayOpenFor(null),
         optIn: {
           needed: optInNeeded(data.meta),
