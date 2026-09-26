@@ -170,8 +170,9 @@ this order.
       marker's judgement counts; your unit's rules on AI help apply; it
       can show an example rewrite of one passage and puts nothing into
       your essay; we check it against real marks and **will ask once how
-      we did when your mark comes back**; and we ask after each read
-      whether it was useful. There should be **no** "use at your own
+      we did when your mark comes back**; we ask after each read
+      whether it was useful; and **a result you haven't saved is lost if
+      the app reloads or closes, so Save to notes to keep it**. There should be **no** "use at your own
       risk". **Not now** closes it; opening the panel again asks again.
       Screenshot it.
 - [ ] **One real run.** Paste a real draft and real criteria. Before it
@@ -186,7 +187,8 @@ this order.
 - [ ] **The `?` beside the panel's title** opens three numbered steps
       inline (paste before you submit; you're pointed at problems and
       can ask for an example rewrite; tell us how we did when the mark
-      comes back), and closes again from the same `?`.
+      comes back), with a line under them saying an unsaved result is
+      lost on reload, and closes again from the same `?`.
 - [ ] **THE RESULT SURVIVES LEAVING THE TAB — the bug from Jared's
       run.** With a result on screen, tap **Study**, then **Courses**.
       The result should still be there, **not** the empty form, and your

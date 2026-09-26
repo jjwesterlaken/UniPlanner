@@ -601,6 +601,8 @@ await test("THE ? SHOWS THE THREE STEPS FROM essayCopy.js, and hides them again"
   await tick();
   const steps = [...host.querySelectorAll('[data-help-panel="essay"] li')].map((li) => li.textContent);
   assert.deepEqual(steps, [...ESSAY_COPY.help.steps]);
+  const note = q(host, "[data-essay-help-note]");
+  assert.ok(note && note.textContent === ESSAY_COPY.reloadLoses, "the ? does not say an unsaved result is lost on reload");
   btn.click();
   await tick();
   assert.equal(q(host, '[data-help-panel="essay"]'), null);
@@ -727,6 +729,19 @@ await test("THE EXAMPLE REWRITE IS A BUTTON, with its cost on a line of its own"
   const cost = q(host, "[data-essay-rewrite-cost]");
   assert.ok(cost && !btn.contains(cost), "the cost is not a separate line");
   assert.equal(cost.textContent, ESSAY_COPY.rewrite.cost(3));
+});
+
+await test("AN UNSAVED RESULT IS LOST ON RELOAD, and both the opt-in and the ? say so, in one sentence, naming Save to notes", async () => {
+  assert.match(ESSAY_COPY.reloadLoses, /reload/i);
+  assert.ok(ESSAY_COPY.reloadLoses.includes(ESSAY_COPY.save), `the sentence does not name the button, "${ESSAY_COPY.save}"`);
+  assert.equal(ESSAY_COPY.help.note, ESSAY_COPY.reloadLoses);
+  const { host } = win.__mount([essayRow()], { optInNeeded: true });
+  await tick();
+  q(host, "[data-essay-open]").click();
+  await tick();
+  const optIn = q(host, "[data-essay-opt-in]");
+  assert.ok(optIn, "no opt-in rendered, so this proves nothing");
+  assert.ok(optIn.textContent.includes(ESSAY_COPY.reloadLoses), "the opt-in does not say an unsaved result is lost on reload");
 });
 
 await test("nothing above logged a React error", () => {

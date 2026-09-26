@@ -488,6 +488,7 @@ export function EssayHelp() {
           <li key={step}>{step}</li>
         ))}
       </ol>
+      <p data-essay-help-note className="mt-2 text-xs text-stone-500">{ESSAY_COPY.help.note}</p>
     </div>
   );
 }
