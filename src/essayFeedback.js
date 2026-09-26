@@ -237,30 +237,28 @@ export function aiUseText({ assessment, copy, formatDate }) {
   return lines.join("\n");
 }
 
-/* ---------- the AI tab's entry point (Jared, 26 September 2026) ----------
+/* ---------- the AI tab's draft card (Jared, 27 September 2026) ----------
 
-   "Feedback on a draft" on the AI tab asks which course and assessment
-   the draft is for, and then opens THE SAME panel on that Grades row:
-   the mark the comparison asks about lives on that item, so the
-   feedback has to be attached there or the mark loop cannot join them.
+   The AI tab takes a draft straight away: one optional course, then the
+   same two boxes as the Grades panel, and the result on the AI tab.
+   Picking or creating an assessment first was too many steps for the
+   main use of the feature.
 
-   This decides what the choice means. An existing assessment must be a
-   live one; a new one needs a title and a weight, the same two things
-   the Grades form requires, because an assessment with no weight is one
-   the grade maths cannot use and the student would have to come back
-   and fix. Anything else is null and nothing happens. */
-export const ENTRY_KIND = "assignment";
+   THE RUN STILL LIVES ON AN ASSESSMENT, because the mark loop is a
+   render condition on one: a delivered run creates a PLACEHOLDER under
+   the chosen course, with no weight and no due date, and the ordinary
+   Grades row for it then carries the mark question when a mark is
+   entered. No weight means the grade maths skips it (weightOf() > 0 in
+   grades.js), so a placeholder can never move a student's average.
 
-export function resolveEssayEntry(choice, { uid, assessments = [] }) {
-  if (!choice) return null;
-  if (choice.assessmentId) {
-    const a = assessments.find((x) => x && x.id === choice.assessmentId && !x.deletedAt);
-    return a ? { id: a.id, course: a.course || "" } : null;
-  }
-  const title = String(choice.title || "").trim();
-  const w = Number(choice.w);
-  if (!title || !Number.isFinite(w) || w <= 0) return null;
-  const course = choice.course || "";
-  const create = { id: uid(), course, title, w, kind: ENTRY_KIND };
-  return { id: create.id, course, create };
+   Created on DELIVERY, never on the tap: a failed or refused run must
+   not leave a row behind. `date` is already formatted, so this module
+   holds no locale and no wording. */
+export const PLACEHOLDER_KIND = "assignment";
+
+export function placeholderAssessment({ id, course = "", date, copy }) {
+  return { id, course: course || "", title: copy.placeholderTitle(date), kind: PLACEHOLDER_KIND, essayPlaceholder: true };
 }
+
+/** Is this assessment weightless, so the grade maths skips it? */
+export const hasWeight = (a) => Number.isFinite(Number(a && a.w)) && Number(a.w) > 0;

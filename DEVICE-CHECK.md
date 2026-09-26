@@ -148,11 +148,14 @@ they are on the same one. Sign in; most of this needs an account.
 There are two ways in, and both end on the same place:
 
 - [ ] **From the AI tab:** below the lecture notes there is a card,
-      **Feedback on a draft**. Pick a course, then an assessment — or
-      **A new assessment…**, which needs a title and a weight before the
-      button works. **Open feedback** should take you to the **Courses**
-      tab with that assessment's panel already open and on screen. A new
-      one should now be on the Grades list.
+      **Feedback on a draft**, with a **Course (optional)** dropdown set
+      to **No course** and the draft and criteria boxes **right there**.
+      Pick a course — it should switch to it. Paste, run, and the result
+      should appear **on the AI tab**, without moving you anywhere. Then
+      go to **Courses → Grades**: under that course there is a new row,
+      **"Essay draft, <today's date>"**, reading **no weight**. Your
+      grade for the course should not change. Type a mark into that row
+      and tap away: the mark question should appear.
 - [ ] **From Courses → Grades**, on any assessment row: **Get feedback on
       a draft**.
 
