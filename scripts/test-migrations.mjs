@@ -328,6 +328,9 @@ async function run() {
          0017; this fixture deliberately does not. */
       if (file.startsWith("0018_")) continue;
       if (file.startsWith("0020_")) continue;
+      /* 0023 likewise re-creates the function, naming entitlements and
+         billing_events, which this fixture never created. */
+      if (file.startsWith("0023_")) continue;
       applyMigration(db, file);
     }
     return db;
@@ -374,6 +377,14 @@ async function run() {
         db,
         `insert into public.entitlements (user_id, source, tier) values
            (${USER}, 'stripe', 'ai'), (${OTHER}, 'revenuecat', 'ai_max');`
+      );
+    }
+    if (one(db, `select to_regclass('public.assessment_feedback') is not null;`) === "t") {
+      psqlOrThrow(
+        db,
+        `insert into public.assessment_feedback (id, user_id, assessment_id, run_id, occasion, deficiency_codes) values
+           ('seed-af-mine', ${USER}, 'asmt-1', 'run-1', 'delivered', '{thesis-unclear}'),
+           ('seed-af-theirs', ${OTHER}, 'asmt-2', 'run-2', 'delivered', '{}');`
       );
     }
     /* The seed must cover everything the derivation finds, or the
@@ -731,7 +742,10 @@ async function run() {
          (null, 'boom from nobody');
        insert into public.entitlements (user_id, source, tier) values
          (${USER}, 'stripe', 'ai'),
-         (${OTHER}, 'revenuecat', 'ai_max');`
+         (${OTHER}, 'revenuecat', 'ai_max');
+       insert into public.assessment_feedback (id, user_id, assessment_id, occasion, rating, mark, band) values
+         ('af-del-mine', ${USER}, 'asmt-1', 'on_mark', 'yes', 72, 'Distinction'),
+         ('af-del-theirs', ${OTHER}, 'asmt-9', 'on_mark', 'no', null, null);`
     );
 
     const owned = one(
@@ -1214,6 +1228,13 @@ async function run() {
      until someone says which generator feeds it, or writes down that
      nothing client-side does. */
 
+  const plannerUid = () => {
+    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    const m = /^const uid = (\(\) => `[^`]+`);/m.exec(src);
+    assert.ok(m, "couldn't find the planner's uid() helper — this guard is blind, fix the pattern");
+    return new Function(`return ${m[1]}`)()();
+  };
+
   const GENERATED_IDS = {
     // The planner's own short id, straight out of the blob. This is the
     // one that was wrong: a uuid column rejected every AI note from
@@ -1241,6 +1262,13 @@ async function run() {
     // DOM-less run, so that is what gets inserted against the column
     // and its 64-char cap.
     "client_errors.build_id": () => "development",
+    /* 0023: every id on assessment_feedback is the planner's own uid()
+       — the assessment's id out of the blob, and a fresh one for the
+       row and the run. Lifted from source like ai_notes.id, so a change
+       of format follows rather than pins. */
+    "assessment_feedback.id": () => plannerUid(),
+    "assessment_feedback.assessment_id": () => plannerUid(),
+    "assessment_feedback.run_id": () => plannerUid(),
   };
 
   /* Columns no client value ever reaches. Each needs a reason, because
@@ -1251,6 +1279,7 @@ async function run() {
     "planner_data.user_id": "the auth user id, minted by Supabase rather than by anything in this repo",
     "client_errors.id": "gen_random_uuid() default on the column; the client never supplies one",
     "client_errors.user_id": "the auth user id when signed in, null when not — only ever copied from the session",
+    "assessment_feedback.user_id": "the auth user id, only ever copied from the session; the insert policy refuses any other value",
     "function_errors.id": "gen_random_uuid() default on the column, and no client can write this table at all — anon and authenticated have no insert grant and no policy, so nothing outside the database ever mints one",
     "ai_notes.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
     "ai_notes_requests.user_id": "the auth user id, minted by Supabase and only ever copied from the session",
@@ -1331,6 +1360,12 @@ async function run() {
          gets exercised: same question (does the column accept what the
          client mints), asked of the only route that exists. */
       "profiles.active_device_id": (v) => `select public.claim_device('${v}')`,
+      "assessment_feedback.id": (v) =>
+        `insert into public.assessment_feedback (id, user_id, assessment_id, run_id, occasion) values ('${v}', ${USER}, 'a1', 'r-${v}', 'delivered')`,
+      "assessment_feedback.assessment_id": (v) =>
+        `insert into public.assessment_feedback (id, user_id, assessment_id, run_id, occasion) values ('i-${v}', ${USER}, '${v}', 'r2-${v}', 'delivered')`,
+      "assessment_feedback.run_id": (v) =>
+        `insert into public.assessment_feedback (id, user_id, assessment_id, run_id, occasion) values ('j-${v}', ${USER}, 'a1', '${v}', 'delivered')`,
     };
     for (const [col, gen] of Object.entries(GENERATED_IDS)) {
       const value = gen();
@@ -1360,6 +1395,38 @@ async function run() {
        values ('aaaaaaaa-0000-4000-8000-00000000ffff', ${USER}, 'C', '1', '{}');`
     );
     assert.equal(r.ok, true, "the text column stopped accepting the uuids already stored under it");
+  });
+
+  await test("0023 is re-runnable, and each apply prints its verified line", () => {
+    const db = withArchives();
+    const r = psql(db, fs.readFileSync(path.join(migrationsDir, "0023_assessment_feedback.sql"), "utf8"));
+    assert.equal(r.ok, true, `a second apply of 0023 failed: ${r.err.slice(0, 200)}`);
+    assert.match(r.err, /0023 applied and verified: 11 properties checked\./, "the self-check did not report, so nobody can tell it ran");
+    assert.equal(one(db, `select count(*)::text from public.assessment_feedback;`), "0", "the self-check left probe rows behind");
+  });
+
+  await test("0023's self-check REFUSES a deletion function that forgot the table (the check can fail)", () => {
+    /* Re-applying 0020 restores a body without assessment_feedback;
+       0023's verification block, run on its own, must then raise. A
+       self-check nobody has watched fail is one nobody should trust. */
+    const db = withArchives();
+    applyMigration(db, "0020_cross_provider_entitlement.sql");
+    const sql = fs.readFileSync(path.join(migrationsDir, "0023_assessment_feedback.sql"), "utf8");
+    const check = sql.slice(sql.lastIndexOf("do $$"));
+    const r = psql(db, check);
+    assert.equal(r.ok, false, "the self-check passed a deletion function that leaves essay feedback behind");
+    assert.match(r.err, /does not delete from assessment_feedback/);
+  });
+
+  await test("0023: a signed-in student can write their own rows and cannot update, read or write anyone else's", () => {
+    const db = withArchives();
+    seedTwoUsers(db);
+    const as = (uid, sql) => psql(db, `set test.uid = ${uid}; set role authenticated; ${sql}`);
+    assert.equal(as(USER, `insert into public.assessment_feedback (id, user_id, assessment_id, run_id, occasion) values ('p1', ${USER}, 'a', 'r', 'delivered');`).ok, true);
+    assert.equal(as(USER, `insert into public.assessment_feedback (id, user_id, assessment_id, run_id, occasion) values ('p2', ${OTHER}, 'a', 'r', 'delivered');`).ok, false, "a row was written for another account");
+    assert.equal(as(USER, `update public.assessment_feedback set rating = 'yes';`).ok, false, "a row was updated");
+    assert.equal(as(OTHER, `select count(*) from public.assessment_feedback;`).out, "0", "another account can read the row");
+    assert.equal(psql(db, `set role anon; select count(*) from public.assessment_feedback;`).ok, false, "anon was answered rather than refused");
   });
 
   await test("0008 is re-runnable (a second apply changes nothing and fails nothing)", () => {
@@ -1890,14 +1957,22 @@ async function run() {
       "0017's create-or-replace did NOT take effect before its self-check raised — if that has become atomic, this test's warning is obsolete and should be simplified"
     );
 
-    /* THE REMEDY: re-apply 0020. It is re-runnable, and it is the
-       latest migration that defines the function, so it restores the
-       body that names every table. */
-    applyMigration(db, "0020_cross_provider_entitlement.sql");
+    /* THE REMEDY: re-apply the LATEST migration that defines the
+       function. It is re-runnable and restores the body that names
+       every table. Derived rather than named, because naming 0020 here
+       went stale the day 0023 re-created the function. */
+    const latest = fs
+      .readdirSync(migrationsDir)
+      .filter((f) => f.endsWith(".sql"))
+      .sort()
+      .filter((f) => /create or replace function public\.delete_my_account_data\(\)/.test(fs.readFileSync(path.join(migrationsDir, f), "utf8")))
+      .pop();
+    assert.ok(latest && latest >= "0020", `the latest migration defining the function is ${latest}, which cannot be right`);
+    applyMigration(db, latest);
     assert.equal(
       one(db, `select prosrc from pg_proc where proname = 'delete_my_account_data';`),
       before,
-      "re-applying 0020 did not restore the deletion function, so there is no cheap way back from a stray 0017"
+      `re-applying ${latest} did not restore the deletion function, so there is no cheap way back from a stray 0017`
     );
   });
 
