@@ -62,7 +62,7 @@ import { ROOT, callVision } from "./lib/photo-calls.mjs";
 import { productionModel, productionCeiling } from "./lib/production-model.mjs";
 import { ARMS, userMessage } from "./lib/essay-arms.mjs";
 import { DEFICIENCIES, measurePoint, refusePoint, quoteVariety, essayFeedbackSchema, MATCH_UNITS } from "../src/essayPoints.js";
-import { normaliseWords, longestNovelRun } from "../src/noWriting.js";
+import { normaliseWords, longestNovelRun, quotedSpans, gramSet } from "../src/noWriting.js";
 
 const argv = process.argv.slice(2);
 const opt = (n, d = null) => {
@@ -184,8 +184,15 @@ for (const arm of Object.values(ARMS)) {
     const ms = points.map((point) => ({ ...measurePoint({ point, essay, criteria }), arm: arm.id, run }));
     measured[arm.id].push(...ms);
     perRun[arm.id].push(ms);
+    const sourceWords = normaliseWords(`${essay}\n${criteria}`);
     sentences[arm.id].push({
       words: normaliseWords(sentence).length,
+      /* Quoted spans of 3+ words in neither the essay nor the criteria:
+         the endpoint refuses the reply on any. A count, never the text. */
+      offered: quotedSpans(sentence).filter((sp) => {
+        const w = normaliseWords(sp);
+        return w.length >= 3 && !gramSet(sourceWords, w.length).has(w.join(" "));
+      }).length,
       novel: Object.fromEntries(MATCH_UNITS.map((k) => [k, longestNovelRun(sentence, `${essay}\n${criteria}`, { matchUnit: k })])),
       run,
     });

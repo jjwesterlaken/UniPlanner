@@ -270,7 +270,8 @@ export const TASK_CREDITS: Record<Task, number> = Object.fromEntries(
 
      maxNoteWords      30  constrained max 27, p99 23 (adversarial p99 71)
      minQuoteWords      3  every 3-word quote located one place; 2-word 80%
-     window / unit  25/4   constrained 1% of notes, adversarial 11%
+     window / unit  30/4   no constrained note can reach it (max 27 words);
+                           at 25 it refused 2 of 72 constrained replies
      maxSentenceWords  50  constrained max 47
 
    THE ARMS DO NOT SEPARATE on length or window, as on the previous
@@ -283,7 +284,7 @@ export const ESSAY_NO_WRITING: {
   minQuoteWords: number;
   maxNoteWords: number;
   maxSentenceWords: number;
-} | null = { window: 25, matchUnit: 4, minQuoteWords: 3, maxNoteWords: 30, maxSentenceWords: 50 };
+} | null = { window: 30, matchUnit: 4, minQuoteWords: 3, maxNoteWords: 30, maxSentenceWords: 50 };
 
 /* The first consent version that disclosed essay drafts. The server
    checks it for the essay task only, because the essay is the only

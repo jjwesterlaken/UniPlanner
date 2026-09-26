@@ -144,6 +144,14 @@ export function finishEssayReply({ raw, essay, criteria, thresholds }) {
   /* The opening sentence has its own length cap: it is one sentence of
      judgement, and a paragraph there is the same signal a long note is. */
   if (normaliseWords(o.sentence).length > thresholds.maxSentenceWords) violations.push({ kind: "sentence-too-long", index: kept.length });
+  /* Offered wording in the opening sentence, checked as in a note: the
+     window does not apply to the sentence, so without this a quoted,
+     invented phrase there would be caught by nothing but the cap. */
+  for (const span of quotedSpans(o.sentence)) {
+    const w = normaliseWords(span);
+    const source = normaliseWords(`${essay}\n${criteria}`);
+    if (w.length >= 3 && !gramSet(source, w.length).has(w.join(" "))) violations.push({ kind: "wording-offered", index: kept.length });
+  }
   const prose = checkNoWriting({
     fields: kept.map((p) => p.note),
     essay,

@@ -945,6 +945,22 @@ test("THE GATE IS 2% OF REPLIES, and one more refused reply breaks it (the contr
   assert.equal(evaluateReplies(over.results, over.sentences, GATE).meetsRule, false);
 });
 
+test("OFFERED WORDING IN THE SENTENCE REFUSES THE REPLY, and a file without the reading is COUNTED unmeasured", () => {
+  const offered = gather([["constrained", reply("constrained", 1, [{}], { words: 20, offered: 1 })]]);
+  assert.equal(evaluateReplies(offered.results, offered.sentences, GATE).constrained.repliesRefused, 1);
+  const clean = gather([["constrained", reply("constrained", 1, [{}], { words: 20, offered: 0 })]]);
+  const c = evaluateReplies(clean.results, clean.sentences, GATE).constrained;
+  assert.equal(c.repliesRefused, 0);
+  assert.equal(c.sentenceOfferedUnmeasured, 0);
+  const old = gather([["constrained", reply("constrained", 1, [{}], { words: 20 })]]);
+  assert.equal(evaluateReplies(old.results, old.sentences, GATE).constrained.sentenceOfferedUnmeasured, 1);
+});
+
+test("the harness records offered wording in the opening sentence, as a count", () => {
+  const src = strip(read("scripts/measure-two-arm.mjs"));
+  assert.match(src, /offered:\s*quotedSpans\(sentence\)/);
+});
+
 test("A POINT WITHOUT A RUN IS AN ERROR: its reply cannot be identified", () => {
   const { run, ...loose } = { ...PT(), arm: "constrained", run: 1 };
   assert.throws(() => evaluateReplies([loose], { constrained: [], adversarial: [] }, GATE), /carries no run/);

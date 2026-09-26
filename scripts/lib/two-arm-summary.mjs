@@ -133,6 +133,7 @@ export function evaluateReplies(results, sentences, settings) {
   const out = {};
   for (const arm of ["constrained", "adversarial"]) {
     const replies = new Map();
+    let unmeasured = 0;
     const get = (k) => {
       if (!replies.has(k)) replies.set(k, { refused: false, points: 0, dropped: 0 });
       return replies.get(k);
@@ -156,6 +157,12 @@ export function evaluateReplies(results, sentences, settings) {
          does. The endpoint does the same (_shared/essayReply.js). */
       if (!Number.isInteger(x.words)) throw new Error("a sentence has no reading; re-run the harness");
       if (x.words > maxSentenceWords) r.refused = true;
+      /* Offered wording in the sentence refuses the reply at the
+         endpoint. A file measured before that was recorded has no
+         reading, and it is COUNTED as unmeasured rather than read as
+         clean. */
+      if (!Number.isInteger(x.offered)) unmeasured += 1;
+      else if (x.offered > 0) r.refused = true;
     }
     const all = [...replies.values()];
     const points = all.reduce((a, r) => a + r.points, 0);
@@ -168,6 +175,7 @@ export function evaluateReplies(results, sentences, settings) {
       points,
       pointsDropped: dropped,
       dropRate: points ? dropped / points : null,
+      sentenceOfferedUnmeasured: unmeasured,
     };
   }
   out.meetsRule = out.constrained.replyRate !== null && out.constrained.replyRate <= MAX_LEGITIMATE_REFUSAL;
@@ -192,6 +200,12 @@ export function printGate(results, sentences, settings) {
   for (const id of ["constrained", "adversarial"]) {
     const r = e[id];
     console.log(`  ${id.padEnd(14)} ${`${r.repliesRefused}/${r.replies} (${pc(r.replyRate)})`.padEnd(20)} ${r.pointsDropped}/${r.points} (${pc(r.dropRate)})`);
+  }
+  for (const id of ["constrained", "adversarial"]) {
+    if (e[id].sentenceOfferedUnmeasured) {
+      console.log(`\n  NOT MEASURED: offered wording in the opening sentence, for ${e[id].sentenceOfferedUnmeasured} ${id} replies.` +
+        "\n  This file predates that reading; the refusals above do not include it.");
+    }
   }
   console.log(
     `\n  RULE: constrained replies refused <= ${MAX_LEGITIMATE_REFUSAL * 100}% — ${e.meetsRule ? "MET" : "NOT MET"}` +

@@ -544,7 +544,7 @@ whether the two arms separate.
 |---|---|---|---|---|
 | `maxNoteWords` | **30** | max 27, p99 23 | p99 71 | above the constrained max with margin |
 | `minQuoteWords` | **3** | 3 words: 100% occur once; 2: 80%; 1: 33% | — | the shortest length that always locates one place |
-| `window` | **25** | 1% of notes reach it | 11% | 30 would be 0%; 25 keeps a ceiling the long notes approach |
+| `window` | **30** | none can reach it: a note's novel run is at most its length, max 27 | 4% | at 25 it refused 2 of 72 constrained replies (2.8%), over the rule |
 | `matchUnit` | **4** | — | — | the unit the window row was read at |
 | `maxSentenceWords` | **50** | max 47 | — | above the constrained max; the opening sentence is one sentence |
 
@@ -570,13 +570,13 @@ asks for at least three words, so the short-quote drops should shrink.
 under it is not yet measured, and the next run is what measures it.
 
 **NO SEPARATION, AGAIN, SAID PLAINLY.** The adversarial arm's note
-lengths overlap the constrained arm's, and the window refuses 11% of
-the adversarial arm against 1% of the constrained. That is not a
+lengths overlap the constrained arm's, and at 30 the window refuses 4%
+of the adversarial arm's notes against none of the constrained. That is not a
 detector. As on gpt-4o-mini, these settings are guards on SIZE, set so
 legitimate feedback is never refused. The ghostwriting control is the
 offered-wording refusal: any quoted span of three or more words in a
-note that appears in neither the essay nor the criteria refuses the
-reply (`_shared/essayReply.js`). The harness's old gate, which required
+note or in the opening sentence that appears in neither the essay nor
+the criteria refuses the reply (`_shared/essayReply.js`). The harness's old gate, which required
 a cell refusing at most 10% of the constrained arm and at least 90% of
 the adversarial arm, tested a claim this feature no longer makes, and
 it has been retired.
