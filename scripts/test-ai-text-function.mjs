@@ -115,42 +115,41 @@ fs.writeFileSync(fnPath, bundle.outputFiles[0].text);
 globalThis.Deno = { serve: () => {}, env: { get: (n) => (n === "OPENAI_API_KEY" ? "sk-test" : "set") } };
 const { handle } = await import(toUrl(fnPath));
 
-/* CRITERIA FROM A PHOTO, SWITCHED ON. The shipped config leaves
-   MEASURED_CRITERIA_BATCH_INPUT_TOKENS null (the task refuses until it
-   is measured), so the criteria path is exercised through a second
-   build that sets it to a test value. Nothing else differs. */
-const CRITERIA_TEST_TOKENS = 5000;
-const NULL_LINE = "export const MEASURED_CRITERIA_BATCH_INPUT_TOKENS: number | null = null;";
-const criteriaOn = {
-  name: "criteria-on",
+/* CRITERIA FROM A PHOTO, SWITCHED OFF. The shipped config holds the
+   measured batch, so the task is on; the refusal a null constant must
+   produce is exercised through a second build that sets it back to
+   null. Nothing else differs. */
+const MEASURED_LINE = /export const MEASURED_CRITERIA_BATCH_INPUT_TOKENS: number \| null = \d+;/;
+const criteriaOff = {
+  name: "criteria-off",
   setup(b) {
     b.onLoad({ filter: /ai-text[\\/]config\.ts$/ }, (args) => {
       const src = fs.readFileSync(args.path, "utf8");
-      if (!src.includes(NULL_LINE)) throw new Error("config.ts no longer holds the null criteria constant this build replaces");
-      return { contents: src.replace(NULL_LINE, `export const MEASURED_CRITERIA_BATCH_INPUT_TOKENS: number | null = ${CRITERIA_TEST_TOKENS};`), loader: "ts" };
+      if (!MEASURED_LINE.test(src)) throw new Error("config.ts no longer holds the measured criteria constant this build replaces");
+      return { contents: src.replace(MEASURED_LINE, "export const MEASURED_CRITERIA_BATCH_INPUT_TOKENS: number | null = null;"), loader: "ts" };
     });
   },
 };
-const onBundle = await build({
+const offBundle = await build({
   entryPoints: [path.join(rootDir, "supabase/functions/ai-text/index.ts")],
   bundle: true,
   format: "esm",
   platform: "neutral",
   write: false,
-  plugins: [{ name: "stub-supabase", setup(b) { b.onResolve({ filter: /^https:\/\/esm\.sh\// }, () => ({ path: stubPath })); } }, criteriaOn],
+  plugins: [{ name: "stub-supabase", setup(b) { b.onResolve({ filter: /^https:\/\/esm\.sh\// }, () => ({ path: stubPath })); } }, criteriaOff],
 });
-fs.writeFileSync(path.join(tmpDir, "fn-on.mjs"), onBundle.outputFiles[0].text);
-const { handle: handleOn } = await import(toUrl(path.join(tmpDir, "fn-on.mjs")));
-const cfgOnBundle = await build({
+fs.writeFileSync(path.join(tmpDir, "fn-off.mjs"), offBundle.outputFiles[0].text);
+const { handle: handleOff } = await import(toUrl(path.join(tmpDir, "fn-off.mjs")));
+const cfgOffBundle = await build({
   entryPoints: [path.join(rootDir, "supabase/functions/ai-text/config.ts")],
   bundle: true,
   format: "esm",
   platform: "neutral",
   write: false,
-  plugins: [criteriaOn],
+  plugins: [criteriaOff],
 });
-fs.writeFileSync(path.join(tmpDir, "cfg-on.mjs"), cfgOnBundle.outputFiles[0].text);
-const cfgOn = await import(toUrl(path.join(tmpDir, "cfg-on.mjs")));
+fs.writeFileSync(path.join(tmpDir, "cfg-off.mjs"), cfgOffBundle.outputFiles[0].text);
+const cfgOff = await import(toUrl(path.join(tmpDir, "cfg-off.mjs")));
 
 
 /* ---------- fakes ---------- */
@@ -251,8 +250,8 @@ const req = (body) =>
 
 const run = (body, deps = {}) =>
   handle(req(body), { env: (n) => (n === "OPENAI_API_KEY" ? "sk-test" : "set"), now: () => new Date("2026-08-12"), ...deps });
-const runOn = (body, deps = {}) =>
-  handleOn(req(body), { env: (n) => (n === "OPENAI_API_KEY" ? "sk-test" : "set"), now: () => new Date("2026-08-12"), ...deps });
+const runOff = (body, deps = {}) =>
+  handleOff(req(body), { env: (n) => (n === "OPENAI_API_KEY" ? "sk-test" : "set"), now: () => new Date("2026-08-12"), ...deps });
 
 const EXPLAIN_OK = { correct: ["osmosis is passive"], missing: ["tonicity"], wrong: [], verdict: "Good start." };
 
@@ -1072,37 +1071,40 @@ async function main() {
   const RUBRIC = "Argument\nHigh Distinction: A sustained, original argument.\nPass: An argument is present.";
   const WHOLE = { criteria: RUBRIC, complete: true, missed: [] };
 
-  await test("CRITERIA IS OFF UNTIL ITS BATCH IS MEASURED: refused free, before the allowance, and the client does not draw the button", async () => {
-    assert.equal(cfg.MEASURED_CRITERIA_BATCH_INPUT_TOKENS, null, "the shipped constant is set; this test is about the unmeasured state");
-    assert.equal(cfg.CRITERIA_PHOTO_ON, false);
-    assert.equal(cfg.TASK_CREDITS.criteria, 0, "an unmeasured task has a price");
+  await test("CRITERIA IS OFF WHILE ITS BATCH IS UNMEASURED: refused free, before the allowance", async () => {
+    assert.equal(cfgOff.MEASURED_CRITERIA_BATCH_INPUT_TOKENS, null, "the off build did not null the constant");
+    assert.equal(cfgOff.CRITERIA_PHOTO_ON, false);
+    assert.equal(cfgOff.TASK_CREDITS.criteria, 0, "an unmeasured task has a price");
     const admin = makeAdmin();
     const trace = [];
-    const res = await run({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: okSummarizer(WHOLE, trace) });
+    const res = await runOff({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: okSummarizer(WHOLE, trace) });
     assert.equal(res.status, 503);
     assert.equal((await res.json()).code, "criteria_unavailable");
     assert.ok(!trace.includes("provider:call"), "an unmeasured task reached the provider");
     assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 0, "an unmeasured task was billed");
-    const limits = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
-    assert.equal(limits.CRITERIA_PHOTO_ENABLED, cfg.CRITERIA_PHOTO_ON, "the client draws the button over a server that refuses it, or hides one that works");
-    assert.equal(limits.TASK_CREDITS.criteria, cfg.TASK_CREDITS.criteria, "the screen and the server disagree about a criteria batch's price");
     const words = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
     assert.match(words.AI_TEXT_FAILURES.criteria_unavailable.detail, /nothing was charged/i);
   });
 
+  await test("THE TWO CRITERIA FLAGS AGREE: the client draws the button exactly when the server has a measured price, and shows that price", async () => {
+    const limits = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    assert.equal(limits.CRITERIA_PHOTO_ENABLED, cfg.CRITERIA_PHOTO_ON, "the client draws the button over a server that refuses it, or hides one that works");
+    assert.equal(limits.TASK_CREDITS.criteria, cfg.TASK_CREDITS.criteria, "the screen and the server disagree about a criteria batch's price");
+  });
+
   await test("A CRITERIA BATCH IS PRICED FROM ITS OWN MEASURED INPUT, not borrowed from a reading's", async () => {
-    assert.equal(cfgOn.MEASURED_CRITERIA_BATCH_INPUT_TOKENS, CRITERIA_TEST_TOKENS, "the switched-on build did not take the test value");
+    assert.ok(cfg.CRITERIA_PHOTO_ON && Number.isInteger(cfg.MEASURED_CRITERIA_BATCH_INPUT_TOKENS), "criteria is not switched on in the shipped config");
     const expected = Math.max(
       1,
       Math.round(
-        (CRITERIA_TEST_TOKENS * (model.VISION_USD_PER_1M_INPUT / 1_000_000) + cfgOn.MAX_TOKENS.criteria * (model.VISION_USD_PER_1M_OUTPUT / 1_000_000)) /
+        (cfg.MEASURED_CRITERIA_BATCH_INPUT_TOKENS * (model.VISION_USD_PER_1M_INPUT / 1_000_000) + cfg.MAX_TOKENS.criteria * (model.VISION_USD_PER_1M_OUTPUT / 1_000_000)) /
           credits.USD_PER_CREDIT
       )
     );
-    assert.equal(cfgOn.TASK_CREDITS.criteria, expected, "the criteria price is not its own derivation");
-    assert.equal(cfgOn.PHOTO_BATCH_CREDITS, cfg.PHOTO_BATCH_CREDITS, "turning criteria on moved a reading's price");
-    assert.equal(cfgOn.photoBatchCreditsFor("criteria"), cfgOn.TASK_CREDITS.criteria);
-    assert.equal(cfgOn.photoBatchCreditsFor("summarise"), cfgOn.PHOTO_BATCH_CREDITS);
+    assert.equal(cfg.TASK_CREDITS.criteria, expected, "the criteria price is not its own derivation");
+    assert.equal(cfgOff.PHOTO_BATCH_CREDITS, cfg.PHOTO_BATCH_CREDITS, "switching criteria off or on moved a reading's price");
+    assert.equal(cfg.photoBatchCreditsFor("criteria"), cfg.TASK_CREDITS.criteria);
+    assert.equal(cfg.photoBatchCreditsFor("summarise"), cfg.PHOTO_BATCH_CREDITS);
   });
 
   await test("CRITERIA IS PHOTOS OR NOTHING, and the essay stays paste-only", async () => {
@@ -1115,7 +1117,7 @@ async function main() {
     ]) {
       const admin = makeAdmin();
       const trace = [];
-      const res = await runOn(body, { supabaseAdmin: admin, summarizer: okSummarizer(WHOLE, trace) });
+      const res = await run(body, { supabaseAdmin: admin, summarizer: okSummarizer(WHOLE, trace) });
       assert.equal(res.status, 400, `${why} was accepted`);
       assert.ok(!trace.includes("provider:call"), `${why} reached the provider`);
     }
@@ -1125,7 +1127,7 @@ async function main() {
     const admin = makeAdmin();
     let messages = null;
     let hasImages = null;
-    const res = await runOn(
+    const res = await run(
       { task: "criteria", images: [IMG, IMG] },
       { supabaseAdmin: admin, summarizer: { complete: async (args) => ((messages = args.messages), (hasImages = args.hasImages), JSON.stringify(WHOLE)) } }
     );
@@ -1143,13 +1145,13 @@ async function main() {
     assert.ok(imgs.length === 2, `${imgs.length} images reached the provider, not the 2 sent`);
     assert.ok(imgs.every((c) => c.image_url.detail === "original"), "small print sent at a resizing detail level");
     const bill = admin.seen.find((x) => x.op === "rpc" && x.payload && "p_credits" in x.payload);
-    assert.equal(bill.payload.p_credits, cfgOn.TASK_CREDITS.criteria, "criteria photos were not charged their own price");
+    assert.equal(bill.payload.p_credits, cfg.TASK_CREDITS.criteria, "criteria photos were not charged their own price");
   });
 
   await test("A PARTIAL TRANSCRIPTION IS FREE AND SAYS SO: what was read and what was missed come back, nothing is billed", async () => {
     const outcome = async (reply) => {
       const admin = makeAdmin();
-      const res = await runOn({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: { complete: async () => reply } });
+      const res = await run({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: { complete: async () => reply } });
       const body = await res.json();
       return { status: res.status, code: body.code, billed: admin.seen.some((x) => x.op === "rpc"), body };
     };
@@ -1175,7 +1177,7 @@ async function main() {
   await test("CRITERIA OUTCOMES: illegible is billed like a reading, no criteria and unusable output are free", async () => {
     const outcome = async (reply) => {
       const admin = makeAdmin();
-      const res = await runOn({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: { complete: async () => reply } });
+      const res = await run({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: { complete: async () => reply } });
       const body = await res.json();
       return { status: res.status, code: body.code, billed: admin.seen.some((x) => x.op === "rpc" && x.payload && "p_credits" in x.payload), body };
     };
@@ -1199,7 +1201,7 @@ async function main() {
     assert.ok(cap > 0, "could not read the trial's photo cap");
     const admin = makeAdmin({ tier: "free", photoPagesUsed: cap });
     const trace = [];
-    const res = await runOn({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: okSummarizer(WHOLE, trace) });
+    const res = await run({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: okSummarizer(WHOLE, trace) });
     assert.equal(res.status, 403, "a trial past its photo cap was allowed a criteria photo");
     assert.ok(!trace.includes("provider:call"));
   });
@@ -1246,10 +1248,7 @@ async function main() {
       /* The one exemption is a task switched OFF, which the handler
          refuses before the allowance read: criteria until its batch is
          measured. Switched on (the test build), it must bill. */
-      if (task === "criteria" && !cfg.CRITERIA_PHOTO_ON) {
-        assert.ok(cfgOn.TASK_CREDITS[task] > 0, "criteria bills nothing even when switched on");
-        continue;
-      }
+      if (task === "criteria" && !cfg.CRITERIA_PHOTO_ON) continue; // off: refused before spend
       assert.ok(cfg.TASK_CREDITS[task] > 0, `${task} bills nothing`);
     }
   });

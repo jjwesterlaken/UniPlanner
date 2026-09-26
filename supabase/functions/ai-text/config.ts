@@ -285,20 +285,20 @@ export const ratesForTask = (task: Task) => {
 
    MARKING CRITERIA ARE NOT PRICED FROM A READING'S BATCH (Jared, 27
    September 2026: "derive the criteria task's own credits from these
-   measurements rather than borrowing 18"). And they cannot be priced
-   from the three 1,024px runs either: the criteria photo is sent at
-   CRITERIA_PHOTO_MAX_EDGE (1,536, for legibility), and at detail
-   "original" an image's bill DOES NOT EXTRAPOLATE from another size
-   (MEASURED_PHOTO_BATCH_INPUT_TOKENS in _shared/model.ts says why).
+   measurements rather than borrowing 18").
 
-   So this is the bill for FOUR photos at 1,536px under this prompt, as
-   scripts/measure-criteria-photos.mjs --diagnose reports it: the
-   prompt's own tokens plus four times one photo's, each read off a
-   pair of calls (one photo, then the same photo twice) rather than
-   modelled. NULL UNTIL THAT RUN: the task refuses before any spend
-   (criteria_unavailable) and the client does not draw the button, the
-   rewrite's two-flag switch. Setting the number is what turns it on. */
-export const MEASURED_CRITERIA_BATCH_INPUT_TOKENS: number | null = null;
+   MEASURED, 27 September 2026, with scripts/measure-criteria-photos.mjs
+   --diagnose on two real rubric photos, at 1,024px (CRITERIA_PHOTO_MAX_
+   EDGE, the reading size, by ruling: resolution was not the limit and
+   1,536 doubled the input). The PROMPT's share, read off a one-photo
+   and a two-photo call, was 423 tokens on BOTH photos, which is what
+   licenses using it at another size: it does not depend on the image.
+   The densest photo, a phone photo of a printed page, was 1,383 at
+   1,024, so one photo is 960 and a four-photo batch 423 + 4 x 960 =
+   4,263. The typed-table screenshot was 607. Re-measure with the same
+   command when the prompt or the size moves: at detail "original" an
+   image's bill does not extrapolate (_shared/model.ts). */
+export const MEASURED_CRITERIA_BATCH_INPUT_TOKENS: number | null = 4263;
 export const CRITERIA_PHOTO_ON = Number.isInteger(MEASURED_CRITERIA_BATCH_INPUT_TOKENS) && (MEASURED_CRITERIA_BATCH_INPUT_TOKENS as number) > 0;
 
 export const PHOTO_ONLY_TASKS: readonly Task[] = ["criteria"];

@@ -834,53 +834,54 @@ and lays a table out as `<band>: <descriptor>` lines under each
 criterion.
 
 **Priced from its own measurement, not borrowed (Jared, 27 September
-2026).** The first version charged a reading's 18. Measured on three
-rubrics at 1,024px it priced at 14–16 at the 2,000-token ceiling, and
-the ruling is that it carries its own figure.
-`MEASURED_CRITERIA_BATCH_INPUT_TOKENS` in `ai-text/config.ts` is the
-bill for four photos at the size criteria photos really leave the
-device, and `TASK_CREDITS.criteria` is derived from it the way every
-weight is. **It is null until measured, and while it is null the task
-is off**: the endpoint refuses `criteria_unavailable` free before the
-allowance read and the client does not draw the button. That is the
-example rewrite's two-flag switch, with a test holding the two halves
-in agreement. The handler prices every photo request per task
-(`photoBatchCreditsFor`), so a criteria batch and a reading's batch
-never borrow each other's figure.
+2026).** `MEASURED_CRITERIA_BATCH_INPUT_TOKENS` in `ai-text/config.ts`
+is the bill for four photos, and `TASK_CREDITS.criteria` is derived
+from it the way every weight is. It is **4,263 → 18 credits**, equal to
+a reading's 18 because the two measured inputs (4,263 and 4,234) fall
+in the same band, not because one borrows the other.
 
-**THE FIRST MEASUREMENT FOUND THE WORST OUTCOME THIS FEATURE HAS.** A
-phone photo of a printed page came back as two bullet points from a
-page with far more text, and reported success. A partial transcription
-that looks whole means a student runs feedback against half their
-criteria and is never told. Two explanations fit and they need
-different fixes. Either the 1,024px downscale left the lower page
-illegible, or the photo is the task-description page and two bullets
-really were its only criteria. **So neither is assumed.**
-`measure-criteria-photos.mjs --diagnose` runs the criteria prompt and
-a read-everything control at both sizes on the one photo, which
-separates legibility from selection in one run.
+**How 4,263 was measured**, because one term came from a different
+size. `--diagnose` on two real rubric photos gave the prompt's share
+from a one-photo and a two-photo call at 1,536: **423 tokens on both
+photos**, which is what shows it does not depend on the image. The
+densest photo, a phone photo of a printed page, was 1,383 at 1,024, so
+one photo is 960 and four photos are 423 + 4 × 960 = 4,263. The typed
+table screenshot was 607. Nothing in that is modelled.
 
-**Both halves are fixed regardless, because both are right on their
-own.** Criteria photos leave the device at `CRITERIA_PHOTO_MAX_EDGE`
-(1,536), since legibility and not cost decides it. And the model now
-reports completeness: `complete` and `missed` in the schema, told never
-to guess and to name the parts it could not read. A reply that is not
-`complete: true` with nothing missed is `criteria_partial` — and **a
-missing verdict is not a yes**. What was read goes into the box marked
-incomplete, with the missed parts named and a retake suggested.
+**The first measurement's alarm was not a defect, and the control is
+why that is known.** A phone photo came back as two bullet points
+"from a page with far more text". Two explanations fit: the 1,024px
+downscale had left the rest illegible, or the page held no more
+criteria than that. `--diagnose` ran the criteria prompt and a
+read-everything control at 1,024 and 1,536. The page read the same at
+both sizes (213 and 225 words), and it was task description and
+learning outcomes, **no marking criteria at all**. The criteria prompt
+returns nothing for it, which is `no_criteria_found`, free, and right.
+Jared confirmed against the original that page 1 ends at those two
+bullets.
 
-**A partial is free, and why it differs from `pages_unreadable`.** An
-illegible photo is billed because its cause is the student's
-photograph. A partial read may be caused by our own downscale, since
-the resolution is ours, and the two cannot be told apart from the
-server. So the cost falls on us. The bound on abuse is that the model
-decides, not the student.
+**So criteria photos go at 1,024, the reading size (Jared's ruling).**
+Resolution was not the limit and 1,536 doubled the input tokens.
+`CRITERIA_PHOTO_MAX_EDGE` holds it, and the measurement script reads
+it, so a change of size is a change of price that gets measured.
 
-**What this does not fix.** Completeness is the model's self-report,
-and the first run's two bullets arrived with nothing saying they were
-partial. The field makes an honest report possible; it does not make
-one certain. The diagnose run is what says whether the model reports
-it.
+**The completeness report stays, because it is right on its own.** The
+schema carries `complete` and `missed`, and the model is told never to
+guess. A reply that is not `complete: true` with nothing missed is
+`criteria_partial`, and **a missing verdict is not a yes**. What was
+read goes into the box marked incomplete, with the missed parts named.
+**A partial is free, unlike `pages_unreadable`**: an illegible photo is
+billed because its cause is the student's photograph, while a partial
+read may be caused by our own downscale, and the server cannot tell the
+two apart. Completeness is still the model's self-report; the field
+makes an honest report possible, not certain.
+
+**The switch.** The task refuses `criteria_unavailable` free before the
+allowance read while the constant is null, and the client draws the
+button only when `CRITERIA_PHOTO_ENABLED` is set, with a test holding
+the two in agreement (the example rewrite's shape). The handler prices
+every photo request per task (`photoBatchCreditsFor`), so a criteria
+batch and a reading's batch never borrow each other's figure.
 
 **Outcomes otherwise follow the existing rules:** an illegible photo
 is `pages_unreadable` and billed, as for a reading; no criteria in the

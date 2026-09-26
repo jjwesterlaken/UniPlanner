@@ -318,17 +318,6 @@ const bundle = await build({
         /* THE REWRITE FLAG, ON FOR THE PROBE ONLY. Production ships it
            false (asserted below); the probe needs the path it will
            take the day it is flipped. */
-        /* THE CRITERIA-PHOTO FLAG, ON FOR THE PROBE ONLY, with a price, as
-           the rewrite's was: production ships it off until the batch is
-           measured, and the probe needs the path it takes once it is. */
-        b.onLoad({ filter: /aiTextLimits\.js$/ }, (args) => ({
-          contents: fs
-            .readFileSync(args.path, "utf8")
-            .replace("export const CRITERIA_PHOTO_ENABLED = false;", "export const CRITERIA_PHOTO_ENABLED = true;")
-            .replace("  criteria: 0,\n};", "  criteria: 17,\n};"),
-          loader: "js",
-          resolveDir: path.dirname(args.path),
-        }));
         /* jsdom has no canvas, so the downscaler is the one piece stubbed:
            it returns a data URL of the shape the real one produces. */
         b.onLoad({ filter: /aiText\.jsx$/ }, (args) => ({
@@ -732,7 +721,9 @@ await test("PHOTOGRAPH YOUR CRITERIA: the photos go as one criteria batch, and t
   await tick();
   q(host, "[data-essay-open]").click();
   await tick();
-  assert.equal(q(host, "[data-criteria-photo-cost]").textContent, ESSAY_COPY.criteriaPhoto.cost(17, 4), "the criteria batch's own price is not shown before the tap");
+  const { TASK_CREDITS } = await import("../src/aiTextLimits.js");
+  assert.ok(TASK_CREDITS.criteria > 0, "the criteria batch has no price, so the line below proves nothing");
+  assert.equal(q(host, "[data-criteria-photo-cost]").textContent, ESSAY_COPY.criteriaPhoto.cost(TASK_CREDITS.criteria, 4), "the criteria batch's own price is not shown before the tap");
   pick(q(host, "[data-criteria-photo-input]"), 2);
   await tick();
   await tick();
@@ -785,11 +776,11 @@ await test("MORE THAN FOUR PHOTOS is refused before anything is sent, and an unr
   win.__criteriaReply = null;
 });
 
-await test("CRITERIA PHOTOS LEAVE AT THEIR OWN SIZE, not a reading's 1024", async () => {
+await test("CRITERIA PHOTOS LEAVE AT THE SIZE THEIR PRICE WAS MEASURED AT", async () => {
   win.__calls = [];
   win.__edges = [];
   const { CRITERIA_PHOTO_MAX_EDGE } = await import("../src/aiTextLimits.js");
-  assert.ok(CRITERIA_PHOTO_MAX_EDGE > 1024, "the criteria size is no larger than a reading's, which read two bullets from a page");
+  assert.ok(Number.isInteger(CRITERIA_PHOTO_MAX_EDGE) && CRITERIA_PHOTO_MAX_EDGE > 0, "no criteria photo size");
   const { host } = win.__mount([essayRow()]);
   await tick();
   q(host, "[data-essay-open]").click();
