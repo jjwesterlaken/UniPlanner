@@ -21,7 +21,13 @@
 
 import { SEVERITY_LEVELS } from "./essayPoints.js";
 
+/* One sentence, shown in the opt-in and under the ? help, so the two
+   cannot say different things about it. The result lives in memory
+   only (essayHold.js): a reload loses it, and saving is how to keep it. */
+const RELOAD_LOSES = "A result you haven't saved is lost if the app reloads or closes, so tap Save to notes if you want to keep it.";
+
 export const ESSAY_COPY = {
+  reloadLoses: RELOAD_LOSES,
   rowAction: "Get feedback on a draft",
 
   /* The AI tab's door into the panel on the Grades row. */
@@ -48,6 +54,7 @@ export const ESSAY_COPY = {
       "You get pointed at problems, most important first, and can ask for an example rewrite of one passage it pointed at.",
       "When your mark comes back, tell us how we did.",
     ],
+    note: RELOAD_LOSES,
   },
   panelTitle: "Feedback on your draft",
   essayLabel: "Your draft",
@@ -68,6 +75,7 @@ export const ESSAY_COPY = {
       "It points at what to work on. If you ask, it can show an example rewrite of one sentence or paragraph it pointed at, next to yours. Nothing is put into your essay, and what you use is yours to disclose under your unit's rules.",
       "We're checking it against real marks. When a mark comes back for an essay you used it on, we'll ask once how we did, and you can skip that.",
       "After each read we'll ask whether it was useful. That's how we find out what to fix.",
+      RELOAD_LOSES,
     ],
     accept: "Turn on essay feedback",
     decline: "Not now",
@@ -108,6 +116,7 @@ export const ESSAY_COPY = {
      essay. */
   rewrite: {
     button: "Show an example rewrite",
+    working: "Writing an example…",
     cost: (credits) => `An example costs ${credits} credits.`,
     yours: "Your passage",
     example: "One way it could read",

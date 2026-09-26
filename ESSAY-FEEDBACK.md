@@ -760,6 +760,43 @@ control), with three steps in `essayCopy.js`: paste before you submit;
 get pointed at problems and ask for an example rewrite of one passage;
 tell us how we did when the mark comes back.
 
+### A RESULT OUTLIVES THE TAB — the production run, 26 September 2026
+
+Jared's first production run lost a delivered result on a tab switch
+and paid 9 credits to see it again. **The cause was the tab
+conditional**, the same one that once ate a two-hour recording: the
+panel renders under `{tab === "courses" && ...}`, so leaving the tab
+unmounts it, and the result, the run id, the examples and both drafts
+were component state. A run still in flight finished into an unmounted
+component, was charged, and was never shown.
+
+**The fix is `useRecordingSession`'s, one feature over.**
+`src/essayHold.js` is a store PlannerApp owns above the tab switch;
+the panel reads and writes its row's entry there. A result stays until
+the student closes the panel (closing is dismissing) and stays after
+saving, marked saved. A request that lands while the student is away
+writes into the hold and is waiting when they come back, and a
+remounted panel shows the run in flight rather than offering the button
+again, which would charge a second read.
+
+**MEMORY ONLY, deliberately, which is why this is not "write it to the
+item".** The entry holds the pasted draft and the result, and the
+result's quotes are the student's own words; the privacy policy says
+supplied text is "not in your planner and not on our server". Writing
+the result to the assessment would sync it and make that false. So a
+**reload** still loses an unsaved result — saving the note is how a
+student keeps one — and sign-out, or another account signing in, clears
+the hold. `test-rendered-tabs.mjs` runs, switches tab through the real
+nav, comes back, and requires the result, exactly one request, and the
+draft absent from the stored planner; it goes red on the old panel with
+"THE RESULT WAS LOST TO A TAB SWITCH".
+
+**And the example rewrite is a button now** — the app's bordered
+secondary button, with its cost on its own line beneath — because
+"Show an example rewrite · An example costs 3 credits" in small grey
+text read as a caption. Grace can restyle it; a test holds that it is a
+bordered, padded button with the cost outside its label.
+
 ### Consent: the same gate, through `AiActionFrame`
 
 All five text features render their controls through `AiActionFrame`,

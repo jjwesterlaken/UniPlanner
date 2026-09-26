@@ -15,12 +15,13 @@
    a property of where this state can reach.
    ================================================================== */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { Sparkles, X, Check, FileText } from "lucide-react";
 import { AiActionFrame, useTask } from "./aiText.jsx";
 import { TASK_CREDITS, ESSAY_MAX_CHARS } from "./aiTextLimits.js";
 import { ESSAY_COPY } from "./essayCopy.js";
 import { orderedPoints, reasonsFor, RATINGS, MAX_COMMENT_CHARS, ESSAY_REWRITE_ENABLED, aiUseText } from "./essayFeedback.js";
+import { createEssayHold } from "./essayHold.js";
 import { btnPrimary, btnGhost, inputCls, labelCls, uid, HelpButton, CourseSelect } from "./PlannerApp.jsx";
 
 /**
@@ -88,10 +89,22 @@ export function EssayResult({ result, rewrites = null }) {
                     <p className="mt-1 text-stone-700">{p.note}</p>
                     {/* THE EXAMPLE REWRITE: on request, one passage, side by
                         side, never written anywhere. */}
+                    {/* A CONTROL, NOT A CAPTION (Jared, 26 September 2026):
+                        the app's bordered button, the cost as a second line
+                        under it. Grace can restyle; it has to look
+                        pressable. */}
                     {rewrites && !rw && (
-                      <button data-essay-rewrite className="mt-1.5 text-xs font-medium text-stone-500 hover:u-accent-text" disabled={rewrites.busy} onClick={() => rewrites.request(p, key)}>
-                        {ESSAY_COPY.rewrite.button} · {ESSAY_COPY.rewrite.cost(rewrites.credits)}
-                      </button>
+                      <div className="mt-2">
+                        <button
+                          data-essay-rewrite
+                          className={`${btnGhost} disabled:cursor-not-allowed disabled:opacity-40`}
+                          disabled={rewrites.busy}
+                          onClick={() => rewrites.request(p, key)}
+                        >
+                          <Sparkles size={14} /> {rewrites.pending === key ? ESSAY_COPY.rewrite.working : ESSAY_COPY.rewrite.button}
+                        </button>
+                        <p data-essay-rewrite-cost className="mt-1 text-xs text-stone-500">{ESSAY_COPY.rewrite.cost(rewrites.credits)}</p>
+                      </div>
                     )}
                     {rw && rw.rewrite && (
                       <div data-essay-side-by-side className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -214,11 +227,11 @@ export function AiUseRecord({ assessment }) {
 
 const blankRating = () => ({ rating: null, reasons: [], sendComment: false, comment: "" });
 
-function FeedbackCapture({ onSend, rewriteRequested = false }) {
+function FeedbackCapture({ onSend, rewriteRequested = false, sent = false }) {
   const c = ESSAY_COPY.capture;
   const [state, setState] = useState(blankRating());
   const [status, setStatus] = useState(null); // null | "sent" | "failed"
-  if (status === "sent") return <p className="text-xs text-stone-500">{c.thanks}</p>;
+  if (sent || status === "sent") return <p className="text-xs text-stone-500">{c.thanks}</p>;
   return (
     <div data-essay-capture className="space-y-2 border-t border-stone-200 pt-2">
       <p className="text-sm font-medium text-stone-700">{c.question}</p>
@@ -241,19 +254,27 @@ function FeedbackCapture({ onSend, rewriteRequested = false }) {
  * Supabase client, so nothing here is relayed through a component that
  * only passes it on (the `folders` ReferenceError).
  */
-export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, onDelivered, onRate, onSave, onRewrite = null, requestOpen = false, onOpened = null }) {
+export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, onDelivered, onRate, onSave, onRewrite = null, requestOpen = false, onOpened = null, hold: heldBy = null }) {
   const { applyFraction } = allowanceApi;
-  const { run, busy, error } = useTask(session, applyFraction);
+  const { run, busy: runBusy, error } = useTask(session, applyFraction);
   /* One passage at a time: a second request waits for the first. The
-     examples live here, beside the essay, and nowhere else. */
+     examples live beside the essay and nowhere else. */
   const rewriteTask = useTask(session, applyFraction);
-  const [rewriteState, setRewriteState] = useState({});
-  const [open, setOpen] = useState(false);
-  const [essay, setEssay] = useState("");
-  const [criteria, setCriteria] = useState("");
-  const [result, setResult] = useState(null);
-  const [runId, setRunId] = useState(null);
-  const [saved, setSaved] = useState(false);
+  /* THE RUN OUTLIVES THE PANEL (essayHold.js). PlannerApp passes a hold
+     that sits above the tab switch; a panel mounted without one (a
+     component test) gets its own, which is the old behaviour. */
+  const ownHold = useRef(null);
+  if (!heldBy && !ownHold.current) ownHold.current = createEssayHold();
+  const hold = heldBy || ownHold.current;
+  const id = assessment.id;
+  const held = useSyncExternalStore(hold.subscribe, () => hold.get(id), () => hold.get(id));
+  const put = (patch) => hold.set(id, patch);
+  const { open, essay, criteria, result, runId, saved, rated } = held;
+  const rewriteState = held.rewrites;
+  const busy = runBusy || held.pending;
+  const setOpen = (v) => put({ open: v });
+  const setEssay = (v) => put({ essay: v });
+  const setCriteria = (v) => put({ criteria: v });
   const [local, setLocal] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
   /* The AI tab's card asked for this row: open, bring it on screen, and
@@ -283,15 +304,11 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
     );
   }
 
+  /* Closing is the student dismissing it: the entry, drafts and all,
+     goes. */
   const close = () => {
-    setOpen(false);
-    setEssay("");
-    setCriteria("");
-    setResult(null);
-    setRunId(null);
-    setSaved(false);
+    hold.clear(id);
     setLocal(null);
-    setRewriteState({});
   };
 
   const header = (
@@ -323,14 +340,15 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
     setLocal(null);
     if (!essay.trim() || !criteria.trim()) return setLocal(ESSAY_COPY.needBoth);
     if (total > ESSAY_MAX_CHARS) return setLocal(ESSAY_COPY.tooLong(total, ESSAY_MAX_CHARS));
+    /* Written to the hold, not to this component: if the student has
+       switched tab by the time it lands, the result is waiting when
+       they come back instead of lost after being charged. */
+    put({ pending: true });
     const out = await run("essay", { text: essay, criteria });
-    if (!out) return;
-    const id = uid();
-    setRunId(id);
-    setResult(out);
-    setSaved(false);
-    setRewriteState({});
-    onDelivered({ result: out, runId: id });
+    if (!out) return put({ pending: false });
+    const runIdNew = uid();
+    put({ pending: false, result: out, runId: runIdNew, saved: false, rated: false, rewrites: {} });
+    onDelivered({ result: out, runId: runIdNew });
   };
 
   return (
@@ -366,12 +384,14 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
               ESSAY_REWRITE_ENABLED && onRewrite
                 ? {
                     credits: TASK_CREDITS.rewrite,
-                    busy: rewriteTask.busy,
+                    busy: rewriteTask.busy || !!held.rewritePending,
+                    pending: held.rewritePending,
                     state: rewriteState,
                     request: async (p, key) => {
+                      put({ rewritePending: key });
                       const out = await rewriteTask.run("rewrite", { text: essay, span: p.quote, note: p.note, deficiency: p.deficiency });
-                      if (!out) return;
-                      setRewriteState((s) => ({ ...s, [key]: { rewrite: out.rewrite } }));
+                      if (!out) return put({ rewritePending: null });
+                      put((cur) => ({ rewritePending: null, rewrites: { ...cur.rewrites, [key]: { rewrite: out.rewrite } } }));
                       onRewrite({ point: p, runId });
                     },
                   }
@@ -394,14 +414,23 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
                 className={btnGhost}
                 onClick={() => {
                   onSave({ result });
-                  setSaved(true);
+                  put({ saved: true });
                 }}
               >
                 <FileText size={14} /> {ESSAY_COPY.save}
               </button>
             )}
           </div>
-          <FeedbackCapture key={runId} rewriteRequested={Object.keys(rewriteState).length > 0} onSend={(state) => onRate({ result, runId, ...state })} />
+          <FeedbackCapture
+            key={runId}
+            sent={rated}
+            rewriteRequested={Object.keys(rewriteState).length > 0}
+            onSend={async (state) => {
+              const ok = await onRate({ result, runId, ...state });
+              if (ok) put({ rated: true });
+              return ok;
+            }}
+          />
         </div>
       )}
     </div>
@@ -459,6 +488,7 @@ export function EssayHelp() {
           <li key={step}>{step}</li>
         ))}
       </ol>
+      <p data-essay-help-note className="mt-2 text-xs text-stone-500">{ESSAY_COPY.help.note}</p>
     </div>
   );
 }
