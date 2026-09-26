@@ -1326,6 +1326,24 @@ the vision prompt can re-price the feature**, so the re-measure moves
 in the same commit; `prompts.js` states the band and a test re-derives
 it.
 
+**AND FOR WEEKS THE SERVER DID NOT CHARGE IT — found 27 September 2026.**
+Every screen, the pre-flight estimate and the device checklist said 18;
+the handler charged a photo batch `TASK_CREDITS.summarise`, **3**,
+because `PHOTO_BATCH_CREDITS` was derived, mirrored to the client and
+compared with its own cost, and **never passed to the function that
+prices a request.** Two guards were green throughout and both were
+correct: one re-derived the constant, one asserted it differed from the
+text weight. Neither read what the handler BILLED — and a third test
+pinned the bill at 3, written while the price was deliberately held
+there and never moved when the hold ended. The fix passes the batch
+price into `checkTextAllowance`, which now REFUSES to price a photo
+request without one rather than falling back to the text weight; the
+guard runs the real handler, reads the RPC's `p_credits` on both the
+delivered and the `pages_unreadable` path, and requires it to equal
+`estimatePhotos(4)` — the figure the reading screen renders. **A
+constant that is right and a charge that uses it are different claims,
+and only the second one costs money.**
+
 **EVERY TIER PAYS FOR ITSELF AT 100% PHOTO USAGE, and it is a test
 rather than a paragraph** (`test-readings.mjs`), derived from
 `model.ts`, `credits.ts`, `config.ts` and `site/pricing.js`, asserted
