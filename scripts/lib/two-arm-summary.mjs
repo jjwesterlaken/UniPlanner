@@ -54,9 +54,8 @@ export function evaluateSettings(results, sentences, settings) {
     const refused = pts.filter((m) => pointRefused(m, settings)).length;
     const sens = (sentences && sentences[id]) || [];
     const sentRefused = sens.filter((x) => {
-      const run = x.novel && x.novel[settings.matchUnit];
-      if (!Number.isInteger(run)) throw new Error("a sentence has no novel-run reading; re-run the harness");
-      return run >= settings.window || (Number.isInteger(settings.maxSentenceWords) && x.words > settings.maxSentenceWords);
+      if (!Number.isInteger(x.words)) throw new Error("a sentence has no reading; re-run the harness");
+      return Number.isInteger(settings.maxSentenceWords) && x.words > settings.maxSentenceWords;
     }).length;
     out[id] = {
       points: pts.length,
@@ -120,8 +119,8 @@ export function scopeControl(by) {
  * (_shared/essayReply.js): points whose quote is not in the essay, is
  * shorter than the floor, or carries an unknown code are DROPPED; the
  * reply is REFUSED if any remaining note is too long, offers wording or
- * reaches the window, or if the opening sentence is too long or reaches
- * the window. A reply is one (arm, set, essay, run).
+ * reaches the window, or if the opening sentence is past its cap (the
+ * window does not apply to it). A reply is one (arm, set, essay, run).
  *
  * It is an UPPER BOUND on the endpoint's refusals: the endpoint also
  * drops off-genre points and applies the thesis rule before checking
@@ -152,9 +151,11 @@ export function evaluateReplies(results, sentences, settings) {
     }
     for (const x of (sentences && sentences[arm]) || []) {
       const r = get(key(x, arm));
-      const run = x.novel && x.novel[matchUnit];
-      if (!Number.isInteger(run) || !Number.isInteger(x.words)) throw new Error("a sentence has no reading; re-run the harness");
-      if (run >= window || x.words > maxSentenceWords) r.refused = true;
+      /* The opening sentence is the model's own summary, all new prose
+         by construction, so the window does not apply to it; the cap
+         does. The endpoint does the same (_shared/essayReply.js). */
+      if (!Number.isInteger(x.words)) throw new Error("a sentence has no reading; re-run the harness");
+      if (x.words > maxSentenceWords) r.refused = true;
     }
     const all = [...replies.values()];
     const points = all.reduce((a, r) => a + r.points, 0);

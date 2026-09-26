@@ -548,6 +548,14 @@ whether the two arms separate.
 | `matchUnit` | **4** | — | — | the unit the window row was read at |
 | `maxSentenceWords` | **50** | max 47 | — | above the constrained max; the opening sentence is one sentence |
 
+**THE WINDOW APPLIES TO NOTES, NEVER TO THE OPENING SENTENCE.** The
+sentence is the model's own summary, so every word of it is new prose:
+its longest novel run on Luna was 29-42 words at unit 4 (p50 33). The
+first gate run applied the 25-word window to it and refused 47 of 72
+constrained replies (65.3%). No window could fix that without also
+switching the window off for notes. So the sentence gets its 50-word cap
+and nothing else, in the endpoint and the harness alike.
+
 **TWO RATES, BECAUSE THE ENDPOINT HAS TWO KINDS OF REFUSAL.** A point
 whose quote is too short, or is not in the essay, is DROPPED and the
 rest of the reply stands. A note or opening sentence that breaks a

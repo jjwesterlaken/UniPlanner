@@ -122,8 +122,13 @@ export function finishEssayReply({ raw, essay, criteria, thresholds }) {
   const { kept, dropped: thesis } = applyThesisRule({ mainIdea, support, points: located });
   dropped.thesis = thesis.length;
 
-  /* 4. NO WRITING, over everything that will be returned as prose: the
-     notes and the opening sentence. Any violation refuses the reply. */
+  /* 4. NO WRITING. Any violation refuses the reply.
+     THE WINDOW APPLIES TO NOTES ONLY. The opening sentence is the
+     model's own summary of the essay, so it is new prose by
+     construction: on Luna its longest novel run was 29-42 words (p50
+     33) at match unit 4, and a 25-word window over it refused 65% of
+     the constrained arm's replies. It gets its length cap and nothing
+     else. */
   const violations = [];
   for (const [i, p] of kept.entries()) {
     if (normaliseWords(p.note).length > thresholds.maxNoteWords) violations.push({ kind: "note-too-long", index: i });
@@ -140,7 +145,7 @@ export function finishEssayReply({ raw, essay, criteria, thresholds }) {
      judgement, and a paragraph there is the same signal a long note is. */
   if (normaliseWords(o.sentence).length > thresholds.maxSentenceWords) violations.push({ kind: "sentence-too-long", index: kept.length });
   const prose = checkNoWriting({
-    fields: [...kept.map((p) => p.note), o.sentence],
+    fields: kept.map((p) => p.note),
     essay,
     criteria,
     matchUnit: thresholds.matchUnit,

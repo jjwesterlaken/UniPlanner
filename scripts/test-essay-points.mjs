@@ -849,8 +849,8 @@ test("evaluateSettings: the 2% rule over constrained POINTS, with replies beside
     ...Array.from({ length: 2 }, () => ({ ...PT({ noteWords: 40 }), arm: "constrained" })),
     ...Array.from({ length: 50 }, () => ({ ...PT({ noteWords: 40 }), arm: "adversarial" })),
   ];
-  const sentences = { constrained: [{ novel: { 4: 25 } }, { novel: { 4: 5 } }], adversarial: [{ novel: { 4: 30 } }] };
-  const e = evaluateSettings(results, sentences, SETTINGS);
+  const sentences = { constrained: [{ words: 60, novel: { 4: 25 } }, { words: 20, novel: { 4: 20 } }], adversarial: [{ words: 30, novel: { 4: 30 } }] };
+  const e = evaluateSettings(results, sentences, { ...SETTINGS, maxSentenceWords: 50 });
   assert.equal(e.constrained.pointsRefused, 2);
   assert.equal(e.constrained.pointRate, 0.02);
   assert.equal(e.meetsRule, true, "exactly 2% is allowed");
@@ -911,11 +911,13 @@ test("A DROPPED POINT'S NOTE IS NOT CHECKED, as at the endpoint", () => {
   assert.equal(evaluateReplies(results, sentences, GATE).constrained.repliesRefused, 0);
 });
 
-test("THE OPENING SENTENCE REFUSES AT ITS CAP + 1 and at the window, not below", () => {
+test("THE OPENING SENTENCE REFUSES AT ITS CAP + 1 ONLY; the window does not apply to it", () => {
+  /* It is the model's own summary, all new prose by construction. The
+     window over it refused 65% of Luna's constrained replies. */
   for (const [s, refused] of [
-    [{ words: 50, novel: { 4: 24 } }, 0],
+    [{ words: 50, novel: { 4: 50 } }, 0],
     [{ words: 51, novel: { 4: 10 } }, 1],
-    [{ words: 20, novel: { 4: 25 } }, 1],
+    [{ words: 40, novel: { 4: 40 } }, 0],
   ]) {
     const { results, sentences } = gather([["constrained", reply("constrained", 1, [{}], s)]]);
     assert.equal(evaluateReplies(results, sentences, GATE).constrained.repliesRefused, refused, JSON.stringify(s));

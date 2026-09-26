@@ -1701,6 +1701,19 @@ async function main() {
     assert.equal((await long.json()).code, "writing_refused");
   });
 
+  await test("THE WINDOW DOES NOT APPLY TO THE OPENING SENTENCE, and still applies to a note (the control)", async () => {
+    /* The sentence is the model's own summary: every word of it is new
+       prose, so any window would refuse it. Here the window is 5. */
+    const at = { ...THRESHOLDS, window: 5, maxNoteWords: 40 };
+    const summary = "Overall this piece argues its case with conviction yet rarely stops to show evidence.";
+    const quiet = essayReply({ overall: { sentence: summary }, reading: { points: [{ quote: "help students learn at their own pace with patient explanations", deficiency: "unsupported-generalisation", note: "No example." }] } });
+    const ok = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer: recording(quiet), essayNoWriting: at });
+    assert.equal(ok.status, 200, "a novel opening sentence was refused by the window");
+    const noisy = essayReply({ overall: { sentence: summary }, reading: { points: [{ quote: "help students learn at their own pace with patient explanations", deficiency: "unsupported-generalisation", note: "Nothing here shows a student actually learning faster than before." }] } });
+    const refused = await run(essayBody(), { supabaseAdmin: makeAdmin(), summarizer: recording(noisy), essayNoWriting: at });
+    assert.equal(refused.status, 422, "the window stopped applying to notes as well");
+  });
+
   await test("A BAND THE CRITERIA DO NOT NAME IS NO BAND, and a predicting sentence is blanked (§4)", async () => {
     const invented = essayReply({
       overall: { bandsConsidered: [{ band: "Distinction", descriptor: "x", rating: 9 }, { band: "Pass", descriptor: "x", rating: 3 }], band: "Distinction", sentence: "You'll get a Distinction." },
