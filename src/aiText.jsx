@@ -171,10 +171,9 @@ function ExhaustedNotice({ allowance }) {
 
 function FailureNotice({ code, allowance }) {
   const copy = describeTextFailure(code, allowance);
-  /* A charged failure is amber rather than grey. The student lost
-     allowance for a result they never saw, and that deserves to look
-     like something happened. */
-  const charged = code === "ai_failed_charged";
+  /* A charged failure is amber rather than grey. Since 26 September
+     2026 the only one is a photo the model could not read. */
+  const charged = code === "pages_unreadable";
   return (
     <div className={`rounded-lg px-3 py-2.5 text-sm ${charged ? "bg-amber-50 text-amber-900" : "bg-stone-100 text-stone-600"}`}>
       <p className="font-medium">{copy.title}</p>
@@ -701,7 +700,9 @@ export function SummariseReading({
     /* The merge failed. Combine locally -- no provider call, nothing
        further charged -- and say which kind of failure it was, because
        one cost the student allowance and the other didn't. */
-    setMergeOutcome(error === "ai_failed_charged" ? "charged" : "failed");
+    /* An unusable merge is free now, like every unusable reply, so a
+       failed merge is always the "cost nothing" case. */
+    setMergeOutcome("failed");
     setResult(combineParts(parts));
   };
 

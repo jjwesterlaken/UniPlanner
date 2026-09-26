@@ -346,8 +346,9 @@ export function parseTaskResult(task, raw, context = {}) {
      was told to reply with this shape instead of the schema, so it must
      not fall through and read as "unusable output". The thrown error
      carries the positions; the handler turns it into its own code,
-     because it is a different fact from ai_failed_charged -- the
-     student can act on it (retake page 3), not just retry. */
+     because it is a different fact from an unusable reply (ai_failed,
+     free) -- the student can act on it (retake page 3), and it is the
+     one parse-stage outcome still billed. */
   if (task === "summarise" && Array.isArray(parsed.unreadable)) {
     const pages = parsed.unreadable.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 1);
     const err = new Error(`summarise: pages unreadable (${pages.join(", ")})`);

@@ -354,32 +354,33 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       if ((err as { essayRefusal?: string }).essayRefusal === "writing") {
         return jsonResponse({ ok: false, stage, code: "writing_refused", error: "The feedback came back in a form we don't show." }, 422);
       }
-      const charged = await billAllowance(admin, { userId, profile, month, credits: allowance.cost });
-      if (!charged.ok) logFailure("billing", charged.error, { task, cost: allowance.cost, after: "parse_failure" });
-      /* THE PAGES COUNT WHEREVER THE CREDITS DO. The provider read them
-         and we were charged; a cap that only counted successful runs
-         would let unusable output be retried against it for ever. */
-      const countedFail = await billPhotoPages(admin, { userId, profile, pages: photoPages });
-      if (!countedFail.ok) logFailure("billing", countedFail.error, { pages: photoPages, after: "parse_failure" });
-      /* A legibility refusal is not unusable output -- it is the model
-         doing what it was told. BILLED, same as any generated output
-         (billing follows spend), but under its OWN code carrying which
-         pages, because the student can act on it: retake page 3. The
+      /* A legibility refusal is the ONE parse-stage outcome still billed
+         (Jared, 26 September 2026): the model did what it was told, and
+         the cause is the photograph, which the student can fix by
+         retaking it. Under its OWN code carrying which pages, and the
          client copy states both halves -- this attempt used allowance,
-         and the resubmit charges again as its own smaller batch. */
+         and the resubmit charges again as its own smaller batch. The
+         pages count wherever the credits do. */
       const unreadable = (err as { unreadablePages?: number[] }).unreadablePages;
       if (Array.isArray(unreadable)) {
+        const charged = await billAllowance(admin, { userId, profile, month, credits: allowance.cost });
+        if (!charged.ok) logFailure("billing", charged.error, { task, cost: allowance.cost, after: "pages_unreadable" });
+        const countedFail = await billPhotoPages(admin, { userId, profile, pages: photoPages });
+        if (!countedFail.ok) logFailure("billing", countedFail.error, { pages: photoPages, after: "pages_unreadable" });
         return jsonResponse(
           { ok: false, stage, code: "pages_unreadable", error: "Some pages couldn't be read.", pages: unreadable },
           422
         );
       }
-      /* A DIFFERENT code from the one above, because these are different
-         facts: that one cost the student nothing, this one cost them
-         allowance for a result they never saw. The client's wording says
-         so -- see AI_TEXT_FAILURES in src/aiTextCopy.js. Charging quietly
-         is how a support ticket becomes a chargeback. */
-      return errorResponse(stage, "ai_failed_charged", "The AI answered, but the answer came back unusable.", 502);
+      /* UNUSABLE OUTPUT IS FREE (Jared, 26 September 2026): "a refusal
+         caused by our own model or checks shouldn't cost the student,
+         whatever the feature." Our model produced something we cannot
+         use, so we absorb it: no credits and no photo pages counted.
+         Answered as the existing free code `ai_failed`, whose wording
+         every shipped build already has, so no older build tells a
+         student they were charged. This retires `ai_failed_charged`,
+         which used to say exactly that. */
+      return errorResponse(stage, "ai_failed", "The AI couldn't finish that. Please try again.", 502);
     }
 
     stage = "billing";

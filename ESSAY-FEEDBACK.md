@@ -618,11 +618,11 @@ a chargeback) and the honesty half stands: the copy still says exactly
 what happened. What changed is who absorbs the cost of our own check
 firing. At Luna's rates that is a fraction of a cent a refusal.
 
-**Not covered by this ruling, and left billed as they were** until it is
-extended to them: `ai_failed_charged` (a reply that came back unusable,
-on any text task) and `pages_unreadable` (the model reporting a
-photographed page it could not read, which the student can fix by
-retaking it).
+**Extended the same day to unusable replies** on every text task: what
+was `ai_failed_charged` is now the free `ai_failed`, and the charged
+code and its wording are gone. **`pages_unreadable` stays billed**, by
+ruling: the model did what it was told, and the cause is the photograph,
+which the student can fix by retaking it.
 
 ### And a wording guard, the readings shape
 

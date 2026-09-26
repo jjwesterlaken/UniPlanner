@@ -16,14 +16,14 @@
    PLAIN JS, imports only its siblings in _shared, so the Edge Function
    runs it and the Node tests import it unmodified.
 
-   TWO OUTCOMES THAT ARE NOT SUCCESS, and they bill differently in the
-   handler, which is why they are told apart here:
+   TWO OUTCOMES THAT ARE NOT SUCCESS, told apart here because the
+   student is told different things. Neither is charged (Jared, 26
+   September 2026: our own model's or check's failure is ours to absorb):
      - a reply that is not the schema's shape throws a plain Error, and
-       is `ai_failed_charged`;
+       is `ai_failed`;
      - a reply that HANDS THE STUDENT WRITING throws with
-       `essayRefusal: "writing"`. It is billed too, because the tokens
-       were generated, but under its own code, because what happened is
-       a different fact (ESSAY-FEEDBACK.md §3).
+       `essayRefusal: "writing"`, under its own code, because what
+       happened is a different fact (ESSAY-FEEDBACK.md §3).
 
    WHAT IS DROPPED RATHER THAN REFUSED, and why the line is there. A
    point whose quote is not in the essay, or is too short to locate

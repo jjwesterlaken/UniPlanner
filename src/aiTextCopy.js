@@ -32,19 +32,14 @@ export const AI_TEXT_FAILURES = {
   /* The call itself failed -- nothing was generated, so nothing was
      charged. Saying so is worth a sentence: a student who has just been
      told something failed reasonably assumes it cost them. */
+  /* Also what an unusable reply returns now (26 September 2026), so the
+     sentence says nothing was charged without claiming nothing came
+     back. */
   ai_failed: {
     title: "The AI couldn't finish that.",
-    detail: "Nothing was generated, so this hasn't used any of your AI study help. Please try again.",
+    detail: "This hasn't used any of your AI study help. Please try again.",
   },
 
-  /* The call ran, we were charged for the tokens, and what came back
-     couldn't be used. The student loses allowance for a result they
-     never saw, and that has to be said before they notice it. */
-  ai_failed_charged: {
-    title: "The AI answered, but the answer came back unusable.",
-    detail:
-      "We were charged for that attempt, so it has used some of your AI study help — we'd rather tell you than have you find out from the number. Trying again usually works.",
-  },
 
   /* ESSAY FEEDBACK IS NOT SWITCHED ON YET: the server refuses it until
      the no-writing thresholds are measured. Nothing was sent to anyone

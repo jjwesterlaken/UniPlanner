@@ -794,22 +794,26 @@ async function main() {
     assert.equal(admin.seen.filter((s) => s.op === "upsert").length, 0);
   });
 
-  await test("output that can't be parsed IS billed, because the tokens were spent", async () => {
-    /* The uncomfortable one, and the honest one: we were charged for
-       those tokens. Not billing would be a silent subsidy for exactly
-       the case worth noticing. */
+  await test("OUTPUT THAT CAN'T BE PARSED IS FREE: our model's failure is ours to absorb (26 September 2026)", async () => {
+    /* Reversed by ruling. It used to be billed, as the honest answer to
+       "we were charged for those tokens"; the ruling is that a failure
+       of our own model shouldn't cost the student, whatever the
+       feature. The honesty half is the code: ai_failed says nothing was
+       charged, and nothing was. */
     const admin = makeAdmin();
     const res = await run(
       { task: "explain", topic: "t", text: "hi" },
       { supabaseAdmin: admin, summarizer: { complete: async () => "not json at all" } }
     );
     assert.equal(res.status, 502);
-    assert.equal(admin.seen.filter((s) => s.op === "rpc").length, 1, "spent tokens went unbilled");
+    assert.equal((await res.json()).code, "ai_failed");
+    assert.equal(admin.seen.filter((s) => s.op === "rpc").length, 0, "an unusable reply was charged to the student");
   });
 
-  await test("a charged failure and a free failure are DIFFERENT codes", async () => {
-    /* The student needs to be told which happened, and one message for
-       both would either understate a charge or invent one. */
+  await test("A FAILED CALL AND AN UNUSABLE REPLY ARE THE SAME FREE CODE, and nothing returns the retired charged one", async () => {
+    /* They were two codes because one was charged. Neither is now, so
+       one code, whose wording says nothing was charged, is the true
+       answer to both. */
     const free = await run(
       { task: "explain", topic: "t", text: "hi" },
       {
@@ -826,7 +830,8 @@ async function main() {
       { supabaseAdmin: makeAdmin(), summarizer: { complete: async () => "not json" } }
     );
     assert.equal((await free.json()).code, "ai_failed");
-    assert.equal((await charged.json()).code, "ai_failed_charged");
+    assert.equal((await charged.json()).code, "ai_failed");
+    assert.doesNotMatch(src, /"ai_failed_charged"/, "the endpoint can still return the retired charged code");
   });
 
   /* ---------- photographed pages ---------- */
@@ -1007,14 +1012,13 @@ async function main() {
     assert.equal(admin.seen.filter((s) => s.op === "upsert").length, 0);
   });
 
-  await test("both post-provider failure codes have wording, and the charged one says so", async () => {
-    /* Pinned the same way the AI notes billing sentence is: charging and
-       saying only "that didn't work" is how a support ticket becomes a
-       chargeback. */
+  await test("the post-provider failure code has wording that says nothing was charged, and the charged photo refusal says it was", async () => {
+    /* Charging and saying only "that didn't work" is how a support
+       ticket becomes a chargeback; saying "charged" when nothing was is
+       the same failure pointing the other way. */
     const { AI_TEXT_FAILURES } = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
-    const charged = `${AI_TEXT_FAILURES.ai_failed_charged.title} ${AI_TEXT_FAILURES.ai_failed_charged.detail}`;
-    assert.match(charged, /charged/i, "the charged failure no longer says it was charged");
-    assert.match(charged, /AI study help/, "it must name what was used, in the words the student sees elsewhere");
+    assert.equal(AI_TEXT_FAILURES.ai_failed_charged, undefined, "the retired charged wording is still defined, so something could still show it");
+    assert.match(`${AI_TEXT_FAILURES.pages_unreadable.title} ${AI_TEXT_FAILURES.pages_unreadable.detail}`, /charge|used/i);
 
     const free = `${AI_TEXT_FAILURES.ai_failed.title} ${AI_TEXT_FAILURES.ai_failed.detail}`;
     assert.match(free, /hasn't used any/i, "a student told something failed assumes it cost them unless told otherwise");
@@ -1031,7 +1035,8 @@ async function main() {
   await test("a failed bill is logged at error level on BOTH billing paths", async () => {
     /* A revenue hole bounded only by how often that write fails, and
        nothing else surfaces it. The parse-failure path used to call
-       bill() and discard the result entirely. */
+       bill() and discard the result entirely; since 26 September 2026
+       that path bills only a photo the model could not read. */
     const errors = [];
     const realError = console.error;
     console.error = (...a) => errors.push(a.join(" "));
@@ -1040,9 +1045,11 @@ async function main() {
         { task: "explain", topic: "t", text: "hi" },
         { supabaseAdmin: makeAdmin({ billError: { message: "write failed" } }), summarizer: okSummarizer(EXPLAIN_OK) }
       );
+      /* The other billing path is the photo refusal, the one parse-stage
+         outcome still charged (26 September 2026). */
       await run(
-        { task: "explain", topic: "t", text: "hi" },
-        { supabaseAdmin: makeAdmin({ billError: { message: "write failed" } }), summarizer: { complete: async () => "not json" } }
+        { task: "summarise", images: [IMG, IMG] },
+        { supabaseAdmin: makeAdmin({ billError: { message: "write failed" } }), summarizer: { complete: async () => JSON.stringify({ unreadable: [2] }) } }
       );
     } finally {
       console.error = realError;
