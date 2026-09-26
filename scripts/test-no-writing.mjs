@@ -576,6 +576,13 @@ const DECLARED_SUBSTITUTION_LINES = {
      student reads lives in a copy module. Neither reaches a screen. */
   "empty-rewrite": "a violation code in essayScope.js, not copy — the student-facing sentence lives in the panel's copy module",
   "the rewrite has no words": "the diagnostic detail beside that code, read by a log and a test rather than by a student",
+  /* A REASON A STUDENT CAN GIVE, not an offer. The feedback form's list
+     (Jared, 18 September 2026) includes a complaint about an example
+     rewrite, and it is only offered on a result where one was asked
+     for (reasonsFor in essayFeedback.js). The id is stored, so it is a
+     stable string rather than copy; the label is the complaint. */
+  "rewrite-changed-meaning": "a stored reason id in essayFeedback.js and essayCopy.js, naming a complaint the student makes, never an offer",
+  "The example rewrite changed my meaning": "the feedback form's complaint about an example rewrite, in the student's voice; it reports a problem with our output and offers nothing",
 };
 
 test("NO USER-FACING COPY OFFERS TO WRITE, REWRITE OR FIX AN ESSAY", () => {

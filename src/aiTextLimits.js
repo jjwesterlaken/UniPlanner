@@ -45,6 +45,11 @@ export const TASK_CREDITS = {
   essay: 9,
 };
 
+/* MAX_INPUT_CHARS.essay in ai-text/config.ts: the draft and the
+   criteria together. Mirrored so the panel refuses a paste the server
+   would answer with a 413; test-ai-text-function.mjs compares the two. */
+export const ESSAY_MAX_CHARS = 24_000;
+
 /* A MIRROR, and the mirror is the allowed form here: this is a browser
    module and the figure is derived in Deno, from the vision model's own
    rates and a MEASURED token count, in ai-text/config.ts. What is never

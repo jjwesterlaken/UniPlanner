@@ -1540,6 +1540,7 @@ async function main() {
        while the server charges another. */
     const limits = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
     assert.equal(limits.TASK_CREDITS.essay, cfg.TASK_CREDITS.essay, "the client's essay price disagrees with the server's");
+    assert.equal(limits.ESSAY_MAX_CHARS, cfg.MAX_INPUT_CHARS.essay, "the panel refuses a different paste length from the one the server enforces");
     /* Control: pricing essay at SUMMARY_MODEL's rates would have been 5,
        so the rate lookup is really doing the work. */
     const atSummary = (24_000 / credits.CHARS_PER_TOKEN) * (credits.USD_PER_1M_INPUT / 1e6) + 4_000 * (credits.USD_PER_1M_OUTPUT / 1e6);

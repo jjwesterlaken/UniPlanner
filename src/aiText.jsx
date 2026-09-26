@@ -218,7 +218,7 @@ async function downscalePhoto(file, { maxEdge = 1024, quality = 0.8 } = {}) {
 }
 
 /** One place that runs a task, so every feature handles failure identically. */
-function useTask(session, applyFraction) {
+export function useTask(session, applyFraction) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [errorDetail, setErrorDetail] = useState(null);
