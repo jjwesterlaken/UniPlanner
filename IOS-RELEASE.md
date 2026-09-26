@@ -13,6 +13,25 @@ is empty and the working tree is clean. Two things are unfinished BY
 DESIGN and ship safely (§5), and one build-time check gates the cut
 (§4, first row).
 
+## Submission record
+
+| Version | Build | Commit | Submitted (Sydney) | Status |
+|---|---|---|---|---|
+| 1.3.0 | 3543343 | `e78acd7` | 27 September 2026 | **In review** — awaiting Apple |
+
+**1.3.0 was built from `e78acd7`, not the tip of `main`.** `main` moved
+on to `82dd43e` (#162) after Grace's build, and that commit changes a
+test only (`test-blocks-neutral` waits for the save indicator to
+settle), so the web bundle and build id (`bc8d90c1321a`) are identical
+and nothing in the submitted binary differs from what production
+serves. A rejection fix branches from `main` as usual; what Apple is
+reviewing is `e78acd7`.
+
+The row is a RECORD of the submission, not evidence of the store's
+state (see CLAUDE.md, *A document is a claim about the artifact*):
+when a date or a plan depends on whether 1.3.0 is live, look at App
+Store Connect rather than this table.
+
 ---
 
 ## 1. The asked items
