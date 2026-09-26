@@ -23,6 +23,32 @@ import { SEVERITY_LEVELS } from "./essayPoints.js";
 
 export const ESSAY_COPY = {
   rowAction: "Get feedback on a draft",
+
+  /* The AI tab's door into the panel on the Grades row. */
+  entry: {
+    title: "Feedback on a draft",
+    subtitle: "Paste an essay before you submit it and see what to work on",
+    courseLabel: "Which course",
+    assessmentLabel: "Which assessment",
+    newAssessment: "A new assessment…",
+    newTitleLabel: "What is it",
+    newTitlePlaceholder: "Essay 1",
+    newWeightLabel: "Worth (% of the unit)",
+    newWeightPlaceholder: "30",
+    go: "Open feedback",
+    where: "It opens on that assessment in Courses → Grades, so when your mark comes back it sits next to the feedback.",
+    noneYet: "No assessments for this course yet — add the one you're writing.",
+  },
+
+  /* The ? on the panel. Three steps, in the order a student meets them. */
+  help: {
+    title: "essay feedback",
+    steps: [
+      "Paste your draft and the marking criteria before you submit.",
+      "You get pointed at problems, most important first, and can ask for an example rewrite of one passage it pointed at.",
+      "When your mark comes back, tell us how we did.",
+    ],
+  },
   panelTitle: "Feedback on your draft",
   essayLabel: "Your draft",
   essayHint: "Paste the essay as it stands. It is sent exactly as written, so take out your name and student ID first if you would rather not send them.",

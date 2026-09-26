@@ -37,6 +37,7 @@ import {
   RATINGS,
   MAX_COMMENT_CHARS,
   MAX_REASONS,
+  resolveEssayEntry,
 } from "../src/essayFeedback.js";
 import { ESSAY_COPY, copyCovers } from "../src/essayCopy.js";
 import { DEFICIENCIES, SEVERITY_LEVELS, PREDICTION_PATTERNS } from "../src/essayPoints.js";
@@ -238,9 +239,11 @@ fs.writeFileSync(
   `import { createRoot } from "react-dom/client";
 import { useState } from "react";
 import { Grades } from "../src/PlannerApp.jsx";
+import { EssayDraftEntry } from "../src/essayPanel.jsx";
 const ALLOWANCE = { tier: "free", limit: 60, used: 0, remaining: 60, fraction: 0, perMonth: false };
-function Harness({ initial, optInNeeded, sink }) {
+function Harness({ initial, optInNeeded, sink, openFor: openFor0 }) {
   const [list, setList] = useState(initial);
+  const [openFor, setOpenFor] = useState(openFor0);
   const [needed, setNeeded] = useState(optInNeeded);
   const patchItem = (key, id, patch) => {
     sink.patches.push({ key, id, patch });
@@ -250,6 +253,8 @@ function Harness({ initial, optInNeeded, sink }) {
     session: { token: "t", user: { id: "u" } },
     allowanceApi: { allowance: ALLOWANCE, applyFraction: () => {}, consent: { needed: false } },
     rule: "half-up",
+    openFor,
+    onOpened: () => { sink.opened += 1; setOpenFor(null); },
     optIn: { needed, accept: () => { sink.optedIn = true; setNeeded(false); } },
     onDelivered: (a, x) => { sink.delivered.push({ a, ...x }); patchItem("assessments", a.id, { essayFeedbackAt: "now" }); },
     onRate: async (a, x) => { sink.rated.push({ a, ...x }); return true; },
@@ -264,11 +269,18 @@ function Harness({ initial, optInNeeded, sink }) {
   return <Grades assessments={list} courses={[{ id: "c", name: "HIST1001" }]} addItem={() => {}} patchItem={patchItem}
     removeItem={() => {}} focused={null} rule="half-up" essay={sink.signedOut ? null : essay} />;
 }
-window.__mount = (initial, { optInNeeded = false, signedOut = false } = {}) => {
+window.__mount = (initial, { optInNeeded = false, signedOut = false, openFor = null } = {}) => {
   const host = document.createElement("div");
   document.body.appendChild(host);
-  const sink = { patches: [], delivered: [], rated: [], saved: [], answers: [], dismissed: [], rewrites: [], optedIn: false, signedOut };
-  createRoot(host).render(<Harness initial={initial} optInNeeded={optInNeeded} sink={sink} />);
+  const sink = { patches: [], delivered: [], rated: [], saved: [], answers: [], dismissed: [], rewrites: [], optedIn: false, signedOut, opened: 0 };
+  createRoot(host).render(<Harness initial={initial} optInNeeded={optInNeeded} sink={sink} openFor={openFor} />);
+  return { host, sink };
+};
+window.__mountEntry = (assessments) => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const sink = { opens: [] };
+  createRoot(host).render(<EssayDraftEntry courses={[{ id: "c", name: "HIST1001" }, { id: "d", name: "PHIL2002" }]} assessments={assessments} onOpen={(x) => sink.opens.push(x)} />);
   return { host, sink };
 };
 `
@@ -497,6 +509,82 @@ await test("AN EXAMPLE REWRITE, CLICKED: one passage and its note go, side by si
   [...host.querySelectorAll("button")].find((b) => b.textContent === ESSAY_COPY.capture.send).click();
   await tick();
   assert.equal(sink.rated.at(-1).rewriteRequested, true, "the rating does not say a rewrite was asked for");
+});
+
+/* ---------------- the AI tab's entry point ---------------- */
+
+await test("THE ENTRY RESOLVES TO A LIVE ROW OR A COMPLETE NEW ONE, and to nothing otherwise", () => {
+  let n = 0;
+  const uid = () => `new${++n}`;
+  const assessments = [{ id: "a1", course: "HIST1001", title: "Essay 1" }, { id: "gone", course: "HIST1001", deletedAt: "x" }];
+  assert.deepEqual(resolveEssayEntry({ assessmentId: "a1" }, { uid, assessments }), { id: "a1", course: "HIST1001" });
+  assert.equal(resolveEssayEntry({ assessmentId: "gone" }, { uid, assessments }), null, "a tombstone is not a row to open");
+  assert.equal(resolveEssayEntry({ assessmentId: "nope" }, { uid, assessments }), null);
+  const made = resolveEssayEntry({ course: "PHIL2002", title: "  Essay 2 ", w: "30" }, { uid, assessments });
+  assert.deepEqual(made, { id: "new1", course: "PHIL2002", create: { id: "new1", course: "PHIL2002", title: "Essay 2", w: 30, kind: "assignment" } });
+  /* The Grades form's own two requirements: a weightless assessment is
+     one the grade maths cannot use. */
+  assert.equal(resolveEssayEntry({ course: "", title: "Essay", w: "" }, { uid, assessments }), null);
+  assert.equal(resolveEssayEntry({ course: "", title: "Essay", w: "0" }, { uid, assessments }), null);
+  assert.equal(resolveEssayEntry({ course: "", title: "  ", w: "30" }, { uid, assessments }), null);
+  assert.equal(resolveEssayEntry(null, { uid, assessments }), null);
+});
+
+await test("THE CARD OFFERS THE COURSE'S OWN ASSESSMENTS, and a course with none opens on a new one", async () => {
+  const { host, sink } = win.__mountEntry([
+    { id: "a1", course: "HIST1001", title: "Essay 1" },
+    { id: "a2", course: "PHIL2002", title: "Report" },
+    { id: "a3", course: "HIST1001", title: "Old", deletedAt: "x" },
+  ]);
+  await tick();
+  const options = () => [...q(host, "[data-essay-entry-assessment]").options].map((o) => o.textContent);
+  assert.deepEqual(options(), ["Essay 1", ESSAY_COPY.entry.newAssessment], "only this course's live rows, then new");
+  assert.equal(q(host, "[data-essay-entry-title]"), null, "new-assessment fields shown with a row already chosen");
+  q(host, "[data-essay-entry-go]").click();
+  await tick();
+  assert.deepEqual(plain(sink.opens), [{ assessmentId: "a1" }]);
+});
+
+await test("A NEW ASSESSMENT FROM THE CARD NEEDS A TITLE AND A WEIGHT before the button does anything", async () => {
+  const { host, sink } = win.__mountEntry([]);
+  await tick();
+  assert.ok(q(host, "[data-essay-entry-title]"), "a course with no assessments did not open on a new one");
+  assert.ok(host.textContent.includes(ESSAY_COPY.entry.noneYet));
+  assert.equal(q(host, "[data-essay-entry-go]").disabled, true);
+  type(q(host, "[data-essay-entry-title]"), "Essay 1");
+  await tick();
+  assert.equal(q(host, "[data-essay-entry-go]").disabled, true, "enabled with no weight");
+  type(q(host, "[data-essay-entry-weight]"), "40");
+  await tick();
+  q(host, "[data-essay-entry-go]").click();
+  await tick();
+  assert.deepEqual(plain(sink.opens), [{ course: "HIST1001", title: "Essay 1", w: "40" }]);
+});
+
+await test("A REQUESTED ROW OPENS ONCE: its panel is open on mount, the other is not, and the request is consumed", async () => {
+  const { host, sink } = win.__mount([essayRow(), essayRow({ id: "a2", title: "Essay 2" })], { openFor: "a2", optInNeeded: true });
+  await tick();
+  assert.equal(host.querySelectorAll("[data-essay-opt-in]").length, 1, "not exactly one panel opened");
+  assert.equal(host.querySelectorAll("[data-essay-open]").length, 1, "the other row's button is gone");
+  assert.equal(sink.opened, 1, "the request was not consumed, so a later visit would reopen it");
+});
+
+await test("THE ? SHOWS THE THREE STEPS FROM essayCopy.js, and hides them again", async () => {
+  assert.equal(ESSAY_COPY.help.steps.length, 3);
+  const { host } = win.__mount([essayRow()]);
+  await tick();
+  q(host, "[data-essay-open]").click();
+  await tick();
+  const btn = [...host.querySelectorAll("button")].find((b) => b.textContent.trim() === "?");
+  assert.ok(btn, "no ? on the panel");
+  assert.equal(q(host, '[data-help-panel="essay"]'), null, "help open before it was asked for");
+  btn.click();
+  await tick();
+  const steps = [...host.querySelectorAll('[data-help-panel="essay"] li')].map((li) => li.textContent);
+  assert.deepEqual(steps, [...ESSAY_COPY.help.steps]);
+  btn.click();
+  await tick();
+  assert.equal(q(host, '[data-help-panel="essay"]'), null);
 });
 
 await test("nothing above logged a React error", () => {

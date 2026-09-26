@@ -595,6 +595,7 @@ const DECLARED_SUBSTITUTION_LINES = {
      limits. */
   "Show an example rewrite": "the per-point button: one passage the feedback located, on request",
   "it can show an example rewrite of one sentence or paragraph it pointed at": "the opt-in's description of the scoped example, which goes on to say nothing is put into the essay",
+  "can ask for an example rewrite of one passage it pointed at": "the panel's ? help, describing the same scoped, on-request example as the opt-in",
   "asked for an example rewrite of one passage": "a line of the student's own AI-use record, for disclosing what was done; it describes a past request",
   "Example rewrites aren't available yet.": "the refusal while the feature is switched off; it offers nothing",
   "example-rewrite": "a stored kind id in the AI-use record (essayFeedback.js), not copy",
