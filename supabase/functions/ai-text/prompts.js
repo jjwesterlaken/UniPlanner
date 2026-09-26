@@ -185,7 +185,7 @@ const SYSTEM = {
   criteria:
     `${SHARED_RULES} The images are photographs or screenshots of the marking criteria (a rubric) for one university assessment. ` +
     "Transcribe the criteria as plain text, word for word. " +
-    'Schema: {"criteria":string}. ' +
+    'Schema: {"criteria":string,"complete":boolean,"missed":[string]}. ' +
     "Copy the wording exactly as it appears: do not summarise, shorten, reword, correct or add anything, " +
     'and keep every band or grade name exactly as written (for example "High Distinction", "Credit", "Level 3"). ' +
     "Keep the structure readable without the page layout: for a table, write each criterion's name on its own line, " +
@@ -193,8 +193,15 @@ const SYSTEM = {
     "and include any weighting or marks the page shows beside the criterion or band they belong to. " +
     "Join words split across line ends. Leave out page furniture that is not part of the criteria " +
     "(headers, footers, page numbers, logos). " +
-    'If the images contain no marking criteria, reply {"criteria":""}. ' +
-    "IF ANY IMAGE IS NOT CLEARLY LEGIBLE, DO NOT GUESS AT IT: instead reply with exactly " +
+    /* COMPLETENESS, because a partial transcription that looks whole
+       is the worst outcome this feature has: a student runs feedback
+       against half their criteria and is never told. */
+    "Never guess at text you cannot read clearly: leave it out. " +
+    "Set complete to true ONLY if you have transcribed every word of marking criteria visible in the images. " +
+    "If any part of an image that could hold criteria is cut off, blurred, too small, in shadow or at an angle you could not read, " +
+    'set complete to false and list each such part in missed, briefly and by position (for example "photo 1, bottom half"). ' +
+    'If the images contain no marking criteria, reply {"criteria":"","complete":true,"missed":[]}. ' +
+    "IF AN IMAGE IS NOT LEGIBLE AT ALL, DO NOT GUESS AT IT: instead reply with exactly " +
     '{"unreadable":[numbers]} listing the 1-based positions of the illegible images, and nothing else.',
 };
 
@@ -401,6 +408,16 @@ export function parseTaskResult(task, raw, context = {}) {
      free code rather than as an unusable reply. */
   if (task === "criteria") {
     const criteria = asString(parsed.criteria).trim();
+    const missed = asArray(parsed.missed).map(asString).map((m) => m.trim()).filter(Boolean).slice(0, 12);
+    /* A MISSING VERDICT IS NOT A YES. Only `complete: true` with nothing
+       listed as missed is a whole transcription; anything else is
+       partial, and says so. */
+    const whole = parsed.complete === true && missed.length === 0;
+    if (!whole) {
+      const err = new Error(`criteria: partial transcription (${missed.length} part(s) missed)`);
+      err.criteriaPartial = { criteria, missed: missed.length ? missed : ["part of the photos"] };
+      throw err;
+    }
     if (!criteria) {
       const err = new Error("criteria: no criteria in the photos");
       err.noCriteria = true;

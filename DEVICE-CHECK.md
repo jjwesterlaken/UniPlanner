@@ -187,16 +187,20 @@ this order.
       first"** before **"Smaller things"**, each quoting your own words.
       The real question: do the points name things a marker would care
       about? Say which ones don't.
-- [ ] **Photograph your criteria**, under the criteria box. Before
-      you tap it, the line under it says **up to 4 photos cost 18
-      credits**, a screenshot counts as a photo, and pasting costs
-      nothing extra. Photograph a real rubric (a printout, or a
-      screenshot of the LMS page). The criteria should appear **in the
-      box, word for word, with the band names exactly as written**, and
-      you can edit them. Say which words or bands it got wrong. Five
-      photos at once should be refused before anything is sent. A photo
-      of something that isn't a rubric should say it found no criteria
-      and that **nothing was charged**.
+- [ ] **Photograph your criteria**, under the criteria box — **only if
+      Jared has turned it on for your build; if the button is not there,
+      skip this step.** Before you tap it, the line under it gives the
+      price for up to 4 photos, says a screenshot counts as a photo, and
+      says pasting costs nothing extra. Photograph a real rubric (a
+      printout, and a screenshot of the LMS page). The criteria should
+      appear **in the box, word for word, with the band names exactly as
+      written**, and you can edit them. Say which words or bands it got
+      wrong. **If it could only read part of the page it must say so** —
+      naming what it missed and that nothing was charged — and never
+      present half a rubric as done. Try one photo taken from a distance
+      to see it. Five photos at once should be refused before anything
+      is sent. A photo of something that isn't a rubric should say it
+      found no criteria and that nothing was charged.
 - [ ] **The `?` beside the panel's title** opens three numbered steps
       inline (paste before you submit; you're pointed at problems and
       can ask for an example rewrite; tell us how we did when the mark

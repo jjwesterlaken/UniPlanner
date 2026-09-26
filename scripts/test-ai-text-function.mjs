@@ -115,6 +115,43 @@ fs.writeFileSync(fnPath, bundle.outputFiles[0].text);
 globalThis.Deno = { serve: () => {}, env: { get: (n) => (n === "OPENAI_API_KEY" ? "sk-test" : "set") } };
 const { handle } = await import(toUrl(fnPath));
 
+/* CRITERIA FROM A PHOTO, SWITCHED ON. The shipped config leaves
+   MEASURED_CRITERIA_BATCH_INPUT_TOKENS null (the task refuses until it
+   is measured), so the criteria path is exercised through a second
+   build that sets it to a test value. Nothing else differs. */
+const CRITERIA_TEST_TOKENS = 5000;
+const NULL_LINE = "export const MEASURED_CRITERIA_BATCH_INPUT_TOKENS: number | null = null;";
+const criteriaOn = {
+  name: "criteria-on",
+  setup(b) {
+    b.onLoad({ filter: /ai-text[\\/]config\.ts$/ }, (args) => {
+      const src = fs.readFileSync(args.path, "utf8");
+      if (!src.includes(NULL_LINE)) throw new Error("config.ts no longer holds the null criteria constant this build replaces");
+      return { contents: src.replace(NULL_LINE, `export const MEASURED_CRITERIA_BATCH_INPUT_TOKENS: number | null = ${CRITERIA_TEST_TOKENS};`), loader: "ts" };
+    });
+  },
+};
+const onBundle = await build({
+  entryPoints: [path.join(rootDir, "supabase/functions/ai-text/index.ts")],
+  bundle: true,
+  format: "esm",
+  platform: "neutral",
+  write: false,
+  plugins: [{ name: "stub-supabase", setup(b) { b.onResolve({ filter: /^https:\/\/esm\.sh\// }, () => ({ path: stubPath })); } }, criteriaOn],
+});
+fs.writeFileSync(path.join(tmpDir, "fn-on.mjs"), onBundle.outputFiles[0].text);
+const { handle: handleOn } = await import(toUrl(path.join(tmpDir, "fn-on.mjs")));
+const cfgOnBundle = await build({
+  entryPoints: [path.join(rootDir, "supabase/functions/ai-text/config.ts")],
+  bundle: true,
+  format: "esm",
+  platform: "neutral",
+  write: false,
+  plugins: [criteriaOn],
+});
+fs.writeFileSync(path.join(tmpDir, "cfg-on.mjs"), cfgOnBundle.outputFiles[0].text);
+const cfgOn = await import(toUrl(path.join(tmpDir, "cfg-on.mjs")));
+
 
 /* ---------- fakes ---------- */
 
@@ -214,6 +251,8 @@ const req = (body) =>
 
 const run = (body, deps = {}) =>
   handle(req(body), { env: (n) => (n === "OPENAI_API_KEY" ? "sk-test" : "set"), now: () => new Date("2026-08-12"), ...deps });
+const runOn = (body, deps = {}) =>
+  handleOn(req(body), { env: (n) => (n === "OPENAI_API_KEY" ? "sk-test" : "set"), now: () => new Date("2026-08-12"), ...deps });
 
 const EXPLAIN_OK = { correct: ["osmosis is passive"], missing: ["tonicity"], wrong: [], verdict: "Good start." };
 
@@ -558,7 +597,8 @@ async function main() {
        did not happen when TYPICAL_SUMMARY_OUTPUT_TOKENS sat at 5.9x
        reality while setting the price of the product. */
     for (const task of cfg.TASKS) {
-      const expected = Math.max(1, Math.round(cfg.usdForTask(task) / credits.USD_PER_CREDIT));
+      if (task === "criteria" && !cfg.CRITERIA_PHOTO_ON) continue; // off: priced 0, refused before spend
+    const expected = Math.max(1, Math.round(cfg.usdForTask(task) / credits.USD_PER_CREDIT));
       assert.equal(cfg.TASK_CREDITS[task], expected, `${task} is priced at ${cfg.TASK_CREDITS[task]}, derived says ${expected}`);
     }
     /* And the ordering the derivation implies, stated so a silent
@@ -574,11 +614,9 @@ async function main() {
     assert.equal(Math.min(...text.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.explain);
     assert.equal(Math.max(...onSummary.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.summarise);
     assert.equal(Math.max(...text.map((t) => cfg.TASK_CREDITS[t])), cfg.TASK_CREDITS.essay);
-    /* And every photo-only task is exactly a photo batch (ruling, 27
-       September 2026: "priced the same, 18 per batch"). */
-    for (const t of cfg.PHOTO_ONLY_TASKS) {
-      assert.equal(cfg.TASK_CREDITS[t], cfg.PHOTO_BATCH_CREDITS, `${t} is not priced as a photo batch`);
-    }
+    /* A photo-only task is priced from its OWN measured batch (27
+       September 2026), asserted in "A CRITERIA BATCH IS PRICED FROM ITS
+       OWN MEASURED INPUT" below. */
   });
 
   await test("THE PHOTO BATCH PRICE IS HELD, and says what unblocks it", async () => {
@@ -1031,6 +1069,42 @@ async function main() {
 
   /* ---------- marking criteria from a photo (27 September 2026) ---------- */
 
+  const RUBRIC = "Argument\nHigh Distinction: A sustained, original argument.\nPass: An argument is present.";
+  const WHOLE = { criteria: RUBRIC, complete: true, missed: [] };
+
+  await test("CRITERIA IS OFF UNTIL ITS BATCH IS MEASURED: refused free, before the allowance, and the client does not draw the button", async () => {
+    assert.equal(cfg.MEASURED_CRITERIA_BATCH_INPUT_TOKENS, null, "the shipped constant is set; this test is about the unmeasured state");
+    assert.equal(cfg.CRITERIA_PHOTO_ON, false);
+    assert.equal(cfg.TASK_CREDITS.criteria, 0, "an unmeasured task has a price");
+    const admin = makeAdmin();
+    const trace = [];
+    const res = await run({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: okSummarizer(WHOLE, trace) });
+    assert.equal(res.status, 503);
+    assert.equal((await res.json()).code, "criteria_unavailable");
+    assert.ok(!trace.includes("provider:call"), "an unmeasured task reached the provider");
+    assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 0, "an unmeasured task was billed");
+    const limits = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    assert.equal(limits.CRITERIA_PHOTO_ENABLED, cfg.CRITERIA_PHOTO_ON, "the client draws the button over a server that refuses it, or hides one that works");
+    assert.equal(limits.TASK_CREDITS.criteria, cfg.TASK_CREDITS.criteria, "the screen and the server disagree about a criteria batch's price");
+    const words = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    assert.match(words.AI_TEXT_FAILURES.criteria_unavailable.detail, /nothing was charged/i);
+  });
+
+  await test("A CRITERIA BATCH IS PRICED FROM ITS OWN MEASURED INPUT, not borrowed from a reading's", async () => {
+    assert.equal(cfgOn.MEASURED_CRITERIA_BATCH_INPUT_TOKENS, CRITERIA_TEST_TOKENS, "the switched-on build did not take the test value");
+    const expected = Math.max(
+      1,
+      Math.round(
+        (CRITERIA_TEST_TOKENS * (model.VISION_USD_PER_1M_INPUT / 1_000_000) + cfgOn.MAX_TOKENS.criteria * (model.VISION_USD_PER_1M_OUTPUT / 1_000_000)) /
+          credits.USD_PER_CREDIT
+      )
+    );
+    assert.equal(cfgOn.TASK_CREDITS.criteria, expected, "the criteria price is not its own derivation");
+    assert.equal(cfgOn.PHOTO_BATCH_CREDITS, cfg.PHOTO_BATCH_CREDITS, "turning criteria on moved a reading's price");
+    assert.equal(cfgOn.photoBatchCreditsFor("criteria"), cfgOn.TASK_CREDITS.criteria);
+    assert.equal(cfgOn.photoBatchCreditsFor("summarise"), cfgOn.PHOTO_BATCH_CREDITS);
+  });
+
   await test("CRITERIA IS PHOTOS OR NOTHING, and the essay stays paste-only", async () => {
     for (const [body, why] of [
       [{ task: "criteria" }, "criteria with no photos"],
@@ -1041,41 +1115,67 @@ async function main() {
     ]) {
       const admin = makeAdmin();
       const trace = [];
-      const res = await run(body, { supabaseAdmin: admin, summarizer: okSummarizer({ criteria: "x" }, trace) });
+      const res = await runOn(body, { supabaseAdmin: admin, summarizer: okSummarizer(WHOLE, trace) });
       assert.equal(res.status, 400, `${why} was accepted`);
       assert.ok(!trace.includes("provider:call"), `${why} reached the provider`);
     }
   });
 
-  await test("CRITERIA FROM A PHOTO: relayed as vision under the transcription prompt, returned verbatim, charged as a photo batch", async () => {
+  await test("CRITERIA FROM A PHOTO: relayed as vision under the transcription prompt, returned verbatim, charged its own price", async () => {
     const admin = makeAdmin();
     let messages = null;
     let hasImages = null;
-    const rubric = "Argument\nHigh Distinction: A sustained, original argument.\nPass: An argument is present.";
-    const res = await run(
+    const res = await runOn(
       { task: "criteria", images: [IMG, IMG] },
-      { supabaseAdmin: admin, summarizer: { complete: async (args) => ((messages = args.messages), (hasImages = args.hasImages), JSON.stringify({ criteria: rubric })) } }
+      { supabaseAdmin: admin, summarizer: { complete: async (args) => ((messages = args.messages), (hasImages = args.hasImages), JSON.stringify(WHOLE)) } }
     );
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.deepEqual(body.result, { criteria: rubric }, "the transcription was altered on the way back");
+    assert.deepEqual(body.result, { criteria: RUBRIC }, "the transcription was altered on the way back");
     assert.equal(hasImages, true, "the adapter was not told this is a photo request, so it would pick the text model");
     const sys = messages.find((m) => m.role === "system").content;
     assert.match(sys, /word for word/i);
     assert.match(sys, /do not summarise/i, "the prompt no longer forbids summarising, which is the difference from a reading");
     assert.match(sys, /band or grade name exactly as written/i, "the band names the essay check reads are not protected");
-    assert.match(sys, /NOT CLEARLY LEGIBLE, DO NOT GUESS/);
+    assert.match(sys, /complete to true ONLY if/i, "the prompt no longer asks the model to say whether it read everything");
+    assert.match(sys, /NOT LEGIBLE AT ALL, DO NOT GUESS/);
     const imgs = messages.find((m) => m.role === "user").content.filter((c) => c.type === "image_url");
     assert.ok(imgs.length === 2, `${imgs.length} images reached the provider, not the 2 sent`);
     assert.ok(imgs.every((c) => c.image_url.detail === "original"), "small print sent at a resizing detail level");
     const bill = admin.seen.find((x) => x.op === "rpc" && x.payload && "p_credits" in x.payload);
-    assert.equal(bill.payload.p_credits, cfg.PHOTO_BATCH_CREDITS, "criteria photos were not charged as a photo batch");
+    assert.equal(bill.payload.p_credits, cfgOn.TASK_CREDITS.criteria, "criteria photos were not charged their own price");
+  });
+
+  await test("A PARTIAL TRANSCRIPTION IS FREE AND SAYS SO: what was read and what was missed come back, nothing is billed", async () => {
+    const outcome = async (reply) => {
+      const admin = makeAdmin();
+      const res = await runOn({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: { complete: async () => reply } });
+      const body = await res.json();
+      return { status: res.status, code: body.code, billed: admin.seen.some((x) => x.op === "rpc"), body };
+    };
+    const partial = await outcome(JSON.stringify({ criteria: "Argument\nHigh Distinction: A sustained", complete: false, missed: ["photo 1, bottom half"] }));
+    assert.equal(partial.status, 422);
+    assert.equal(partial.code, "criteria_partial");
+    assert.equal(partial.billed, false, "a partial transcription was billed as a success");
+    assert.equal(partial.body.criteria, "Argument\nHigh Distinction: A sustained", "what WAS read did not come back");
+    assert.deepEqual(partial.body.missed, ["photo 1, bottom half"], "the missed parts did not come back");
+    /* A MISSING VERDICT IS NOT A YES, and neither is a yes with parts listed as missed. */
+    for (const reply of [{ criteria: RUBRIC }, { criteria: RUBRIC, complete: true, missed: ["photo 2, left column"] }, { criteria: RUBRIC, complete: "yes", missed: [] }]) {
+      const r = await outcome(JSON.stringify(reply));
+      assert.equal(r.code, "criteria_partial", `${JSON.stringify(reply)} was read as a whole transcription`);
+      assert.equal(r.billed, false);
+    }
+    const whole = await outcome(JSON.stringify(WHOLE));
+    assert.equal(whole.status, 200, "a complete transcription was not accepted — the control");
+    assert.equal(whole.billed, true);
+    const words = await import(toUrl(path.join(rootDir, "src/aiTextCopy.js")));
+    assert.match(words.AI_TEXT_FAILURES.criteria_partial.detail, /nothing was charged/i);
   });
 
   await test("CRITERIA OUTCOMES: illegible is billed like a reading, no criteria and unusable output are free", async () => {
     const outcome = async (reply) => {
       const admin = makeAdmin();
-      const res = await run({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: { complete: async () => reply } });
+      const res = await runOn({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: { complete: async () => reply } });
       const body = await res.json();
       return { status: res.status, code: body.code, billed: admin.seen.some((x) => x.op === "rpc" && x.payload && "p_credits" in x.payload), body };
     };
@@ -1083,7 +1183,7 @@ async function main() {
     assert.equal(unreadable.code, "pages_unreadable");
     assert.deepEqual(unreadable.body.pages, [1]);
     assert.equal(unreadable.billed, true, "an illegible rubric photo is the photo's fault and is billed, as for a reading");
-    const none = await outcome(JSON.stringify({ criteria: "   " }));
+    const none = await outcome(JSON.stringify({ criteria: "   ", complete: true, missed: [] }));
     assert.equal(none.code, "no_criteria_found");
     assert.equal(none.billed, false, "photos with no criteria in them were charged");
     const junk = await outcome("not json");
@@ -1095,14 +1195,11 @@ async function main() {
   });
 
   await test("CRITERIA PHOTOS COUNT AGAINST THE TRIAL'S PHOTO CAP, like any photographed page", async () => {
-    const cap = Number(
-      fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/photoCap.js"), "utf8").match(/MAX_FREE_PHOTO_PAGES\s*=\s*(\d+)/)?.[1] ||
-        fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/credits.ts"), "utf8").match(/MAX_FREE_PHOTO_PAGES\s*=\s*(\d+)/)[1]
-    );
+    const cap = Number(fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/credits.ts"), "utf8").match(/MAX_FREE_PHOTO_PAGES\s*=\s*(\d+)/)[1]);
     assert.ok(cap > 0, "could not read the trial's photo cap");
     const admin = makeAdmin({ tier: "free", photoPagesUsed: cap });
     const trace = [];
-    const res = await run({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: okSummarizer({ criteria: "x" }, trace) });
+    const res = await runOn({ task: "criteria", images: [IMG] }, { supabaseAdmin: admin, summarizer: okSummarizer(WHOLE, trace) });
     assert.equal(res.status, 403, "a trial past its photo cap was allowed a criteria photo");
     assert.ok(!trace.includes("provider:call"));
   });
@@ -1110,8 +1207,10 @@ async function main() {
   await test("THE CRITERIA MEASUREMENT SCRIPT reads the shipped configuration (dry run), and refuses to run with no photos", async () => {
     const script = path.join(rootDir, "scripts/measure-criteria-photos.mjs");
     const out = execFileSync(process.execPath, [script, "--dry-run"], { cwd: rootDir, encoding: "utf8" });
-    assert.match(out, new RegExp(`charged: ${cfg.PHOTO_BATCH_CREDITS} credits a batch`), "the dry run did not read the charged price");
     assert.match(out, new RegExp(`ceiling ${cfg.MAX_TOKENS.criteria} output tokens`));
+    const limits = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    assert.match(out, new RegExp(`photos at maxEdge ${limits.CRITERIA_PHOTO_MAX_EDGE}`), "the script does not measure at the size the app sends");
+    assert.match(out, cfg.CRITERIA_PHOTO_ON ? new RegExp(`charged: ${cfg.TASK_CREDITS.criteria} credits`) : /task is off/);
     assert.match(out, /nothing was called and nothing was spent/);
     let refused = false;
     try {
@@ -1144,6 +1243,13 @@ async function main() {
     for (const task of cfg.TASKS) {
       assert.ok(cfg.MAX_TOKENS[task] > 0, `${task} has no output ceiling`);
       assert.ok(cfg.MAX_INPUT_CHARS[task] > 0, `${task} has no input cap`);
+      /* The one exemption is a task switched OFF, which the handler
+         refuses before the allowance read: criteria until its batch is
+         measured. Switched on (the test build), it must bill. */
+      if (task === "criteria" && !cfg.CRITERIA_PHOTO_ON) {
+        assert.ok(cfgOn.TASK_CREDITS[task] > 0, "criteria bills nothing even when switched on");
+        continue;
+      }
       assert.ok(cfg.TASK_CREDITS[task] > 0, `${task} bills nothing`);
     }
   });

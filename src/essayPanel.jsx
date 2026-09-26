@@ -20,7 +20,7 @@ import { Sparkles, X, Check, FileText, Camera } from "lucide-react";
 import { AiActionFrame, useTask, downscalePhoto } from "./aiText.jsx";
 import { AI_TEXT_FAILURES } from "./aiTextCopy.js";
 import { PHOTOS_PER_CHUNK } from "./readingChunks.js";
-import { TASK_CREDITS, ESSAY_MAX_CHARS, PHOTO_BATCH_CREDITS } from "./aiTextLimits.js";
+import { TASK_CREDITS, ESSAY_MAX_CHARS, CRITERIA_PHOTO_ENABLED, CRITERIA_PHOTO_MAX_EDGE } from "./aiTextLimits.js";
 import { ESSAY_COPY } from "./essayCopy.js";
 import { orderedPoints, reasonsFor, RATINGS, MAX_COMMENT_CHARS, ESSAY_REWRITE_ENABLED, aiUseText } from "./essayFeedback.js";
 import { createEssayHold } from "./essayHold.js";
@@ -355,14 +355,23 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
               <label className={labelCls}>{ESSAY_COPY.criteriaLabel}</label>
               <textarea data-essay-criteria className={inputCls} rows={4} spellCheck={false} value={criteria} onChange={(e) => setCriteria(e.target.value)} />
               <p className="mt-0.5 text-xs text-stone-500">{ESSAY_COPY.criteriaHint}</p>
-              <CriteriaPhoto
-                session={session}
-                allowanceApi={allowanceApi}
-                pending={held.criteriaPending}
-                setPending={(v) => put({ criteriaPending: v })}
-                onText={(text) => put((cur) => ({ criteria: cur.criteria.trim() ? `${cur.criteria.trimEnd()}\n\n${text}` : text, criteriaFromPhoto: true }))}
-                filled={held.criteriaFromPhoto}
-              />
+              {CRITERIA_PHOTO_ENABLED && (
+                <CriteriaPhoto
+                  session={session}
+                  allowanceApi={allowanceApi}
+                  pending={held.criteriaPending}
+                  setPending={(v) => put({ criteriaPending: v })}
+                  onText={(text, missed = null) =>
+                    put((cur) => ({
+                      criteria: !text ? cur.criteria : cur.criteria.trim() ? `${cur.criteria.trimEnd()}\n\n${text}` : text,
+                      criteriaFromPhoto: true,
+                      criteriaPartial: missed,
+                    }))
+                  }
+                  filled={held.criteriaFromPhoto}
+                  partial={held.criteriaPartial}
+                />
+              )}
             </div>
             <p className="text-xs text-stone-500">{ESSAY_COPY.cost(TASK_CREDITS.essay)}</p>
             {local && <p className="text-xs text-amber-800">{local}</p>}
@@ -498,7 +507,7 @@ export function EssayHelp() {
  * batch that lands while the student is on another tab still fills the
  * box, and a remounted panel does not offer the button a second time.
  */
-function CriteriaPhoto({ session, allowanceApi, pending, setPending, onText, filled }) {
+function CriteriaPhoto({ session, allowanceApi, pending, setPending, onText, filled, partial = null }) {
   const c = ESSAY_COPY.criteriaPhoto;
   const { run, busy, error, errorDetailRef } = useTask(session, allowanceApi.applyFraction);
   const [local, setLocal] = useState(null);
@@ -514,12 +523,14 @@ function CriteriaPhoto({ session, allowanceApi, pending, setPending, onText, fil
     setPending(true);
     try {
       const images = [];
-      for (const f of files) images.push(await downscalePhoto(f));
+      for (const f of files) images.push(await downscalePhoto(f, { maxEdge: CRITERIA_PHOTO_MAX_EDGE }));
       const out = await run("criteria", { images });
-      if (out && out.criteria) onText(out.criteria);
+      if (out && out.criteria) onText(out.criteria, null);
       else {
         const detail = errorDetailRef.current;
         if (detail && Array.isArray(detail.pages)) setUnreadable(detail.pages);
+        /* PARTIAL: what was read goes in the box, marked incomplete. */
+        if (detail && detail.code === "criteria_partial") onText(typeof detail.criteria === "string" ? detail.criteria : "", Array.isArray(detail.missed) ? detail.missed : []);
       }
     } catch (e) {
       setLocal(AI_TEXT_FAILURES.server_error ? AI_TEXT_FAILURES.server_error.title : null);
@@ -528,7 +539,7 @@ function CriteriaPhoto({ session, allowanceApi, pending, setPending, onText, fil
     }
   };
 
-  const failure = error && error !== "pages_unreadable" ? AI_TEXT_FAILURES[error] : null;
+  const failure = error && error !== "pages_unreadable" && error !== "criteria_partial" ? AI_TEXT_FAILURES[error] : null;
   return (
     <div data-criteria-photo className="mt-2 space-y-1">
       <label className={`${btnGhost} cursor-pointer ${working ? "pointer-events-none opacity-40" : ""}`}>
@@ -548,8 +559,9 @@ function CriteriaPhoto({ session, allowanceApi, pending, setPending, onText, fil
           }}
         />
       </label>
-      <p data-criteria-photo-cost className="text-xs text-stone-500">{c.cost(PHOTO_BATCH_CREDITS, PHOTOS_PER_CHUNK)}</p>
-      {filled && !working && <p data-criteria-photo-done className="text-xs text-stone-600">{c.done}</p>}
+      <p data-criteria-photo-cost className="text-xs text-stone-500">{c.cost(TASK_CREDITS.criteria, PHOTOS_PER_CHUNK)}</p>
+      {partial && !working && <p data-criteria-photo-partial className="text-xs text-amber-800">{c.partial(partial)}</p>}
+      {filled && !partial && !working && <p data-criteria-photo-done className="text-xs text-stone-600">{c.done}</p>}
       {unreadable && <p data-criteria-photo-error className="text-xs text-amber-800">{c.unreadable(unreadable)}</p>}
       {failure && (
         <p data-criteria-photo-error className="text-xs text-amber-800">

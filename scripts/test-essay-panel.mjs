@@ -233,6 +233,7 @@ fs.writeFileSync(
     "  if (args.task === 'rewrite') return { allowanceUsed: 0.2, result: { rewrite: 'Everyone can be helped by computers.' } };\n" +
     "  if (args.task === 'criteria') {\n" +
     "    if (globalThis.__criteriaReply && globalThis.__criteriaReply.code) { const e = new Error('x'); e.code = globalThis.__criteriaReply.code; e.body = globalThis.__criteriaReply; throw e; }\n" +
+    "    globalThis.__downscaled = (globalThis.__downscaled || 0);\n" +
     "    return { allowanceUsed: 0.3, result: { criteria: 'High Distinction: Sustained original argument.\\nPass: An argument is present.' } };\n" +
     "  }\n" +
     "  return { allowanceUsed: 0.15, result: globalThis.__result };\n" +
@@ -317,6 +318,17 @@ const bundle = await build({
         /* THE REWRITE FLAG, ON FOR THE PROBE ONLY. Production ships it
            false (asserted below); the probe needs the path it will
            take the day it is flipped. */
+        /* THE CRITERIA-PHOTO FLAG, ON FOR THE PROBE ONLY, with a price, as
+           the rewrite's was: production ships it off until the batch is
+           measured, and the probe needs the path it takes once it is. */
+        b.onLoad({ filter: /aiTextLimits\.js$/ }, (args) => ({
+          contents: fs
+            .readFileSync(args.path, "utf8")
+            .replace("export const CRITERIA_PHOTO_ENABLED = false;", "export const CRITERIA_PHOTO_ENABLED = true;")
+            .replace("  criteria: 0,\n};", "  criteria: 17,\n};"),
+          loader: "js",
+          resolveDir: path.dirname(args.path),
+        }));
         /* jsdom has no canvas, so the downscaler is the one piece stubbed:
            it returns a data URL of the shape the real one produces. */
         b.onLoad({ filter: /aiText\.jsx$/ }, (args) => ({
@@ -324,7 +336,7 @@ const bundle = await build({
             .readFileSync(args.path, "utf8")
             .replace(
               "export async function downscalePhoto(file, { maxEdge = 1024, quality = 0.8 } = {}) {",
-              'export async function downscalePhoto(file, { maxEdge = 1024, quality = 0.8 } = {}) {\n  return "data:image/jpeg;base64,QUJD";'
+              'export async function downscalePhoto(file, { maxEdge = 1024, quality = 0.8 } = {}) {\n  globalThis.__edges = [...(globalThis.__edges || []), maxEdge];\n  return "data:image/jpeg;base64,QUJD";'
             ),
           loader: "jsx",
           resolveDir: path.dirname(args.path),
@@ -720,7 +732,7 @@ await test("PHOTOGRAPH YOUR CRITERIA: the photos go as one criteria batch, and t
   await tick();
   q(host, "[data-essay-open]").click();
   await tick();
-  assert.equal(q(host, "[data-criteria-photo-cost]").textContent, ESSAY_COPY.criteriaPhoto.cost(18, 4), "the photo price is not shown before the tap");
+  assert.equal(q(host, "[data-criteria-photo-cost]").textContent, ESSAY_COPY.criteriaPhoto.cost(17, 4), "the criteria batch's own price is not shown before the tap");
   pick(q(host, "[data-criteria-photo-input]"), 2);
   await tick();
   await tick();
@@ -771,6 +783,46 @@ await test("MORE THAN FOUR PHOTOS is refused before anything is sent, and an unr
   assert.ok(err && err.textContent === ESSAY_COPY.criteriaPhoto.unreadable([2]), `the unreadable photo was not named: ${err && err.textContent}`);
   assert.equal(q(host, "[data-essay-criteria]").value, "", "a refused batch put something in the box");
   win.__criteriaReply = null;
+});
+
+await test("CRITERIA PHOTOS LEAVE AT THEIR OWN SIZE, not a reading's 1024", async () => {
+  win.__calls = [];
+  win.__edges = [];
+  const { CRITERIA_PHOTO_MAX_EDGE } = await import("../src/aiTextLimits.js");
+  assert.ok(CRITERIA_PHOTO_MAX_EDGE > 1024, "the criteria size is no larger than a reading's, which read two bullets from a page");
+  const { host } = win.__mount([essayRow()]);
+  await tick();
+  q(host, "[data-essay-open]").click();
+  await tick();
+  pick(q(host, "[data-criteria-photo-input]"), 2);
+  await tick();
+  await tick();
+  assert.ok(win.__edges.length === 2, `${win.__edges.length} photos were downscaled, not 2`);
+  assert.ok(win.__edges.every((e) => e === CRITERIA_PHOTO_MAX_EDGE), `downscaled at ${win.__edges.join(", ")}, not ${CRITERIA_PHOTO_MAX_EDGE}`);
+});
+
+await test("A PARTIAL TRANSCRIPTION IS SHOWN AS PARTIAL: what was read goes in the box, the missed parts are named, and it is not called done", async () => {
+  win.__calls = [];
+  win.__criteriaReply = { ok: false, code: "criteria_partial", criteria: "Argument\nHigh Distinction: A sustained", missed: ["photo 1, bottom half"] };
+  const { host } = win.__mount([essayRow()]);
+  await tick();
+  q(host, "[data-essay-open]").click();
+  await tick();
+  pick(q(host, "[data-criteria-photo-input]"), 1);
+  await tick();
+  await tick();
+  assert.equal(q(host, "[data-essay-criteria]").value, "Argument\nHigh Distinction: A sustained", "what WAS read did not reach the box");
+  const note = q(host, "[data-criteria-photo-partial]");
+  assert.ok(note, "a partial transcription was not marked partial");
+  assert.equal(note.textContent, ESSAY_COPY.criteriaPhoto.partial(["photo 1, bottom half"]));
+  assert.equal(q(host, "[data-criteria-photo-done]"), null, "a partial transcription was presented as done");
+  assert.match(ESSAY_COPY.criteriaPhoto.partial(["x"]), /nothing was charged/i);
+  /* A whole batch afterwards clears the partial mark. */
+  win.__criteriaReply = null;
+  pick(q(host, "[data-criteria-photo-input]"), 1);
+  await tick();
+  await tick();
+  assert.equal(q(host, "[data-criteria-photo-partial]"), null, "a later complete batch left the partial mark up");
 });
 
 await test("nothing above logged a React error", () => {

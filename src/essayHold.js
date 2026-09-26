@@ -49,6 +49,8 @@ export const blankEntry = () => ({
      a transcription the student should check. */
   criteriaPending: false,
   criteriaFromPhoto: false,
+  /* The parts a partial transcription missed, until the next batch. */
+  criteriaPartial: null,
 });
 
 export function createEssayHold() {

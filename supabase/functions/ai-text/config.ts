@@ -102,13 +102,11 @@ export const MAX_TOKENS: Record<Task, number> = {
 
   /* MARKING CRITERIA FROM A PHOTO (Jared, 27 September 2026): a
      rubric transcribed verbatim so the essay's band check can read the
-     criteria's own band names. A dense four-band, six-criterion rubric
-     is ~900 words, ~1,200 tokens; four photographs of one is the most a
-     batch can carry. The SAME ceiling as a photographed reading on
-     purpose: the ruling is "priced the same, 18 per batch", and this
-     ceiling is what makes the derivation land there (TASK_CREDITS
-     below). NOT MEASURED — scripts/measure-criteria-photos.mjs prints
-     the real completion tokens, and this moves on that. */
+     criteria's own band names. MEASURED on three rubrics (27 September
+     2026): the densest, three PDF pages of task and criteria, produced
+     940 output tokens; a four-photo batch of that density is ~1,250.
+     2,000 keeps truncation, which the adapter turns into a hard error,
+     well out of reach for a batch of four. */
   criteria: 2000,
 };
 
@@ -281,24 +279,54 @@ export const ratesForTask = (task: Task) => {
   return rates;
 };
 
-/* THE PHOTO-ONLY TASKS, priced by the photo-batch formula: the MEASURED
-   input of one batch at the vision model's rates, plus the task's own
-   output ceiling. Text caps mean nothing for a request that carries no
-   text. The handler charges PHOTO_BATCH_CREDITS for any request with
-   photographs (guards.js), and a test holds this weight equal to it. */
+/* THE PHOTO-ONLY TASKS carry no text, so text caps mean nothing for
+   them; each is priced from its OWN measured batch input at the vision
+   model's rates, plus its output ceiling.
+
+   MARKING CRITERIA ARE NOT PRICED FROM A READING'S BATCH (Jared, 27
+   September 2026: "derive the criteria task's own credits from these
+   measurements rather than borrowing 18"). And they cannot be priced
+   from the three 1,024px runs either: the criteria photo is sent at
+   CRITERIA_PHOTO_MAX_EDGE (1,536, for legibility), and at detail
+   "original" an image's bill DOES NOT EXTRAPOLATE from another size
+   (MEASURED_PHOTO_BATCH_INPUT_TOKENS in _shared/model.ts says why).
+
+   So this is the bill for FOUR photos at 1,536px under this prompt, as
+   scripts/measure-criteria-photos.mjs --diagnose reports it: the
+   prompt's own tokens plus four times one photo's, each read off a
+   pair of calls (one photo, then the same photo twice) rather than
+   modelled. NULL UNTIL THAT RUN: the task refuses before any spend
+   (criteria_unavailable) and the client does not draw the button, the
+   rewrite's two-flag switch. Setting the number is what turns it on. */
+export const MEASURED_CRITERIA_BATCH_INPUT_TOKENS: number | null = null;
+export const CRITERIA_PHOTO_ON = Number.isInteger(MEASURED_CRITERIA_BATCH_INPUT_TOKENS) && (MEASURED_CRITERIA_BATCH_INPUT_TOKENS as number) > 0;
+
 export const PHOTO_ONLY_TASKS: readonly Task[] = ["criteria"];
+const photoBatchInputTokens = (task: Task) => (task === "criteria" ? MEASURED_CRITERIA_BATCH_INPUT_TOKENS : null);
 
 /** What one call of `task` costs us, at its own input and output caps. */
 export const usdForTask = (task: Task) =>
   PHOTO_ONLY_TASKS.includes(task)
-    ? MEASURED_PHOTO_BATCH_INPUT_TOKENS * (VISION_USD_PER_1M_INPUT / 1_000_000) +
+    ? (photoBatchInputTokens(task) ?? NaN) * (VISION_USD_PER_1M_INPUT / 1_000_000) +
       MAX_TOKENS[task] * (VISION_USD_PER_1M_OUTPUT / 1_000_000)
     : (MAX_INPUT_CHARS[task] / CHARS_PER_TOKEN) * (ratesForTask(task).in / 1_000_000) +
       MAX_TOKENS[task] * (ratesForTask(task).out / 1_000_000);
 
+
+
+/* A task switched off (its measured input still null) has no cost to
+   derive from, so it is priced 0 and nothing can be charged for it; the
+   handler refuses it before the allowance read regardless. */
 export const TASK_CREDITS: Record<Task, number> = Object.fromEntries(
-  TASKS.map((task) => [task, creditsFor(usdForTask(task))])
+  TASKS.map((task) => [task, Number.isFinite(usdForTask(task)) ? creditsFor(usdForTask(task)) : 0])
 ) as Record<Task, number>;
+
+/* What a request CARRYING PHOTOS is charged, per task. A reading's
+   batch and a criteria batch are different bills at different
+   resolutions, so neither borrows the other's. Read by the handler;
+   PHOTO_BATCH_CREDITS is defined below and filled in there. */
+export const photoBatchCreditsFor = (task: Task): number | null =>
+  task === "summarise" ? PHOTO_BATCH_CREDITS : task === "criteria" ? (CRITERIA_PHOTO_ON ? TASK_CREDITS.criteria : null) : null;
 
 /* ---------- essay feedback: the two things that must be true first ----------
 

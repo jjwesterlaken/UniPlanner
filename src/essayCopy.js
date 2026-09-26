@@ -51,6 +51,9 @@ export const ESSAY_COPY = {
       `Up to ${photos} photos cost ${credits} credits. A screenshot counts as a photo. Pasting the criteria costs nothing extra.`,
     done: "Check this against the original and fix anything it got wrong: the feedback is judged against exactly what's in the box.",
     tooMany: (photos) => `Up to ${photos} photos at a time. Send the rest as a second batch.`,
+    /* A partial read is shown AS partial, never as success. */
+    partial: (missed) =>
+      `Only part of your criteria could be read (missed: ${[].concat(missed).join("; ")}). What was read is in the box, but it is incomplete. Nothing was charged. Retake those parts closer, flat and in good light, or type in what's missing.`,
     unreadable: (pages) => {
       const list = [].concat(pages);
       const one = list.length === 1;

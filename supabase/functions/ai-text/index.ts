@@ -34,7 +34,8 @@ import { checkRewriteSpan } from "../_shared/essayRewrite.js";
 import { openaiTextAdapter } from "./openai.ts";
 import {
   TASKS,
-  PHOTO_BATCH_CREDITS,
+  photoBatchCreditsFor,
+  CRITERIA_PHOTO_ON,
   MAX_TOKENS,
   MAX_INPUT_CHARS,
   PHOTOS_PER_CHUNK,
@@ -210,6 +211,14 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
           The provider check above cannot see it: the companies did not
           change, the material did. An older build sends no version and is
           refused for this task only. */
+    /* CRITERIA FROM A PHOTO IS OFF UNTIL ITS BATCH IS MEASURED: its
+       price is derived from that measurement and there is nothing
+       honest to charge before it (config.ts). Refused free, here,
+       before the allowance read. */
+    if (task === "criteria" && !CRITERIA_PHOTO_ON) {
+      logStage(stage, { rejected: "criteria_unavailable" });
+      return errorResponse(stage, "criteria_unavailable", "Photographing criteria isn't available yet. Paste them instead.", 503);
+    }
     if (task === "rewrite" && !essayRewrite) {
       logStage(stage, { rejected: "rewrite_unavailable" });
       return errorResponse(stage, "rewrite_unavailable", "Example rewrites aren't available yet.", 503);
@@ -292,10 +301,11 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       creditsUsed,
       taskCredits: TASK_CREDITS,
       monthlyLimit: spent.limit,
-      /* The screens quote PHOTO_BATCH_CREDITS for a batch; this is what
-         makes the server charge it. */
+      /* The screens quote each photo task's own batch price; this is
+         what makes the server charge it (a reading's PHOTO_BATCH_CREDITS,
+         a criteria batch's own measured price). */
       photoPages,
-      photoBatchCredits: PHOTO_BATCH_CREDITS,
+      photoBatchCredits: photoBatchCreditsFor(task),
     });
     if (!allowance.ok) {
       logStage(stage, { rejected: allowance.code });
@@ -362,6 +372,22 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
       /* NO CRITERIA IN THE PHOTOS: free, like the refusals above. The
          student has nothing to use, and the fix (photograph the rubric,
          not the task sheet) is theirs to try again. */
+      /* A PARTIAL TRANSCRIPTION IS FREE, AND SHOWN AS PARTIAL (Jared, 27
+         September 2026: "a partial should not bill as a full success").
+         Free rather than billed like pages_unreadable, because the two
+         are not the same fact. An illegible photo is billed because
+         its cause is the student's photograph. A partial read may be
+         our own downscale — the resolution is ours — and the two
+         cannot be told apart from here, so the cost falls on us. The
+         student still gets what WAS read, marked incomplete, and which
+         parts were missed, so they can retake exactly those. */
+      if ((err as { criteriaPartial?: { criteria: string; missed: string[] } }).criteriaPartial) {
+        const partial = (err as { criteriaPartial: { criteria: string; missed: string[] } }).criteriaPartial;
+        return jsonResponse(
+          { ok: false, stage, code: "criteria_partial", error: "Only part of the criteria could be read.", criteria: partial.criteria, missed: partial.missed },
+          422
+        );
+      }
       if ((err as { noCriteria?: boolean }).noCriteria) {
         return jsonResponse({ ok: false, stage, code: "no_criteria_found", error: "We couldn't find marking criteria in those photos." }, 422);
       }
