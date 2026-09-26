@@ -181,15 +181,16 @@ this order.
       box stays closed until you tick **Also send a comment**, and when
       open it says it is only sent on the tick and trains nothing. Send
       it: you should see a thank-you.
-- [ ] **The example rewrite, if it is switched on in your build.** Each
-      point then has **Show an example rewrite · An example costs 3
-      credits.** It should come back **beside** your passage, labelled,
-      with a line saying it isn't put into your essay and your unit's
-      rules apply. Nothing in your essay or notes changes. **If there is
-      no such button, it is switched off in this build — that is
-      expected, not a bug.** If you do use it: afterwards **Your AI-use
-      record** on that panel should list it, with **none of your essay's
-      words in it**, and Copy should copy it.
+- [ ] **The example rewrite.** Each point has **Show an example rewrite ·
+      An example costs 3 credits.** It should come back **beside** your
+      passage, labelled, with a line saying it isn't put into your essay
+      and your unit's rules apply. Nothing in your essay or notes
+      changes. Check the example **adds nothing your essay didn't say** —
+      no new name, number or source — and say if it does. If it is ever
+      refused ("went outside your passage"), the message must say
+      **nothing was charged**, and your credits must not move.
+      Afterwards **Your AI-use record** on that panel should list it,
+      with **none of your essay's words in it**, and Copy should copy it.
 - [ ] **The mark question must NOT appear yet** — nothing is marked.
 - [ ] **Type a mark** into that assessment's mark box. While you are
       typing, nothing appears. Tap away: *"Your mark is in. How did our

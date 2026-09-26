@@ -438,8 +438,10 @@ shipped in it.
 > **Feedback on your essays.** Paste a draft and your marking criteria
 > on any assessment in Grades, and get comments that quote your own
 > words and say what to work on first. It reads your draft against the
-> criteria you give it, and it never predicts your mark. When your mark
-> comes back, we'll ask once how we did.
+> criteria you give it, and it never predicts your mark. If you ask,
+> it can show an example rewrite of one sentence it pointed at, beside
+> yours — nothing is put into your essay. When your mark comes back,
+> we'll ask once how we did.
 >
 > Also new: edit your AI lecture notes, a ? on every study tool with
 > a worked example, photographed readings with the price shown before
@@ -447,11 +449,10 @@ shipped in it.
 > Text fields no longer zoom on iPhone, and dark mode no longer shows
 > white bars when you scroll past the end.
 
-**If the example rewrite is switched on in the submitted build**, add
-to the first paragraph: *"If you ask, it can show an example rewrite
-of one sentence it pointed at, beside yours — nothing is put into your
-essay."* Otherwise leave it out: What's New must not describe a
-control the reviewer cannot find.
+The example rewrite is switched on (26 September 2026), so What's New
+and the reviewer note both describe it. If it is ever switched off
+before a submission, take the sentence out of both: neither may
+describe a control the reviewer cannot find.
 
 ### Reviewer notes
 
