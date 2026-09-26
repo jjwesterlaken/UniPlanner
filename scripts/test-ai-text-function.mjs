@@ -1779,6 +1779,127 @@ async function main() {
     assert.deepEqual(summarise.response_format, { type: "json_object" });
   });
 
+  /* ---------- the example rewrite ---------- */
+
+  const REWRITE_LIMITS = { maxSpanWords: 120, maxSpanShare: 0.25, escapeRun: 6, exceedsRatio: 1.5 };
+  const LONG_ESSAY =
+    "Computers help people in many ways every single day. They let families talk every week across oceans and time zones. " +
+    "They help students learn at their own pace with patient explanations. Some say they make people lazy but many people use them to plan sport and exercise. " +
+    "Libraries now lend laptops to anyone who asks. Teachers set homework that only works online. Parents check school notices on their phones every evening.";
+  const SPAN = "They help students learn at their own pace with patient explanations.";
+  const rewriteBody = (over = {}) => ({
+    task: "rewrite",
+    text: LONG_ESSAY,
+    span: SPAN,
+    note: "No example shows this.",
+    deficiency: "unsupported-generalisation",
+    consentVersion: 8,
+    ...over,
+  });
+
+  await test("THE REWRITE IS PRICED FROM ITS OWN CEILINGS on the essay model: 3 credits, and the client agrees", async () => {
+    assert.equal(cfg.TASK_CREDITS.rewrite, 3);
+    assert.equal(cfg.MAX_TOKENS.rewrite, 1500);
+    assert.equal(cfg.MAX_INPUT_CHARS.rewrite, 2000);
+    const limits = await import(toUrl(path.join(rootDir, "src/aiTextLimits.js")));
+    assert.equal(limits.TASK_CREDITS.rewrite, cfg.TASK_CREDITS.rewrite);
+  });
+
+  await test("THE REWRITE IS OFF IN PRODUCTION until its scope limits are measured, and refusing costs nothing", async () => {
+    assert.equal(cfg.ESSAY_REWRITE, null, "the scope limits were set without the measurement config.ts says they need");
+    const summarizer = recording({ rewrite: SPAN });
+    const trace = [];
+    const admin = makeAdmin({ trace });
+    const res = await run(rewriteBody(), { supabaseAdmin: admin, summarizer });
+    assert.equal(res.status, 503);
+    assert.equal((await res.json()).code, "rewrite_unavailable");
+    assert.equal(summarizer.calls, 0);
+    assert.ok(!trace.includes("db:select:ai_usage"), "the allowance was read before refusing");
+  });
+
+  await test("THE REWRITE NEEDS CONSENT v8, because it sends part of an essay", async () => {
+    const summarizer = recording({ rewrite: SPAN });
+    const res = await run(rewriteBody({ consentVersion: 7 }), { supabaseAdmin: makeAdmin(), summarizer, essayRewrite: REWRITE_LIMITS });
+    assert.equal(res.status, 403);
+    assert.equal((await res.json()).code, "consent_required");
+    assert.equal(summarizer.calls, 0);
+  });
+
+  await test("ONE PASSAGE, NEVER A SECTION: not in the essay, two paragraphs, or too long are refused free", async () => {
+    for (const [what, over, code] of [
+      ["a passage that is not in the essay", { span: "Something the student never wrote at all." }, "bad_request"],
+      ["two paragraphs", { span: "Libraries now lend laptops to anyone who asks.\n\nTeachers set homework that only works online." }, "span_too_long"],
+      ["most of the essay", { span: LONG_ESSAY.split(". ").slice(0, 4).join(". ") + "." }, "span_too_long"],
+    ]) {
+      const summarizer = recording({ rewrite: "x" });
+      const admin = makeAdmin();
+      const res = await run(rewriteBody(over), { supabaseAdmin: admin, summarizer, essayRewrite: REWRITE_LIMITS });
+      assert.equal(res.status, 400, what);
+      assert.equal((await res.json()).code, code, what);
+      assert.equal(summarizer.calls, 0, `${what} reached the provider`);
+      assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 0, `${what} was billed`);
+    }
+  });
+
+  await test("THE MODEL SEES THE PASSAGE AND THE NOTE, and never the criteria or the rest of the essay", async () => {
+    const summarizer = recording({ rewrite: "They help students learn at their own pace, with patient explanations." });
+    const res = await run(rewriteBody(), { supabaseAdmin: makeAdmin(), summarizer, essayRewrite: REWRITE_LIMITS });
+    assert.equal(res.status, 200);
+    const sent = JSON.stringify(summarizer.args.messages);
+    assert.ok(sent.includes("patient explanations"), "the passage did not reach the model");
+    assert.ok(sent.includes("No example shows this."), "the note did not reach the model");
+    assert.ok(!sent.includes("Libraries now lend laptops"), "THE REST OF THE ESSAY REACHED THE MODEL");
+    assert.equal(summarizer.args.task, "rewrite");
+    const body = await res.json();
+    assert.equal(body.result.rewrite, "They help students learn at their own pace, with patient explanations.");
+  });
+
+  await test("A REWRITE THAT LEAVES ITS PASSAGE OR INVENTS A FACT IS REFUSED, BILLED, under its own code; an in-scope one is billed as a success", async () => {
+    for (const [what, rewrite] of [
+      ["escapes the span", "They help students learn at their own pace. Libraries now lend laptops to anyone who asks."],
+      ["invents a figure", "In 2019, 73% of students learned at their own pace with patient explanations."],
+    ]) {
+      const admin = makeAdmin();
+      const res = await run(rewriteBody(), { supabaseAdmin: admin, summarizer: recording({ rewrite }), essayRewrite: REWRITE_LIMITS });
+      assert.equal(res.status, 422, what);
+      assert.equal((await res.json()).code, "rewrite_refused", what);
+      assert.equal(admin.seen.filter((x) => x.op === "rpc").length, 1, `${what}: the generated tokens went unbilled`);
+    }
+    const admin = makeAdmin();
+    const ok = await run(rewriteBody(), { supabaseAdmin: admin, summarizer: recording({ rewrite: "Students can learn at their own pace, with patient explanations." }), essayRewrite: REWRITE_LIMITS });
+    assert.equal(ok.status, 200);
+    const rpc = admin.seen.find((x) => x.op === "rpc");
+    assert.equal(rpc.payload.p_credits, 3);
+  });
+
+  await test("span and note are the rewrite's alone", async () => {
+    const res = await run({ task: "explain", topic: "x", text: "y", span: "z", consentVersion: 8 }, { supabaseAdmin: makeAdmin(), summarizer: recording(EXPLAIN_OK) });
+    assert.equal(res.status, 400);
+  });
+
+  await test("THE REAL ADAPTER sends a rewrite to the essay model with its own strict schema", async () => {
+    const { build: b } = await import("esbuild");
+    const out = await b({ entryPoints: [path.join(rootDir, "supabase/functions/ai-text/openai.ts")], bundle: true, format: "esm", platform: "neutral", write: false });
+    const f = path.join(tmpDir, "adapter-rewrite.mjs");
+    fs.writeFileSync(f, out.outputFiles[0].text);
+    const { openaiTextAdapter } = await import(toUrl(f));
+    let sent = null;
+    await openaiTextAdapter.complete({
+      messages: [{ role: "user", content: "x" }],
+      maxTokens: 1500,
+      apiKey: "sk-test",
+      task: "rewrite",
+      fetchImpl: async (_u, init) => {
+        sent = JSON.parse(init.body);
+        return { ok: true, json: async () => ({ choices: [{ message: { content: "{}" }, finish_reason: "stop" }] }) };
+      },
+    });
+    assert.equal(sent.model, model.ESSAY_MODEL);
+    assert.equal(sent.response_format.json_schema.name, "essay_rewrite");
+    assert.equal(sent.response_format.json_schema.strict, true);
+    assert.equal(sent.max_completion_tokens, 1500);
+  });
+
   fs.rmSync(tmpDir, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

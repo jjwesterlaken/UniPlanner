@@ -158,6 +158,19 @@ await test("recordFeedback: no client does nothing, 23505 is done, any other err
   assert.ok(!/\.upsert\(/.test(read("src/essayFeedbackStore.js")), "an upsert needs UPDATE, which 0023 does not grant");
 });
 
+await test("THE AI-USE RECORD IS BOUNDED AND HOLDS NO ESSAY TEXT", async () => {
+  const { withAiUse, rewriteEntry, feedbackEntry, aiUseText, MAX_AI_USE_ENTRIES } = await import("../src/essayFeedback.js");
+  let a = { title: "Essay 1" };
+  for (let i = 0; i < MAX_AI_USE_ENTRIES + 10; i++) a = { ...a, aiUse: withAiUse(a, rewriteEntry({ at: `2026-09-${String((i % 28) + 1).padStart(2, "0")}T00:00:00Z`, deficiency: "repetition", spanWords: 12 })) };
+  assert.equal(a.aiUse.length, MAX_AI_USE_ENTRIES, "the record grows without bound");
+  const entry = rewriteEntry({ at: "x", deficiency: "repetition", spanWords: 12, quote: "SENTINEL", rewrite: "SENTINEL" });
+  assert.ok(!JSON.stringify(entry).includes("SENTINEL"), "essay text reached a record entry");
+  const text = aiUseText({ assessment: { title: "Essay 1", aiUse: [feedbackEntry({ at: "a" }), entry] }, copy: ESSAY_COPY, formatDate: () => "26/09/2026" });
+  assert.match(text, /AI use on Essay 1/);
+  assert.match(text, /asked for AI feedback on a draft/);
+  assert.match(text, /\(12 words\), about: Said more than once/);
+});
+
 /* ---------------- the copy ---------------- */
 
 const strings = [];
@@ -213,6 +226,7 @@ fs.writeFileSync(
   "export const fetchTextAllowance = async () => ({ unavailable: true });\n" +
     "export const callAiText = async (args) => {\n" +
     "  globalThis.__calls = [...(globalThis.__calls || []), args];\n" +
+    "  if (args.task === 'rewrite') return { allowanceUsed: 0.2, result: { rewrite: 'Everyone can be helped by computers.' } };\n" +
     "  return { allowanceUsed: 0.15, result: globalThis.__result };\n" +
     "};\n"
 );
@@ -242,6 +256,10 @@ function Harness({ initial, optInNeeded, sink }) {
     onSave: (a, x) => sink.saved.push({ a, ...x }),
     onMarkAnswer: (a, x) => { sink.answers.push({ a, ...x }); patchItem("assessments", a.id, { markCompareAsked: "now" }); },
     onMarkDismiss: (a) => { sink.dismissed.push(a.id); patchItem("assessments", a.id, { markCompareAsked: "now" }); },
+    onRewrite: (a, x) => {
+      sink.rewrites.push({ a, ...x });
+      setList((l) => l.map((y) => (y.id === a.id ? { ...y, aiUse: [...(y.aiUse || []), { at: "2026-09-26T00:00:00Z", kind: "example-rewrite", code: x.point.deficiency, words: 3 }] } : y)));
+    },
   };
   return <Grades assessments={list} courses={[{ id: "c", name: "HIST1001" }]} addItem={() => {}} patchItem={patchItem}
     removeItem={() => {}} focused={null} rule="half-up" essay={sink.signedOut ? null : essay} />;
@@ -249,7 +267,7 @@ function Harness({ initial, optInNeeded, sink }) {
 window.__mount = (initial, { optInNeeded = false, signedOut = false } = {}) => {
   const host = document.createElement("div");
   document.body.appendChild(host);
-  const sink = { patches: [], delivered: [], rated: [], saved: [], answers: [], dismissed: [], optedIn: false, signedOut };
+  const sink = { patches: [], delivered: [], rated: [], saved: [], answers: [], dismissed: [], rewrites: [], optedIn: false, signedOut };
   createRoot(host).render(<Harness initial={initial} optInNeeded={optInNeeded} sink={sink} />);
   return { host, sink };
 };
@@ -271,6 +289,16 @@ const bundle = await build({
       setup(b) {
         b.onResolve({ filter: /(^|\/)config\.js$/ }, () => ({ path: configStub }));
         b.onResolve({ filter: /aiTextClient\.js$/ }, () => ({ path: clientStub }));
+        /* THE REWRITE FLAG, ON FOR THE PROBE ONLY. Production ships it
+           false (asserted below); the probe needs the path it will
+           take the day it is flipped. */
+        b.onLoad({ filter: /essayFeedback\.js$/ }, (args) => ({
+          contents: fs
+            .readFileSync(args.path, "utf8")
+            .replace("export const ESSAY_REWRITE_ENABLED = false;", "export const ESSAY_REWRITE_ENABLED = true;"),
+          loader: "js",
+          resolveDir: path.dirname(args.path),
+        }));
       },
     },
   ],
@@ -421,6 +449,54 @@ await test("DISMISSED IS ANSWERED: the ask goes and does not return", async () =
   await tick();
   assert.deepEqual(plain(sink.dismissed), ["a1"]);
   assert.equal(q(host, "[data-mark-compare]"), null);
+});
+
+await test("THE REWRITE BUTTON IS NOT DRAWN IN PRODUCTION until the server's limits are set", () => {
+  /* The client half of the two-flag switch. The probe flips it; this is
+     the assertion that production does not, and that the probe's flip
+     really found the line (or every rewrite test below is about a
+     button that never exists). */
+  assert.match(read("src/essayFeedback.js"), /export const ESSAY_REWRITE_ENABLED = false;/);
+  assert.match(read("supabase/functions/ai-text/config.ts"), /\} \| null = null;\n\n\/\* The first consent version/, "the server's rewrite limits are set, so the client flag is out of step");
+});
+
+await test("AN EXAMPLE REWRITE, CLICKED: one passage and its note go, side by side comes back, the record gains a line with no essay text", async () => {
+  win.__calls = [];
+  const { host, sink } = win.__mount([essayRow()]);
+  await tick();
+  q(host, "[data-essay-open]").click();
+  await tick();
+  type(q(host, "[data-essay-text]"), "My draft. Computers help everyone. Nobody disagrees.");
+  type(q(host, "[data-essay-criteria]"), "Criteria.");
+  await tick();
+  q(host, "[data-essay-go]").click();
+  await tick();
+  await tick();
+  const buttons = host.querySelectorAll("[data-essay-rewrite]");
+  assert.equal(buttons.length, 2, "one button per point");
+  buttons[0].click();
+  await tick();
+  await tick();
+  const call = win.__calls.find((c) => c.task === "rewrite");
+  assert.ok(call, "no rewrite request was made");
+  assert.equal(call.payload.span, "computers help everyone", "the passage is not the point's quote");
+  assert.equal(call.payload.criteria, undefined, "THE CRITERIA WENT WITH A REWRITE");
+  assert.equal(call.payload.text, "My draft. Computers help everyone. Nobody disagrees.");
+  const side = q(host, "[data-essay-side-by-side]");
+  assert.ok(side && side.textContent.includes("computers help everyone") && q(side, "[data-essay-example]").textContent.includes("Everyone can be helped"));
+  assert.equal(sink.rewrites.length, 1);
+  assert.equal(host.querySelectorAll("[data-essay-rewrite]").length, 1, "the button stayed after its example came back");
+  q(host, "[data-ai-use-open]").click();
+  await tick();
+  const record = q(host, "[data-ai-use-record] textarea").value;
+  assert.match(record, /example rewrite of one passage/);
+  assert.doesNotMatch(record, /computers help everyone|Everyone can be helped/i, "ESSAY TEXT REACHED THE AI-USE RECORD");
+  q(host, '[data-essay-rating="partly"]').click();
+  await tick();
+  assert.ok(host.textContent.includes(ESSAY_COPY.capture.reasons["rewrite-changed-meaning"]), "the rewrite complaint is missing after a rewrite");
+  [...host.querySelectorAll("button")].find((b) => b.textContent === ESSAY_COPY.capture.send).click();
+  await tick();
+  assert.equal(sink.rated.at(-1).rewriteRequested, true, "the rating does not say a rewrite was asked for");
 });
 
 await test("nothing above logged a React error", () => {

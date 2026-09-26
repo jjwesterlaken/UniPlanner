@@ -44,7 +44,7 @@ import {
 
 export const SUMMARY_PROVIDER = "openai";
 
-export const TASKS = ["practice", "explain", "weakspots", "summarise", "merge", "essay"] as const;
+export const TASKS = ["practice", "explain", "weakspots", "summarise", "merge", "essay", "rewrite"] as const;
 export type Task = (typeof TASKS)[number];
 
 /* ---------- output ceilings, one justification each ----------
@@ -91,6 +91,14 @@ export const MAX_TOKENS: Record<Task, number> = {
      to 3,000, so a truncation here is the first thing to look at when
      the real traffic starts. */
   essay: 4000,
+
+  /* One example rewrite of ONE passage (a sentence or a paragraph,
+     capped at ESSAY_REWRITE.maxSpanWords). The reply itself is ~200
+     tokens at most; the rest is headroom for the reasoning tokens the
+     essay model spends first. NOT MEASURED: a guess about reasoning
+     use, priced by the same rule as every task. measure-rewrite.mjs
+     prints the real completion tokens, and the ceiling moves on that. */
+  rewrite: 1500,
 };
 
 /* ---------- input caps ----------
@@ -116,6 +124,12 @@ export const MAX_INPUT_CHARS: Record<Task, number> = {
      and feedback on four quarters cannot say whether the argument holds
      together. Over it, refuse naming the overage. ESSAY-FEEDBACK.md §2. */
   essay: 24_000,
+  /* What the MODEL reads for a rewrite: the passage (at most
+     ESSAY_REWRITE.maxSpanWords, ~800 characters), the reviewer's note
+     (500) and the code's definition. The essay travels in the request
+     too, but only so the server can check scope, and is capped by
+     MAX_INPUT_CHARS.essay; it is never sent on, so it is not priced. */
+  rewrite: 2_000,
 };
 
 /* ---------- photographed pages ----------
@@ -285,6 +299,28 @@ export const ESSAY_NO_WRITING: {
   maxNoteWords: number;
   maxSentenceWords: number;
 } | null = { window: 30, matchUnit: 4, minQuoteWords: 3, maxNoteWords: 30, maxSentenceWords: 50 };
+
+/* ---------- the example rewrite: its limits, and OFF until measured ----------
+
+   Jared's ruling, 18 September 2026 (_shared/essayRewrite.js has it in
+   full). maxSpanWords and maxSpanShare are PRODUCT RULES — one sentence
+   or one paragraph, never a section — chosen, not measured. escapeRun
+   and exceedsRatio are #142's scope-check parameters, and those are
+   DESIGN PARAMETERS OF A SYNTHETIC TEST: nobody has yet run them over
+   real rewrites, and a refused rewrite is billed. So this is null, the
+   task refuses with rewrite_unavailable before any spend, and it is
+   switched on the way the essay thresholds were: measure-rewrite.mjs on
+   the essay model, the constrained replies' refusal rate at these
+   settings at most 2%, the settings recorded in ESSAY-FEEDBACK.md.
+
+   The proposed values, for that run:
+     { maxSpanWords: 120, maxSpanShare: 0.25, escapeRun: 6, exceedsRatio: 1.5 } */
+export const ESSAY_REWRITE: {
+  maxSpanWords: number;
+  maxSpanShare: number;
+  escapeRun: number;
+  exceedsRatio: number;
+} | null = null;
 
 /* The first consent version that disclosed essay drafts. The server
    checks it for the essay task only, because the essay is the only

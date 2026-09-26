@@ -93,7 +93,7 @@ export const ESSAY_MODEL = "gpt-5.6-luna";
  * measured on it, and no other task moves.
  */
 export function modelFor({ hasImages = false, task = null }: { hasImages?: boolean; task?: string | null } = {}): string {
-  if (task === "essay") return ESSAY_MODEL;
+  if (task === "essay" || task === "rewrite") return ESSAY_MODEL;
   return hasImages ? VISION_MODEL : SUMMARY_MODEL;
 }
 

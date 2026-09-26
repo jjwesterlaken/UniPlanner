@@ -107,6 +107,45 @@ differently.
 
 ---
 
+## 5. The example rewrite: is the claim changed in the same release as the feature?
+
+**Why it is on this list.** Until 1.3.0 the essay-feedback design said
+the feature "must never write, rewrite, or complete the essay", and that
+sentence was repeated in internal documents, a reviewer-note draft and
+the device checklist. On 18 September 2026 Jared ruled the other way:
+essay feedback may show an example rewrite of ONE passage the feedback
+pointed at, on request, beside the student's own, never inserted.
+**Shipping the rewrite while any published claim still says we never
+rewrite would be misleading conduct**, so the claim and the feature
+change in one release.
+
+**What changed, and where:**
+
+- Terms §2 (Version 2, 26 September 2026) gains a paragraph: essay
+  feedback points at what to work on; on request it can show an example
+  rewrite of one sentence or paragraph, beside the student's own;
+  nothing is put into their work; the university's and unit's rules on
+  AI help govern, and following them is the student's responsibility;
+  the app keeps a per-assessment record of the help asked for.
+- The privacy policy's AI section and OpenAI row name the example
+  rewrite as a purpose, say only the passage and its comment go to the
+  AI, and say the AI-use record holds none of the essay.
+- The opt-in screen says it can show an example of one passage, that
+  nothing is put into the essay, and that the unit's rules apply.
+- The reviewer note (IOS-RELEASE.md) no longer says the feature "never
+  rewrites the essay".
+
+**The question for a lawyer.** Is placing responsibility for academic
+integrity on the student (Terms §2 and §3) enforceable and fair under
+the Australian Consumer Law's unfair-terms regime, given that the app
+now supplies wording on request? The drafting leans on three facts: the
+student must ask, one passage at a time; nothing is inserted; and the
+app keeps a record designed to make disclosure easy.
+
+**Not settled here:** whether an example rewrite should carry a visible
+watermark or label when copied. It does not today; the record is the
+disclosure mechanism.
+
 ## Not on this list, because it is decided
 
 - **Governing law is the ACT**, named rather than left at "Australia"

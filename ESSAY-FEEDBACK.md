@@ -1,12 +1,19 @@
 # Essay feedback — discovery, for 1.3
 
-**Status: DISCOVERY AND PLAN ONLY.** No code, no endpoint, no screens.
-Nothing here merges to `main` until 1.1.0 is approved.
+**Status: BUILT for 1.3.0** (26 September 2026): the endpoint is on,
+the panel sits on the Grades row, the capture and the mark loop write to
+0023, and the example rewrite is built and switched OFF until its scope
+limits are measured (see "THE EXAMPLE REWRITE" below). What follows was
+written as discovery and is kept as the record of why it is shaped this
+way.
 
 The feature as briefed: a student supplies their marking criteria and
 their essay draft; the AI returns an estimated band against those
 criteria and specific suggestions for improvement. **It must never
-write, rewrite, or complete the essay.**
+write, rewrite, or complete the essay.** *That last sentence was the
+brief. Jared reversed it on 18 September 2026, for one scoped action:
+see "THE EXAMPLE REWRITE". The comments themselves still never offer
+wording, and everything in §3 still holds for them.*
 
 Every figure below was computed by running the project's own constants
 out of `_shared/credits.ts` and `ai-text/config.ts`, bundled the way
@@ -1262,3 +1269,58 @@ Neither is engineering:
 2. **Gate C is Apple's queue.** Two days is the estimate; an issue is
    what makes it longer, and the device checklist exists to find the
    issues before Apple does.
+
+
+## THE EXAMPLE REWRITE (Jared, 18 September 2026) — built, switched off until measured
+
+**The ruling.** Default unchanged: located comments, no replacement
+wording. New, per suggestion: "show me an example rewrite", one passage
+at a time, on the student's request. Limits, enforced and tested:
+
+| rule | held by | refused |
+|---|---|---|
+| one sentence or one paragraph, never a section | `checkRewriteSpan`: verbatim in the essay, no paragraph break, at most `maxSpanWords`, at most `maxSpanShare` of the essay | **free**, before any spend (`span_too_long`) |
+| rework their wording, add no argument, fact, example or reference | the prompt, then `checkScope` (#142) over the reply: `escapes-span`, `fabricated-fact`, `exceeds-span` | **billed**, under `rewrite_refused` |
+| side by side, nothing inserted | the panel renders both; nothing writes the example anywhere | — |
+| never from the assignment prompt | the model gets the passage and the point's note only; the essay reaches our server for the check and goes no further | — |
+
+**The AI-use record** is on each assessment (`aiUse`), bounded at 50
+entries, and holds **no essay text**: when, what kind (feedback or an
+example), which problem, how many words. The privacy policy says text
+supplied to the AI features is "not in your planner", and copying the
+rewritten sentences into the record would make that false; what a
+disclosure needs is what was done, and the student has the essay. The
+panel shows it as text with a Copy button.
+
+**The price is derived, 3 credits**: the model reads at most 2,000
+characters (passage, note, definition) and may write 1,500 tokens, which
+is headroom for the essay model's reasoning. That ceiling is a guess,
+and `measure-rewrite.mjs` prints real completion tokens.
+
+**Why it is OFF.** `checkScope`'s parameters were designed on a synthetic
+control and have never run on real rewrites, and a refused rewrite is
+billed. The essay thresholds showed what an unmeasured check costs: a
+window that looked reasonable refused 65% of legitimate replies once it
+met the real opening sentence. So `ESSAY_REWRITE` is null in
+`ai-text/config.ts` (the server refuses `rewrite_unavailable`, free) and
+`ESSAY_REWRITE_ENABLED` is false in `src/essayFeedback.js` (the button is
+not drawn). **Switch-on is the essay order:** run
+
+    node scripts/measure-rewrite.mjs --dir <asap> --sets 1,2,8 --n 12 --keep <outside>/rewrites.json
+
+read the gate (at most 2% of the shipped prompt's rewrites refused at
+the chosen settings), set `ESSAY_REWRITE`, deploy the functions, and only
+then flip the client flag.
+
+**The claims changed in the same release** (LEGAL-REVIEW.md §5): Terms
+§2, the privacy policy's AI section and OpenAI row, the opt-in, and the
+reviewer note. The wording guard still bans any offer to write the
+essay; each mention of the scoped example is declared by phrase in
+`test-no-writing.mjs`, and a test asserts its copy says nothing is put
+into the essay and that the unit's rules apply.
+
+**No consent bump**: the rewrite sends part of an essay draft to the
+same company as essay feedback, so `ai-text:rewrite` maps to the
+existing `essay-draft` type and v8 covers it. v8 has not reached a
+student yet (the web promote is held for the panel), so the wording
+could still change without re-asking anyone.

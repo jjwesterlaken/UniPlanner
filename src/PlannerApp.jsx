@@ -121,6 +121,9 @@ import {
   ratedRow,
   onMarkRow,
   essayNoteFields,
+  withAiUse,
+  feedbackEntry,
+  rewriteEntry,
 } from "./essayFeedback.js";
 import { recordFeedback } from "./essayFeedbackStore.js";
 import { ESSAY_COPY } from "./essayCopy.js";
@@ -4630,6 +4633,7 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
                 onDelivered={(x) => essay.onDelivered(a, x)}
                 onRate={(x) => essay.onRate(a, x)}
                 onSave={(x) => essay.onSave(a, x)}
+                onRewrite={(x) => essay.onRewrite(a, x)}
               />
             </div>
           )}
@@ -6187,7 +6191,8 @@ export default function PlannerApp() {
         onDelivered: (assessment, { result, runId }) => {
           /* A TIMESTAMP, NOT A NOTE ID (ESSAY-FEEDBACK.md): the fact that
              we gave feedback outlives any note the student bins. */
-          patchItem("assessments", assessment.id, { essayFeedbackAt: nowISO() });
+          const at = nowISO();
+          patchItem("assessments", assessment.id, { essayFeedbackAt: at, aiUse: withAiUse(assessment, feedbackEntry({ at })) });
           recordFeedback({
             supabaseClient: supabase,
             row: deliveredRow({ id: uid(), userId: session.user.id, assessmentId: assessment.id, runId, result, tier: essayTier, credits: TASK_CREDITS.essay }),
@@ -6241,6 +6246,15 @@ export default function PlannerApp() {
           });
         },
         onMarkDismiss: (assessment) => patchItem("assessments", assessment.id, { markCompareAsked: nowISO() }),
+        /* THE AI-USE RECORD, no essay text: when, what kind, which
+           problem, how many words. Read from the CURRENT item, so a
+           sync landing mid-session cannot be overwritten by a stale
+           copy of the list. */
+        onRewrite: (assessment, { point }) => {
+          const cur = ((dataRef.current.semesters[dataRef.current.semester] || {}).assessments || []).find((x) => x.id === assessment.id) || assessment;
+          const words = String(point.quote || "").trim().split(/\s+/).filter(Boolean).length;
+          patchItem("assessments", assessment.id, { aiUse: withAiUse(cur, rewriteEntry({ at: nowISO(), deficiency: point.deficiency, spanWords: words })) });
+        },
       }
     : null;
 

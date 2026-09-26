@@ -66,6 +66,24 @@ export function validateRequest({ body, tasks, maxInputChars, practiceMaxCards, 
     return { ok: true, task, text: "", images };
   }
 
+  /* THE EXAMPLE REWRITE: the essay (for the SERVER's scope check, never
+     sent on), the passage a feedback point located, and that point's
+     note and code. Shape only here; whether the passage is one the
+     rewrite may touch is checkRewriteSpan's, in the handler, because it
+     needs the configured limits. */
+  if (task === "rewrite") {
+    if (!text.trim()) return bad("text is required for this task");
+    if (text.length > maxInputChars.essay) return bad("the essay is over the essay cap");
+    const span = typeof body.span === "string" ? body.span : "";
+    const note = typeof body.note === "string" ? body.note : "";
+    const deficiency = typeof body.deficiency === "string" ? body.deficiency : "";
+    if (!span.trim()) return bad("span is required for this task");
+    if (span.length + note.length + deficiency.length > maxInputChars.rewrite) return bad("the passage and note are over the rewrite cap");
+    if (deficiency.length > 64) return bad("deficiency is not a code");
+    return { ok: true, task, text, span, note, deficiency, images: null };
+  }
+  if (body.span !== undefined || body.note !== undefined) return bad("span and note are only accepted for rewrite");
+
   if (task === "essay") {
     if (!text.trim()) return bad("text is required for this task");
     /* No criteria, no feedback: the whole reading is "against the

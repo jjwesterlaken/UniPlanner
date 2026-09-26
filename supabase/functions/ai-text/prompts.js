@@ -16,6 +16,7 @@
 
 import { ESSAY_SYSTEM_PROMPT, essayUserMessage } from "../_shared/essayPrompt.js";
 import { finishEssayReply } from "../_shared/essayReply.js";
+import { REWRITE_SYSTEM_PROMPT, rewriteUserMessage, finishRewrite } from "../_shared/essayRewrite.js";
 
 const SHARED_RULES = [
   "You are helping a university student study.",
@@ -163,6 +164,12 @@ const SYSTEM = {
      SHARED_RULES: that prompt is complete as measured, and adding a
      line to it would be a configuration nobody measured. */
   essay: ESSAY_SYSTEM_PROMPT,
+
+  /* THE EXAMPLE REWRITE (Jared, 18 September 2026). One passage and the
+     point's note, never the criteria and never the rest of the essay:
+     "no path that generates text from the assignment prompt rather than
+     from their own writing" is held by what this message CAN carry. */
+  rewrite: REWRITE_SYSTEM_PROMPT,
 };
 
 /**
@@ -244,6 +251,12 @@ export function buildMessages(task, body) {
       { role: "user", content: essayUserMessage({ essay: String(body.text || ""), criteria: String(body.criteria || "") }) },
     ];
   }
+  if (task === "rewrite") {
+    return [
+      { role: "system", content: system },
+      { role: "user", content: rewriteUserMessage({ span: String(body.span || ""), note: body.note, deficiency: body.deficiency }) },
+    ];
+  }
   if (task === "merge") {
     /* One user message per section, in order, so the model sees the
        sequence rather than one blob it has to infer an order from. */
@@ -316,6 +329,10 @@ export function parseTaskResult(task, raw, context = {}) {
      reply. Everything it does is in _shared/essayReply.js. */
   if (task === "essay") {
     return finishEssayReply({ raw, essay: context.text || "", criteria: context.criteria || "", thresholds: context.thresholds || null });
+  }
+  if (task === "rewrite") {
+    if (!context.rewriteLimits) throw new Error("rewrite: no scope limits set");
+    return finishRewrite({ raw, essay: context.text || "", span: context.span || "", limits: context.rewriteLimits });
   }
   let parsed;
   try {

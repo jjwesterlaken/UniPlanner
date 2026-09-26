@@ -30,6 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { resolveEssayMessages } from "./lib/essay-prompt.mjs";
 import { productionModel } from "./lib/production-model.mjs";
+import { ESSAY_COPY } from "../src/essayCopy.js";
 import {
   normaliseWords,
   gramSet,
@@ -583,6 +584,22 @@ const DECLARED_SUBSTITUTION_LINES = {
      stable string rather than copy; the label is the complaint. */
   "rewrite-changed-meaning": "a stored reason id in essayFeedback.js and essayCopy.js, naming a complaint the student makes, never an offer",
   "The example rewrite changed my meaning": "the feedback form's complaint about an example rewrite, in the student's voice; it reports a problem with our output and offers nothing",
+
+  /* THE EXAMPLE REWRITE, RULED IN (Jared, 18 September 2026): one
+     passage the feedback pointed at, on request, side by side, never
+     inserted. So this guard's claim NARROWED rather than went away: no
+     copy may offer to write, rewrite or fix THE ESSAY, and every
+     mention of the scoped example is declared here by its exact phrase,
+     so a new sentence using the word still has to be read and argued
+     for. The test below it asserts the example's copy carries its two
+     limits. */
+  "Show an example rewrite": "the per-point button: one passage the feedback located, on request",
+  "it can show an example rewrite of one sentence or paragraph it pointed at": "the opt-in's description of the scoped example, which goes on to say nothing is put into the essay",
+  "asked for an example rewrite of one passage": "a line of the student's own AI-use record, for disclosing what was done; it describes a past request",
+  "Example rewrites aren't available yet.": "the refusal while the feature is switched off; it offers nothing",
+  "example-rewrite": "a stored kind id in the AI-use record (essayFeedback.js), not copy",
+  "ai-text:rewrite": "a route id in MATERIAL_ROUTES, not copy",
+  '"rewrite"': "the task id passed to the endpoint, quotes included so the declaration covers the bare id and no sentence",
 };
 
 test("NO USER-FACING COPY OFFERS TO WRITE, REWRITE OR FIX AN ESSAY", () => {
@@ -680,6 +697,13 @@ test("NO USER-FACING COPY OFFERS TO WRITE, REWRITE OR FIX AN ESSAY", () => {
       "constraint rests on:\n" + offenders.join("\n") +
       "\nIf a line SAYS WE DO NOT do it, declare it in DECLARED_SUBSTITUTION_LINES with that reason."
   );
+});
+
+test("THE EXAMPLE'S COPY CARRIES ITS LIMITS: one passage, nothing put into the essay, and the unit's rules", () => {
+  const said = [ESSAY_COPY.rewrite.note, ...ESSAY_COPY.optIn.bullets].join(" ");
+  assert.match(said, /isn't put into your essay|Nothing is put into your essay/);
+  assert.match(said, /unit's rules/);
+  assert.match(ESSAY_COPY.optIn.bullets.join(" "), /one sentence or paragraph/);
 });
 
 test("A DECLARED LINE IS CHECKED, not rubber-stamped", () => {

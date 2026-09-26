@@ -30,6 +30,7 @@ import { stageLine } from "../ai-notes/diagnostics.js";
 import { recordFailure } from "../_shared/failureLog.ts";
 import { validateRequest, checkTextAllowance, allowanceFraction } from "./guards.js";
 import { buildMessages, parseTaskResult } from "./prompts.js";
+import { checkRewriteSpan } from "../_shared/essayRewrite.js";
 import { openaiTextAdapter } from "./openai.ts";
 import {
   TASKS,
@@ -43,6 +44,7 @@ import {
   TEXT_TIERS,
   MAX_READING_CHUNKS,
   ESSAY_NO_WRITING,
+  ESSAY_REWRITE,
   ESSAY_MIN_CONSENT_VERSION,
 } from "./config.ts";
 
@@ -74,6 +76,9 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
      thresholds set, while production reads config.ts, where they are
      unset until measured. */
   const essayNoWriting = ("essayNoWriting" in deps ? deps.essayNoWriting : ESSAY_NO_WRITING) as typeof ESSAY_NO_WRITING;
+  /* The same arrangement for the example rewrite, whose scope limits are
+     null in config.ts until measured. */
+  const essayRewrite = ("essayRewrite" in deps ? deps.essayRewrite : ESSAY_REWRITE) as typeof ESSAY_REWRITE;
 
   let stage = "env_check";
   try {
@@ -204,8 +209,15 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
           The provider check above cannot see it: the companies did not
           change, the material did. An older build sends no version and is
           refused for this task only. */
-    if (task === "essay") {
-      if (!essayNoWriting) {
+    if (task === "rewrite" && !essayRewrite) {
+      logStage(stage, { rejected: "rewrite_unavailable" });
+      return errorResponse(stage, "rewrite_unavailable", "Example rewrites aren't available yet.", 503);
+    }
+    /* THE REWRITE SENDS PART OF AN ESSAY, so it needs the same consent
+       as essay feedback: essay drafts are v8's material, whichever task
+       carries them. */
+    if (task === "essay" || task === "rewrite") {
+      if (task === "essay" && !essayNoWriting) {
         logStage(stage, { rejected: "essay_unavailable" });
         return errorResponse(stage, "essay_unavailable", "Essay feedback isn't available yet.", 503);
       }
@@ -220,6 +232,22 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
           "consent_required",
           "Essay feedback needs your agreement to what is sent. Please reload the app and read what is sent before trying again.",
           403
+        );
+      }
+    }
+
+    /* ONE PASSAGE, NEVER A SECTION, refused free: nothing is spent yet. */
+    if (task === "rewrite" && essayRewrite) {
+      const span = checkRewriteSpan({ essay: valid.text, span: (valid as { span?: string }).span || "", limits: essayRewrite });
+      if (!span.ok) {
+        logStage(stage, { rejected: span.code, detail: span.detail });
+        return errorResponse(
+          stage,
+          span.code,
+          span.code === "span_too_long"
+            ? "An example rewrite works on one sentence or one paragraph at a time. Pick a shorter passage."
+            : "That request wasn't valid.",
+          400
         );
       }
     }
@@ -293,7 +321,13 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
     stage = "parse";
     let result: unknown;
     try {
-      result = parseTaskResult(task, raw, { text: valid.text, criteria: (valid as { criteria?: string }).criteria || "", thresholds: essayNoWriting });
+      result = parseTaskResult(task, raw, {
+        text: valid.text,
+        criteria: (valid as { criteria?: string }).criteria || "",
+        thresholds: essayNoWriting,
+        span: (valid as { span?: string }).span || "",
+        rewriteLimits: essayRewrite,
+      });
     } catch (err) {
       /* Billed anyway, deliberately: the tokens were generated and we
          were charged for them. Saying so is the same honesty ai-notes
@@ -318,6 +352,12 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          and under its own code, because it is a different fact from an
          unusable reply: the student can retry, and the copy says the
          retry charges again (ESSAY-FEEDBACK.md §3). */
+      /* THE REWRITE LEFT ITS PASSAGE, or added a fact. Billed, like every
+         generated reply, under its own code; the student is told the
+         attempt was charged and that trying again charges again. */
+      if ((err as { essayRefusal?: string }).essayRefusal === "scope") {
+        return jsonResponse({ ok: false, stage, code: "rewrite_refused", error: "The example went outside the passage, so we didn't show it." }, 422);
+      }
       if ((err as { essayRefusal?: string }).essayRefusal === "writing") {
         return jsonResponse({ ok: false, stage, code: "writing_refused", error: "The feedback came back in a form we don't show." }, 422);
       }

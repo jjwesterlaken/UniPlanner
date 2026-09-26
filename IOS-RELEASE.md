@@ -371,6 +371,13 @@ subscription.
 
 ### The reviewer note — DRAFTED HERE, not carried over
 
+**Corrected 26 September 2026.** The first draft said the feature
+"never rewrites the essay", which the 18 September ruling reversed, and
+it named an Assessments tab, a "Get feedback" button and a 3-credit
+price, none of which is what shipped. **If the example rewrite is still
+switched off in the build that is submitted, delete the sentence about
+it** rather than describe a control the reviewer cannot find.
+
 **There was no essay reviewer note in this repository before now**; the
 earlier one existed only in a conversation and is not evidence of
 anything. This is a fresh draft for Jared to approve, and it is short
@@ -378,14 +385,17 @@ on purpose — App Review Notes are read quickly and a long note invites
 questions.
 
 > UniPlanner's essay feedback gives a student written comments on
-> their own draft against their own marking criteria. It never
-> rewrites the essay and never predicts a grade; both are enforced in
-> the product, not just in the prompt.
+> their own draft against their own marking criteria. It never predicts
+> a grade. If the student asks, it can show an example rewrite of one
+> sentence or paragraph that a comment pointed at, beside their own; it
+> never writes or inserts into their work, and it keeps a record of the
+> help asked for so they can disclose it under their unit's rules. The
+> limits are enforced on our server, not just in the prompt.
 >
-> To try it: sign in with the account above, open **Assessments**,
-> pick any assessment, and use **Get feedback**. Paste any text you
-> like into the essay box and anything into the criteria box. The
-> account has free trial credits; one run costs 3.
+> To try it: sign in with the account above, open **Courses**, add an
+> assessment under **Grades**, and use **Get feedback on a draft** on
+> its row. Paste any text into the draft box and anything into the
+> criteria box. The account has free trial credits; one read costs 9.
 >
 > The essay is sent to our server, relayed to our AI provider for the
 > single request, and stored nowhere. Students are told this on the
