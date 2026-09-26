@@ -39,7 +39,7 @@ export const ESSAY_COPY = {
     bullets: [
       "This is new, and it can be wrong or miss things. Your marker's judgement is the one that counts.",
       "Your unit's rules on AI help apply, and they differ between units. Check yours before you use this on assessed work.",
-      "It points at what to work on in your own words. It doesn't write your essay.",
+      "It points at what to work on. If you ask, it can show an example rewrite of one sentence or paragraph it pointed at, next to yours. Nothing is put into your essay, and what you use is yours to disclose under your unit's rules.",
       "We're checking it against real marks. When a mark comes back for an essay you used it on, we'll ask once how we did, and you can skip that.",
       "After each read we'll ask whether it was useful. That's how we find out what to fix.",
     ],
@@ -75,6 +75,28 @@ export const ESSAY_COPY = {
     "off-criterion": "Not something these criteria ask for",
   },
   codeLabel: (code) => ESSAY_COPY.codeLabels[code] || "Something to look at",
+
+  /* THE EXAMPLE REWRITE (Jared, 18 September 2026): one passage, on
+     request, side by side, never inserted. The wording says what it is
+     and whose rules govern using it, and never offers to write the
+     essay. */
+  rewrite: {
+    button: "Show an example rewrite",
+    cost: (credits) => `An example costs ${credits} credits.`,
+    yours: "Your passage",
+    example: "One way it could read",
+    note: "An example only, in your words where possible. It isn't put into your essay, and if you use any of it, your unit's rules on AI help apply.",
+    recorded: "Added to your AI-use record for this assessment.",
+  },
+
+  record: "Your AI-use record",
+  recordCopy: "Copy",
+  recordCopied: "Copied",
+  recordHeading: (title) => `AI use on ${title || "this assessment"} (from UniPlanner)`,
+  recordFeedbackLine: (when) => `${when}: asked for AI feedback on a draft against my marking criteria.`,
+  recordRewriteLine: (when, words, problem) =>
+    `${when}: asked for an example rewrite of one passage${words ? ` (${words} words)` : ""}${problem ? `, about: ${problem}` : ""}.`,
+  recordEmpty: "No AI help recorded yet.",
 
   save: "Save to notes",
   saved: "Saved to your notes",

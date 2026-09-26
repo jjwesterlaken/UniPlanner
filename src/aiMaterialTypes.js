@@ -289,6 +289,12 @@ export const MATERIAL_ROUTES = {
      criteria go only with an essay and are disclosed in the same line:
      a type of its own would be a disclosure nobody reads separately. */
   "ai-text:essay": ["essay-draft"],
+  /* The example rewrite sends ONE PASSAGE of the essay and the point's
+     note to the model, and the essay itself to our server for the scope
+     check, which never sends it on. The same material v8 disclosed, to
+     the same company: no new type, so no bump. What it gives BACK is new,
+     and the screen and the policy say so. */
+  "ai-text:rewrite": ["essay-draft"],
 
   /* ---- ai-notes: one entry per adapter method ---- */
 

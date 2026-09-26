@@ -43,6 +43,8 @@ export const TASK_CREDITS = {
   merge: 2,
   /* On gpt-5.6-luna at a 4,000-token ceiling: ruled 25 September 2026. */
   essay: 9,
+  /* One example rewrite of one passage, on the same model. */
+  rewrite: 3,
 };
 
 /* MAX_INPUT_CHARS.essay in ai-text/config.ts: the draft and the

@@ -54,8 +54,9 @@ export const AI_TEXT_FAILURES = {
     detail: "Nothing was sent and nothing was charged.",
   },
 
-  /* THE FEEDBACK OFFERED WRITING, which this feature must never do, so
-     it was not shown. BOTH HALVES, the pages_unreadable rule: the attempt
+  /* THE FEEDBACK OFFERED WRITING, which the COMMENTS must never do (an
+     example rewrite is a separate request the student makes), so it
+     was not shown. BOTH HALVES, the pages_unreadable rule: the attempt
      was charged, because the tokens were generated, and a retry charges
      again. And it is not the student's fault, which is said. */
   writing_refused: {
@@ -63,6 +64,30 @@ export const AI_TEXT_FAILURES = {
     detail:
       "It started suggesting wording for your essay rather than pointing at what to work on, so we stopped it. " +
       "That attempt was charged, and trying again will be charged again. Nothing you did caused this.",
+  },
+
+  /* THE EXAMPLE REWRITE IS OFF until its scope limits are measured, and
+     the server refuses before anything is spent. */
+  rewrite_unavailable: {
+    title: "Example rewrites aren't available yet.",
+    detail: "Nothing was sent and nothing was charged.",
+  },
+
+  /* ONE PASSAGE AT A TIME, refused before anything was spent. */
+  span_too_long: {
+    title: "That passage is too long for an example.",
+    detail: "An example works on one sentence or one paragraph at a time. Nothing was sent and nothing was charged.",
+  },
+
+  /* THE EXAMPLE WENT OUTSIDE ITS PASSAGE, or added something that wasn't
+     in the essay, so it was not shown. NOT CHARGED (Jared, 26 September
+     2026): the check is ours, so its refusals are ours to absorb, and a
+     rewrite is charged only when one is delivered. */
+  rewrite_refused: {
+    title: "That example went outside your passage, so we didn't show it.",
+    detail:
+      "It reworked more than the passage you picked, or added something that isn't in your essay. " +
+      "Nothing was charged, and you can try again. Nothing you did caused this.",
   },
 
   /* The legibility refusal on photographed pages. BOTH HALVES, by

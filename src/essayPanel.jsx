@@ -20,7 +20,7 @@ import { Sparkles, X, Check, FileText } from "lucide-react";
 import { AiActionFrame, useTask } from "./aiText.jsx";
 import { TASK_CREDITS, ESSAY_MAX_CHARS } from "./aiTextLimits.js";
 import { ESSAY_COPY } from "./essayCopy.js";
-import { orderedPoints, reasonsFor, RATINGS, MAX_COMMENT_CHARS } from "./essayFeedback.js";
+import { orderedPoints, reasonsFor, RATINGS, MAX_COMMENT_CHARS, ESSAY_REWRITE_ENABLED, aiUseText } from "./essayFeedback.js";
 import { btnPrimary, btnGhost, inputCls, labelCls, uid } from "./PlannerApp.jsx";
 
 /**
@@ -55,7 +55,7 @@ export function EssayOptIn({ onAccept, onDecline }) {
  * else renders a band (§4): a test mounts it and asserts the disclaimer
  * is present wherever the band is.
  */
-export function EssayResult({ result }) {
+export function EssayResult({ result, rewrites = null }) {
   const points = orderedPoints(result);
   return (
     <div data-essay-result className="space-y-3">
@@ -78,13 +78,39 @@ export function EssayResult({ result }) {
           <div key={level} data-essay-severity={level}>
             <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-stone-500">{ESSAY_COPY.severityHeading[level]}</p>
             <ul className="space-y-2">
-              {group.map((p, i) => (
-                <li key={`${level}-${i}`} data-essay-point className="rounded-lg border border-stone-200 bg-surface p-2.5 text-sm">
-                  <p className="font-medium text-stone-800">{ESSAY_COPY.codeLabel(p.deficiency)}</p>
-                  <p className="mt-1 border-l-2 border-stone-300 pl-2 text-stone-600">&ldquo;{p.quote}&rdquo;</p>
-                  <p className="mt-1 text-stone-700">{p.note}</p>
-                </li>
-              ))}
+              {group.map((p, i) => {
+                const key = `${level}-${i}`;
+                const rw = rewrites && rewrites.state[key];
+                return (
+                  <li key={key} data-essay-point className="rounded-lg border border-stone-200 bg-surface p-2.5 text-sm">
+                    <p className="font-medium text-stone-800">{ESSAY_COPY.codeLabel(p.deficiency)}</p>
+                    <p className="mt-1 border-l-2 border-stone-300 pl-2 text-stone-600">&ldquo;{p.quote}&rdquo;</p>
+                    <p className="mt-1 text-stone-700">{p.note}</p>
+                    {/* THE EXAMPLE REWRITE: on request, one passage, side by
+                        side, never written anywhere. */}
+                    {rewrites && !rw && (
+                      <button data-essay-rewrite className="mt-1.5 text-xs font-medium text-stone-500 hover:u-accent-text" disabled={rewrites.busy} onClick={() => rewrites.request(p, key)}>
+                        {ESSAY_COPY.rewrite.button} · {ESSAY_COPY.rewrite.cost(rewrites.credits)}
+                      </button>
+                    )}
+                    {rw && rw.rewrite && (
+                      <div data-essay-side-by-side className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded border border-stone-200 p-2">
+                          <p className="text-xs font-medium text-stone-500">{ESSAY_COPY.rewrite.yours}</p>
+                          <p className="mt-0.5 text-stone-700">{p.quote}</p>
+                        </div>
+                        <div className="rounded border border-stone-200 p-2">
+                          <p className="text-xs font-medium text-stone-500">{ESSAY_COPY.rewrite.example}</p>
+                          <p data-essay-example className="mt-0.5 text-stone-700">{rw.rewrite}</p>
+                        </div>
+                        <p className="text-xs text-stone-500 sm:col-span-2">
+                          {ESSAY_COPY.rewrite.note} {ESSAY_COPY.rewrite.recorded}
+                        </p>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         );
@@ -154,9 +180,41 @@ export function RatingFields({ state, set, rewriteRequested = false, allowCommen
   );
 }
 
+/** The AI-use record for this assessment, to copy into a disclosure. */
+export function AiUseRecord({ assessment }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  if (!Array.isArray(assessment.aiUse) || assessment.aiUse.length === 0) return null;
+  const text = aiUseText({ assessment, copy: ESSAY_COPY, formatDate: (iso) => new Date(iso).toLocaleDateString("en-AU") });
+  if (!open) {
+    return (
+      <button data-ai-use-open className="text-xs font-medium text-stone-500 hover:u-accent-text" onClick={() => setOpen(true)}>
+        {ESSAY_COPY.record}
+      </button>
+    );
+  }
+  return (
+    <div data-ai-use-record className="space-y-1">
+      <textarea readOnly className={inputCls} rows={Math.min(8, assessment.aiUse.length + 2)} value={text} />
+      <button
+        className={btnGhost}
+        onClick={() => {
+          try {
+            navigator.clipboard.writeText(text).then(() => setCopied(true), () => {});
+          } catch (e) {
+            /* no clipboard: the text is selectable in the box */
+          }
+        }}
+      >
+        {copied ? ESSAY_COPY.recordCopied : ESSAY_COPY.recordCopy}
+      </button>
+    </div>
+  );
+}
+
 const blankRating = () => ({ rating: null, reasons: [], sendComment: false, comment: "" });
 
-function FeedbackCapture({ onSend }) {
+function FeedbackCapture({ onSend, rewriteRequested = false }) {
   const c = ESSAY_COPY.capture;
   const [state, setState] = useState(blankRating());
   const [status, setStatus] = useState(null); // null | "sent" | "failed"
@@ -164,11 +222,11 @@ function FeedbackCapture({ onSend }) {
   return (
     <div data-essay-capture className="space-y-2 border-t border-stone-200 pt-2">
       <p className="text-sm font-medium text-stone-700">{c.question}</p>
-      <RatingFields state={state} set={setState} />
+      <RatingFields state={state} set={setState} rewriteRequested={rewriteRequested} />
       {state.rating && (
         <button
           className={btnGhost}
-          onClick={async () => setStatus((await onSend(state)) ? "sent" : "failed")}
+          onClick={async () => setStatus((await onSend({ ...state, rewriteRequested })) ? "sent" : "failed")}
         >
           {c.send}
         </button>
@@ -183,9 +241,13 @@ function FeedbackCapture({ onSend }) {
  * Supabase client, so nothing here is relayed through a component that
  * only passes it on (the `folders` ReferenceError).
  */
-export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, onDelivered, onRate, onSave }) {
+export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, onDelivered, onRate, onSave, onRewrite = null }) {
   const { applyFraction } = allowanceApi;
   const { run, busy, error } = useTask(session, applyFraction);
+  /* One passage at a time: a second request waits for the first. The
+     examples live here, beside the essay, and nowhere else. */
+  const rewriteTask = useTask(session, applyFraction);
+  const [rewriteState, setRewriteState] = useState({});
   const [open, setOpen] = useState(false);
   const [essay, setEssay] = useState("");
   const [criteria, setCriteria] = useState("");
@@ -211,6 +273,7 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
     setRunId(null);
     setSaved(false);
     setLocal(null);
+    setRewriteState({});
   };
 
   const header = (
@@ -242,12 +305,14 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
     setRunId(id);
     setResult(out);
     setSaved(false);
+    setRewriteState({});
     onDelivered({ result: out, runId: id });
   };
 
   return (
     <div data-essay-panel className="mt-2 space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-2.5">
       {header}
+      <AiUseRecord assessment={assessment} />
       <AiActionFrame title={ESSAY_COPY.panelTitle} task="essay" api={allowanceApi} error={error} busy={busy}>
         {!result && (
           <div className="space-y-2">
@@ -271,7 +336,29 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
       </AiActionFrame>
       {result && (
         <div className="space-y-3">
-          <EssayResult result={result} />
+          <EssayResult
+            result={result}
+            rewrites={
+              ESSAY_REWRITE_ENABLED && onRewrite
+                ? {
+                    credits: TASK_CREDITS.rewrite,
+                    busy: rewriteTask.busy,
+                    state: rewriteState,
+                    request: async (p, key) => {
+                      const out = await rewriteTask.run("rewrite", { text: essay, span: p.quote, note: p.note, deficiency: p.deficiency });
+                      if (!out) return;
+                      setRewriteState((s) => ({ ...s, [key]: { rewrite: out.rewrite } }));
+                      onRewrite({ point: p, runId });
+                    },
+                  }
+                : null
+            }
+          />
+          {rewriteTask.error && (
+            <AiActionFrame title={ESSAY_COPY.rewrite.button} task="rewrite" api={allowanceApi} error={rewriteTask.error} busy={false}>
+              {null}
+            </AiActionFrame>
+          )}
           <div className="flex justify-end">
             {saved ? (
               <span className="text-xs text-stone-500">
@@ -290,7 +377,7 @@ export function EssayFeedbackPanel({ session, assessment, allowanceApi, optIn, o
               </button>
             )}
           </div>
-          <FeedbackCapture key={runId} onSend={(state) => onRate({ result, runId, ...state })} />
+          <FeedbackCapture key={runId} rewriteRequested={Object.keys(rewriteState).length > 0} onSend={(state) => onRate({ result, runId, ...state })} />
         </div>
       )}
     </div>

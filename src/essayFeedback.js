@@ -182,3 +182,57 @@ export function essayNoteFields({ result, assessment, copy, pageId }) {
     blocks: [{ id: `${pageId}:t0`, type: "text", html: html.join(""), body: text.join("\n") }],
   };
 }
+
+/* ---------- the example rewrite, client side ---------- */
+
+/* THE CLIENT HALF OF A TWO-FLAG SWITCH. The server refuses the rewrite
+   until ESSAY_REWRITE is set in ai-text/config.ts; this decides only
+   whether the button is DRAWN. The order is forced: measure, set the
+   server's limits, deploy the functions, THEN let this reach students
+   (the web promote, the app build). A button drawn over a server that
+   refuses is a control that fails after the tap. ON since 26 September
+   2026, with the server's limits in the same change. */
+export const ESSAY_REWRITE_ENABLED = true;
+
+/* ---------- the AI-use record (Jared, 18 September 2026) ----------
+
+   "A per-assessment record of which parts were rewritten, exportable by
+   the student, so they can disclose AI assistance accurately under their
+   unit's rules."
+
+   IT HOLDS NO ESSAY TEXT, deliberately. The privacy policy says text
+   supplied to the AI features is not stored, "not in your planner and
+   not on our server", and copying the rewritten sentences in here would
+   make that false. What it records is what a disclosure asks for: when,
+   what kind of help, which problem, and how much of the essay. The
+   student has the essay; the record says what was done to it.
+
+   BOUNDED: an assessment keeps its newest MAX_AI_USE_ENTRIES. Store
+   state, not history, and this is about one assessment. */
+export const MAX_AI_USE_ENTRIES = 50;
+
+export function withAiUse(assessment, entry) {
+  const prior = Array.isArray(assessment && assessment.aiUse) ? assessment.aiUse : [];
+  return [...prior, entry].slice(-MAX_AI_USE_ENTRIES);
+}
+
+export const feedbackEntry = ({ at }) => ({ at, kind: "feedback" });
+export const rewriteEntry = ({ at, deficiency, spanWords }) => ({
+  at,
+  kind: "example-rewrite",
+  code: typeof deficiency === "string" ? deficiency.slice(0, 64) : null,
+  words: Number.isInteger(spanWords) ? spanWords : null,
+});
+
+/** The record as plain text, for the student to copy into a disclosure. */
+export function aiUseText({ assessment, copy, formatDate }) {
+  const entries = (assessment && Array.isArray(assessment.aiUse) ? assessment.aiUse : []).filter(Boolean);
+  const lines = [copy.recordHeading(assessment && assessment.title)];
+  for (const e of entries) {
+    const when = formatDate(e.at);
+    if (e.kind === "feedback") lines.push(copy.recordFeedbackLine(when));
+    else if (e.kind === "example-rewrite") lines.push(copy.recordRewriteLine(when, e.words, e.code ? copy.codeLabel(e.code) : null));
+  }
+  if (entries.length === 0) lines.push(copy.recordEmpty);
+  return lines.join("\n");
+}

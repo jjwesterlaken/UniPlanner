@@ -167,6 +167,24 @@ test("A FACT THE STUDENT USED ELSEWHERE IN THE ESSAY IS NOT A FABRICATION", () =
   assert.ok(!kinds.includes("fabricated-fact"), `the student's own 1979 citation was called a fabrication: ${JSON.stringify(r.violations)}`);
 });
 
+test("A WORD THE STUDENT WROTE IN LOWER CASE IS NOT A NEW NAME WHEN THE REWRITE CAPITALISES IT (26 September)", () => {
+  const essay = "Many people use the internet every day for school. Some rely on it too much.";
+  const span = "Many people use the internet every day for school.";
+  const r = checkScope({ essay, span, rewrite: "Many people use the Internet each day for school." });
+  assert.ok(r.ok, `the student's own word read as invented: ${JSON.stringify(r.violations)}`);
+  /* THE CONTROL: a name the essay never has, in any case, still fires. */
+  const c = checkScope({ essay, span, rewrite: "Many people, as Turkle notes, use the internet for school." });
+  assert.ok(c.violations.some((v) => v.kind === "fabricated-fact"), "an invented name no longer fires");
+});
+
+test("A NUMBER THE STUDENT SPELLED OUT IS NOT A NEW FIGURE WHEN THE REWRITE WRITES IT AS DIGITS", () => {
+  const essay = "It took three days to get there. Nobody complained.";
+  const span = "It took three days to get there.";
+  assert.ok(checkScope({ essay, span, rewrite: "Getting there took 3 days." }).ok, "the student's own number read as invented");
+  const c = checkScope({ essay, span, rewrite: "Getting there took 4 days." });
+  assert.ok(c.violations.some((v) => v.kind === "fabricated-fact"), "a changed number no longer fires");
+});
+
 test("THE PARAMETERS ARE PARAMETERS, and the escape run is adjustable without editing the module", () => {
   /* Both constants are design choices of a synthetic test rather than
      measured thresholds, which is stated in the module. This pins that

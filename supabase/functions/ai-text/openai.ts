@@ -8,6 +8,7 @@
 
 import { modelFor } from "../_shared/model.ts";
 import { essayFeedbackSchema } from "../_shared/essaySchema.js";
+import { rewriteSchema } from "../_shared/essayRewrite.js";
 
 export const openaiTextAdapter = {
   name: "openai",
@@ -59,7 +60,11 @@ export const openaiTextAdapter = {
            that hold (essaySchema.js). The Gate A reads measured it this
            way, so it ships this way. */
         response_format:
-          task === "essay" ? { type: "json_schema", json_schema: essayFeedbackSchema() } : { type: "json_object" },
+          task === "essay"
+            ? { type: "json_schema", json_schema: essayFeedbackSchema() }
+            : task === "rewrite"
+              ? { type: "json_schema", json_schema: rewriteSchema() }
+              : { type: "json_object" },
         /* Never absent. Without it the model may emit its full
            16,384-token output on every call, which is what would set the
            price of the product -- see MAX_TOKENS in config.ts, where each
