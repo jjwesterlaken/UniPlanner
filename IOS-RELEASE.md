@@ -249,7 +249,9 @@ off by default and nothing in `src/purchases.js` turns it on.
 
 **Still declared as NOT collected**, flatly: Location, Financial Info,
 Health & Fitness, Contacts, Browsing History, Search History,
-**Usage Data** (there is no analytics of any kind), and Sensitive
+**Usage Data** (no product analytics, no SDK, and nothing records what
+a student taps or looks at — the one `Analytics` purpose, from 1.3.0,
+is a rating or mark a student chooses to send; see 3a), and Sensitive
 Info. Financial Info stays NOT collected and is worth saying out loud:
 the payment is taken by Apple, we never see a card, and nothing in the
 app handles one. **Data Used to Track You: none** — which is also what
@@ -335,7 +337,20 @@ It is **not** `Sensitive Info` — Apple's list there is race, religion,
 sexual orientation, pregnancy, disability, biometrics, union
 membership and political opinion. An academic mark is none of them.
 
-### AND ONE SENTENCE IN THIS DOCUMENT BECOMES FALSE
+### The comment box and the AI-use record — the same row, nothing new
+
+**The optional comment** on a rating is User Content the student types
+and chooses to send, with the box saying it is stored and trains
+nothing. It may quote their essay. `Other User Content`, linked, no
+tracking, **Analytics** — the rating's row and purpose.
+
+**The AI-use record** (when and what kind of AI help was asked for on an
+assessment, no essay text) lives in the planner and syncs with it, like
+marks and notes: `Other User Content`, **App Functionality**, already
+declared. It exists so the student can disclose, which is the student's
+own use.
+
+### AND ONE SENTENCE IN THIS DOCUMENT BECOMES FALSE — edited 26 September 2026
 
 Section 3 says: *"**Usage Data** (there is no analytics of any kind)"*.
 
@@ -401,6 +416,86 @@ questions.
 > single request, and stored nowhere. Students are told this on the
 > consent screen before the first use, which you will see on that
 > first run.
+
+---
+
+## 3b. The App Store Connect text for 1.3.0 — paste-ready
+
+Drafted 26 September 2026 for Jared to approve. **Wording is Grace's**
+wherever a student reads it (What's New); the reviewer note and the
+questionnaire answers are facts and are Jared's.
+
+### Version
+
+`1.3.0`. Not 1.2.0 (see 3a).
+
+### What's New
+
+Written against **1.1.0, the version live on the App Store**. If iOS
+1.2.0 was approved in between, drop the second paragraph's items that
+shipped in it.
+
+> **Feedback on your essays.** Paste a draft and your marking criteria
+> on any assessment in Grades, and get comments that quote your own
+> words and say what to work on first. It reads your draft against the
+> criteria you give it, and it never predicts your mark. When your mark
+> comes back, we'll ask once how we did.
+>
+> Also new: edit your AI lecture notes, a ? on every study tool with
+> a worked example, photographed readings with the price shown before
+> you start, and a way to tell us about problems or ideas from Settings.
+> Text fields no longer zoom on iPhone, and dark mode no longer shows
+> white bars when you scroll past the end.
+
+**If the example rewrite is switched on in the submitted build**, add
+to the first paragraph: *"If you ask, it can show an example rewrite
+of one sentence it pointed at, beside yours — nothing is put into your
+essay."* Otherwise leave it out: What's New must not describe a
+control the reviewer cannot find.
+
+### Reviewer notes
+
+The essay note is in section 3 above (corrected 26 September). Put it
+**after** the account credentials and the existing notes for the AI
+lecture notes and purchases, which are unchanged from 1.1.0.
+
+### Age rating — the answers, against Apple's live questionnaire
+
+Read from *Age ratings values and definitions* on 26 September 2026.
+**There is no question about AI or generated content**, so the answers
+follow from what the app does, not from how it does it.
+
+| Question | Answer | Why |
+|---|---|---|
+| Parental Controls | No | none in the app |
+| Age Assurance | No | none in the app |
+| Unrestricted Web Access | **No** | links go to our own pages (privacy, terms, support) and Stripe's checkout; there is no browser |
+| User-Generated Content | **No** | everything a student writes is private to their account; nothing is distributed to other users |
+| Social Media | No | |
+| Messaging and Chat | **No** | the AI features are not communication between users |
+| Advertising | No | |
+| Mature themes, sexuality, violence, medical or wellness, chance-based | None / No | the app supplies none of it. The AI works only on what the student pastes, and returns comments on it to that student alone |
+
+That should keep the **4+** rating the app already has. The one row a
+reviewer could read differently is **User-Generated Content**: a
+student's own notes are content they generate, but Apple's definition
+is about *broad distribution*, which the app has none of. Answer No.
+
+### Guidelines checked for the rewrite (the 18 September order)
+
+**No App Review Guideline addresses academic integrity, cheating or
+AI-written schoolwork** (checked 26 September 2026). The ones that
+apply are **5.1.1** and **5.1.2(i)**, on sharing personal data with a
+third-party AI, which the consent screen naming Groq and OpenAI already
+answers, and which v8's line about essays being sent as written
+extends. Nothing further is needed for review. The integrity question
+is a legal one, and it is LEGAL-REVIEW.md §5.
+
+### App Privacy
+
+Section 3a: one row gains the `Analytics` purpose; nothing else
+changes. **Play's data-safety form takes the same edit** so the two
+labels agree (ANDROID-RELEASE.md §2).
 
 ---
 
