@@ -156,6 +156,14 @@ There are two ways in, and both end on the same place:
       **"Essay draft, <today's date>"**, reading **no weight**. Your
       grade for the course should not change. Type a mark into that row
       and tap away: the mark question should appear.
+- [ ] **Linking a draft to the real assessment.** Run a draft from the
+      AI tab under a course, then add the real assessment (say "Essay 1",
+      with its weight) on Grades. The draft's row should now offer
+      **This draft is for [Essay 1] · Link**. Link it: the draft's row
+      disappears, and Essay 1 says it **includes feedback from a draft
+      you linked**. Type a mark on Essay 1 and tap away: the mark
+      question appears there. On a course with no real assessment, the
+      draft's row should say to add the real one first.
 - [ ] **From Courses → Grades**, on any assessment row: **Get feedback on
       a draft**.
 

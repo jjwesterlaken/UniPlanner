@@ -690,6 +690,118 @@ async function run() {
     assert.ok(!back.stored.includes("held draft text"), "THE DRAFT OR ITS QUOTES REACHED THE STORED PLANNER");
   });
 
+  /* LINKING A DRAFT TO THE REAL ASSESSMENT, in the real app, by clicks.
+     The draft carries a run; the real assessment has none of its own.
+     After linking, a mark on the REAL row must ask the mark question,
+     and the answer must be recorded against the DRAFT's id — the id the
+     run's rows name — because assessment_feedback is insert-only and
+     those rows are never moved. */
+  await test("A LINKED DRAFT'S FEEDBACK MEETS THE REAL MARK: link, enter the mark there, and the answer is recorded against the draft's runs", async () => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+    const now = new Date().toISOString();
+    await page.addInitScript(
+      ({ ref, userId, tabKey, meta, now }) => {
+        const hour = Math.floor(Date.now() / 1000) + 3600;
+        localStorage.setItem(
+          `sb-${ref}-auth-token`,
+          JSON.stringify({
+            access_token: "test-token",
+            token_type: "bearer",
+            expires_at: hour,
+            expires_in: 3600,
+            refresh_token: "test-refresh",
+            user: { id: userId, email: "render-probe@example.test", aud: "authenticated", role: "authenticated" },
+          })
+        );
+        localStorage.setItem("uni-planner-mode", "light");
+        if (!sessionStorage.getItem("seeded")) {
+          sessionStorage.setItem("seeded", "1");
+          localStorage.setItem(tabKey, "courses");
+          localStorage.setItem(
+            "uni-planner-v1",
+            JSON.stringify({
+              semester: "Semester 1",
+              semesters: {
+                "Semester 1": {
+                  courses: [{ id: "c-hist", name: "HIST1001", updatedAt: now }],
+                  assessments: [
+                    { id: "real-essay", course: "HIST1001", title: "Essay 1", w: 40, kind: "assignment", updatedAt: now },
+                    {
+                      id: "draft-essay",
+                      course: "HIST1001",
+                      title: "Essay draft, 27 Sep",
+                      kind: "assignment",
+                      essayPlaceholder: true,
+                      essayFeedbackAt: now,
+                      aiUse: [{ at: now, kind: "feedback" }],
+                      updatedAt: now,
+                    },
+                  ],
+                },
+              },
+              meta: { ...meta, essayOptIn: { version: 1, at: now } },
+            })
+          );
+        }
+      },
+      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, meta: CONSENTED_META, now }
+    );
+    const feedbackRows = [];
+    await page.route(`${SUPABASE_HOST}/**`, async (route) => {
+      const r = route.request();
+      const url = r.url();
+      if (url.includes("/rest/v1/assessment_feedback") && r.method() === "POST") {
+        try {
+          const body = JSON.parse(r.postData() || "null");
+          for (const row of [].concat(body || [])) feedbackRows.push(row);
+        } catch {
+          /* recorded as nothing */
+        }
+        return route.fulfill({ status: 201, contentType: "application/json", body: "[]" });
+      }
+      if (url.includes("/auth/v1/user")) return route.fulfill(json({ id: USER_ID, email: "render-probe@example.test" }));
+      if (url.includes("/auth/v1/")) return route.fulfill(json({ access_token: "test-token", user: { id: USER_ID } }));
+      if (url.includes("/rest/v1/profiles")) return route.fulfill(json(PROFILE_ROW));
+      if (url.includes("/rest/v1/ai_usage")) return route.fulfill(json({ user_id: USER_ID, credits_used: 12 }));
+      return route.fulfill(json([]));
+    });
+    await page.goto("file://" + path.join(OUT, "index.html"));
+    await page.waitForSelector("[data-placeholder-link]", { timeout: 15_000 });
+    const options = await page.$$eval("[data-placeholder-link-target] option", (o) => o.map((x) => x.textContent));
+    await page.selectOption("[data-placeholder-link-target]", "real-essay");
+    await page.click("[data-placeholder-link-go]");
+    await page.waitForSelector("[data-linked-note]", { timeout: 5_000 });
+    const afterLink = await page.evaluate(() => ({
+      draftRowGone: !/Essay draft, /.test(document.body.innerText),
+      stored: JSON.parse(localStorage.getItem("uni-planner-v1") || "{}"),
+    }));
+    const mark = page.locator('input[aria-label="Mark for Essay 1"]');
+    await mark.fill("72");
+    await page.locator("h2").first().click();
+    await page.waitForSelector("[data-mark-compare]", { timeout: 5_000 });
+    await page.click('[data-mark-compare] [data-essay-rating="partly"]');
+    await page.click("[data-mark-send]");
+    await page.waitForTimeout(700);
+    await ctx.close();
+
+    const sem = (afterLink.stored.semesters || {})["Semester 1"] || {};
+    const real = (sem.assessments || []).find((x) => x.id === "real-essay") || {};
+    const draft = (sem.assessments || []).find((x) => x.id === "draft-essay") || {};
+    const onMark = feedbackRows.filter((r) => r && r.occasion === "on_mark");
+    assert.deepEqual(errors, [], `the link path threw:\n        ${errors.join("\n        ")}`);
+    assert.deepEqual(options.slice(1), ["Essay 1"], `the draft offered ${JSON.stringify(options)} as targets`);
+    assert.ok(afterLink.draftRowGone, "the draft is still on the Grades list after linking");
+    assert.ok(draft.deletedAt, "the draft was not tombstoned, so a second device would bring it back");
+    assert.deepEqual(real.linkedFrom, ["draft-essay"], "the real assessment does not record the linked draft");
+    assert.ok(Array.isArray(real.aiUse) && real.aiUse.length === 1, "the draft's AI-use record did not move to the real assessment");
+    assert.equal(onMark.length, 1, `${onMark.length} on_mark rows; the answer covers exactly the one linked draft`);
+    assert.equal(onMark[0].assessment_id, "draft-essay", `the answer was recorded against ${onMark[0].assessment_id}, not the draft whose runs it joins`);
+    assert.equal(onMark[0].rating, "partly");
+  });
+
   await test("every tab was actually visited, so none of the above passed over nothing", () => {
     assert.deepEqual(visited, ids, `visited ${visited.length} of ${ids.length} tabs`);
   });

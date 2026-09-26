@@ -39,6 +39,11 @@ import {
   MAX_REASONS,
   placeholderAssessment,
   hasWeight,
+  linkPlaceholder,
+  linkTargets,
+  markAnswerIds,
+  MAX_LINKED_DRAFTS,
+  MAX_AI_USE_ENTRIES,
 } from "../src/essayFeedback.js";
 import { ESSAY_COPY, copyCovers } from "../src/essayCopy.js";
 import { DEFICIENCIES, SEVERITY_LEVELS, PREDICTION_PATTERNS } from "../src/essayPoints.js";
@@ -538,6 +543,45 @@ await test("AN EXAMPLE REWRITE, CLICKED: one passage and its note go, side by si
 });
 
 /* ---------------- the AI tab's entry point ---------------- */
+
+await test("LINKING A DRAFT carries its feedback and AI-use record onto the real assessment, and the mark answer then covers both", () => {
+  const draft = { id: "d1", course: "HIST1001", title: "Essay draft, 27 Sep", essayPlaceholder: true, essayFeedbackAt: "2026-09-27T01:00:00Z", aiUse: [{ at: "2026-09-27T01:00:00Z", kind: "feedback" }] };
+  const real = { id: "a1", course: "HIST1001", title: "Essay 1", w: 40, aiUse: [{ at: "2026-09-20T00:00:00Z", kind: "feedback" }] };
+  const patch = linkPlaceholder(draft, real);
+  assert.deepEqual(patch.linkedFrom, ["d1"]);
+  assert.deepEqual(plain(patch.aiUse.map((e) => e.at)), ["2026-09-20T00:00:00Z", "2026-09-27T01:00:00Z"], "the record was not merged oldest first");
+  const linked = { ...real, ...patch, mark: 72 };
+  assert.equal(showMarkCompare(linked), true, "a real assessment with a linked draft does not ask the mark question");
+  assert.deepEqual(markAnswerIds(linked), ["d1"], "the answer is not recorded against the draft whose runs it joins");
+  assert.deepEqual(markAnswerIds({ ...linked, essayFeedbackAt: "x" }), ["a1", "d1"], "an assessment with its own runs AND a linked draft records both");
+  assert.equal(showMarkCompare({ ...real, mark: 72 }), false, "an assessment with no feedback of its own or linked asks anyway");
+  /* Linking twice does not duplicate, and a draft already asked is not carried. */
+  assert.deepEqual(linkPlaceholder(draft, linked).linkedFrom, ["d1"]);
+  assert.deepEqual(linkPlaceholder({ ...draft, id: "d2", markCompareAsked: "x" }, real).linkedFrom, [], "a draft already answered was carried and would be recorded twice");
+  /* Bounded. */
+  const many = { ...real, linkedFrom: Array.from({ length: MAX_LINKED_DRAFTS }, (_, i) => `old${i}`), aiUse: Array.from({ length: MAX_AI_USE_ENTRIES }, (_, i) => ({ at: `2026-01-${String((i % 28) + 1).padStart(2, "0")}`, kind: "feedback" })) };
+  const bounded = linkPlaceholder(draft, many);
+  assert.equal(bounded.linkedFrom.length, MAX_LINKED_DRAFTS);
+  assert.equal(bounded.linkedFrom[bounded.linkedFrom.length - 1], "d1", "the newest link was the one dropped");
+  assert.equal(bounded.aiUse.length, MAX_AI_USE_ENTRIES);
+  /* Only a real, live assessment is a target. */
+  assert.equal(linkPlaceholder(draft, { ...draft, id: "d3" }), null, "a draft was linked to another draft");
+  assert.equal(linkPlaceholder(real, draft), null, "a real assessment was treated as a draft");
+  assert.equal(linkPlaceholder(draft, { ...real, deletedAt: "x" }), null, "a draft was linked to a deleted assessment");
+});
+
+await test("LINK TARGETS are the draft's own course's live, real assessments, and nothing else", () => {
+  const draft = { id: "d1", course: "HIST1001", essayPlaceholder: true };
+  const list = [
+    draft,
+    { id: "a1", course: "HIST1001", title: "Essay 1" },
+    { id: "a2", course: "PHIL2002", title: "Report" },
+    { id: "a3", course: "HIST1001", title: "Old", deletedAt: "x" },
+    { id: "d2", course: "HIST1001", essayPlaceholder: true },
+  ];
+  assert.deepEqual(linkTargets(draft, list).map((a) => a.id), ["a1"]);
+  assert.deepEqual(linkTargets({ ...draft, course: "" }, [{ id: "n1", course: "" }, { id: "n2", course: "X" }]).map((a) => a.id), ["n1"], "No course drafts link within No course");
+});
 
 await test("A PLACEHOLDER IS WEIGHTLESS, DATED, UNDER THE CHOSEN COURSE, and the grade maths skips it", () => {
   const a = placeholderAssessment({ id: "d1", course: "HIST1001", date: "27 Sep", copy: ESSAY_COPY });
