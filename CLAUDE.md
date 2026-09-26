@@ -883,12 +883,16 @@ global this way — `AudioContext`/`webkitAudioContext` is a real
 platform feature test, and `purchases.js` and `appReview.js` ask
 Capacitor properly.
 
-### `window.storage` — SAME CLASS, WHOLE PLANNER. Priority: before the closed test.
+### `window.storage` — SAME CLASS, WHOLE PLANNER. DELETED, 27 September 2026.
 
 Found by sweeping for the class rather than the instance, 18 September
-2026. **Not fixed**, deliberately — it is not a change to make inside a
-bug fix about audio — and recorded with a priority rather than as a
-line, because it is a worse failure than anything fixed this week.
+2026, and left out of that audio fix deliberately — it was not a change
+to make inside a bug fix about audio. **Deleted on 27 September 2026**,
+for 1.3.0: `store` reads and writes localStorage and nothing else, and
+`test-local-only.mjs` walks the signed-out real build with a
+`window.storage` already on the page whose get finds nothing, requiring
+it untouched and the edit in localStorage. Against the old store that
+walk goes red on both. The rest of this section is kept as the reason.
 
 `store` in `PlannerApp.jsx` (`get`, `set` and `del`, around lines
 222/243/260) prefers `window.storage` over `localStorage`
@@ -4829,11 +4833,8 @@ Everything else on this list has been applied and verified; the record
 of what each migration did is kept below the line because the ordering
 lessons are load-bearing, not because the work is outstanding.
 
-1. **Delete `store`'s `window.storage` branch** — the highest-priority
-   item on this list and the only one that can lose a user's data. See
-   *"`window.storage` — SAME CLASS, WHOLE PLANNER"* above for what it
-   costs and why the fix is a deletion rather than a guard. Before the
-   closed test.
+1. ~~Delete `store`'s `window.storage` branch~~ — **done, 27 September
+   2026** (see *"`window.storage` — SAME CLASS, WHOLE PLANNER"* above).
 2. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
    Vault secrets migration 0004 reads. Until then the retention sweep
    only runs opportunistically and the periods the privacy policy states

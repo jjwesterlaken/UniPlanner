@@ -234,19 +234,22 @@ import {
 
 const STORAGE_KEY = "uni-planner-v1";
 
-// Works in two places: the Claude preview (window.storage) and a hosted
-// copy on your phone (the browser's own localStorage). Everything is guarded
-// so it never crashes if a store is unavailable.
+/* The planner lives in localStorage, and ONLY there.
+
+   This used to prefer a `window.storage` object when one existed — a
+   hook for the preview the app was first built in. Nothing sets that
+   name today, and that was the problem: it is a statement about this
+   week's dependencies, and `window.Capacitor` arrived in the web bundle
+   as the side effect of a billing library's import. A `window.storage`
+   whose get found nothing would load an empty planner, the debounced
+   save would then write there, and a signed-out student's real planner
+   — which lives only on the device — would never be read again. The
+   branch was deleted rather than guarded: there is no preview to
+   support. test-local-only.mjs puts a window.storage on the page and
+   requires it untouched. Every method is still guarded so a blocked or
+   full store never crashes the app. */
 const store = {
   async get(key) {
-    try {
-      if (typeof window !== "undefined" && window.storage && window.storage.get) {
-        const r = await window.storage.get(key);
-        return r && r.value ? r.value : null;
-      }
-    } catch (e) {
-      /* fall through */
-    }
     try {
       return window.localStorage.getItem(key);
     } catch (e) {
@@ -261,15 +264,6 @@ const store = {
   async set(key, val) {
     const bytes = typeof val === "string" ? val.length : 0;
     try {
-      if (typeof window !== "undefined" && window.storage && window.storage.set) {
-        await window.storage.set(key, val);
-        return { ok: true };
-      }
-    } catch (e) {
-      /* fall through to localStorage rather than reporting — the
-         preview host being absent isn't a failure the user can act on */
-    }
-    try {
       window.localStorage.setItem(key, val);
       return { ok: true };
     } catch (e) {
@@ -277,14 +271,6 @@ const store = {
     }
   },
   async del(key) {
-    try {
-      if (typeof window !== "undefined" && window.storage && window.storage.delete) {
-        await window.storage.delete(key);
-        return;
-      }
-    } catch (e) {
-      /* fall through */
-    }
     try {
       window.localStorage.removeItem(key);
     } catch (e) {
