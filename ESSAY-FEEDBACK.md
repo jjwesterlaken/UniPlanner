@@ -1308,6 +1308,22 @@ right things.
 
 ### The query
 
+> **SUPERSEDED, 27 September 2026: run `supabase/checks/essay-quality-weekly.sql`
+> instead** (RELEASE-1.3.1.md §1). The two queries below are kept as the
+> reasoning, and they have two defects the checks file fixes and
+> `scripts/test-essay-quality.mjs` pins:
+>
+> - **Do not create the `essay_marks` view.** A view made in the SQL editor
+>   lands in `public`, where the platform's default privileges grant it to
+>   `anon` (0008), and it runs with its owner's rights — so it would serve
+>   every student's ratings and marks through PostgREST with RLS never
+>   consulted. The checks file uses CTEs and creates nothing.
+> - **The join over-counts.** It pairs an `on_mark` row with EVERY
+>   `delivered` row for the assessment, so a redraft counts one mark once
+>   per run, and a linked draft (one mark written as one row per id it
+>   covers) counts it again. On the test fixture it returns 4 rows for 2
+>   shared marks.
+
 Two of them, and the second is the one that answers the question.
 
 ```sql
