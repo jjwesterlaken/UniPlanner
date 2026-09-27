@@ -4067,8 +4067,22 @@ rotate rather than revoke where something depends on it.
 
 The places a secret lives, as of now: Supabase → Edge Functions →
 Secrets holds `OPENAI_API_KEY`, `GROQ_API_KEY`, `DEEPGRAM_API_KEY`,
-`AI_NOTES_SWEEP_SECRET` and the service role key. None of them appear
-in this repository, which is why the list has to be written down.
+`AI_NOTES_SWEEP_SECRET`, `RESEND_API_KEY`, `ERROR_DIGEST_SECRET`, the
+Stripe and RevenueCat secrets and the service role key — and **one
+credential lives outside Edge Functions entirely**: Supabase →
+Authentication → Emails → SMTP Settings holds a Resend key as its
+password. None of them appear in this repository, which is why the list
+has to be written down (the grep `Deno.env.get(` under
+`supabase/functions/` is the check for the function half).
+
+**The two Resend keys must come from the SAME Resend account**, the one
+`send.uniplannerapp.com` is verified in. On 27 September 2026 they did
+not: re-verifying the domain in the digest's account invalidated the
+other account's verification, and every signup and reset email failed
+with `550 domain is not verified` while the digest carried on sending.
+EMAIL-SETUP.md has the rule and the checklist. It went unnoticed
+because Auth's SMTP failures are logged by Supabase Auth, which nothing
+of ours reads — the digest sees Edge Function failures only.
 
 ## A client-minted id crossing into a typed column
 

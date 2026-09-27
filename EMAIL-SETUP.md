@@ -13,6 +13,50 @@ the code side is already done and is confirmed at the end.
 
 ---
 
+## ⚠️ ONE Resend account. Every Resend key comes from it.
+
+**Rule (27 September 2026):** everything that sends from
+`send.uniplannerapp.com` uses an API key from **one** Resend account,
+the one the domain is verified in. Today that is two things:
+
+| Sender | Where the key is configured |
+|---|---|
+| Supabase Auth: signup confirmation, password reset | Supabase → Authentication → Emails → SMTP Settings → **Password** |
+| The error digest (`error-digest` Edge Function) | Supabase → Edge Functions → Secrets → **`RESEND_API_KEY`** |
+
+**Why, from the outage it caused.** Recovery and signup emails failed
+from about 14:05 on 27 September (Sydney) with Resend's
+`550 domain is not verified`:
+- **The Auth SMTP key was from a different Resend account/team.** It
+  was not the account where `send.uniplannerapp.com` had been
+  re-verified on 21 September for the digest.
+- **Verifying the domain in the second account published a new DKIM
+  record, which invalidated the first account's verification.** A
+  domain can be verified in one Resend account at a time, so a second
+  account's verification is not additive.
+- **The fix was to point Auth SMTP at a key from the current account.**
+  No DNS change and no code change. **Verified the same day:** a
+  password-reset email reached a real inbox.
+
+It took six days to surface, and nothing about the digest's own sending
+looked wrong in that time, because the digest was the account that
+*was* verified. **Two senders on two accounts is a configuration that
+works until one of them re-verifies**, and it fails in the one that
+didn't.
+
+**Before creating, rotating or revoking a Resend key:**
+- Open Resend → **Domains** and confirm `send.uniplannerapp.com` is
+  **Verified in the account you are in**.
+- Update **both** rows in the table above. A key rotated in one place
+  and not the other is this outage again.
+- Revoke the old key only after both senders have been tested with the
+  new one: a signup or reset reaching a real inbox, and a digest run.
+- **Never "Add Domain" for `send.uniplannerapp.com` in any other Resend
+  account or team.** If the dashboard offers to, you are in the wrong
+  account.
+
+---
+
 ## ⚠️ Read this before touching DNS
 
 **The domain already has an SPF record, for Google Workspace.**
@@ -188,6 +232,7 @@ with this app before**, on the live site.
 
 | What happens | Where the fault is |
 |---|---|
+| **`550 domain is not verified`** in Supabase's Auth logs, and the app shows an "error sending … email" message | **The SMTP key belongs to a Resend account the domain is not verified in** — the 27 September outage. Check which account the key came from (rule at the top). Not DNS, not code. |
 | No email at all, no error in the app | DNS not verified, or the API key is wrong. Check Resend's **Logs** — if the send appears there, the problem is delivery; if it does not, Supabase never sent it. |
 | Email lands in spam | DNS incomplete — usually DKIM missing, or no DMARC record. Not a code problem. |
 | Email arrives from `supabase.io` | Custom SMTP is not actually enabled, or was saved without the domain verified. |
@@ -197,6 +242,72 @@ with this app before**, on the live site.
 
 Step 2 succeeding tells you DNS and SMTP are right. Everything after that
 is the app.
+
+
+---
+
+## Detecting an Auth email failure — PROPOSED, not built
+
+**Why the 27 September outage went unnoticed.** The error digest reads
+`function_errors`, which only Edge Functions write. Auth's SMTP send is
+done by Supabase Auth itself, and its failures go to the Auth logs in
+the dashboard, which nothing of ours reads. The student was not silent.
+`resetPasswordForEmail` and `signUp` return a 500, and the app shows
+the message raw. But that error went to the student and nowhere else.
+
+**What does not work, so nobody reaches for it:**
+- **Resend webhooks.** A `550` refuses the message at SMTP submission,
+  so Resend never creates an email object and there is no event to send.
+  Webhooks see what Resend accepted, and this was refused.
+- **Querying Auth logs from the database.** They are not in Postgres.
+  Reading them means Supabase's Management API with a personal access
+  token, which is another credential with account-wide scope, stored
+  somewhere a scheduled job can reach it.
+
+**The proposal: two checks, because they catch different people.**
+
+1. **A canary, which catches it before any student does.** A scheduled
+   job calls Auth's `/recover` for a dedicated canary account, on an
+   address we own, with the anon key, exactly as the app does.
+   - **A non-2xx is the failure.** SMTP failures surface as a 500 at
+     that endpoint, so the check needs no inbox access.
+   - It records a `function_errors` row for the digest.
+   - It **alerts immediately on the transition to failing**, one email
+     sent through `RESEND_API_KEY`, which is independent of Auth SMTP
+     and was the half still working on 27 September. It sends nothing
+     while the state holds and one email on recovery, so a broken day is
+     two emails rather than twenty-four.
+   - **Hourly:** a locked-out student is the most urgent failure this
+     app has.
+   - **Costs:** 24 Auth emails a day into a canary inbox, well inside
+     the raised rate limit. And a canary account that exists only to be
+     reset, holding nothing.
+   - **Depends on the pg_cron/pg_net wiring** (CLAUDE.md, pending item
+     2), same as the digest.
+
+2. **Client-side reporting, which gives evidence about real students.**
+   When `signUp` or `resetPassword` fails with a server error (5xx, or
+   a message matching Auth's "error sending … email"), the app writes a
+   `client_errors` row (0010), using a fixed code (`auth_email_failed`)
+   and which flow it was.
+   - **It never includes the email address**, and the student-facing
+     wording is unchanged.
+   - It does not leak whether an account exists. The row reaches only
+     us, and the student sees what they saw before.
+   - **The digest then has to read `client_errors` too**, which it does
+     not today.
+
+**Recommended: both, canary first.** The canary would have caught this
+outage within the hour. Client reporting would have caught it at the
+first student, but only once somebody read the next digest.
+
+**Structural alternative, for later:** Supabase's *Send Email* Auth
+hook. Auth hands the message to an Edge Function, which sends it
+through Resend's API. Failures then land in `function_errors` like
+everything else, and there is one Resend key instead of two. The cost is
+owning the templates in code, and a function outage becomes an email
+outage. It is worth it once there is a second reason to own the
+templates.
 
 ---
 
