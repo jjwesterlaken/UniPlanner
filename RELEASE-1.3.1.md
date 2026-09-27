@@ -9,7 +9,7 @@ for that.
 | # | Item | State |
 |---|---|---|
 | 1 | Weekly essay-feedback quality queries | **Built.** `supabase/checks/essay-quality-weekly.sql`, pinned by `scripts/test-essay-quality.mjs` |
-| 2 | Cost against credits, per task | **Ruled GO, 27 September 2026.** The ceiling half is measured below. The real-spend half (0024, `ai_task_costs`, no user id and no content) is being built |
+| 2 | Cost against credits, per task | **Ruled GO, 27 September 2026.** The ceiling half is measured below. The real-spend half (0024, `ai_task_costs`, no user id and no content) is **built**: migration 0024, `supabase/checks/ai-cost-weekly.sql`, and the deploy order below |
 | 3 | Placeholder linking | Shipped in 1.3.0 (#161), with the plain control. **Grace restyles it.** Listed so it stays visible |
 
 ---
@@ -149,7 +149,7 @@ This is the `TYPICAL_SUMMARY_OUTPUT_TOKENS` lesson: that one was
 modelled at 2,800 and measured at 475. **A price set from an unmeasured
 number is a guess, however carefully it was derived.**
 
-**Proposed for 1.3.1:**
+**Built for 1.3.1, as proposed** (ruled go 27 September 2026):
 - **Migration 0024, `ai_task_costs`. It widens, so it goes before the
   deploy.** One row per provider call: `day` (date, not timestamp),
   `task`, `medium` (text or photos), `model`, `prompt_tokens`,
@@ -177,8 +177,40 @@ number is a guess, however carefully it was derived.**
   and has its own measured constants. Transcription is priced per
   audio minute, so token counts are the wrong instrument there.
 
-**The ruling needed:** go or no-go on 0024 plus the `ai-text` change
-for 1.3.1. The cheaper alternative is logging `usage` on the existing
-stage line. That costs one line and no migration, but it lands in the
-platform log viewer, which no weekly query can read. That is the
-problem 0022 was written to solve, so the table is recommended.
+**What differs from the proposal:**
+- **Every exit after the provider records a row, including free
+  refusals.** A free refusal still spent money, and that is exactly
+  what the weekly query needs to see.
+- **Rows store the cost in dollars and the value of a credit at write
+  time.** The weekly query then needs no constants, and a later price
+  change does not rewrite history.
+- **Retention is 90 days**, purged by the error digest's daily run.
+
+**The deploy order.** 0024 widens, so:
+1. **Apply `0024_ai_task_costs.sql`** in the SQL editor. It must end
+   with `0024 applied and verified: 8 properties checked`. If it raises
+   instead, nothing was changed.
+2. **Deploy the functions:** `ai-text` writes the rows and
+   `error-digest` purges them.
+3. **Verify** with one real AI action, then:
+   ```sql
+   select day, task, medium, model, prompt_tokens, completion_tokens, usd, credits_charged, outcome
+     from public.ai_task_costs order by id desc limit 5;
+   ```
+   Expect `usd` to be non-null and `credits_charged` to equal what the
+   action cost on screen.
+
+Deploying the functions first is safe but blind. Every record would
+fail with "function does not exist", which is logged and swallowed by
+design, so no row would be written and nothing would look wrong.
+
+**Weekly:** `supabase/checks/ai-cost-weekly.sql` runs the same way as
+the essay queries. It has three blocks:
+- `by_task`: requests, outcomes, median, p95 and max real cost,
+  median and worst cover on delivered requests, and the share of
+  requests near the output ceiling.
+- `totals`: spent against charged credit value, over the last 7 and
+  28 days.
+- `free_outcomes`: what the free refusals cost us.
+
+**Read `requests` before any cover.**
