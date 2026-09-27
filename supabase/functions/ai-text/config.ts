@@ -279,6 +279,16 @@ export const ratesForTask = (task: Task) => {
   return rates;
 };
 
+/* The model a CALL runs on, and that model's rates: what 0024's cost
+   row prices the provider's real token counts with. Per medium first
+   (a photo request is on the vision model whatever its task), then per
+   task — the same order modelFor decides in, so the row can never be
+   priced at the rates of a model the adapter did not call. */
+export const ratesForCall = ({ hasImages, task }: { hasImages: boolean; task: Task }) =>
+  hasImages
+    ? { model: modelFor({ hasImages: true, task }), in: VISION_USD_PER_1M_INPUT, out: VISION_USD_PER_1M_OUTPUT }
+    : { model: modelFor({ hasImages: false, task }), ...ratesForTask(task) };
+
 /* THE PHOTO-ONLY TASKS carry no text, so text caps mean nothing for
    them; each is priced from its OWN measured batch input at the vision
    model's rates, plus its output ceiling.

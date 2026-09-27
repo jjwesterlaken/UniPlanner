@@ -32,9 +32,12 @@ import { validateRequest, checkTextAllowance, allowanceFraction } from "./guards
 import { buildMessages, parseTaskResult } from "./prompts.js";
 import { checkRewriteSpan } from "../_shared/essayRewrite.js";
 import { openaiTextAdapter } from "./openai.ts";
+import { costArgs, recordTaskCost } from "../_shared/taskCost.js";
+import { USD_PER_CREDIT } from "../_shared/credits.ts";
 import {
   TASKS,
   photoBatchCreditsFor,
+  ratesForCall,
   CRITERIA_PHOTO_ON,
   MAX_TOKENS,
   MAX_INPUT_CHARS,
@@ -315,6 +318,33 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
     /* ---- provider: the only step that spends money ---- */
     stage = "provider";
     logStage(stage, { task, maxTokens: MAX_TOKENS[task] });
+    const hasImages = Array.isArray(body.images) && body.images.length > 0;
+    /* WHAT THIS CALL REALLY COST (0024). The adapter reports the
+       provider's own usage; every way out of the handler from here on
+       records one row — the free refusals included, because they spent
+       money too, and that is exactly what the weekly query is for. No
+       account and no content goes in (taskCost.js), and the write can
+       never fail the request: it resolves whatever happens, and a
+       failure is logged beside the rest. */
+    let spend: { model: string; usage: unknown; finishReason: string | null } | null = null;
+    const rates = ratesForCall({ hasImages, task });
+    const noteCost = async (outcome: string, credits: number) => {
+      const recorded = await recordTaskCost(
+        admin,
+        costArgs({
+          task,
+          hasImages,
+          spend,
+          fallbackModel: rates.model,
+          maxTokens: MAX_TOKENS[task],
+          rates,
+          usdPerCredit: USD_PER_CREDIT,
+          credits,
+          outcome,
+        })
+      );
+      if (!recorded.ok) logFailure("cost_record", recorded.error, { task, outcome });
+    };
     let raw: string;
     try {
       raw = await summarizer.complete({
@@ -322,14 +352,18 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
         maxTokens: MAX_TOKENS[task],
         apiKey: env("OPENAI_API_KEY")!,
         // Which MEDIUM this is, not which task — see openai.ts.
-        hasImages: Array.isArray(body.images) && body.images.length > 0,
+        hasImages,
         task,
+        onUsage: (s: typeof spend) => {
+          spend = s;
+        },
       });
     } catch (err) {
       // Nothing is billed. The call failed, so there is nothing to
       // charge for — unlike ai-notes, where transcription has already
       // succeeded and been paid for by the time summarising runs.
       logFailure(stage, err, { task });
+      await noteCost("provider_failed", 0);
       return errorResponse(stage, "ai_failed", "The AI couldn't finish that. Please try again.", 502);
     }
 
@@ -357,8 +391,10 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          Returned BEFORE the billing below, which every other task keeps. */
       if (task === "rewrite") {
         if ((err as { essayRefusal?: string }).essayRefusal === "scope") {
+          await noteCost("rewrite_refused", 0);
           return jsonResponse({ ok: false, stage, code: "rewrite_refused", error: "The example went outside the passage, so we didn't show it." }, 422);
         }
+        await noteCost("ai_failed", 0);
         return errorResponse(stage, "ai_failed", "The AI couldn't finish that. Please try again.", 502);
       }
       /* AND THE SAME FOR ESSAY FEEDBACK'S NO-WRITING REFUSAL (Jared, 26
@@ -367,6 +403,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          offered wording and our check stopped it, so the student is not
          charged. Returned before the billing below. */
       if ((err as { essayRefusal?: string }).essayRefusal === "writing") {
+        await noteCost("writing_refused", 0);
         return jsonResponse({ ok: false, stage, code: "writing_refused", error: "The feedback came back in a form we don't show." }, 422);
       }
       /* NO CRITERIA IN THE PHOTOS: free, like the refusals above. The
@@ -383,12 +420,14 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          parts were missed, so they can retake exactly those. */
       if ((err as { criteriaPartial?: { criteria: string; missed: string[] } }).criteriaPartial) {
         const partial = (err as { criteriaPartial: { criteria: string; missed: string[] } }).criteriaPartial;
+        await noteCost("criteria_partial", 0);
         return jsonResponse(
           { ok: false, stage, code: "criteria_partial", error: "Only part of the criteria could be read.", criteria: partial.criteria, missed: partial.missed },
           422
         );
       }
       if ((err as { noCriteria?: boolean }).noCriteria) {
+        await noteCost("no_criteria_found", 0);
         return jsonResponse({ ok: false, stage, code: "no_criteria_found", error: "We couldn't find marking criteria in those photos." }, 422);
       }
       /* A legibility refusal is the ONE parse-stage outcome still billed
@@ -404,6 +443,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
         if (!charged.ok) logFailure("billing", charged.error, { task, cost: allowance.cost, after: "pages_unreadable" });
         const countedFail = await billPhotoPages(admin, { userId, profile, pages: photoPages });
         if (!countedFail.ok) logFailure("billing", countedFail.error, { pages: photoPages, after: "pages_unreadable" });
+        await noteCost("pages_unreadable", allowance.cost);
         return jsonResponse(
           { ok: false, stage, code: "pages_unreadable", error: "Some pages couldn't be read.", pages: unreadable },
           422
@@ -417,6 +457,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
          every shipped build already has, so no older build tells a
          student they were charged. This retires `ai_failed_charged`,
          which used to say exactly that. */
+      await noteCost("ai_failed", 0);
       return errorResponse(stage, "ai_failed", "The AI couldn't finish that. Please try again.", 502);
     }
 
@@ -435,6 +476,7 @@ export async function handle(req: Request, deps: Record<string, unknown> = {}) {
        spend the cap on work that was never billed. */
     const counted = await billPhotoPages(admin, { userId, profile, pages: photoPages });
     if (!counted.ok) logFailure(stage, counted.error, { pages: photoPages });
+    await noteCost("delivered", allowance.cost);
 
     return jsonResponse({
       ok: true,

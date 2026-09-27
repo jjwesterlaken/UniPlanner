@@ -160,7 +160,7 @@ const USER = "11111111-1111-4111-8111-111111111111";
  * A fake database that records the order of everything, so the ordering
  * property can be asserted rather than read.
  */
-function makeAdmin({ tier = "ai", creditsUsed = 0, photoPagesUsed = 0, usageError = null, billError = null, trace } = {}) {
+function makeAdmin({ tier = "ai", creditsUsed = 0, photoPagesUsed = 0, usageError = null, billError = null, costError = null, trace } = {}) {
   const seen = [];
   let banked = creditsUsed;
   let pages = photoPagesUsed;
@@ -208,6 +208,17 @@ function makeAdmin({ tier = "ai", creditsUsed = 0, photoPagesUsed = 0, usageErro
      unnoticed, which is the "a fake that returns nothing makes
      everything downstream agree" trap in a new costume. */
   const rpc = async (fn, args) => {
+    /* THE COST ROW (0024) IS NOT A BILL, so it is recorded under its own
+       op: every "was anything billed?" assertion in this file filters on
+       op === "rpc", and a diagnostic written on a free refusal must not
+       read as a charge. `costError` makes the write fail, for the test
+       that a failed cost row cannot fail the request. */
+    if (fn === "record_ai_task_cost") {
+      seen.push({ op: "cost", fn, payload: args });
+      if (trace) trace.push("db:cost");
+      if (costError) return { data: null, error: costError };
+      return { data: null, error: null };
+    }
     seen.push({ op: "rpc", fn, payload: args });
     if (trace) trace.push(`db:rpc:${fn}`);
     if (billError) return { data: null, error: billError };
@@ -2187,6 +2198,184 @@ async function main() {
     assert.equal(sent.response_format.json_schema.name, "essay_rewrite");
     assert.equal(sent.response_format.json_schema.strict, true);
     assert.equal(sent.max_completion_tokens, 1500);
+  });
+
+  /* ---------- what a request REALLY cost (0024) ---------- */
+
+  const taskCost = await import(toUrl(path.join(rootDir, "supabase/functions/_shared/taskCost.js")));
+  const SPEND = { model: "reported-model", usage: { prompt_tokens: 1200, completion_tokens: 300, completion_tokens_details: { reasoning_tokens: 40 } }, finishReason: "stop" };
+  /* A summarizer that reports usage the way openai.ts does, then answers. */
+  const reporting = (reply, spend = SPEND) => ({
+    async complete(args) {
+      args.onUsage && args.onUsage(spend);
+      return typeof reply === "string" ? reply : JSON.stringify(reply);
+    },
+  });
+  const costsOf = (admin) => admin.seen.filter((x) => x.op === "cost").map((x) => x.payload);
+  const billedOf = (admin) => admin.seen.filter((x) => x.op === "rpc" && x.payload && "p_credits" in x.payload).reduce((n, x) => n + x.payload.p_credits, 0);
+
+  await test("EVERY WAY OUT AFTER THE PROVIDER RECORDS ONE COST ROW, and its credits are exactly what was billed", async () => {
+    const cases = [
+      ["delivered", { task: "explain", topic: "t", text: "hi" }, reporting(EXPLAIN_OK)],
+      ["provider_failed", { task: "explain", topic: "t", text: "hi" }, { async complete() { throw new Error("upstream 500"); } }],
+      ["ai_failed", { task: "explain", topic: "t", text: "hi" }, reporting("not json")],
+      ["pages_unreadable", { task: "summarise", images: [IMG, IMG] }, reporting({ unreadable: [2] })],
+      ["delivered", { task: "summarise", images: [IMG] }, reporting(SUMMARY_OK)],
+    ];
+    const seenOutcomes = new Set();
+    for (const [outcome, body, summarizer] of cases) {
+      const admin = makeAdmin();
+      await run(body, { supabaseAdmin: admin, summarizer });
+      const rows = costsOf(admin);
+      assert.equal(rows.length, 1, `${outcome} (${body.task}) wrote ${rows.length} cost rows, not 1`);
+      assert.equal(rows[0].p_outcome, outcome);
+      assert.equal(rows[0].p_task, body.task);
+      assert.equal(rows[0].p_medium, body.images ? "photos" : "text");
+      assert.equal(rows[0].p_credits_charged, billedOf(admin), `${outcome}: the cost row says ${rows[0].p_credits_charged} credits, the bill says ${billedOf(admin)}`);
+      assert.equal(rows[0].p_max_tokens, cfg.MAX_TOKENS[body.task]);
+      seenOutcomes.add(outcome);
+    }
+    /* Non-vacuity: a free path and a billed path both ran, or "credits
+       equal the bill" could be true only because both are always 0. */
+    assert.ok(seenOutcomes.has("delivered") && seenOutcomes.has("provider_failed") && seenOutcomes.has("pages_unreadable"));
+  });
+
+  await test("NO EXIT AFTER THE PROVIDER SKIPS THE COST ROW: every return from there to the outer catch records one first", async () => {
+    /* The behavioural test above drives five exits. The free refusals
+       (writing, rewrite scope, partial and missing criteria) each have
+       their own return, and a new one added later is exactly where a
+       row would be forgotten — so this reads them all. Comments are
+       stripped first: the ones in this region name the outcomes. */
+    const src = fs
+      .readFileSync(path.join(rootDir, "supabase/functions/ai-text/index.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    const from = src.indexOf('stage = "provider";');
+    const to = src.indexOf('return errorResponse(stage, "server_error"', from);
+    assert.ok(from > 0 && to > from, "could not find the provider stage and the outer catch");
+    const lines = src.slice(from, to).split("\n");
+    const exits = lines.map((l, i) => [l, i]).filter(([l]) => /^\s*return\b/.test(l));
+    assert.ok(exits.length >= 9, `found ${exits.length} exits after the provider, expected at least 9`);
+    for (const [line, i] of exits) {
+      const before = lines.slice(Math.max(0, i - 3), i).join("\n");
+      assert.match(before, /await noteCost\(/, `this exit records no cost row: ${line.trim()}`);
+    }
+  });
+
+  await test("A REQUEST REFUSED BEFORE THE PROVIDER WRITES NO COST ROW: nothing was spent", async () => {
+    const admin = makeAdmin({ tier: "ai", creditsUsed: 1_000_000 });
+    const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: reporting(EXPLAIN_OK) });
+    assert.equal(res.status, 403, "the control did not refuse at the allowance");
+    assert.equal(costsOf(admin).length, 0, "a request that never reached the provider was recorded as a cost");
+  });
+
+  await test("THE ROW CARRIES THE PROVIDER'S OWN COUNTS AND PRICES THEM AT THE CALLED MODEL'S RATES", async () => {
+    for (const [body, reply, hasImages] of [
+      [{ task: "explain", topic: "t", text: "hi" }, EXPLAIN_OK, false],
+      [{ task: "summarise", images: [IMG] }, SUMMARY_OK, true],
+    ]) {
+      const admin = makeAdmin();
+      await run(body, { supabaseAdmin: admin, summarizer: reporting(reply) });
+      const [row] = costsOf(admin);
+      const rates = cfg.ratesForCall({ hasImages, task: body.task });
+      assert.deepEqual([row.p_prompt_tokens, row.p_completion_tokens, row.p_reasoning_tokens], [1200, 300, 40]);
+      assert.equal(row.p_model, "reported-model", "the model the ADAPTER reported was replaced by a guess");
+      assert.ok(Math.abs(row.p_usd - (1200 * rates.in + 300 * rates.out) / 1e6) < 1e-12, `${body.task}: priced at the wrong rates`);
+      assert.equal(row.p_usd_per_credit, credits.USD_PER_CREDIT);
+      assert.equal(row.p_finish_reason, "stop");
+    }
+    /* The two media are really priced differently, or the loop above proves nothing about the split. */
+    assert.notDeepEqual(cfg.ratesForCall({ hasImages: true, task: "summarise" }), cfg.ratesForCall({ hasImages: false, task: "summarise" }));
+  });
+
+  await test("A MISSING USAGE BLOCK IS UNKNOWN, NEVER FREE: null counts and null cost", async () => {
+    const admin = makeAdmin();
+    await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: { async complete() { throw new Error("socket closed"); } } });
+    const [row] = costsOf(admin);
+    assert.equal(row.p_prompt_tokens, null);
+    assert.equal(row.p_completion_tokens, null);
+    assert.equal(row.p_usd, null, "an unknown cost was recorded as a number");
+    assert.equal(row.p_model, cfg.ratesForCall({ hasImages: false, task: "explain" }).model, "with no report, the row names the model the handler chose");
+  });
+
+  await test("A FAILED COST WRITE CANNOT FAIL THE REQUEST: the student still gets the result they paid for", async () => {
+    const admin = makeAdmin({ costError: { message: "function record_ai_task_cost does not exist" } });
+    const res = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: admin, summarizer: reporting(EXPLAIN_OK) });
+    assert.equal(res.status, 200);
+    assert.ok((await res.json()).result, "the result was lost over a diagnostic");
+    assert.equal(billedOf(admin), cfg.TASK_CREDITS.explain, "billing changed because the cost write failed");
+    /* And a write that THROWS rather than returning an error. */
+    const throwing = makeAdmin();
+    const rpc = throwing.rpc;
+    throwing.rpc = async (fn, args) => (fn === "record_ai_task_cost" ? Promise.reject(new Error("boom")) : rpc(fn, args));
+    const res2 = await run({ task: "explain", topic: "t", text: "hi" }, { supabaseAdmin: throwing, summarizer: reporting(EXPLAIN_OK) });
+    assert.equal(res2.status, 200, "a throwing cost write took down the request");
+  });
+
+  await test("NO ACCOUNT AND NO CONTENT REACH THE ROW: the argument names are the closed list, and no value is the user or their text", async () => {
+    const SECRET_TEXT = "my private essay sentence about photosynthesis";
+    const admin = makeAdmin();
+    await run({ task: "explain", topic: "t", text: SECRET_TEXT }, { supabaseAdmin: admin, summarizer: reporting(EXPLAIN_OK) });
+    const [row] = costsOf(admin);
+    assert.deepEqual(Object.keys(row), [...taskCost.COST_ARG_NAMES]);
+    for (const v of Object.values(row)) {
+      assert.notEqual(v, USER, "the user id reached the cost row");
+      assert.ok(!String(v).includes("photosynthesis"), "the student's text reached the cost row");
+    }
+    /* And the builder reads only named fields: passing an id through does nothing. */
+    const built = taskCost.costArgs({ task: "explain", hasImages: false, spend: SPEND, maxTokens: 1, rates: { in: 1, out: 1 }, usdPerCredit: 0.001, credits: 1, outcome: "delivered", user_id: USER, text: SECRET_TEXT });
+    assert.deepEqual(Object.keys(built), [...taskCost.COST_ARG_NAMES]);
+    /* The names are the migration's, in its order. */
+    const sql = fs.readFileSync(path.join(rootDir, "supabase/migrations/0024_ai_task_costs.sql"), "utf8");
+    const declared = [...sql.match(/create or replace function public\.record_ai_task_cost\(([\s\S]*?)\)\s*returns/)[1].matchAll(/\b(p_[a-z_]+)\b/g)].map((m) => m[1]);
+    assert.deepEqual(declared, [...taskCost.COST_ARG_NAMES], "the RPC's parameters and the builder's arguments disagree, so every write would fail silently");
+  });
+
+  await test("THE ADAPTER REPORTS USAGE EVEN WHEN IT THEN THROWS on a truncated reply, which was still paid for", async () => {
+    const out = await build({ entryPoints: [path.join(rootDir, "supabase/functions/ai-text/openai.ts")], bundle: true, format: "esm", platform: "neutral", write: false });
+    const f = path.join(tmpDir, "adapter-usage.mjs");
+    fs.writeFileSync(f, out.outputFiles[0].text);
+    const { openaiTextAdapter } = await import(toUrl(f));
+    const call = async (finish) => {
+      let spend = null;
+      let threw = false;
+      try {
+        await openaiTextAdapter.complete({
+          messages: [{ role: "user", content: "x" }],
+          maxTokens: 10,
+          apiKey: "sk-test",
+          onUsage: (s) => (spend = s),
+          fetchImpl: async () => ({ ok: true, json: async () => ({ usage: { prompt_tokens: 7, completion_tokens: 10 }, choices: [{ message: { content: "{" }, finish_reason: finish }] }) }),
+        });
+      } catch {
+        threw = true;
+      }
+      return { spend, threw };
+    };
+    const cut = await call("length");
+    assert.equal(cut.threw, true, "the control: a truncated reply must still throw");
+    assert.deepEqual(cut.spend.usage, { prompt_tokens: 7, completion_tokens: 10 }, "a truncated reply's cost was not reported");
+    assert.equal(cut.spend.finishReason, "length");
+    const ok = await call("stop");
+    assert.equal(ok.threw, false);
+    assert.equal(ok.spend.model, model.SUMMARY_MODEL);
+    /* A callback that throws changes nothing. */
+    await openaiTextAdapter.complete({
+      messages: [{ role: "user", content: "x" }],
+      maxTokens: 10,
+      apiKey: "sk-test",
+      onUsage: () => {
+        throw new Error("broken callback");
+      },
+      fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: "{}" }, finish_reason: "stop" }] }) }),
+    });
+  });
+
+  await test("THE COST TABLE IS PURGED: error-digest deletes ai_task_costs past the retention period", async () => {
+    const src = fs.readFileSync(path.join(rootDir, "supabase/functions/error-digest/index.ts"), "utf8");
+    assert.match(src, /AI_TASK_COST_RETENTION_DAYS/, "the digest does not read the cost table's retention period");
+    assert.match(src, /\.from\("ai_task_costs"\)\s*\.delete\(\)\s*\.lt\("day"/, "nothing purges ai_task_costs, so it grows for ever");
+    assert.ok(taskCost.AI_TASK_COST_RETENTION_DAYS >= 28, "a retention shorter than four weeks cannot answer a weekly-trend question");
   });
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
