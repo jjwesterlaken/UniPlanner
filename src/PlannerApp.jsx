@@ -146,6 +146,7 @@ import {
 import { buildAttempt, pruneAttempts, weakTopics } from "./practice.js";
 import { classifyStorageError, describeSaveFailure, describeSize, formatBytes } from "./storageHealth.js";
 import { createReporter, installGlobalHandlers } from "./errorReport.js";
+import { authEmailFailureReport } from "./authEmailFailure.js";
 import { HELP_TOPICS } from "./helpText.js";
 import {
   aiNotePreview,
@@ -5480,8 +5481,21 @@ export default function PlannerApp() {
     await runSync(s);
   };
 
+  /* A signup or reset whose EMAIL could not be sent is reported to us
+     (authEmailFailure.js) and then shown to the student exactly as
+     before. The report is a fixed sentence: no address, no Auth text. */
+  const reportAuthEmailFailure = (e) => {
+    if (e && e.authEmailFailed) reportErrorRef.current(authEmailFailureReport(e.authEmailFailed));
+  };
+
   const handleSignUp = async ({ email, password }) => {
-    const s = await backend.signUp({ email, password });
+    let s;
+    try {
+      s = await backend.signUp({ email, password });
+    } catch (e) {
+      reportAuthEmailFailure(e);
+      throw e;
+    }
     setSession(s);
     await runSync(s);
   };
@@ -5562,7 +5576,14 @@ export default function PlannerApp() {
     return () => data && data.subscription && data.subscription.unsubscribe();
   }, []);
 
-  const handleResetPassword = async ({ email }) => backend.resetPassword({ email });
+  const handleResetPassword = async ({ email }) => {
+    try {
+      return await backend.resetPassword({ email });
+    } catch (e) {
+      reportAuthEmailFailure(e);
+      throw e;
+    }
+  };
 
   const handleSetPassword = async (password) => {
     await backend.updatePassword({ password });

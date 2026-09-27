@@ -137,7 +137,39 @@ export async function handle(req: Request): Promise<Response> {
       logFailure(stage, countErr);
     }
 
-    const digest = buildDigest(rows ?? [], { total: typeof total === "number" ? total : (rows ?? []).length, since, windowHours: DIGEST_WINDOW_HOURS });
+    /* THE APP'S OWN REPORTS (client_errors), the same window, bounded
+       the same way. Selected WITHOUT user_id: the email has no need to
+       say whose device broke. A failed read is NOT a quiet day for the
+       app — it is said in the email, and the server half still goes. */
+    stage = "read_client";
+    const notes: string[] = [];
+    const { data: clientRows, error: clientErr } = await admin
+      .from("client_errors")
+      .select("message, build_id, url, created_at")
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(500);
+    let clientTotal = 0;
+    if (clientErr) {
+      logFailure(stage, clientErr);
+      notes.push("The app's own error reports (client_errors) could not be read, so this email says nothing about them.");
+    } else {
+      const { count: cCount, error: cCountErr } = await admin
+        .from("client_errors")
+        .select("id", { count: "exact", head: true })
+        .gte("created_at", since);
+      if (cCountErr) logFailure(stage, cCountErr);
+      clientTotal = typeof cCount === "number" ? cCount : (clientRows ?? []).length;
+    }
+
+    const digest = buildDigest(rows ?? [], {
+      total: typeof total === "number" ? total : (rows ?? []).length,
+      since,
+      windowHours: DIGEST_WINDOW_HOURS,
+      clientRows: clientErr ? [] : clientRows ?? [],
+      clientTotal,
+      notes,
+    });
 
     /* THE PURGE RUNS WHATEVER THE DIGEST SAYS, including on a quiet
        day when no email is sent. Nothing else reads this table, so
@@ -155,7 +187,7 @@ export async function handle(req: Request): Promise<Response> {
     const { error: costPurgeErr } = await admin.from("ai_task_costs").delete().lt("day", costsBefore);
     if (costPurgeErr) logFailure(stage, costPurgeErr, { table: "ai_task_costs" });
 
-    if (digest.groups.length === 0) {
+    if (digest.groups.length === 0 && digest.notes.length === 0) {
       /* SILENCE IS THE HEALTHY SIGNAL. See the header: a daily "0
          errors" email is one that gets filtered, and a filtered digest
          is not read on the morning it matters. */

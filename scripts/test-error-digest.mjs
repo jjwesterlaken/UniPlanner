@@ -747,9 +747,18 @@ async function run() {
     /* DERIVED, so the list cannot drift into a vocabulary nothing
        emits. A code nobody returns is a flag that can never fire, which
        is the vacuous-pass shape wearing a constant. */
-    const sources = ["_shared/stripe.ts", "stripe-webhook/index.ts", "billing-checkout/index.ts", "billing-portal/index.ts"]
-      .map((f) => path.join(rootDir, "supabase/functions", f))
-      .filter((f) => fs.existsSync(f))
+    /* EVERY producer, walked rather than listed: the Edge Functions and
+       the app (auth_email_failed is raised by both the canary and the
+       client). The digest's own declaration is left out, or every code
+       would be "produced" by the list that names it. */
+    const walk = (dir) =>
+      fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const p = path.join(dir, e.name);
+        return e.isDirectory() ? walk(p) : /\.(ts|js|jsx)$/.test(e.name) ? [p] : [];
+      });
+    const declaring = path.join(rootDir, "supabase/functions/error-digest/digest.js");
+    const sources = [...walk(path.join(rootDir, "supabase/functions")), ...walk(path.join(rootDir, "src"))]
+      .filter((f) => f !== declaring)
       .map((f) => fs.readFileSync(f, "utf8"))
       .join("\n");
     assert.ok(sources.length > 0, "no function sources were read — this guard checked nothing");

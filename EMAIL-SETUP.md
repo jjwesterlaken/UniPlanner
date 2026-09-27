@@ -246,7 +246,7 @@ is the app.
 
 ---
 
-## Detecting an Auth email failure — PROPOSED, not built
+## Detecting an Auth email failure — BUILT (27 September 2026)
 
 **Why the 27 September outage went unnoticed.** The error digest reads
 `function_errors`, which only Edge Functions write. Auth's SMTP send is
@@ -264,7 +264,11 @@ the message raw. But that error went to the student and nowhere else.
   token, which is another credential with account-wide scope, stored
   somewhere a scheduled job can reach it.
 
-**The proposal: two checks, because they catch different people.**
+**Built as proposed, both halves** (Jared, 27 September 2026). Setup
+is SUPABASE-SETUP.md §3e. The code: `supabase/functions/auth-email-canary/`
+with migration 0025, `src/authEmailFailure.js`, and the digest reading
+`client_errors`; `scripts/test-auth-email.mjs` covers all three. **Two
+checks, because they catch different people:**
 
 1. **A canary, which catches it before any student does.** A scheduled
    job calls Auth's `/recover` for a dedicated canary account, on an
@@ -282,6 +286,10 @@ the message raw. But that error went to the student and nowhere else.
    - **Costs:** 24 Auth emails a day into a canary inbox, well inside
      the raised rate limit. And a canary account that exists only to be
      reset, holding nothing.
+   - **The canary address must accept mail.** Auth really sends it a
+     reset every hour, and a bouncing address would damage the sending
+     domain's reputation hour after hour. **It also spends Resend quota:**
+     about 720 of the free tier's 3,000 a month.
    - **Depends on the pg_cron/pg_net wiring** (CLAUDE.md, pending item
      2), same as the digest.
 
@@ -294,10 +302,10 @@ the message raw. But that error went to the student and nowhere else.
      wording is unchanged.
    - It does not leak whether an account exists. The row reaches only
      us, and the student sees what they saw before.
-   - **The digest then has to read `client_errors` too**, which it does
-     not today.
+   - **The digest now reads `client_errors` too**, the same 24 hours,
+     without the user id, and floats `auth_email_failed` to the top.
 
-**Recommended: both, canary first.** The canary would have caught this
+**Why both.** The canary would have caught this
 outage within the hour. Client reporting would have caught it at the
 first student, but only once somebody read the next digest.
 

@@ -23,6 +23,7 @@
    RLS is off, every signed-in user could read everyone else's planner.
    ================================================================== */
 
+import { isAuthEmailSendFailure } from "./authEmailFailure.js";
 import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, isConfigured } from "./config.js";
 import { PASSWORD_RESET_REDIRECT } from "./legalLinks.js";
@@ -531,6 +532,16 @@ export { supabase };
 const TABLE = "planner_data";
 
 /** Turn Supabase's technical errors into something a person can act on. */
+/* The same readable message as ever, with the flow attached when Auth
+   could not SEND the email, so PlannerApp can report it to us
+   (authEmailFailure.js). Nothing else about the error travels: the
+   student sees exactly what they saw before. */
+function authError(error, flow) {
+  const e = new Error(readable(error));
+  if (isAuthEmailSendFailure(error)) e.authEmailFailed = flow;
+  return e;
+}
+
 function readable(error) {
   const raw = (error && error.message) || "";
   const lower = raw.toLowerCase();
@@ -574,7 +585,7 @@ export const supabaseBackend = {
       email: (email || "").trim(),
       password: password || "",
     });
-    if (error) throw new Error(readable(error));
+    if (error) throw authError(error, "signup");
 
     // If the project requires email confirmation there's no session yet.
     if (!data.session) {
@@ -656,7 +667,7 @@ export const supabaseBackend = {
     const { error } = await supabase.auth.resetPasswordForEmail((email || "").trim(), {
       redirectTo: PASSWORD_RESET_REDIRECT,
     });
-    if (error) throw new Error(readable(error));
+    if (error) throw authError(error, "reset");
     return { sent: true };
   },
 

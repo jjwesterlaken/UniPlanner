@@ -50,7 +50,42 @@ export const MESSAGE_EXCERPT_CHARS = 300;
    ended a paid period early, so a student lost time they paid for.
    Raised by stripe-webhook with `code` set in the detail — see the
    test named for why the stage name alone would never have matched. */
-export const MUST_REPORT_CODES = ["stripe_permission_denied", "not_an_invoice", "portal_configuration"];
+/* `auth_email_failed` (27 September 2026): Supabase Auth could not send
+   a signup or reset email. Raised by the auth-email-canary function on
+   a failed probe, and by the app itself when a student's signup or
+   reset comes back with a send failure (see clientRowForDigest). It is
+   a setting to fix — the SMTP key, the sending domain — and until it is
+   fixed nobody can confirm an account or get back into one. */
+export const MUST_REPORT_CODES = ["stripe_permission_denied", "not_an_invoice", "portal_configuration", "auth_email_failed"];
+
+/* THE APP'S OWN ERROR REPORTS (client_errors, 0010), brought into the
+   same email. They were written for weeks and read by nobody unless
+   somebody opened the table — which is how a reset flow could fail for
+   every student with only the students knowing.
+
+   A report's message comes from an Error object, so it groups on its
+   first line; the stack is left out of the email like the server's.
+   NEVER the user id: the email is ours, but it has no need to say
+   whose device broke, and a row about a signed-in student is still
+   about that student. Only the build and the page path travel. */
+export const CLIENT_FN = "app";
+export const CLIENT_NAME_CHARS = 120;
+
+export function clientRowForDigest(row) {
+  const message = String((row && row.message) || "Unknown error");
+  const first = message.split("\n")[0].slice(0, CLIENT_NAME_CHARS);
+  const code = MUST_REPORT_CODES.find((c) => first.startsWith(`${c}:`) || first === c) || null;
+  return {
+    fn: CLIENT_FN,
+    stage: "client",
+    name: first,
+    /* The first line only, like the name: anything after it is a stack
+       or a quoted value, and the table holds the whole thing. */
+    message: first,
+    detail: { ...(code ? { code } : {}), build: (row && row.build_id) || null, path: (row && row.url) || null },
+    occurred_at: row && row.created_at,
+  };
+}
 
 /**
  * The must-report code a row carries, or "".
@@ -77,9 +112,10 @@ export function mustReportCode(row) {
  * as 40,000 and not as the 500 that were read. `truncated` says which
  * happened, so a reader is never quietly told a smaller number.
  */
-export function buildDigest(rows, { total, since, windowHours } = {}) {
+export function buildDigest(rows, { total, since, windowHours, clientRows = [], clientTotal = 0, notes = [] } = {}) {
   const groups = new Map();
-  for (const row of rows || []) {
+  const clientMapped = (clientRows || []).map(clientRowForDigest);
+  for (const row of [...(rows || []), ...clientMapped]) {
     const key = [row.fn, row.stage, row.name || ""].join(" / ");
     const code = mustReportCode(row);
     const existing = groups.get(key);
@@ -108,6 +144,8 @@ export function buildDigest(rows, { total, since, windowHours } = {}) {
 
   const read = (rows || []).length;
   const counted = typeof total === "number" ? total : read;
+  const clientRead = clientMapped.length;
+  const clientCounted = typeof clientTotal === "number" && clientTotal > clientRead ? clientTotal : clientRead;
 
   return {
     since: since ?? null,
@@ -115,6 +153,13 @@ export function buildDigest(rows, { total, since, windowHours } = {}) {
     total: counted,
     read,
     truncated: counted > read,
+    clientTotal: clientCounted,
+    clientRead,
+    clientTruncated: clientCounted > clientRead,
+    /* Things the digest could not find out, said in the email rather
+       than read as nothing: a failed read of client_errors is not a day
+       with no app errors. */
+    notes: [...(notes || [])],
     /* MUST-REPORT FIRST, then loudest. Count alone is what would hide
        a single configuration failure under a noisy transient one. */
     groups: [...groups.values()].sort(
@@ -131,7 +176,7 @@ export function buildDigest(rows, { total, since, windowHours } = {}) {
  */
 export function digestSubject(digest) {
   const kinds = digest.groups.length;
-  const failures = digest.total;
+  const failures = digest.total + (digest.clientTotal || 0);
   const base = `UniPlanner: ${failures} failure${failures === 1 ? "" : "s"} in ${kinds} kind${kinds === 1 ? "" : "s"}`;
   /* IN THE SUBJECT, because the subject is the part that gets read on a
      phone without opening anything, and these two are the ones worth
@@ -155,6 +200,11 @@ export function digestText(digest) {
   if (digest.truncated) {
     lines.push(`Showing the ${digest.read} most recent. The counts below are of those ${digest.read}, not of all ${digest.total}.`);
   }
+  if (digest.clientTotal) {
+    lines.push(`${digest.clientTotal} error report${digest.clientTotal === 1 ? "" : "s"} from the app itself.`);
+    if (digest.clientTruncated) lines.push(`Showing the ${digest.clientRead} most recent app reports, not all ${digest.clientTotal}.`);
+  }
+  for (const note of digest.notes || []) lines.push(`NOTE: ${note}`);
   lines.push("");
 
   for (const g of digest.groups) {
@@ -174,7 +224,7 @@ export function digestText(digest) {
      the place to read about it sends somebody hunting. The table is the
      fuller record — it holds the stacks, which are deliberately not in
      the email. */
-  lines.push("Full rows, with stacks: Supabase → Table editor → function_errors.");
+  lines.push("Full rows, with stacks: Supabase → Table editor → function_errors (servers) and client_errors (the app).");
   lines.push("Sent by the error-digest function on a daily pg_cron schedule.");
   lines.push("A morning with no email is a morning with no failures.");
   return lines.join("\n");
