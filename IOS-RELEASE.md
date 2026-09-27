@@ -15,9 +15,9 @@ DESIGN and ship safely (§5), and one build-time check gates the cut
 
 ## Submission record
 
-| Version | Build | Commit | Submitted (Sydney) | Status |
+| Version | Build | Commit | Submitted (Sydney) | Approved and live (Sydney) |
 |---|---|---|---|---|
-| 1.3.0 | 3543343 | `e78acd7` | 27 September 2026 | **In review** — awaiting Apple |
+| 1.3.0 | 3543343 | `e78acd7` | 27 September 2026 | **27 September 2026** — approved first time, no rejection |
 
 **1.3.0 was built from `e78acd7`, not the tip of `main`.** `main` moved
 on to `82dd43e` (#162) after Grace's build, and that commit changes a
