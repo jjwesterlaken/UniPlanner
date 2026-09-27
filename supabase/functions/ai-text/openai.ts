@@ -20,6 +20,7 @@ export const openaiTextAdapter = {
     hasImages = false,
     task = null,
     fetchImpl = fetch,
+    onUsage = null,
   }: {
     messages: { role: string; content: unknown }[];
     maxTokens: number;
@@ -27,6 +28,11 @@ export const openaiTextAdapter = {
     hasImages?: boolean;
     task?: string | null;
     fetchImpl?: typeof fetch;
+    /* Told what the call really cost (0024): the model, the provider's
+       own usage block, and why it stopped. Called BEFORE the checks
+       below throw, because a truncated reply was still paid for. Its
+       own try, so a broken callback can never fail the request. */
+    onUsage?: ((spend: { model: string; usage: unknown; finishReason: string | null }) => void) | null;
   }): Promise<string> {
     /* THE MODEL IS CHOSEN PER MEDIUM, not per task. Photographs and
        pasted text are the same `summarise` task, so a single model
@@ -93,6 +99,11 @@ export const openaiTextAdapter = {
 
     const json = await res.json();
     const choice = json?.choices?.[0];
+    try {
+      onUsage?.({ model, usage: json?.usage ?? null, finishReason: choice?.finish_reason ?? null });
+    } catch {
+      /* a diagnostic; see the parameter */
+    }
     /* Hitting the ceiling truncates the JSON mid-structure, so the parse
        downstream would fail with something unrelated-looking. Named here
        so the logs say "the cap was too low for this task" rather than

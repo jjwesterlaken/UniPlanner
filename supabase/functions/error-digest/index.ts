@@ -58,6 +58,7 @@ import { getSupabaseAdmin } from "../_shared/supabaseAdmin.ts";
 import { stageLine } from "../ai-notes/diagnostics.js";
 import { FUNCTION_ERROR_RETENTION_DAYS, recordFailure } from "../_shared/failureLog.ts";
 import { buildDigest, digestSubject, digestText } from "./digest.js";
+import { AI_TASK_COST_RETENTION_DAYS } from "../_shared/taskCost.js";
 
 const logStage = (stage: string, extra: Record<string, unknown> = {}) => console.log(stageLine(stage, extra, "error-digest"));
 // deno-lint-ignore no-explicit-any
@@ -145,6 +146,14 @@ export async function handle(req: Request): Promise<Response> {
     const purgeBefore = new Date(Date.now() - FUNCTION_ERROR_RETENTION_DAYS * 86400_000).toISOString();
     const { error: purgeErr } = await admin.from("function_errors").delete().lt("occurred_at", purgeBefore);
     if (purgeErr) logFailure(stage, purgeErr);
+    /* AND THE COST ROWS (0024), which grow with every AI request and
+       have no reader but the weekly query. This is the one daily job,
+       so their purge rides here too; a day, because the table stores a
+       day rather than a timestamp. A failure is logged and changes
+       nothing else, the same as the purge above. */
+    const costsBefore = new Date(Date.now() - AI_TASK_COST_RETENTION_DAYS * 86400_000).toISOString().slice(0, 10);
+    const { error: costPurgeErr } = await admin.from("ai_task_costs").delete().lt("day", costsBefore);
+    if (costPurgeErr) logFailure(stage, costPurgeErr, { table: "ai_task_costs" });
 
     if (digest.groups.length === 0) {
       /* SILENCE IS THE HEALTHY SIGNAL. See the header: a daily "0

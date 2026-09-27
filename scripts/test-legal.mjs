@@ -8,6 +8,7 @@
    Run via `npm test`. */
 
 import assert from "node:assert/strict";
+import { AI_TASK_COST_RETENTION_DAYS } from "../supabase/functions/_shared/taskCost.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -755,7 +756,23 @@ async function run() {
        twice, so one of them could drift and the other occurrence would
        keep the assertion green. Every day-count in the document must be
        one the server actually enforces. */
-    const allowed = new Set([String(RESULT_RETENTION_DAYS), String(FAILED_RESULT_RETENTION_DAYS)]);
+    /* AND THE OPERATIONAL TABLES' PERIODS, read from the code that
+       purges them. function_errors' 30 days used to pass only because
+       it happens to equal FAILED_RESULT_RETENTION_DAYS — a coincidence
+       between two unrelated constants, the colour-coincidence class —
+       so moving either one would have gone red for the wrong reason or
+       stayed green over a false sentence. */
+    const failureLogSrc = fs.readFileSync(path.join(rootDir, "supabase/functions/_shared/failureLog.ts"), "utf8");
+    const fnErrDays = failureLogSrc.match(/export const FUNCTION_ERROR_RETENTION_DAYS\s*=\s*(\d+)/);
+    assert.ok(fnErrDays, "could not read FUNCTION_ERROR_RETENTION_DAYS from failureLog.ts");
+    assert.ok(text.includes(`${AI_TASK_COST_RETENTION_DAYS} days`), "the cost records' retention is missing or wrong");
+    assert.ok(text.includes(`${fnErrDays[1]} days`), "the failure records' retention is missing or wrong");
+    const allowed = new Set([
+      String(RESULT_RETENTION_DAYS),
+      String(FAILED_RESULT_RETENTION_DAYS),
+      fnErrDays[1],
+      String(AI_TASK_COST_RETENTION_DAYS),
+    ]);
     const quoted = [...text.matchAll(/(\d+)\s+days?/g)].map((m) => m[1]);
     assert.ok(quoted.length > 0, "the policy quotes no retention period at all");
     for (const n of quoted) {
@@ -896,6 +913,15 @@ async function run() {
     function_errors: {
       privacy: /record of the failure[\s\S]*?no identifier for\s+your account/i,
       deletion: /record of failures on our own servers/i,
+    },
+    /* WHAT AN AI REQUEST COST US (0024), the function_errors shape: our
+       own arithmetic, no account identifier and no content, so the
+       deletion page says it is NOT covered rather than promising it is,
+       and the policy says both halves — what it counts, and that it
+       holds nothing written and nothing that points at the student. */
+    ai_task_costs: {
+      privacy: /record of what each AI request cost[\s\S]*?nothing you wrote[\s\S]*?no identifier for\s+your account/i,
+      deletion: /record of what AI requests cost us/i,
     },
     /* A subscription record is OURS, about a transaction — not the
        student's content, and not something they can restore. Both
