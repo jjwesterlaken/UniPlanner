@@ -981,8 +981,11 @@ async function run() {
      not names. That is a partial guard, and a partial guard that says so
      is worth more than a thorough-looking one that doesn't. */
 
+  /* `site` too: the marketing page is a client on the same origin, and
+     its data modules (site/promo.js's dismissal key) are copied into
+     what ships beside the app. */
   const clientSources = () =>
-    ["src", "public"].flatMap((dir) =>
+    ["src", "public", "public/site", "site"].flatMap((dir) =>
       fs
         .readdirSync(path.join(rootDir, dir))
         .filter((f) => /\.(js|jsx)$/.test(f))
@@ -1036,6 +1039,10 @@ async function run() {
     "uni-planner-review-asked": {
       noUserContent:
         "one timestamp recording that this install has already been asked to rate the app, so it is asked once and never again. Device-local and deliberately unsynced, because the platform's own review quota is per-device and a synced flag would mean two devices disagreeing through last-write-wins. It holds none of the student's work, nothing about what they recorded or wrote, and not even whether a prompt appeared — the platform API is a request and never says",
+    },
+    "uni-planner-promo-dismissed-UNI50": {
+      noUserContent:
+        "one flag recording that this browser dismissed the marketing page's launch-offer banner, so it stays dismissed. Set on the marketing page, device-local, never synced and never read by the app; it holds nothing of the student's and nothing about them beyond having closed a banner",
     },
     "uni-planner-archive-pending": {
       noUserContent:

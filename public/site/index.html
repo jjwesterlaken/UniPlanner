@@ -38,6 +38,18 @@ font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
 .w{max-width:1120px;margin:0 auto;padding:0 28px}
 a{color:inherit}
 
+/* The launch-offer bar (site/promo.js). Hidden in the markup and
+   shown by site.js only while the offer runs, so an expired page never
+   flashes it; `[hidden]` is restated because `display:block` would
+   otherwise beat the attribute. */
+.promo{background:var(--teal-text);color:#fff;font-size:14px;line-height:1.45}
+.promo[hidden]{display:none}
+.promoin{display:flex;align-items:center;gap:12px;min-height:40px;padding-top:8px;padding-bottom:8px}
+.promoin p{margin:0;flex:1}
+.promoin b{font-weight:600;letter-spacing:.04em}
+.promox{flex:none;background:transparent;border:0;color:#fff;font-size:20px;line-height:1;
+padding:4px 8px;cursor:pointer;border-radius:6px}
+.promox:hover{background:rgba(255,255,255,.14)}
 nav{position:sticky;top:0;z-index:20;background:rgba(250,249,246,.9);
 backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .navin{display:flex;align-items:center;gap:28px;height:64px}
@@ -221,6 +233,11 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
 </style>
 </head>
 <body>
+
+<div class="promo" data-promo hidden><div class="w promoin">
+  <p data-promo-text></p>
+  <button type="button" class="promox" data-promo-dismiss>&times;</button>
+</div></div>
 
 <nav><div class="w navin">
   <a class="brand" href="#"><span class="mark">U</span> <span class="wordmark">UniPlanner</span></a>
