@@ -6,7 +6,7 @@
       Resend and a fake state row. The claims that matter are about
       SEQUENCES — one alert when it starts, silence while it holds, one
       when it recovers, a retry when the alert itself failed — so the
-      handler is driven hour by hour against the same state.
+      handler is driven run by run against the same state.
 
    2. THE APP: a signup or reset whose email could not be sent reaches
       the reporter as a fixed sentence, through the REAL sync.js
@@ -160,7 +160,7 @@ async function main() {
     }
   });
 
-  await test("AN OUTAGE IS TWO EMAILS: one when it starts, silence for three failing hours, one when it recovers", async () => {
+  await test("AN OUTAGE IS TWO EMAILS: one when it starts, silence for three failing runs, one when it recovers", async () => {
     const w = world();
     const sequence = [200, 500, 500, 500, 500, 200, 200];
     for (const recover of sequence) await runHour(w, { recover });
@@ -178,16 +178,16 @@ async function main() {
     assert.equal(w.alerts[0].to[0], ENV.ERROR_DIGEST_TO);
   });
 
-  await test("AN ALERT THAT FAILED TO SEND IS RETRIED NEXT HOUR, because the state did not move", async () => {
+  await test("AN ALERT THAT FAILED TO SEND IS RETRIED ON THE NEXT RUN, because the state did not move", async () => {
     const w = world();
     await runHour(w, { recover: 500, resend: 403 });
     assert.equal(w.alerts.length, 1, "the control: an alert was attempted");
     assert.equal(w.state.status, "healthy", "the state recorded a failing alert that was never delivered");
     await runHour(w, { recover: 500, resend: 200 });
-    assert.equal(w.alerts.length, 2, "the next hour did not retry the alert");
+    assert.equal(w.alerts.length, 2, "the next run did not retry the alert");
     assert.equal(w.state.status, "failing");
     await runHour(w, { recover: 500 });
-    assert.equal(w.alerts.length, 2, "a third failing hour alerted again");
+    assert.equal(w.alerts.length, 2, "a third failing run alerted again");
   });
 
   await test("UNKNOWN IS NOT A RECOVERY AND NOT AN OUTAGE: a rate limit or an unreachable Auth moves nothing", async () => {
@@ -357,6 +357,24 @@ async function main() {
     const src = fs.readFileSync(path.join(rootDir, "supabase/functions/error-digest/index.ts"), "utf8");
     assert.match(src, /digest\.groups\.length === 0 && digest\.notes\.length === 0/, "a digest with only a note would be treated as a quiet day and never sent");
     assert.match(src, /\.from\("client_errors"\)\s*\.select\("message, build_id, url, created_at"\)/, "the digest does not read client_errors, or reads more than it prints");
+  });
+
+  await test("THE SCHEDULE AND THE QUOTA THE DOCS STATE ARE ONE NUMBER, read from 0025's cron line", () => {
+    /* Every run sends a real email through Resend, so the documented
+       daily and monthly counts are a cost statement. They are derived
+       from the schedule 0025 actually creates, never typed beside it. */
+    const sql = fs.readFileSync(path.join(rootDir, "supabase/migrations/0025_auth_email_canary.sql"), "utf8");
+    const cron = sql.match(/cron\.schedule\(\s*'auth-email-canary',\s*'([^']+)'/);
+    assert.ok(cron, "0025 schedules no auth-email-canary job");
+    const [minute, hour, dom, month, dow] = cron[1].split(/\s+/);
+    assert.ok(/^\d+$/.test(minute) && dom === "*" && month === "*" && dow === "*", `a schedule this guard cannot count: ${cron[1]}`);
+    const step = hour === "*" ? 1 : Number((hour.match(/^\*\/(\d+)$/) || [])[1]);
+    assert.ok(Number.isInteger(step) && 24 % step === 0, `an hour field this guard cannot count: ${hour}`);
+    const perDay = 24 / step;
+    assert.equal(perDay, 6, "the canary no longer runs every four hours, which is the ruled cadence");
+    const setup = fs.readFileSync(path.join(rootDir, "SUPABASE-SETUP.md"), "utf8");
+    assert.match(setup, new RegExp(`${perDay} emails a day, about ${perDay * 30} a month`), "SUPABASE-SETUP states a different Resend cost from the schedule 0025 creates");
+    assert.ok(setup.includes(`'${cron[1]}'`), "SUPABASE-SETUP quotes a different schedule from the one 0025 creates");
   });
 
   fs.rmSync(tmpDir, { recursive: true, force: true });

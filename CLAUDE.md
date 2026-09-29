@@ -4867,12 +4867,16 @@ lessons are load-bearing, not because the work is outstanding.
 
 1. ~~Delete `store`'s `window.storage` branch~~ — **done, 27 September
    2026** (see *"`window.storage` — SAME CLASS, WHOLE PLANNER"* above).
-2. **pg_cron and pg_net**, enabled in `Database → Extensions`, plus the
-   Vault secrets migration 0004 reads. Until then the retention sweep
-   only runs opportunistically and the periods the privacy policy states
-   are aspirational rather than enforced. 0004 raises a notice saying so
-   rather than failing. The error-report digest email waits on this same
-   wiring.
+2. ~~**pg_cron and pg_net**~~ — **enabled since 17 September 2026**,
+   and the error digest runs on its schedule (Jared, 29 September). What
+   is still open here is the RETENTION SWEEP, which is a different job:
+   SUPABASE-SETUP.md §3b records that 0004's job sends its secret to
+   `ai-notes`, which is deployed WITH JWT verification, so the platform
+   refuses it before our code runs. Until that is fixed the sweep only
+   runs opportunistically after a request, and the periods the privacy
+   policy states are enforced only as often as somebody records a
+   lecture. `cron.job_run_details` will show that job "succeeding",
+   because pg_net got a response.
 3. **Bump `actions/checkout` and `actions/setup-node` to `@v5`**, in
    every workflow. Both currently target Node 20, which GitHub has
    deprecated; the runners force them onto Node 24 and they work, so this
@@ -6316,12 +6320,11 @@ then throws an error on purpose and proves the report goes only to
 our own `client_errors` endpoint — and in demo mode goes nowhere.
 Account deletion clears the account's reports; anonymous rows stay
 (they belong to nobody, and sweeping them would delete other
-signed-out users' diagnostics). **The daily digest email is ruled YES
-but deferred**: build it when the closed test starts generating
-reports worth waking up to. Resend is done; the remaining dependency
-is the pg_cron/pg_net wiring, and with two users the dashboard query
-is enough. One email a day via a dedicated secret (the sweep-secret
-rule), never one per error.
+signed-out users' diagnostics). **The daily digest email is built
+and running on its schedule** (pg_cron and pg_net on since 17 September
+2026), and from #166 it reads `client_errors` as well as
+`function_errors`. One email a day via a dedicated secret (the
+sweep-secret rule), never one per error, and nothing on a quiet day.
 
 **Promote-on-release** (the Hosting section has the full ritual) is
 the cheap dev/prod split: `release` is the Pages production branch,

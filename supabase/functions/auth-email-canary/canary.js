@@ -10,7 +10,7 @@
    Auth's SMTP send is done by Supabase Auth itself. The student saw an
    error; we saw nothing.
 
-   So once an hour the canary asks Auth to send a password reset to a
+   So every four hours the canary asks Auth to send a password reset to a
    canary account we own, exactly as the app does — the anon key, the
    public `/recover` endpoint. An SMTP failure comes back from that
    endpoint as a 5xx, so the check needs no access to any inbox.
@@ -34,7 +34,7 @@
    probe, so a failure that has already been alerted is not forgotten.
 
    THE STATE MOVES ONLY WHEN THE ALERT WAS SENT. If Resend refuses the
-   alert, the state stays where it was, so the next hour tries again.
+   alert, the state stays where it was, so the next run tries again.
    Flipping first would record "we told somebody" when nobody was told,
    which is the one failure this function exists to prevent.
    ================================================================== */
@@ -54,7 +54,7 @@ export function classifyProbe(status) {
 }
 
 /**
- * What to do, given the stored state and this hour's probe.
+ * What to do, given the stored state and this run's probe.
  * `prev` is the stored row or null (never run). Returns the alert to
  * send ("failing" | "recovered" | null) and the status to store IF the
  * alert, when there is one, was sent.

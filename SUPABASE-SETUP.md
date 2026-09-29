@@ -211,7 +211,12 @@ recordings client-side instead.
 
 ## 3. Scheduled jobs: the retention sweep and the error digest
 
-Two pg_cron jobs, both of the same shape — pg_cron calling pg_net
+**pg_cron and pg_net have been enabled on the project since 17 September
+2026, and the error digest runs on its schedule.** What follows is the
+setup as it was done, kept for a fresh project, plus the canary (§3e),
+which is the one job still to be created.
+
+pg_cron jobs, all of the same shape — pg_cron calling pg_net
 calling an Edge Function — and they share one set of prerequisites.
 Neither is created by the migration that schedules it unless the
 prerequisites are in place; the migration raises a **notice** naming
@@ -392,35 +397,48 @@ every run.
 
 ### 3e. The Auth email canary
 
-Once an hour, `auth-email-canary` asks Supabase Auth to send a password
+Every four hours, `auth-email-canary` asks Supabase Auth to send a password
 reset to a canary account and emails `ERROR_DIGEST_TO` **once** when that
 starts failing and **once** when it recovers (EMAIL-SETUP.md, *Detecting
 an Auth email failure*). It exists because on 27 September every signup
 and reset email failed for hours and nothing of ours noticed.
 
-**Order: apply 0025, deploy the function, then set these.** Without them
-the function answers `canary_disabled` and the cron job does nothing.
+**Order.** The extensions are already on (§3a), so 0025 creates the job
+as soon as its two Vault secrets exist:
+
+1. Add the Vault secrets `auth_canary_function_url` and
+   `auth_canary_secret` (§3b).
+2. Apply 0025. It must end with `0025 applied and verified: 5 properties
+   checked`, and raise no notice about a missing secret. If it does,
+   add the secret and re-run it; it is safe to re-run.
+3. Merge #166 and deploy functions.
+4. Set the function's two secrets:
 
 ```bash
 supabase secrets set AUTH_CANARY_SECRET=<the same string as auth_canary_secret>
-supabase secrets set AUTH_CANARY_EMAIL=<a REAL mailbox you own, see below>
+supabase secrets set AUTH_CANARY_EMAIL=purgatory+canary@uniplannerapp.com
 ```
+
+Without them the function answers `canary_disabled` and each run does
+nothing.
 
 It reuses `RESEND_API_KEY`, `ERROR_DIGEST_TO` and `ERROR_DIGEST_FROM`
 for its two alerts, and the platform's own `SUPABASE_URL` and
 `SUPABASE_ANON_KEY` for the probe.
 
-**`AUTH_CANARY_EMAIL` must be a mailbox that ACCEPTS mail**, such as a
-Google Workspace alias with a filter that archives it. Every hour Auth
-really sends it a reset email through Resend. An address that bounces
-would damage the sending domain's reputation, hour after hour, which is
+**`AUTH_CANARY_EMAIL` is `purgatory+canary@uniplannerapp.com`** (Jared,
+29 September 2026), and it must be a mailbox that ACCEPTS mail: every run
+Auth really sends it a reset email through Resend. A `+` address is
+delivered to its base mailbox, so `purgatory@` has to exist, and a filter
+on `+canary` there keeps the resets out of sight. An address that bounces
+would damage the sending domain's reputation, run after run, which is
 the one thing a check on email delivery must not do. The function
 creates the canary *account* itself (confirmed, no password), so there
 is nothing to set up in Authentication.
 
-**It uses Resend quota: 24 emails a day, about 720 a month.** Resend's
-free tier is 100 a day and 3,000 a month. The schedule is one line in
-0025 (`'17 * * * *'`) if that needs to become every few hours.
+**It uses Resend quota: 6 emails a day, about 180 a month**, against the
+free tier's 100 a day and 3,000 a month. The schedule is one line in
+0025 (`'17 */4 * * *'`: 00:17, 04:17 and so on, UTC).
 
 **Verify it:**
 

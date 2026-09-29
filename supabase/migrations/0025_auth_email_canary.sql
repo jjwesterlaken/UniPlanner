@@ -1,5 +1,5 @@
 -- ---------------------------------------------------------------------
--- 0025: auth_email_canary — the state of the hourly Auth email check.
+-- 0025: auth_email_canary — the state of the four-hourly Auth email check.
 --
 -- On 27 September 2026 every signup and password-reset email failed for
 -- hours (Resend `550 domain is not verified`: the Auth SMTP key came
@@ -7,7 +7,7 @@
 -- noticed, because the error digest reads what Edge Functions record
 -- and Auth's SMTP send is done by Supabase Auth itself.
 --
--- The auth-email-canary function now asks Auth, once an hour, to send
+-- The auth-email-canary function now asks Auth, every four hours, to send
 -- a reset to a canary account we own, and alerts ONCE when that starts
 -- failing and ONCE when it recovers. This table is where it remembers
 -- which of the two it last told somebody: ONE ROW, id = 1.
@@ -21,7 +21,7 @@
 -- against the columns).
 --
 -- Every failed probe ALSO writes a function_errors row, so the daily
--- digest counts the failing hours even after the one alert was sent.
+-- digest counts every failing run even after the one alert was sent.
 --
 -- THE SCHEDULE is the 0022 arrangement: pg_cron calling pg_net calling
 -- the function, with a DEDICATED secret read from Vault at execution
@@ -34,7 +34,7 @@
 -- IT WIDENS, so it is applied BEFORE the function is deployed. A
 -- function deployed first would fail every run at "state_read" (500,
 -- visible in cron.job_run_details and in the digest), which is loud
--- rather than silent — but it would also record every hour's probe
+-- rather than silent — but it would also record every run's probe
 -- with no alert, so apply first.
 -- ---------------------------------------------------------------------
 
@@ -55,10 +55,10 @@ alter table public.auth_email_canary enable row level security;
 revoke all on public.auth_email_canary from anon, authenticated;
 
 comment on table public.auth_email_canary is
-  'One row (id = 1): whether the hourly Auth email canary last found Supabase Auth able to send email, and since when. Written by the auth-email-canary function under the service role. Holds nothing about any user — see 0025''s header.';
+  'One row (id = 1): whether the four-hourly Auth email canary last found Supabase Auth able to send email, and since when. Written by the auth-email-canary function under the service role. Holds nothing about any user — see 0025''s header.';
 
 -- ---------------------------------------------------------------------
--- The hourly schedule.
+-- The schedule: every four hours (Jared, 29 September 2026).
 -- ---------------------------------------------------------------------
 do $$
 declare
@@ -84,11 +84,13 @@ begin
   perform cron.unschedule('auth-email-canary')
   where exists (select 1 from cron.job where jobname = 'auth-email-canary');
 
-  -- At :17 past every hour: off the hour, where scheduled traffic piles
-  -- up, and away from the digest's 21:00.
+  -- EVERY FOUR HOURS, at :17 past (00:17, 04:17, ... UTC): six probes a
+  -- day, so an outage is noticed within four hours and costs six Resend
+  -- sends a day rather than twenty-four. Off the hour, where scheduled
+  -- traffic piles up; the digest's 21:00 is never shared.
   perform cron.schedule(
     'auth-email-canary',
-    '17 * * * *',
+    '17 */4 * * *',
     format(
       $job$
       select net.http_post(

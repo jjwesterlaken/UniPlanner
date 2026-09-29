@@ -1,5 +1,5 @@
 /* ==================================================================
-   auth-email-canary — once an hour, can Supabase Auth send email?
+   auth-email-canary — every four hours, can Supabase Auth send email?
 
    The decisions are in canary.js; the header there says why this
    exists. This file does the four things with side effects: make sure
@@ -118,7 +118,7 @@ export async function handle(req: Request, deps: Record<string, any> = {}): Prom
     const { data: prev, error: readErr } = await admin.from("auth_email_canary").select("status, since").eq("id", STATE_ID).maybeSingle();
     if (readErr) {
       /* A FAILED READ IS NOT "HEALTHY BEFORE". Deciding from it would
-         send a "failing" alert every hour of an outage, or a "recovered"
+         send a "failing" alert on every run of an outage, or a "recovered"
          one that never happened. The probe is already recorded above. */
       logFailure(stage, readErr);
       return jsonResponse({ ok: false, code: "state_unavailable", probe, status }, 500);
@@ -145,7 +145,7 @@ export async function handle(req: Request, deps: Record<string, any> = {}): Prom
 
     stage = "state_write";
     /* The status moves only with a sent alert; the check time always.
-       A change whose alert failed keeps the OLD status, so the next hour
+       A change whose alert failed keeps the OLD status, so the next run
        sees the same change and tries the alert again. */
     const moved = decision.changed && alerted;
     const keptStatus = prev?.status === "failing" ? "failing" : "healthy";

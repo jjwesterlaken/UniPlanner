@@ -280,18 +280,18 @@ checks, because they catch different people:**
      sent through `RESEND_API_KEY`, which is independent of Auth SMTP
      and was the half still working on 27 September. It sends nothing
      while the state holds and one email on recovery, so a broken day is
-     two emails rather than twenty-four.
-   - **Hourly:** a locked-out student is the most urgent failure this
-     app has.
-   - **Costs:** 24 Auth emails a day into a canary inbox, well inside
-     the raised rate limit. And a canary account that exists only to be
-     reset, holding nothing.
-   - **The canary address must accept mail.** Auth really sends it a
-     reset every hour, and a bouncing address would damage the sending
-     domain's reputation hour after hour. **It also spends Resend quota:**
-     about 720 of the free tier's 3,000 a month.
-   - **Depends on the pg_cron/pg_net wiring** (CLAUDE.md, pending item
-     2), same as the digest.
+     two emails rather than six.
+   - **Every four hours** (Jared, 29 September 2026): an outage is
+     noticed within four hours, at a quarter of the hourly cost.
+   - **Costs:** 6 Auth emails a day into a canary inbox, well inside the
+     raised rate limit, and about 180 of Resend's free 3,000 a month.
+     And a canary account that exists only to be reset, holding nothing.
+   - **The canary address is `purgatory+canary@uniplannerapp.com`, and
+     it must accept mail.** Auth really sends it a reset on every run, and
+     a bouncing address would damage the sending domain's reputation.
+   - **pg_cron and pg_net are already on** (since 17 September 2026; the
+     digest runs on its schedule), so the job is created when 0025 is
+     applied with its two Vault secrets in place.
 
 2. **Client-side reporting, which gives evidence about real students.**
    When `signUp` or `resetPassword` fails with a server error (5xx, or
@@ -306,7 +306,7 @@ checks, because they catch different people:**
      without the user id, and floats `auth_email_failed` to the top.
 
 **Why both.** The canary would have caught this
-outage within the hour. Client reporting would have caught it at the
+outage within four hours. Client reporting would have caught it at the
 first student, but only once somebody read the next digest.
 
 **Structural alternative, for later:** Supabase's *Send Email* Auth
