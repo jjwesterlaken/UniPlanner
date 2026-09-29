@@ -909,10 +909,15 @@ async function run() {
     rejectSdk = false,
     signedOut = false,
     usageStatus = 200,
+    now = undefined,
   }) {
     const dir = await keyedBuild();
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
+    /* A FIXED CLOCK, for the claims that are about a date (the launch
+       code comes down at PROMO_ENDS_AT). Date only: timers still run,
+       so the app's own effects behave as they do without it. */
+    if (now !== undefined) await page.clock.setFixedTime(now);
     const errors = [];
     page.on("pageerror", (err) => errors.push(String(err)));
     await page.addInitScript(
@@ -1409,6 +1414,40 @@ async function run() {
         );
       }
     }
+  });
+
+  await test("THE LAUNCH CODE ON THE PLAN PANEL: on web until PROMO_ENDS_AT, gone after it, never in a store build, never for a web subscriber", async () => {
+    /* One line under the web plan buttons, from site/promo.js — the
+       module the marketing banner reads — so the two come down
+       together. Every world is asserted against its own control, since
+       an absent line is also what a panel that never rendered gives. */
+    const promo = await import(pathToFileURL(path.join(rootDir, "site/promo.js")).href);
+    const end = Date.parse(promo.PROMO_ENDS_AT);
+    const before = end - 86_400_000;
+    const expected = promo.promoPlanLine(before);
+    assert.ok(expected && expected.includes(promo.PROMO_CODE), "the fixture's before-time is not inside the offer");
+
+    const running = await mountAccount({ native: false, now: before });
+    await running.close();
+    assert.deepEqual(running.errors, [], `the Account tab threw:\n        ${running.errors.join("\n        ")}`);
+    assert.match(running.html, /data-web-purchase/, "the web panel did not render, so the line's presence proves nothing");
+    const line = (running.html.match(/<p[^>]*data-promo-line[^>]*>([\s\S]*?)<\/p>/) || [])[1];
+    assert.equal(line, expected, "the plan panel does not show the launch code while the offer runs");
+
+    const ended = await mountAccount({ native: false, now: end });
+    await ended.close();
+    assert.match(ended.html, /data-web-purchase/, "the control: the web panel still renders after the offer");
+    assert.doesNotMatch(ended.html, /data-promo-line/, "the launch code is still on the plan panel at PROMO_ENDS_AT");
+
+    const store = await mountAccount({ native: "ios", now: before });
+    await store.close();
+    assert.doesNotMatch(store.html, /data-web-purchase/, "the control: an iOS shell has no web panel");
+    assert.ok(!store.html.includes(promo.PROMO_CODE), "a store build shows the web launch code");
+
+    const subscriber = await mountAccount({ native: false, now: before, profile: { ...PROFILE_ROW, store: "stripe" } });
+    await subscriber.close();
+    assert.match(subscriber.html, /data-web-manage/, "the control: a web subscriber sees the portal button");
+    assert.doesNotMatch(subscriber.html, /data-promo-line/, "a student who already paid on the web is offered a first-payment code");
   });
 
   await test("PRESSING A PLAN REALLY REACHES billing-checkout, carrying the session's token", async () => {

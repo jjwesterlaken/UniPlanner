@@ -73,6 +73,7 @@ import {
 } from "./plansCopy.js";
 import { bumpEntitlement, entitlementVersion, refreshEntitlementSoon, subscribeEntitlement } from "./entitlementRefresh.js";
 import { STRIPE_ENABLED, WEB_PLANS } from "./billingFlags.js";
+import { promoPlanLine } from "../site/promo.js";
 import { openPortal, startCheckout } from "./stripeClient.js";
 import { webPriceLabel } from "./webPrices.js";
 import { btnPrimary, btnGhost, Card } from "./PlannerApp.jsx";
@@ -348,6 +349,19 @@ export function PlansPanel({ session }) {
             </div>
           ))}
           <p className="text-xs text-stone-500">{WEB.buyHint}</p>
+          {/* THE LAUNCH CODE, where it is typed: Stripe Checkout, which
+              this button opens. site/promo.js holds the words and the
+              end date the marketing banner uses, so this line comes down
+              with it at PROMO_ENDS_AT, without a redeploy. WEB BRANCH
+              ONLY — a store build never renders it, because a store
+              purchase cannot take the code. Not shown to a student who
+              already has a web subscription: the code is for a FIRST
+              payment. */}
+          {store !== "stripe" && promoPlanLine(Date.now()) && (
+            <p className="text-xs font-medium text-stone-700" data-promo-line>
+              {promoPlanLine(Date.now())}
+            </p>
+          )}
           {store === "stripe" && (
             <button type="button" className={`${btnGhost} w-full`} disabled={!!busy} onClick={manageOnWeb} data-web-manage>
               <ExternalLink size={14} />

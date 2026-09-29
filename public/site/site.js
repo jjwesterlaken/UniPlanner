@@ -18,6 +18,7 @@ import { TIERS, PERIODS, allowanceLine, priceLabel } from "./pricing.js";
 import { FLAGS } from "./flags.js";
 import { storeUrl } from "./store-listing.js";
 import { REPOSITORY_URL, PRODUCT_NAME, ARTIFACT_NAMES, APP_URL } from "./build-facts.js";
+import { PROMO_CODE, PROMO_COPY, PROMO_DISMISS_KEY, promoBanner } from "./promo.js";
 
 /* ---------- the service worker that used to own this path ----------
 
@@ -384,6 +385,58 @@ function fillDownloads() {
   }
 }
 
+/* ---------- the launch-offer bar ----------
+
+   Everything it says, and when it stops, is site/promo.js. The bar is
+   `hidden` in the markup and only this unhides it, so after
+   PROMO_ENDS_AT the page renders exactly as it did before the offer:
+   no flash, no redeploy.
+
+   DISMISSAL IS REMEMBERED IN THIS BROWSER ONLY, and storage is allowed
+   to fail: a private window, blocked site data or a full quota must not
+   stop the bar rendering or the close button closing it for this view.
+   A failed read shows the bar; a failed write still hides it now. */
+function fillPromo() {
+  const bar = document.querySelector("[data-promo]");
+  if (!bar) return;
+  const sentence = promoBanner(Date.now());
+  if (!sentence) return;
+  let dismissed = false;
+  try {
+    dismissed = window.localStorage.getItem(PROMO_DISMISS_KEY) === "1";
+  } catch {
+    dismissed = false;
+  }
+  if (dismissed) return;
+  const text = bar.querySelector("[data-promo-text]");
+  if (text) {
+    /* Built from nodes, not innerHTML: the code is bold, and the words
+       are Grace's to change, so nothing in them is ever parsed. */
+    text.textContent = "";
+    sentence.split(PROMO_CODE).forEach((part, i) => {
+      if (i > 0) {
+        const b = document.createElement("b");
+        b.textContent = PROMO_CODE;
+        text.appendChild(b);
+      }
+      text.appendChild(document.createTextNode(part));
+    });
+  }
+  const close = bar.querySelector("[data-promo-dismiss]");
+  if (close) {
+    close.setAttribute("aria-label", PROMO_COPY.dismiss);
+    close.addEventListener("click", () => {
+      bar.hidden = true;
+      try {
+        window.localStorage.setItem(PROMO_DISMISS_KEY, "1");
+      } catch {
+        /* Closed for this view; it may reappear next visit. */
+      }
+    });
+  }
+  bar.hidden = false;
+}
+
 releaseTheOldWorker();
 /* Order matters only in that each one `replace`s and the first to
    match wins: a recovery link opened inside an installed shortcut
@@ -395,3 +448,4 @@ fillHeroCta();
 fillStoreBadges();
 fillPricing();
 fillDownloads();
+fillPromo();
