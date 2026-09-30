@@ -43,7 +43,7 @@ export const HELP_TOPICS = {
     what:
       "Two settings that tell the app when your teaching weeks run, and how your university turns a raw mark into the one it records.",
     example:
-      "Set the start date to the Monday of week 1, and a deadline on 15 September stops reading “due 15 September” and starts reading “due Week 9” — in the workload forecast and anywhere else the app talks about weeks. Add your mid-semester break and the numbering steps over it, so the week you come back to is the week you actually come back to.",
+      "Set the start date to the Monday of week 1, and a deadline on 15 September stops reading “due 15 September” and starts reading “due Week 9” — in the workload forecast and anywhere else the app talks about weeks. Add your mid-semester break and the numbering steps over it, so the week you come back to is the week you actually come back to. Add how many teaching weeks there are too, and a weekly class in the calendar can stop at the end of semester instead of repeating into the holidays.",
     cost:
       "The start date is optional and nothing breaks without it — deadlines are simply labelled by date instead of by week, which is better than a confident “Week 10” that is really week 9. The rounding rule only affects Grades: it decides whether 74.5 counts as a 75.",
   },
