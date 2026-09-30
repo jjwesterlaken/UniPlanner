@@ -22,6 +22,11 @@
    dashboard shows UNI50 redemptions, which is the nearest thing to a
    conversion count available.
 
+   WHERE TO READ THE COUNTS: Cloudflare → uniplannerapp.com (a zone
+   since 16 September 2026) → Analytics & Logs → HTTP Traffic, filtered
+   to Path equals `/go/google` and so on. Read weekly: retention on the
+   plan the zone is on is short.
+
    Adding a channel is adding a name here; the build writes the
    redirect and scripts/test-path-split.mjs checks it.
    ================================================================== */
