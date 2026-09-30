@@ -46,6 +46,7 @@ const SRC_PAGE = "public/site/index.html";
    plain JS with no browser globals, so Node can simply load it and
    there is nothing to parse. */
 import { SITE_URL, APP_URL, DOCUMENT_PATHS } from "../src/legalLinks.js";
+import { CAMPAIGN_CHANNELS, campaignPath, CAMPAIGN_TARGET } from "../site/campaigns.js";
 
 /* The app's PATH, from the same constant every button points at, so
    the directory this build writes the app into and the URL it is
@@ -404,9 +405,20 @@ fs.writeFileSync(
     "# below is a path that now holds NO FILE, so this list can never",
     "# shadow something the site serves.",
     ...moved.map((f) => `/${f}  ${APP_PATH}/${f}  301`),
+    "#",
+    "# One landing path per ad channel (site/campaigns.js), counted by",
+    "# Cloudflare's own request analytics. 302, so every click is asked",
+    "# for and counted rather than cached by the browser.",
+    ...CAMPAIGN_CHANNELS.map((c) => `${campaignPath(c)}  ${CAMPAIGN_TARGET}  302`),
     "",
   ].join("\n")
 );
+for (const c of CAMPAIGN_CHANNELS) {
+  if (!/^[a-z0-9-]+$/.test(c)) throw new Error(`campaign channel "${c}" is not a lower-case URL-safe name`);
+  if (fs.existsSync(path.join(OUT, campaignPath(c).replace(/^\//, "")))) {
+    throw new Error(`${campaignPath(c)} is a real file in the build, so its redirect would never be reached`);
+  }
+}
 
 /* ---------- every link must resolve ---------- */
 

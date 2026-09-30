@@ -406,7 +406,10 @@ function forwarder(name, { pathname = "/", search = "", hash = "", standalone = 
     const lines = fs
       .readFileSync(path.join(OUT, "_redirects"), "utf8")
       .split("\n")
-      .filter((l) => l.trim() && !l.startsWith("#"));
+      .filter((l) => l.trim() && !l.startsWith("#"))
+      /* The ad-channel landing paths are their own class, asserted in
+         the next test: temporary, into `/`, not into the app. */
+      .filter((l) => !l.trim().startsWith("/go/"));
     assert.ok(lines.length > 0, "no redirects at all — this check would pass over nothing");
     for (const line of lines) {
       const [from, to, code] = line.trim().split(/\s+/);
@@ -418,6 +421,27 @@ function forwarder(name, { pathname = "/", search = "", hash = "", standalone = 
       );
       assert.ok(fs.existsSync(path.join(OUT, to.replace(/^\//, ""))), `${from} redirects to ${to}, which is not in the build`);
     }
+  });
+
+  await test("ONE LANDING PATH PER AD CHANNEL: /go/<channel> -> / as a 302, derived from site/campaigns.js", async () => {
+    /* A 302 because a browser caches a 301 and would never ask again,
+       so repeat clicks would go uncounted. Into `/`, the marketing page,
+       never the app. Derived both ways: every channel has exactly one
+       line, and no /go/ line exists that the list does not name. */
+    const { CAMPAIGN_CHANNELS, campaignPath, CAMPAIGN_TARGET } = await import(pathToFileURL(path.join(rootDir, "site/campaigns.js")).href);
+    assert.ok(CAMPAIGN_CHANNELS.length >= 2, "the channel list is nearly empty — this would pass over nothing");
+    const go = fs
+      .readFileSync(path.join(OUT, "_redirects"), "utf8")
+      .split("\n")
+      .filter((l) => l.trim().startsWith("/go/"))
+      .map((l) => l.trim().split(/\s+/));
+    assert.deepEqual(go.map(([from]) => from).sort(), CAMPAIGN_CHANNELS.map(campaignPath).sort(), "the /go/ redirects are not exactly the channel list");
+    for (const [from, to, code] of go) {
+      assert.equal(code, "302", `${from} is a ${code}; a cached permanent redirect stops repeat clicks being counted`);
+      assert.equal(to, CAMPAIGN_TARGET, `${from} lands on ${to}, not the marketing page`);
+      assert.ok(!fs.existsSync(path.join(OUT, from.replace(/^\//, ""))), `${from} is a real file, so the redirect is never reached`);
+    }
+    assert.equal(CAMPAIGN_TARGET, "/", "campaign traffic lands somewhere other than the marketing page");
   });
 
   await test("one origin gets ONE policy, and it is the app's", () => {

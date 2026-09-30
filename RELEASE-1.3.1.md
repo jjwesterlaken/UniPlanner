@@ -9,7 +9,7 @@ for that.
 | # | Item | State |
 |---|---|---|
 | 1 | Weekly essay-feedback quality queries | **Built.** `supabase/checks/essay-quality-weekly.sql`, pinned by `scripts/test-essay-quality.mjs` |
-| 2 | Cost against credits, per task | **Ruled GO, 27 September 2026.** The ceiling half is measured below. The real-spend half (0024, `ai_task_costs`, no user id and no content) is **built**: migration 0024, `supabase/checks/ai-cost-weekly.sql`, and the deploy order below |
+| 2 | Cost against credits, per task | **Ruled GO, 27 September 2026.** The ceiling half is measured below. The real-spend half (0024, `ai_task_costs`, no user id and no content) is **live and verified, 30 September 2026** (#165). The first row after the deploy was explain / text / gpt-4o-mini, 181 in and 93 out, $0.0000829, 1 credit, delivered; the table had been empty only because no AI action ran between the deploy and the first check. Run `supabase/checks/ai-cost-weekly.sql` weekly |
 | 3 | Placeholder linking | Shipped in 1.3.0 (#161), with the plain control. **Grace restyles it.** Listed so it stays visible |
 
 ---
