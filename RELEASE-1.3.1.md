@@ -9,9 +9,10 @@ for that.
 | # | Item | State |
 |---|---|---|
 | 1 | Weekly essay-feedback quality queries | **Built.** `supabase/checks/essay-quality-weekly.sql`, pinned by `scripts/test-essay-quality.mjs` |
-| 2 | Cost against credits, per task | **Ruled GO, 27 September 2026.** The ceiling half is measured below. The real-spend half (0024, `ai_task_costs`, no user id and no content) is **live, 27 September 2026**: 0024 applied, functions deployed, policy promoted (#165). Run `supabase/checks/ai-cost-weekly.sql` weekly |
+| 2 | Cost against credits, per task | **Ruled GO, 27 September 2026.** The ceiling half is measured below. The real-spend half (0024, `ai_task_costs`, no user id and no content) is **live and verified, 30 September 2026** (#165). The first row after the deploy was explain / text / gpt-4o-mini, 181 in and 93 out, $0.0000829, 1 credit, delivered; the table had been empty only because no AI action ran between the deploy and the first check. Run `supabase/checks/ai-cost-weekly.sql` weekly |
 | 3 | Placeholder linking | Shipped in 1.3.0 (#161), with the plain control. **Grace restyles it.** Listed so it stays visible |
 | 4 | Auth email failure detection | **Built, 27 September 2026.** A canary every four hours (`auth-email-canary`, migration 0025), plus app-side reports of signup and reset email failures, which the digest now reads. Setup is SUPABASE-SETUP.md §3e |
+| 5 | Bounded recurring events | **Live on the web, 1 October 2026** (#170, promoted). In the iOS and Android 1.3.1 builds. `src/recurrence.js`, a teaching-weeks field on Semester setup, pinned by `scripts/test-recurrence.mjs`. See section 5 |
 
 ---
 
@@ -215,3 +216,50 @@ the essay queries. It has three blocks:
 - `free_outcomes`: what the free refusals cost us.
 
 **Read `requests` before any cover.**
+
+---
+
+## 5. Bounded recurring events
+
+From user feedback: a weekly class repeated forever, and the only way
+to stop it was to delete the whole series. Ruled go 30 September 2026:
+teaching weeks go on Semester setup (blank by default), the default
+count is 12, count mode skips the break, and "this and all following"
+is included.
+
+**What a weekly event can say now.** It has three optional fields, and
+each one rides the ordinary per-item merge:
+- `repeatEnd`, one of:
+  - `{kind:"semester"}` ends on the Sunday of teaching week N and has no
+    class in the break week.
+  - `{kind:"count", n}` gives n classes. Break weeks are skipped and not
+    counted.
+  - absent or null means no end, which is **exactly** the old behaviour.
+- `until` is written by "this and all following". It caps any series
+  and keeps its break skipping.
+- `skip` is written by "this event only".
+
+**Nothing changes under anyone.** An event saved before this has no
+`repeatEnd`, so it is left completely alone: no end, and no break
+skipping either. A test runs the old predicate beside the new one for
+every day of a year. Opening an old event to fix its room does not give
+it an end. Only ticking "repeats weekly" on an event that isn't weekly
+yet does that.
+
+**The default.** If the semester start and teaching weeks are set, a new
+series runs until the end of semester. If they aren't, it runs 12 times.
+A semester series whose dates are later cleared, or which starts after
+the semester has ended, falls back to 12 times. It never becomes endless
+and never shows nothing.
+
+**Sync.** There is no merge change, no new collection and no migration.
+Deleting one class, or this-and-following, is a patch with a bumped
+`updatedAt`. Only "all events in the series" tombstones the item, and
+that was the only delete there was before. A fully used series (every
+class skipped, plus an `until`) measures under 1 KB.
+
+**For Grace.** The wording is in `src/calendarCopy.js`. The teaching
+weeks field is on her Semester setup screen. The end choice is radio
+buttons under the weekly checkbox, and the delete choices are a row of
+three buttons under the event. Both are plain controls, waiting for
+her pass.

@@ -111,13 +111,14 @@ one yet.
 
 ---
 
-## 2. At Squarespace (DNS)
+## 2. DNS: at Cloudflare since 16 September 2026
 
-Squarespace holds the DNS for `uniplannerapp.com`. The nameservers were
-deliberately never moved, so this is where records go.
-
-**Squarespace → Settings → Domains → uniplannerapp.com → DNS Settings →
-Custom Records.**
+**`uniplannerapp.com` is a Cloudflare zone since 16 September 2026**, so
+records go in **Cloudflare → uniplannerapp.com → DNS → Records**. This
+section originally described Squarespace, which held the DNS until then;
+the notes below still apply, with one addition: a Resend record that is
+a CNAME must be **DNS only (grey cloud)**, not proxied, or verification
+never sees it.
 
 For each record Resend gave you, add a row. Notes that catch people out:
 
@@ -130,8 +131,7 @@ For each record Resend gave you, add a row. Notes that catch people out:
 - **Do not touch the existing MX records.** Those are Google Workspace
   and carry Jared's actual mail. The Resend MX record, if there is one,
   is for the *subdomain* and does not conflict.
-- **TXT values often need quotes stripped.** Squarespace usually wants
-  the value without surrounding quotation marks.
+- **TXT values:** paste them without surrounding quotation marks.
 
 Then wait. Propagation is usually minutes but can be an hour. Resend's
 Domains page shows each record as verified when it sees it.

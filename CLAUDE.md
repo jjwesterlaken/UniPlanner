@@ -4583,10 +4583,21 @@ planner never mixes with production's.
 ### The app's origin is fixed, and it is not `/` forever
 
 **`https://www.uniplannerapp.com` is the app's permanent origin**, live
-since 12 August 2026. DNS stays at Squarespace: one CNAME, `www` →
-`uniplanner.pages.dev`, with the bare domain forwarding to `www`. MX
-records never moved, so Google Workspace mail was never at risk — which
-is why the nameserver switch was cancelled rather than merely postponed.
+since 12 August 2026. **`uniplannerapp.com` has been a Cloudflare zone
+since 16 September 2026** (Jared, 30 September): DNS records, the edge
+cache DEPLOY-CHECKLIST §7a purges, and the per-path request counts the
+`/go/<channel>` ad paths rely on (Analytics & Logs → HTTP Traffic) all
+live under that zone. `www` points at the Pages project. MX records
+are Google Workspace's and must be carried over untouched by any DNS
+change.
+
+**This paragraph used to say "DNS stays at Squarespace … the nameserver
+switch was cancelled", and it went on saying so for a fortnight after
+the switch happened** — while DEPLOY-CHECKLIST, written after it, told
+the reader to purge the zone cache. Two documents disagreeing is the
+signal; the fix was asking, not choosing whichever sounded more
+recent. The same stale sentence sat in EMAIL-SETUP §2, which is why
+both changed together.
 
 **The origin must not change, and the path split did not change it** —
 `www.uniplannerapp.com` before and after, with the app one level deeper.
