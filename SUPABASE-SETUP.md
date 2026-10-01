@@ -255,6 +255,23 @@ exact; the migrations look them up by name.
 | `auth_canary_function_url` | `https://<project-ref>.supabase.co/functions/v1/auth-email-canary` | 0025, at schedule time |
 | `auth_canary_secret` | a DIFFERENT long random string | 0025's job, at run time |
 
+**A missing or misnamed secret REFUSES the apply, naming it.** Each of
+0004, 0022 and 0025 checks BOTH of its secrets by exact name before it
+schedules anything, and stops with an error such as
+
+```
+0025 REFUSED: Vault secret "auth_canary_function_url" was not found (or is empty), so the Auth email canary was NOT scheduled. …
+```
+
+It used to raise a NOTICE and skip, and it never looked for the bearer
+secret at all, so an apply could "succeed" having scheduled nothing.
+That is what happened on 1 October 2026, when the canary's URL had been
+saved under the wrong name and only a live probe showed it. An empty
+value counts as missing. The fix is always the same: add the secret
+under exactly the name in the error, then re-run the migration.
+`scripts/test-migrations.mjs` runs each schedule against a stubbed
+Vault, with a misnamed URL among the cases.
+
 **The URL is read when the migration is applied; the secret is read
 when the job runs.** That is deliberate and worth understanding before
 changing either migration: the credential is never written into
@@ -338,23 +355,24 @@ one, and publishing a second invalidates both.
 
 ### 3e. The order, and why re-running the migration is a step
 
-For the digest, the first apply of 0022 deliberately does **not**
-schedule anything:
+For the digest, in this order:
 
-1. **Apply `0022_function_errors.sql`.** It WIDENS — it creates the
-   table the functions write — so it goes **before** the deploy. With
-   no Vault secret yet it raises a notice about skipping the schedule
-   and applies cleanly. Its self-check verifies the table, the revoked
-   grants, the absence of an account column and the column bounds; an
-   apply cannot report success while any of that is untrue.
-2. **Deploy the functions.** `deploy-functions.yml` globs every
+1. **Add the two Vault secrets first** (3b): `error_digest_function_url`
+   and `error_digest_secret`. The URL is known before anything is
+   deployed. With pg_cron and pg_net on, 0022 now REFUSES without them,
+   naming the missing one, and in the SQL editor that refusal rolls the
+   whole script back, table included.
+2. **Apply `0022_function_errors.sql`.** It WIDENS — it creates the
+   table the functions write — so it goes **before** the deploy. Its
+   self-check verifies the table, the revoked grants, the absence of an
+   account column and the column bounds; an apply cannot report success
+   while any of that is untrue.
+3. **Deploy the functions.** `deploy-functions.yml` globs every
    function, so `error-digest` ships with the rest and nothing needs
    adding to a list.
-3. **Set the secrets** (3c) and add the **Vault secrets** (3b).
-4. **Re-apply `0022_function_errors.sql`.** Now the Vault lookups
-   succeed and the cron job is created. It is idempotent —
-   `cron.unschedule` runs first — so re-applying is the intended way to
-   (re)create the schedule.
+4. **Set the function's secrets** (3c). Re-applying 0022 is still safe
+   and is the way to (re)create the schedule: it is idempotent, and
+   `cron.unschedule` runs first.
 
 Verify it exists:
 
@@ -406,11 +424,18 @@ and reset email failed for hours and nothing of ours noticed.
 **Order.** The extensions are already on (§3a), so 0025 creates the job
 as soon as its two Vault secrets exist:
 
-1. Add the Vault secrets `auth_canary_function_url` and
-   `auth_canary_secret` (§3b).
+1. Add the two Vault secrets, under exactly these names (§3b):
+
+   | Vault secret | Value |
+   |---|---|
+   | `auth_canary_function_url` | `https://<project-ref>.supabase.co/functions/v1/auth-email-canary` |
+   | `auth_canary_secret` | a long random string, the same one as the function's `AUTH_CANARY_SECRET` |
+
 2. Apply 0025. It must end with `0025 applied and verified: 5 properties
-   checked`, and raise no notice about a missing secret. If it does,
-   add the secret and re-run it; it is safe to re-run.
+   checked`. If either secret is missing, misspelt or empty it stops
+   with `0025 REFUSED: Vault secret "<name>" was not found`, naming the
+   one it could not find, and schedules nothing. Add that secret under
+   exactly that name and re-run; it is safe to re-run.
 3. Merge #166 and deploy functions.
 4. Set the function's two secrets:
 

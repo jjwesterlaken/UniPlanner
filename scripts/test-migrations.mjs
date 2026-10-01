@@ -2153,6 +2153,91 @@ async function run() {
     assert.match(out, /ALL PASS/, `the live billing check fails once 0018 is applied:\n${out}`);
   });
 
+  /* ---------- A MISSING VAULT SECRET REFUSES, BY NAME ----------
+
+     0004, 0022 and 0025 schedule a pg_cron job whose URL is read from
+     Vault at apply time and whose bearer secret is read at run time.
+     Each used to raise a NOTICE and skip when the URL was missing, and
+     never looked for the secret at all, so an apply "succeeded" having
+     scheduled nothing. On 1 October 2026 that is exactly what the
+     canary's URL, saved under the wrong name, did.
+
+     The shim has neither pg_cron nor pg_net, so the full-folder apply
+     above returns at the extension check and never reaches this code.
+     Here the three schemas are stubbed so the REAL schedule block from
+     each file runs, in five worlds. The last one is the control: with
+     both secrets present the job IS created, so a block that refused
+     everything could not pass. */
+  const VAULT_SCHEDULES = [
+    ["0004_deletion_and_retention.sql", "ai_notes_function_url", "ai_notes_sweep_secret"],
+    ["0022_function_errors.sql", "error_digest_function_url", "error_digest_secret"],
+    ["0025_auth_email_canary.sql", "auth_canary_function_url", "auth_canary_secret"],
+  ];
+  const CRON_NET_VAULT_STUBS = `
+    create schema cron;
+    create table cron.job (jobid serial primary key, jobname text unique, schedule text, command text);
+    create function cron.schedule(n text, s text, c text) returns bigint language sql as $f$
+      insert into cron.job (jobname, schedule, command) values (n, s, c)
+      on conflict (jobname) do update set schedule = excluded.schedule, command = excluded.command
+      returning jobid::bigint $f$;
+    create function cron.unschedule(n text) returns boolean language sql as $f$
+      delete from cron.job where jobname = n returning true $f$;
+    create schema net;
+    create function net.http_post(url text, headers jsonb, body jsonb) returns bigint language sql as $f$ select 1::bigint $f$;
+    create schema vault;
+    create table vault.decrypted_secrets (name text, decrypted_secret text);`;
+  const scheduleBlock = (file) => {
+    const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
+    const blocks = sql.match(/^do \$\$[\s\S]*?^\$\$;/gm) || [];
+    const mine = blocks.filter((b) => /cron\.schedule\(/.test(b));
+    assert.equal(mine.length, 1, `${file}: expected exactly one DO block that calls cron.schedule, found ${mine.length}`);
+    const job = /cron\.schedule\(\s*'([^']+)'/.exec(mine[0]);
+    assert.ok(job, `${file}: could not read the job name`);
+    return { block: mine[0], job: job[1] };
+  };
+  assert.equal(VAULT_SCHEDULES.length, 3);
+
+  for (const [file, urlName, secretName] of VAULT_SCHEDULES) {
+    await test(`${file.slice(0, 4)} REFUSES, NAMING THE VAULT SECRET IT COULD NOT FIND, and schedules once both exist`, () => {
+      const { block, job } = scheduleBlock(file);
+      const worlds = [
+        { label: "no secrets", secrets: [], missing: urlName },
+        { label: "the URL under the wrong name (1 October)", secrets: [[urlName.replace("_function_url", "_url"), "https://x.test/fn"], [secretName, "s3cret"]], missing: urlName },
+        { label: "an empty URL", secrets: [[urlName, ""], [secretName, "s3cret"]], missing: urlName },
+        { label: "the URL and no bearer secret", secrets: [[urlName, "https://x.test/fn"]], missing: secretName },
+      ];
+      for (const w of worlds) {
+        const db = freshDb();
+        psqlOrThrow(db, CRON_NET_VAULT_STUBS);
+        for (const [n, v] of w.secrets) psqlOrThrow(db, `insert into vault.decrypted_secrets values ('${n}', '${v}');`);
+        const r = psql(db, block);
+        assert.equal(r.ok, false, `${file}, ${w.label}: the apply succeeded instead of refusing`);
+        assert.ok(r.err.includes(`"${w.missing}"`), `${file}, ${w.label}: the refusal does not name ${w.missing}:\n${r.err}`);
+        assert.equal(count(db, "cron.job", `jobname = '${job}'`), 0, `${file}, ${w.label}: a job was scheduled anyway`);
+      }
+      // The control.
+      const db = freshDb();
+      psqlOrThrow(db, CRON_NET_VAULT_STUBS);
+      psqlOrThrow(db, `insert into vault.decrypted_secrets values ('${urlName}', 'https://x.test/fn'), ('${secretName}', 's3cret');`);
+      psqlOrThrow(db, block);
+      assert.equal(count(db, "cron.job", `jobname = '${job}'`), 1, `${file}: with both secrets present no job was scheduled`);
+      const command = one(db, `select command from cron.job where jobname = '${job}';`);
+      assert.ok(command.includes("https://x.test/fn"), `${file}: the job does not call the URL from Vault`);
+      assert.ok(!command.includes("s3cret") && command.includes(`'${secretName}'`), `${file}: the job stores the secret's VALUE instead of looking it up at run time`);
+    });
+  }
+
+  await test("SUPABASE-SETUP names every Vault secret the three schedules refuse without", () => {
+    const setup = fs.readFileSync(path.join(rootDir, "SUPABASE-SETUP.md"), "utf8");
+    for (const [file, urlName, secretName] of VAULT_SCHEDULES) {
+      const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
+      for (const n of [urlName, secretName]) {
+        assert.ok(sql.includes(`'${n}'`), `${file} no longer reads ${n}; this table is stale`);
+        assert.ok(setup.includes(`\`${n}\``), `SUPABASE-SETUP.md does not name the Vault secret ${n}`);
+      }
+    }
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 
