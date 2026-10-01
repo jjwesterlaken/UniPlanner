@@ -211,7 +211,12 @@ recordings client-side instead.
 
 ## 3. Scheduled jobs: the retention sweep and the error digest
 
-Two pg_cron jobs, both of the same shape — pg_cron calling pg_net
+**pg_cron and pg_net have been enabled on the project since 17 September
+2026, and the error digest runs on its schedule.** What follows is the
+setup as it was done, kept for a fresh project, plus the canary (§3e),
+which is the one job still to be created.
+
+pg_cron jobs, all of the same shape — pg_cron calling pg_net
 calling an Edge Function — and they share one set of prerequisites.
 Neither is created by the migration that schedules it unless the
 prerequisites are in place; the migration raises a **notice** naming
@@ -236,7 +241,7 @@ Supabase dashboard → **Database → Extensions**, enable both:
 They are enabled per project in the dashboard, not by SQL, which is why
 no migration can do it.
 
-### 3b. The four Vault secrets
+### 3b. The Vault secrets
 
 Dashboard → **Project Settings → Vault**. Names are lower case and
 exact; the migrations look them up by name.
@@ -247,6 +252,8 @@ exact; the migrations look them up by name.
 | `ai_notes_sweep_secret` | a long random string you invent | 0004's job, at run time |
 | `error_digest_function_url` | `https://<project-ref>.supabase.co/functions/v1/error-digest` | 0022, at schedule time |
 | `error_digest_secret` | a long random string you invent | 0022's job, at run time |
+| `auth_canary_function_url` | `https://<project-ref>.supabase.co/functions/v1/auth-email-canary` | 0025, at schedule time |
+| `auth_canary_secret` | a DIFFERENT long random string | 0025's job, at run time |
 
 **The URL is read when the migration is applied; the secret is read
 when the job runs.** That is deliberate and worth understanding before
@@ -386,6 +393,68 @@ curl -s -X POST https://<project-ref>.supabase.co/functions/v1/error-digest \
 `{"ok":true,"outcome":"sent"}` means the email went. Then remove the
 row, or leave it — the digest purges anything older than 30 days on
 every run.
+
+
+### 3e. The Auth email canary
+
+Every four hours, `auth-email-canary` asks Supabase Auth to send a password
+reset to a canary account and emails `ERROR_DIGEST_TO` **once** when that
+starts failing and **once** when it recovers (EMAIL-SETUP.md, *Detecting
+an Auth email failure*). It exists because on 27 September every signup
+and reset email failed for hours and nothing of ours noticed.
+
+**Order.** The extensions are already on (§3a), so 0025 creates the job
+as soon as its two Vault secrets exist:
+
+1. Add the Vault secrets `auth_canary_function_url` and
+   `auth_canary_secret` (§3b).
+2. Apply 0025. It must end with `0025 applied and verified: 5 properties
+   checked`, and raise no notice about a missing secret. If it does,
+   add the secret and re-run it; it is safe to re-run.
+3. Merge #166 and deploy functions.
+4. Set the function's two secrets:
+
+```bash
+supabase secrets set AUTH_CANARY_SECRET=<the same string as auth_canary_secret>
+supabase secrets set AUTH_CANARY_EMAIL=purgatory+canary@uniplannerapp.com
+```
+
+Without them the function answers `canary_disabled` and each run does
+nothing.
+
+It reuses `RESEND_API_KEY`, `ERROR_DIGEST_TO` and `ERROR_DIGEST_FROM`
+for its two alerts, and the platform's own `SUPABASE_URL` and
+`SUPABASE_ANON_KEY` for the probe.
+
+**`AUTH_CANARY_EMAIL` is `purgatory+canary@uniplannerapp.com`** (Jared,
+29 September 2026), and it must be a mailbox that ACCEPTS mail: every run
+Auth really sends it a reset email through Resend. A `+` address is
+delivered to its base mailbox, so `purgatory@` has to exist, and a filter
+on `+canary` there keeps the resets out of sight. An address that bounces
+would damage the sending domain's reputation, run after run, which is
+the one thing a check on email delivery must not do. The function
+creates the canary *account* itself (confirmed, no password), so there
+is nothing to set up in Authentication.
+
+**It uses Resend quota: 6 emails a day, about 180 a month**, against the
+free tier's 100 a day and 3,000 a month. The schedule is one line in
+0025 (`'17 */4 * * *'`: 00:17, 04:17 and so on, UTC).
+
+**Verify it:**
+
+```bash
+curl -s -X POST https://<project-ref>.supabase.co/functions/v1/auth-email-canary \
+  -H "Authorization: Bearer <AUTH_CANARY_SECRET>" \
+  -H "content-type: application/json" -d '{"probe":true}'
+```
+
+`{"ok":true,"probe":"ok",...,"state":"healthy"}` means Auth sent the
+canary a reset email, and one should be in its inbox. Then:
+
+```sql
+select * from public.auth_email_canary;
+select jobname, schedule from cron.job where jobname = 'auth-email-canary';
+```
 
 ## Provider limits this design was built around
 

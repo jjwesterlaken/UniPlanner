@@ -246,7 +246,7 @@ is the app.
 
 ---
 
-## Detecting an Auth email failure — PROPOSED, not built
+## Detecting an Auth email failure — BUILT (27 September 2026)
 
 **Why the 27 September outage went unnoticed.** The error digest reads
 `function_errors`, which only Edge Functions write. Auth's SMTP send is
@@ -264,7 +264,11 @@ the message raw. But that error went to the student and nowhere else.
   token, which is another credential with account-wide scope, stored
   somewhere a scheduled job can reach it.
 
-**The proposal: two checks, because they catch different people.**
+**Built as proposed, both halves** (Jared, 27 September 2026). Setup
+is SUPABASE-SETUP.md §3e. The code: `supabase/functions/auth-email-canary/`
+with migration 0025, `src/authEmailFailure.js`, and the digest reading
+`client_errors`; `scripts/test-auth-email.mjs` covers all three. **Two
+checks, because they catch different people:**
 
 1. **A canary, which catches it before any student does.** A scheduled
    job calls Auth's `/recover` for a dedicated canary account, on an
@@ -276,14 +280,18 @@ the message raw. But that error went to the student and nowhere else.
      sent through `RESEND_API_KEY`, which is independent of Auth SMTP
      and was the half still working on 27 September. It sends nothing
      while the state holds and one email on recovery, so a broken day is
-     two emails rather than twenty-four.
-   - **Hourly:** a locked-out student is the most urgent failure this
-     app has.
-   - **Costs:** 24 Auth emails a day into a canary inbox, well inside
-     the raised rate limit. And a canary account that exists only to be
-     reset, holding nothing.
-   - **Depends on the pg_cron/pg_net wiring** (CLAUDE.md, pending item
-     2), same as the digest.
+     two emails rather than six.
+   - **Every four hours** (Jared, 29 September 2026): an outage is
+     noticed within four hours, at a quarter of the hourly cost.
+   - **Costs:** 6 Auth emails a day into a canary inbox, well inside the
+     raised rate limit, and about 180 of Resend's free 3,000 a month.
+     And a canary account that exists only to be reset, holding nothing.
+   - **The canary address is `purgatory+canary@uniplannerapp.com`, and
+     it must accept mail.** Auth really sends it a reset on every run, and
+     a bouncing address would damage the sending domain's reputation.
+   - **pg_cron and pg_net are already on** (since 17 September 2026; the
+     digest runs on its schedule), so the job is created when 0025 is
+     applied with its two Vault secrets in place.
 
 2. **Client-side reporting, which gives evidence about real students.**
    When `signUp` or `resetPassword` fails with a server error (5xx, or
@@ -294,11 +302,11 @@ the message raw. But that error went to the student and nowhere else.
      wording is unchanged.
    - It does not leak whether an account exists. The row reaches only
      us, and the student sees what they saw before.
-   - **The digest then has to read `client_errors` too**, which it does
-     not today.
+   - **The digest now reads `client_errors` too**, the same 24 hours,
+     without the user id, and floats `auth_email_failed` to the top.
 
-**Recommended: both, canary first.** The canary would have caught this
-outage within the hour. Client reporting would have caught it at the
+**Why both.** The canary would have caught this
+outage within four hours. Client reporting would have caught it at the
 first student, but only once somebody read the next digest.
 
 **Structural alternative, for later:** Supabase's *Send Email* Auth

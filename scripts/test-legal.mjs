@@ -864,6 +864,36 @@ async function run() {
     return [...found].sort();
   };
 
+  /* TABLES THAT ARE ABOUT NO ONE, and the only way out of the sweep
+     below. The documents enumerate where a STUDENT'S data lives; a row
+     of operational state that holds nothing about any person has no
+     sentence to be. Each entry names the ONLY columns the table may
+     have, and the check reads them out of the create statement — so the
+     day a column is added (an address, a user id, anything), the table
+     falls back into the sweep and has to be described. An excuse that
+     cannot be falsified is a rubber stamp; this one is checked. */
+  const NOT_ABOUT_ANYONE = {
+    auth_email_canary: {
+      columns: ["id", "status", "since", "checked_at", "last_probe", "last_http_status"],
+      why: "whether Supabase Auth could send email at the last hourly check, and since when: one row, no address, no user",
+    },
+  };
+  const columnsOf = (table) => {
+    const create = migrationSql().match(new RegExp(`create table (?:if not exists )?public\\.${table} \\(([\\s\\S]*?)\\n\\);`));
+    assert.ok(create, `public.${table} has no create statement this guard can read`);
+    return create[1]
+      .split("\n")
+      .map((l) => l.replace(/--.*$/, "").trim())
+      .filter((l) => l && !/^(constraint|primary key|unique|check)\b/i.test(l))
+      .map((l) => l.split(/\s+/)[0]);
+  };
+  const excused = (table) => {
+    const entry = NOT_ABOUT_ANYONE[table];
+    if (!entry) return false;
+    assert.deepEqual(columnsOf(table), entry.columns, `public.${table} is excused from the documents as holding nothing about anyone, but its columns are no longer the ones that excuse was checked against`);
+    return true;
+  };
+
   /* What each table must be visible as, in words a student would use.
      A table whose contents a student never sees would still need a line
      here saying so — "nothing, and why" is a decision, silence isn't. */
@@ -950,7 +980,13 @@ async function run() {
   await test("every table in the schema is accounted for in both published documents", () => {
     const privacy = prose("privacy.html");
     const deletion = prose("delete-account.html");
+    let excusedCount = 0;
     for (const table of schemaTables()) {
+      if (excused(table)) {
+        excusedCount += 1;
+        assert.ok(!DOCUMENTED_AS[table], `public.${table} is both documented and excused; pick one`);
+        continue;
+      }
       const entry = DOCUMENTED_AS[table];
       assert.ok(
         entry,
@@ -961,6 +997,9 @@ async function run() {
       assert.match(privacy, entry.privacy, `the privacy policy no longer describes public.${table}`);
       assert.match(deletion, entry.deletion, `the deletion page no longer lists public.${table}`);
     }
+    /* A stale excuse (a table since dropped or renamed) is a list nobody
+       reads any more; every one must name a real table. */
+    assert.equal(excusedCount, Object.keys(NOT_ABOUT_ANYONE).length, "an entry in NOT_ABOUT_ANYONE names no table in the schema");
   });
 
   /* ---------- the same question, on the device ----------
@@ -1135,6 +1174,7 @@ async function run() {
     let unowned = 0;
     for (const table of schemaTables()) {
       if (table === "planner_data") continue; // deleted dynamically, guarded in test-migrations.mjs
+      if (excused(table)) continue; // about no one, so nothing to delete with an account
       const create = sql.match(new RegExp(`create table (?:if not exists )?public\\.${table} \\(([\\s\\S]*?)\\n\\);`));
       assert.ok(create, `public.${table} has no create statement this guard can read`);
       const hasUserId = /\buser_id\b/.test(create[1]);

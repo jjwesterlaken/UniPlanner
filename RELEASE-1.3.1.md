@@ -11,7 +11,8 @@ for that.
 | 1 | Weekly essay-feedback quality queries | **Built.** `supabase/checks/essay-quality-weekly.sql`, pinned by `scripts/test-essay-quality.mjs` |
 | 2 | Cost against credits, per task | **Ruled GO, 27 September 2026.** The ceiling half is measured below. The real-spend half (0024, `ai_task_costs`, no user id and no content) is **live and verified, 30 September 2026** (#165). The first row after the deploy was explain / text / gpt-4o-mini, 181 in and 93 out, $0.0000829, 1 credit, delivered; the table had been empty only because no AI action ran between the deploy and the first check. Run `supabase/checks/ai-cost-weekly.sql` weekly |
 | 3 | Placeholder linking | Shipped in 1.3.0 (#161), with the plain control. **Grace restyles it.** Listed so it stays visible |
-| 5 | Bounded recurring events | **Built.** `src/recurrence.js`, a teaching-weeks field on Semester setup, pinned by `scripts/test-recurrence.mjs`. See section 5 |
+| 4 | Auth email failure detection | **Built, 27 September 2026.** A canary every four hours (`auth-email-canary`, migration 0025), plus app-side reports of signup and reset email failures, which the digest now reads. Setup is SUPABASE-SETUP.md §3e |
+| 5 | Bounded recurring events | **Live on the web, 1 October 2026** (#170, promoted). In the iOS and Android 1.3.1 builds. `src/recurrence.js`, a teaching-weeks field on Semester setup, pinned by `scripts/test-recurrence.mjs`. See section 5 |
 
 ---
 
