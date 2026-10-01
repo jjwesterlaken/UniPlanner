@@ -5858,6 +5858,16 @@ nobody reads afterwards is not a report. Where a migration must not
 clobber, it should still ASSERT the end state and raise — the skip may
 be conditional, the verification may not be.
 
+**The same shape turned up in the three cron migrations, 1 October
+2026.** 0004, 0022 and 0025 each skipped their schedule with a NOTICE
+when the Vault URL was missing, and none checked the bearer secret. The
+canary's URL had been saved under the wrong name, so 0025 "applied" and
+scheduled nothing, and only a live probe showed it. All three now
+refuse, naming the secret they could not find; the extension checks
+stay NOTICEs, because the test cluster has neither extension. The
+guard in `test-migrations.mjs` stubs `cron`, `net` and `vault` so the
+real schedule blocks run, with the misnamed URL as one of the cases.
+
 ### THE NATIVE BUNDLE IS A DIFFERENT ARTIFACT, AND NOTHING WAS MEASURING IT
 
 Two iOS layout complaints arrived together on build 3509882 and looked
