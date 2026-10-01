@@ -216,6 +216,18 @@ import {
   SHEET_ENTRIES_MAX,
 } from "./reference.js";
 import { PRIVACY_URL, DELETE_ACCOUNT_URL, SUPPORT_URL, SUPPORT_EMAIL } from "./legalLinks.js";
+import {
+  occursOn,
+  semesterEnd,
+  defaultRepeatEnd,
+  occurrenceCount,
+  skipPatch,
+  followingPatch,
+  DEFAULT_REPEAT_COUNT,
+  MAX_REPEAT_COUNT,
+  MAX_TEACHING_WEEKS,
+} from "./recurrence.js";
+import { RECURRENCE_COPY, fillCopy } from "./calendarCopy.js";
 import { feedbackLink, FEEDBACK_COPY } from "./feedbackLink.js";
 import { Capacitor } from "@capacitor/core";
 import {
@@ -1257,7 +1269,7 @@ function Assignments({ assignments, courses, addItem, patchItem, removeItem, foc
 /*  Calendar                                                          */
 /* ------------------------------------------------------------------ */
 
-function EventFields({ state, set, courses }) {
+function EventFields({ state, set, courses, settings }) {
   return (
     <div className="grid grid-cols-2 gap-2">
       <div className="col-span-2">
@@ -1285,14 +1297,84 @@ function EventFields({ state, set, courses }) {
         <input className={inputCls} spellCheck placeholder="e.g. Building 8, Room 204" value={state.location || ""} onChange={(e) => set((x) => ({ ...x, location: e.target.value }))} />
       </div>
       <label className="col-span-2 flex items-center gap-2 text-sm text-stone-700">
-        <input type="checkbox" className="h-4 w-4 u-accent-text" checked={state.repeat === "weekly"} onChange={(e) => set((x) => ({ ...x, repeat: e.target.checked ? "weekly" : "none" }))} />
-        Repeats weekly (for recurring class times)
+        <input
+          type="checkbox"
+          className="h-4 w-4 u-accent-text"
+          checked={state.repeat === "weekly"}
+          onChange={(e) => {
+            const on = e.target.checked;
+            // A NEW weekly series gets a bounded end by default. An event
+            // that already has `repeat: "weekly"` keeps whatever end it
+            // has — including none — so opening an old event to fix its
+            // room never quietly changes when it stops.
+            set((x) => ({ ...x, repeat: on ? "weekly" : "none", ...(on && x.repeatEnd === undefined ? { repeatEnd: defaultRepeatEnd(settings) } : {}) }));
+          }}
+        />
+        {RECURRENCE_COPY.repeatLabel}
       </label>
+      {state.repeat === "weekly" && <RepeatEndFields state={state} set={set} settings={settings} />}
     </div>
   );
 }
 
-function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) {
+/* How a weekly series ends. `repeatEnd: null` is "never" — written as
+   null rather than left out, because patchItem spreads the patch over
+   the stored event and an omitted key would keep the old end. */
+function RepeatEndFields({ state, set, settings }) {
+  const end = state.repeatEnd || null;
+  const kind = end ? end.kind : "none";
+  const semEnd = semesterEnd(settings);
+  const choose = (k) =>
+    set((x) => ({
+      ...x,
+      repeatEnd: k === "semester" ? { kind: "semester" } : k === "count" ? { kind: "count", n: (x.repeatEnd && x.repeatEnd.n) || DEFAULT_REPEAT_COUNT } : null,
+    }));
+  const radio = (k, label, disabled = false) => (
+    <label className={`flex items-center gap-2 text-sm ${disabled ? "text-stone-400" : "text-stone-700"}`}>
+      <input type="radio" name={`repeat-end-${state.id || "new"}`} className="h-4 w-4 u-accent-text" checked={kind === k} disabled={disabled} onChange={() => choose(k)} data-repeat-end={k} />
+      {label}
+    </label>
+  );
+  return (
+    <fieldset className="col-span-2 space-y-1.5 rounded-lg border border-stone-200 p-2.5">
+      <legend className={`${labelCls} px-1`}>{RECURRENCE_COPY.endLabel}</legend>
+      {radio("semester", RECURRENCE_COPY.endSemester, !semEnd && kind !== "semester")}
+      <p className="ml-6 text-xs text-stone-400">
+        {semEnd ? fillCopy(RECURRENCE_COPY.endSemesterHint, { date: formatAU(semEnd) }) : RECURRENCE_COPY.endSemesterUnset}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        {radio("count", RECURRENCE_COPY.endCount)}
+        {kind === "count" && (
+          <input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={MAX_REPEAT_COUNT}
+            className={`${inputCls} w-20`}
+            aria-label={RECURRENCE_COPY.endCountAria}
+            value={end.n ?? ""}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              set((x) => ({ ...x, repeatEnd: { kind: "count", n: Number.isInteger(n) ? Math.min(Math.max(n, 1), MAX_REPEAT_COUNT) : "" } }));
+            }}
+          />
+        )}
+      </div>
+      {kind === "count" && <p className="ml-6 text-xs text-stone-400">{RECURRENCE_COPY.endCountHint}</p>}
+      {radio("none", RECURRENCE_COPY.endNone)}
+    </fieldset>
+  );
+}
+
+/* The chip on a weekly event: says how the series ends. */
+function repeatChip(e, settings) {
+  if (e.until) return fillCopy(RECURRENCE_COPY.chipUntil, { date: formatAU(e.until) });
+  if (!e.repeatEnd) return RECURRENCE_COPY.chipWeekly;
+  if (e.repeatEnd.kind === "semester" && semesterEnd(settings)) return RECURRENCE_COPY.chipSemester;
+  return fillCopy(RECURRENCE_COPY.chipCount, { n: occurrenceCount(e, settings) });
+}
+
+function Calendar({ events, courses, settings = {}, addItem, patchItem, removeItem, focused }) {
   const today = new Date();
   const [viewY, setViewY] = useState(today.getFullYear());
   const [viewM, setViewM] = useState(today.getMonth());
@@ -1302,16 +1384,11 @@ function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) 
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
   const [edit, setEdit] = useState({});
+  const [deleting, setDeleting] = useState(null); // id of the weekly event whose delete choices are open
 
   const eventsForDay = (iso) => {
-    const d = parseISO(iso);
-    const wd = d.getDay();
     return events
-      .filter((e) => {
-        if (!e.date) return false;
-        if (e.repeat === "weekly") return parseISO(e.date).getDay() === wd && iso >= e.date;
-        return e.date === iso;
-      })
+      .filter((e) => occursOn(e, iso, settings))
       .sort((a, b) => (a.start || "").localeCompare(b.start || ""));
   };
 
@@ -1396,7 +1473,7 @@ function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) 
 
       {showForm && (
         <div className={`mt-3 ${editBox}`}>
-          <EventFields state={form} set={setForm} courses={courses} />
+          <EventFields state={form} set={setForm} courses={courses} settings={settings} />
           <div className="mt-2 flex justify-end gap-2">
             <button className={btnGhost} onClick={() => setShowForm(false)}>
               <X size={15} /> Cancel
@@ -1413,7 +1490,7 @@ function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) 
         {dayEvents.map((e) =>
           editingId === e.id ? (
             <li key={e.id} className={editBox}>
-              <EventFields state={edit} set={setEdit} courses={courses} />
+              <EventFields state={edit} set={setEdit} courses={courses} settings={settings} />
               <div className="mt-2 flex justify-end gap-2">
                 <button className={btnGhost} onClick={() => setEditingId(null)}>
                   <X size={15} /> Cancel
@@ -1424,7 +1501,7 @@ function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) 
               </div>
             </li>
           ) : (
-            <li key={e.id} className={`flex items-start gap-3 rounded-xl border border-stone-200 p-3 ${focused && e.course === focused ? "u-highlight" : ""}`}>
+            <li key={e.id} className={`flex flex-wrap items-start gap-3 rounded-xl border border-stone-200 p-3 ${focused && e.course === focused ? "u-highlight" : ""}`}>
               <div className="flex w-16 flex-shrink-0 flex-col items-center rounded-lg u-accent-soft u-accent-deeptext py-1.5 text-xs font-semibold">
                 {e.start ? <span>{formatTime(e.start)}</span> : <Clock size={15} />}
                 {e.end && <span className="font-normal opacity-70">{formatTime(e.end)}</span>}
@@ -1434,8 +1511,8 @@ function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) 
                   <h5 className="font-medium text-stone-800">{e.title || "Class"}</h5>
                   <CourseChip name={e.course} />
                   {e.repeat === "weekly" && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-500">
-                      <Repeat size={11} /> Weekly
+                    <span className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-500" data-repeat-chip>
+                      <Repeat size={11} /> {repeatChip(e, settings)}
                     </span>
                   )}
                 </div>
@@ -1449,10 +1526,41 @@ function Calendar({ events, courses, addItem, patchItem, removeItem, focused }) 
                 <button className={iconBtn} onClick={() => { setEditingId(e.id); setEdit({ ...e }); setShowForm(false); }}>
                   <Pencil size={15} />
                 </button>
-                <button className={iconBtn} onClick={() => removeItem("events", e.id)}>
+                <button
+                  className={iconBtn}
+                  aria-label="Delete"
+                  onClick={() => (e.repeat === "weekly" ? setDeleting(deleting === e.id ? null : e.id) : removeItem("events", e.id))}
+                >
                   <Trash2 size={15} />
                 </button>
               </div>
+              {deleting === e.id && (
+                <div className="basis-full" role="group" aria-label={RECURRENCE_COPY.deleteTitle} data-delete-choices>
+                  <div className="flex flex-wrap justify-end gap-2 pt-1">
+                    <button className={btnGhost} onClick={() => setDeleting(null)}>
+                      {RECURRENCE_COPY.deleteCancel}
+                    </button>
+                    <button className={btnGhost} data-delete="one" onClick={() => { patchItem("events", e.id, skipPatch(e, selected)); setDeleting(null); }}>
+                      {RECURRENCE_COPY.deleteOne}
+                    </button>
+                    <button
+                      className={btnGhost}
+                      data-delete="following"
+                      onClick={() => {
+                        const r = followingPatch(e, selected, settings);
+                        if (r.remove) removeItem("events", e.id);
+                        else patchItem("events", e.id, r.patch);
+                        setDeleting(null);
+                      }}
+                    >
+                      {RECURRENCE_COPY.deleteFollowing}
+                    </button>
+                    <button className={`${btnGhost} text-red-700`} data-delete="all" onClick={() => { removeItem("events", e.id); setDeleting(null); }}>
+                      {RECURRENCE_COPY.deleteAll}
+                    </button>
+                  </div>
+                </div>
+              )}
             </li>
           )
         )}
@@ -4429,6 +4537,26 @@ function SemesterSetup({ settings, rounding, patchSettings }) {
             Counting straight through a non-teaching week puts everything after it a week out.
           </p>
         </div>
+        <div>
+          <label className={labelCls} htmlFor="teaching-weeks">Teaching weeks</label>
+          <input
+            id="teaching-weeks"
+            className={inputCls}
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={MAX_TEACHING_WEEKS}
+            placeholder="e.g. 12"
+            value={settings.teachingWeeks ?? ""}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              patchSettings({ teachingWeeks: Number.isInteger(n) && n >= 1 && n <= MAX_TEACHING_WEEKS ? n : null });
+            }}
+          />
+          <p className="mt-1 text-xs text-stone-400">
+            Optional. Not counting the break. With the start date, repeating classes can end with the semester.
+          </p>
+        </div>
       </div>
 
       <div className="mt-3 border-t border-stone-100 pt-3">
@@ -6539,7 +6667,7 @@ export default function PlannerApp() {
 
         {tab === "calendar" && (
           <Section icon={CalendarDays} title="Calendar" subtitle="Class times and important dates (DD/MM/YYYY)">
-            <Calendar events={sem.events} courses={sem.courses} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} />
+            <Calendar events={sem.events} courses={sem.courses} settings={settings} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} />
           </Section>
         )}
 
