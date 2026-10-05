@@ -85,8 +85,8 @@ export const APP_STORE_URL = `https://apps.apple.com/au/app/id${APPLE_APP_ID}`;
 export const PLAY_STORE_URL = null;
 
 /** The listing URL for a badge id, or null when there is no listing.
-    Null is what makes the renderer fall back to "Coming soon" rather
-    than publishing a link to nowhere. */
+    Null is what keeps that store off the page rather than publishing
+    a link to nowhere. */
 export function storeUrl(id) {
   if (id === "ios") return APP_STORE_URL;
   if (id === "android") return PLAY_STORE_URL;

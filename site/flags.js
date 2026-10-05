@@ -12,7 +12,9 @@
    ================================================================== */
 
 export const FLAGS = {
-  /** Google Play badge. ON when the listing is live — which is after
+  /** Google Play badge. ON when the listing is live, and only together
+      with PLAY_STORE_URL and Google's badge artwork copied into
+      public/site/ (then named in STORE_BADGES in site.js). That is after
       the closed test's 12 testers / 14 continuous days and up to a
       further week for production access. */
   playBadge: false,
@@ -24,9 +26,10 @@ export const FLAGS = {
       site/store-listing.js, which is where the href comes from.
 
       THIS BOOLEAN IS NO LONGER THE WHOLE DECISION, and that is
-      deliberate: `fillStoreBadges` requires the flag AND a URL, so
-      flipping one without the other renders "Coming soon" rather than
-      a badge that says "Get it now" and links nowhere. The version of
+      deliberate: a store badge renders only with the flag on, a URL in
+      site/store-listing.js AND the store's own badge artwork on this
+      origin (public/site/). Missing any one, the store is simply not
+      on the page — never a badge that links nowhere. The version of
       this comment that stood here described exactly that hazard, and
       the remedy was to make it unreachable instead of remembered.
 

@@ -211,52 +211,56 @@ function fillHeroCta() {
   if (platform !== "other") a.setAttribute("href", APP_URL);
 }
 
+/* THE STORE BADGES ARE APPLE'S OWN ARTWORK, SERVED FROM THIS ORIGIN.
+   `app-store-badge.svg` is the black "Download on the App Store" badge
+   from developer.apple.com, unmodified, copied into public/site/ — so
+   showing it is not a request to Apple. Only the CLICK leaves the page,
+   which is the same footing as every download href.
+
+   A store is shown only when THREE things are true: its flag is on, its
+   listing URL exists, and its badge artwork is on this origin. A store
+   that fails any of them renders NOTHING — not a "Coming soon" chip.
+   Google Play has no URL and no artwork yet, so it is absent until both
+   arrive and the flag is turned on. */
+const STORE_BADGES = [
+  { id: "android", flag: () => FLAGS.playBadge, name: "Google Play", asset: null, alt: "Get it on Google Play" },
+  { id: "ios", flag: () => FLAGS.appStoreBadge, name: "App Store", asset: "app-store-badge.svg", alt: "Download on the App Store" },
+];
+
+function liveStoreBadges() {
+  const live = STORE_BADGES.map((b) => ({ ...b, href: storeUrl(b.id) })).filter(
+    (b) => Boolean(b.flag() && b.href && b.asset)
+  );
+  /* ORDERED BY THE VISITOR'S PLATFORM, NOT FILTERED BY IT — the person
+     choosing is often not on the machine they are choosing for. */
+  const mine = platform === "ios" ? "ios" : platform === "android" ? "android" : null;
+  if (mine) live.sort((a, b) => (a.id === mine ? -1 : b.id === mine ? 1 : 0));
+  return live;
+}
+
+function storeBadgeNode(b) {
+  const a = el("a", "storebadge");
+  a.setAttribute("href", b.href);
+  a.setAttribute("data-store", b.id);
+  /* It leaves this origin, so it opens away from the page; `noopener`
+     because a named target hands the opened page a handle on this one. */
+  a.setAttribute("target", "_blank");
+  a.setAttribute("rel", "noopener");
+  const img = document.createElement("img");
+  img.setAttribute("src", b.asset);
+  img.setAttribute("alt", b.alt);
+  img.setAttribute("width", "120");
+  img.setAttribute("height", "40");
+  a.appendChild(img);
+  return a;
+}
+
 function fillStoreBadges() {
   const box = document.querySelector("[data-store-badges]");
   if (!box) return;
-  const badges = [
-    { id: "android", flag: FLAGS.playBadge, name: "Google Play" },
-    { id: "ios", flag: FLAGS.appStoreBadge, name: "App Store" },
-  ].map((b) => {
-    const href = storeUrl(b.id);
-    /* THE FLAG AND THE LINK CANNOT DISAGREE, and the direction is
-       fail-closed. A flag turned on before the URL exists produces
-       "Coming soon" — which is merely early — where the alternative is
-       a badge reading "Get it now" over nothing, which is the state
-       site/flags.js spent a release describing as worse than being
-       off. Both halves are required, so neither can be the whole
-       decision. */
-    return { ...b, href, live: Boolean(b.flag && href) };
-  });
-  /* ORDERED BY THE VISITOR'S PLATFORM, NOT FILTERED BY IT — the same
-     rule `downloadsFor` states for the cards, and for the same reason:
-     the person choosing is often not on the machine they are choosing
-     for, and a student on a laptop looking for the phone app is the
-     ordinary case. So an iPhone sees the App Store first and Google
-     Play second, rather than seeing one store and being told nothing
-     about the other. */
-  const mine = platform === "ios" ? "ios" : platform === "android" ? "android" : null;
-  if (mine) badges.sort((a, b) => (a.id === mine ? -1 : b.id === mine ? 1 : 0));
-  for (const b of badges) {
-    /* THE SLOT EXISTS AND IS HIDDEN, rather than being absent. Turning
-       a listing on is then a boolean in site/flags.js, on the day it
-       goes live, instead of a layout change under time pressure. */
-    /* AN ANCHOR WHEN IT LEADS SOMEWHERE, A SPAN WHEN IT DOES NOT.
-       A badge that looks clickable and is not is the complaint people
-       report as the site being broken, so the element type carries the
-       difference rather than a class name that only looks different. */
-    const node = el(b.live ? "a" : "span", b.live ? "badge" : "badge soon");
-    if (b.live) {
-      node.setAttribute("href", b.href);
-      /* It leaves this origin, so it opens away from the page rather
-         than replacing it — and `noopener` because a named target
-         hands the opened page a handle on this one. */
-      node.setAttribute("target", "_blank");
-      node.setAttribute("rel", "noopener");
-    }
-    node.innerHTML = `<b>${esc(b.name)}</b>${b.live ? "Get it now" : "Coming soon"}`;
-    box.appendChild(node);
-  }
+  const live = liveStoreBadges();
+  box.hidden = live.length === 0;
+  for (const b of live) box.appendChild(storeBadgeNode(b));
 }
 
 function fillPricing() {
@@ -359,12 +363,18 @@ function fillDownloads() {
   /* The web card is not a release asset, so it is not in downloadsFor —
      it is always available and always last-but-two. */
   box.appendChild(make({ id: "web", title: "Web", blurb: "Nothing to install", href: APP_URL, label: "Open the app" }));
-  box.appendChild(
-    make({ id: "android", title: "Android", blurb: "Google Play", href: null, label: "Coming soon", soon: !FLAGS.playBadge })
-  );
-  box.appendChild(
-    make({ id: "ios", title: "iPhone and iPad", blurb: "App Store", href: null, label: "Coming soon", soon: !FLAGS.appStoreBadge })
-  );
+  /* THE PHONE STORES GET A CARD ONLY WHEN THEY HAVE A LISTING, and the
+     card's button IS the store's badge. These used to be two
+     hand-written "Coming soon" cards, and the iPhone one went on saying
+     so — with no link — after the listing went live. */
+  for (const b of liveStoreBadges()) {
+    const d = el("div", `d${b.id === lead ? " lead" : ""}`);
+    d.setAttribute("data-store-card", b.id);
+    d.appendChild(el("h4", null, esc(b.id === "ios" ? "iPhone and iPad" : "Android")));
+    d.appendChild(el("p", null, esc(b.name)));
+    d.appendChild(storeBadgeNode(b));
+    box.appendChild(d);
+  }
 
   /* THE NOTE UNDER THE BOX, and it is rendered from the cards rather
      than written into index.html. The hand-written one outlived the
