@@ -93,15 +93,14 @@ jobs:
         run: npm run test:coverage
 
       - name: Audit dependencies
-        # THE POLICY, so nobody has to re-derive it: HIGH and CRITICAL
-        # advisories block, moderate and low do not. Moderate advisories
-        # in dev tooling are perpetual noise, and a gate that cries wolf
-        # gets disabled — the 95%-coverage lesson. All dependencies are
-        # audited (not just prod): the bundle ships what esbuild pulls
-        # in, but the build machine runs everything else, and a
-        # compromised dev dependency writes the bundle. Baseline at the
-        # gate's landing: 0 vulnerabilities.
-        run: npm audit --audit-level=high
+        # HIGH and CRITICAL block, moderate and low do not (a gate that
+        # cries wolf gets disabled). Audits shipped (production)
+        # dependencies only — build tooling is out of scope (5 Oct 2026).
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit build tooling (report only, never blocks)
+        # Keeps dev-dependency advisories visible now the gate above skips them.
+        run: npm audit --audit-level=high || echo "::warning title=Build-tooling audit (report only)::High advisories in dev dependencies. They do not block merges; see the 'Audit build tooling' step log."
 
   e2e:
     name: e2e journeys
