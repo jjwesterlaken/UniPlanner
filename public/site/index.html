@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>UniPlanner | The study planner built for Australian uni</title>
-<meta name="description" content="Record a lecture and get structured notes and study cards. Track what you need on the final in HD/D/C/P bands. Plan every deadline by teaching week. Free, no ads, data stored in Sydney.">
+<title>UniPlanner | Essay feedback, AI lecture notes and WAM, built for Australian uni</title>
+<meta name="description" content="Feedback on your essay against the marking criteria. Record a lecture and get notes and study cards. Know what you need on the final in HD/D/C/P bands. Free, no ads, data stored in Sydney.">
 <link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
@@ -68,7 +68,11 @@ padding:8px 16px;border-radius:8px;white-space:nowrap;flex:none}
    from the hero rather than a new one. */
 .navcta.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
 
-.hero{padding:76px 0 60px}
+/* VERTICAL ONLY. The hero shares its element with `.w`, and a
+   `padding` shorthand here zeroed the 28px side gutter every other
+   section gets from `.w` — which is what left the hero text touching
+   the screen edge on a phone. */
+.hero{padding-top:76px;padding-bottom:60px}
 .herogrid{display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
 .eyebrow{display:inline-block;font-size:12.5px;font-weight:600;letter-spacing:.08em;
 text-transform:uppercase;color:var(--teal-text);background:var(--teal-pale);
@@ -81,11 +85,12 @@ h1 em{font-style:normal;color:var(--teal)}
 .btn{display:inline-flex;align-items:center;gap:9px;background:var(--teal);color:#fff;
 text-decoration:none;font-size:15.5px;font-weight:500;padding:13px 22px;border-radius:10px}
 .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
-.storebadges{display:flex;gap:10px;margin-top:18px}
-.badge{border:1px solid var(--line);border-radius:9px;padding:8px 14px;background:var(--card);
-font-size:12.5px;color:var(--soft);line-height:1.25}
-.badge b{display:block;font-size:14px;color:var(--ink);font-weight:600}
-.badge.soon{opacity:.55}
+/* Apple's own badge artwork, served from this origin (site.js says
+   why). Shown at Apple's 40px minimum height, unaltered. */
+.storebadges{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.storebadges[hidden]{display:none}
+.storebadge{display:inline-block;line-height:0;border-radius:8px}
+.storebadge img{display:block;height:40px;width:auto}
 .freeline{font-size:13.5px;color:var(--soft);margin-top:18px}
 
 .shot{background:var(--card);border:1px solid var(--line);border-radius:16px;
@@ -122,9 +127,16 @@ border-radius:13px;background:var(--card)}
 .strip{background:var(--teal);color:#fff;padding:26px 0}
 .stripin{display:flex;flex-wrap:wrap;gap:34px;justify-content:center;text-align:center;
 font-size:15px}
-.stripin div{display:flex;align-items:center;gap:9px}
+/* BLOCK, NOT FLEX. As a flex row the bold run and the text after it
+   were two items with a gap between them, so the gap landed before the
+   comma: "Teaching weeks , breaks included". The source spaces are
+   the spacing now. */
+.stripin div{display:block}
 .stripin b{font-weight:600}
-.dot{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.5)}
+.dot{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.5);align-self:center}
+/* Once the items wrap the dots have nothing to separate and float at
+   the line ends, so they go below the width where the row wraps. */
+@media(max-width:639px){.dot{display:none}.stripin{gap:10px 28px}}
 
 section{padding:78px 0}
 .shead{max-width:60ch;margin:0 0 44px}
@@ -135,6 +147,15 @@ line-height:1.15;letter-spacing:-.02em;margin:0 0 14px}
 .feat{display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:center;margin-bottom:82px}
 .feat:last-child{margin-bottom:0}
 .feat.rev .txt{order:2}
+/* A FEATURE WITH NO SCREENSHOT YET. One column at full width, the same
+   82px rhythm as the others, the bullets laid out as a row so the
+   width reads as intended rather than as a missing picture. To add a
+   screenshot later: put a `.shot` div after `.txt` and drop `solo`. */
+.feat.solo{grid-template-columns:1fr}
+.feat[id]{scroll-margin-top:84px}
+.feat.solo p{max-width:68ch}
+.feat.solo ul{display:grid;grid-template-columns:repeat(3,1fr);gap:14px 32px;margin-top:22px}
+.feat.solo li{margin-bottom:0}
 .ftag{font-size:12.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
 color:var(--clay);margin:0 0 12px}
 .feat h3{font-family:Newsreader,serif;font-weight:500;font-size:29px;letter-spacing:-.02em;
@@ -190,6 +211,7 @@ padding:6px 10px;display:inline-block;margin:8px 0 0}
 text-decoration:none;border:1px solid var(--teal);border-radius:8px;padding:7px 15px}
 .d.soon .dbtn{color:var(--soft);border-color:var(--line)}
 .dnote{font-size:12.5px;color:var(--soft);margin:12px 0 0;line-height:1.45;text-align:left}
+.d .storebadge{margin-top:2px}
 .dalt{display:block;font-size:12.5px;color:var(--soft);margin-top:9px;text-decoration:underline}
 
 footer{padding:52px 0 40px;border-top:1px solid var(--line);margin-top:20px}
@@ -205,6 +227,8 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
 .dshots{grid-template-columns:1fr}
  .herogrid,.feat{grid-template-columns:1fr;gap:34px}
  .feat.rev .txt{order:0}
+ .feat.solo ul{grid-template-columns:1fr;gap:0}
+ .feat.solo li{margin-bottom:7px}
  .steps,.mini,.trustgrid,.prices,.dlbox{grid-template-columns:1fr}
  .navlinks{display:none}
  /* The links collapse here; both buttons must not, so the pair takes
@@ -227,7 +251,7 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
 @media(max-width:560px){
  nav .brand .wordmark{display:none}
  nav .brand{gap:0}
- .hero{padding:48px 0 40px}
+ .hero{padding-top:48px;padding-bottom:40px}
  section{padding:56px 0}
 }
 </style>
@@ -243,6 +267,7 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
   <a class="brand" href="#"><span class="mark">U</span> <span class="wordmark">UniPlanner</span></a>
   <div class="navlinks">
     <a href="#features">Features</a>
+    <a href="#essays">Essays</a>
     <a href="#how">AI notes</a>
     <a href="#pricing">Pricing</a>
     <a href="#download">Download</a>
@@ -270,9 +295,9 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
 <div class="w hero">
   <div class="herogrid">
     <div>
-      <span class="eyebrow">Made in Australia, for Australian uni</span>
+      <span class="eyebrow">Made in Australia, for Australian uni students</span>
       <h1>Your whole semester, <em>finally in one place</em></h1>
-      <p class="sub">Record a lecture and get structured notes and study cards. Track what you need on the final in real HD/D/C/P bands. Plan every deadline by teaching week instead of by date.</p>
+      <p class="sub">Get feedback on an essay against your marking criteria. Record a lecture and get structured notes and study cards. Know what you need on the final in real HD/D/C/P bands.</p>
       <div class="ctas">
         <a class="btn" href="#download" data-hero-cta>Download for Windows</a>
         <a class="btn ghost" href="#features">See what it does</a>
@@ -293,8 +318,24 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
 
 <section id="features"><div class="w">
   <div class="shead">
-    <h2>Four things it does better than a notebook</h2>
-    <p>Your lectures written up by course, your marks worked out, and every deadline placed in the week it's due.</p>
+    <h2>Five things it does better than a notebook</h2>
+    <p>Feedback on your essays before you hand them in, your lectures written up by course, your marks worked out, and every deadline in the week it's due.</p>
+  </div>
+
+  <!-- TEXT ONLY UNTIL THERE IS A SCREENSHOT. `solo` makes it one
+       full-width column; adding a `.shot` after `.txt` and removing
+       `solo` turns it into an ordinary feature block, no other change. -->
+  <div class="feat solo" id="essays">
+    <div class="txt">
+      <p class="ftag">Essays</p>
+      <h3>Feedback before you hand it in</h3>
+      <p>Paste your draft and the marking criteria, or photograph the rubric, and get point-by-point feedback against what your marker is actually looking for.</p>
+      <ul>
+        <li><b>Against your criteria</b>, not generic advice. If the rubric has bands, it tells you which one you're in.</li>
+        <li><b>It never writes for you.</b> Every point quotes your own words and tells you what to fix. Ask for an example rewrite and it sits beside your text, never in it.</li>
+        <li><b>Works from a photo</b> of the marking guide, or paste the text.</li>
+      </ul>
+    </div>
   </div>
 
   <div class="feat">
@@ -327,20 +368,6 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
 
   <div class="feat">
     <div class="txt">
-      <p class="ftag">Study</p>
-      <h3>Revise the twelve you keep missing</h3>
-      <p>Study cards on a spaced schedule. Cards you know drift out to weeks, cards you miss come back in the same session, so your revision time goes where it is actually needed.</p>
-      <ul>
-        <li><b>Practice mode</b> for the night before, when nothing is technically due</li>
-        <li><b>Weak spots</b>, ranked, and the AI can tell you what they have in common</li>
-        <li><b>Explain it back</b> in your own words and get told what you missed</li>
-      </ul>
-    </div>
-    <div class="shot"><span>A card under review, with Explain it back open and Again / Good / Easy below.</span><img src="phone-3-study.png" alt="A study card under review on a phone, with an Explain it back box open beneath it and the Again, Good and Easy buttons below." decoding="async" loading="lazy"></div>
-  </div>
-
-  <div class="feat rev">
-    <div class="txt">
       <p class="ftag">Planner</p>
       <h3>Deadlines by week, not by date</h3>
       <p>Set your semester dates once and every deadline in the app knows it is due in Week 9, skipping the mid-semester break the way your unit outline does.</p>
@@ -351,6 +378,20 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
       </ul>
     </div>
     <div class="shot"><span>Deadlines by teaching week, with the busy weeks flagged before they arrive.</span><img src="phone-1-home.png" alt="The Plan tab on a phone: What&#39;s coming lists Week 2, Week 3 and Week 6 with a busy-week warning, and the weekly reading planner sits below it." decoding="async" loading="lazy"></div>
+  </div>
+
+  <div class="feat rev">
+    <div class="txt">
+      <p class="ftag">Study</p>
+      <h3>Revise what you keep getting wrong</h3>
+      <p>Study cards on a spaced schedule. Cards you know drift out to weeks, cards you miss come back in the same session, so your revision time goes where it is actually needed.</p>
+      <ul>
+        <li><b>Practice mode</b> for the night before, when nothing is technically due</li>
+        <li><b>Weak spots</b>, ranked, and the AI can tell you what they have in common</li>
+        <li><b>Explain it back</b> in your own words and get told what you missed</li>
+      </ul>
+    </div>
+    <div class="shot"><span>A card under review, with Explain it back open and Again / Good / Easy below.</span><img src="phone-3-study.png" alt="A study card under review on a phone, with an Explain it back box open beneath it and the Again, Good and Easy buttons below." decoding="async" loading="lazy"></div>
   </div>
 </div></section>
 
@@ -397,7 +438,7 @@ padding:16px 20px;margin:32px 0 0;font-size:14.5px;color:#5c4a12}
 
 <section id="desktop"><div class="w">
   <div class="shead" style="margin-left:auto;margin-right:auto;text-align:center">
-    <h2>Recording this computer's audio needs the desktop app</h2>
+    <h2>Recording an online class? Use the desktop app</h2>
     <!-- THE SENTENCE STANDS ON ITS OWN. Grace's ruling, and it is the
          point of this whole section: a phone visitor never sees the two
          shots below, so the fact cannot live in them. Everything a

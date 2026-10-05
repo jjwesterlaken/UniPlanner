@@ -1694,12 +1694,18 @@ test("every download card offers what its own data says it offers", () => {
   w.document.body.appendChild(tag);
   fs.rmSync(bundle, { force: true });
 
-  const rendered = [...w.document.querySelectorAll("[data-downloads] .d")].map((card) => ({
-    title: card.querySelector("h4")?.textContent,
-    label: card.querySelector("a.dbtn")?.textContent,
-    href: card.querySelector("a.dbtn")?.getAttribute("href"),
-    note: card.querySelector(".dnote")?.textContent || null,
-  }));
+  /* A phone-store card's button is the store's BADGE, so its label is
+     the badge image's alt text — the words a screen reader says. */
+  const rendered = [...w.document.querySelectorAll("[data-downloads] .d")].map((card) => {
+    const btn = card.querySelector("a.dbtn, a.storebadge");
+    const badge = btn && btn.classList.contains("storebadge");
+    return {
+      title: card.querySelector("h4")?.textContent,
+      label: badge ? btn.querySelector("img")?.getAttribute("alt") : btn?.textContent,
+      href: btn?.getAttribute("href"),
+      note: card.querySelector(".dnote")?.textContent || null,
+    };
+  });
   /* NON-VACUITY FIRST: an empty page satisfies every claim below. */
   assert.ok(rendered.length >= 3, `only ${rendered.length} card(s) rendered — the probe is reading the wrong element`);
 
@@ -1872,28 +1878,26 @@ test("the hero button offers THIS machine's build, and never one that does not e
   }
 });
 
-test("the store badges lead with the visitor's store, and still name the other", () => {
-  /* ORDERED, NOT FILTERED — the rule downloadsFor states for the cards.
-     Somebody on a laptop looking for the phone app is the ordinary
-     case, so hiding a store is the trap; leading with theirs is the
-     convenience. */
-  const order = (ua, touch) =>
-    [...renderSiteAs(ua, { maxTouchPoints: touch }).querySelectorAll("[data-store-badges] .badge b")].map(
-      (b) => b.textContent
-    );
-  const onIos = order(UA.ios, 5);
-  const onAndroid = order(UA.android, 5);
-  const onDesktop = order(UA.windows, 0);
-
-  assert.equal(onIos.length, 2, `the iOS visitor sees ${onIos.length} badge(s) — a store was hidden rather than moved`);
-  assert.deepEqual([...onIos].sort(), [...onAndroid].sort(), "the two phones are offered different sets of stores");
-  assert.deepEqual([...onIos].sort(), [...onDesktop].sort(), "a desktop visitor is offered a different set of stores");
-
-  assert.equal(onIos[0], "App Store", `an iPhone leads with "${onIos[0]}"`);
-  assert.equal(onAndroid[0], "Google Play", `an Android phone leads with "${onAndroid[0]}"`);
-  /* AND THE TWO REALLY DIFFER, so a renderer that ignores the platform
-     cannot satisfy both lines above by accident. */
-  assert.notDeepEqual(onIos, onAndroid, "the badge order does not follow the platform at all");
+test("a store with no listing is ABSENT from the page — no Coming-soon chip, in the hero or the download box", () => {
+  /* Jared's instruction, 5 October 2026: the "Google Play — Coming soon"
+     chip comes off the page entirely. Asserted for every platform,
+     because the order used to follow the visitor and a renderer that
+     only drops it for one of them would pass a single-platform check. */
+  for (const [ua, touch] of [[UA.ios, 5], [UA.android, 5], [UA.windows, 0]]) {
+    const doc = renderSiteAs(ua, { maxTouchPoints: touch });
+    /* The VISIBLE text: the test injects the bundle as an inline
+       <script>, and its source comments name "Coming soon" to say why
+       it is gone. */
+    const body = doc.body.cloneNode(true);
+    for (const n of body.querySelectorAll("script")) n.remove();
+    const text = body.textContent;
+    assert.doesNotMatch(text, /Coming soon/, `"Coming soon" is on the page for ${ua}`);
+    assert.doesNotMatch(text, /Google Play/, `Google Play is named on the page for ${ua}, and it has no listing`);
+    /* NON-VACUITY: the App Store badge IS there, in both places, so the
+       absence above is not a page that rendered no stores at all. */
+    assert.equal(doc.querySelectorAll('[data-store-badges] a.storebadge[data-store="ios"]').length, 1, `no hero App Store badge for ${ua}`);
+    assert.equal(doc.querySelectorAll('[data-downloads] a.storebadge[data-store="ios"]').length, 1, `no download-box App Store badge for ${ua}`);
+  }
 });
 
 test("the listing URL is derived from one id, and a store with no listing answers null", () => {
@@ -1915,72 +1919,67 @@ test("the listing URL is derived from one id, and a store with no listing answer
   assert.equal(storeUrl(), null);
 });
 
-test("THE APP STORE BADGE IS A REAL LINK TO THE REAL LISTING, read off the built page", () => {
-  /* THE ARTIFACT, not the flag. `FLAGS.appStoreBadge === true` is a
-     claim that a badge is on; what a visitor can do with it is a
-     property of the rendered element, and for a release the badge
-     linked nowhere at all the difference between those two is the
-     whole bug. So this reads the anchor out of the built page. */
+test("THE APP STORE BADGE IS APPLE'S ARTWORK, SERVED FROM THIS ORIGIN, LINKING TO THE REAL LISTING", () => {
+  /* THE ARTIFACT, not the flag: what a visitor can do with the badge is
+     a property of the rendered element. Read in BOTH places it appears. */
   const doc = renderSiteAs(UA.ios, { maxTouchPoints: 5 });
-  const badges = [...doc.querySelectorAll("[data-store-badges] .badge")];
-  const apple = badges.find((n) => /App Store/.test(n.textContent));
-  assert.ok(apple, "no App Store badge is rendered at all");
-
-  assert.equal(apple.tagName, "A", `the App Store badge is a <${apple.tagName.toLowerCase()}>, so it cannot be clicked`);
-  assert.equal(apple.getAttribute("href"), APP_STORE_URL, "the badge does not point at the listing");
-  assert.match(apple.textContent, /Get it now/, "the badge is linked and still reads as unreleased");
-  /* It leaves this origin. `noopener` because a named target hands the
-     opened page a handle on this one. */
-  assert.equal(apple.getAttribute("target"), "_blank");
-  assert.match(apple.getAttribute("rel") || "", /noopener/);
-
-  /* THE CONTROL. Without it, "the badge is an anchor" is satisfied by a
-     renderer that anchors everything, including the store with no
-     listing — which would publish a dead link for Google Play. */
-  const play = badges.find((n) => /Google Play/.test(n.textContent));
-  assert.ok(play, "no Google Play badge is rendered at all");
-  assert.equal(play.tagName, "SPAN", "Google Play is a link, and its listing does not exist yet");
-  assert.match(play.textContent, /Coming soon/);
-  assert.notEqual(apple.tagName, play.tagName, "both badges render the same element, so the distinction is not being made");
+  const badges = [...doc.querySelectorAll('a.storebadge[data-store="ios"]')];
+  assert.equal(badges.length, 2, `${badges.length} App Store badge(s) rendered — expected the hero and the download box`);
+  for (const a of badges) {
+    assert.equal(a.getAttribute("href"), APP_STORE_URL, "the badge does not point at the listing");
+    assert.equal(a.getAttribute("target"), "_blank");
+    assert.match(a.getAttribute("rel") || "", /noopener/);
+    const img = a.querySelector("img");
+    assert.ok(img, "the badge is not an image");
+    /* A RELATIVE PATH, so it resolves on this origin — a badge image
+       loaded from Apple would be the one third-party request on the
+       page. Its alt is what the badge says. */
+    const src = img.getAttribute("src");
+    assert.doesNotMatch(src, /^(https?:)?\/\//, `the badge image is fetched from "${src}", not from this origin`);
+    assert.equal(img.getAttribute("alt"), "Download on the App Store");
+    assert.ok(fs.existsSync(path.join(rootDir, "dist-site", src)), `the badge image ${src} is not in the built site`);
+  }
+  /* The file is Apple's unmodified SVG and pulls nothing in: no
+     <image>, no href, no url(), and no host but the SVG namespace. */
+  const svg = fs.readFileSync(path.join(rootDir, "public/site/app-store-badge.svg"), "utf8");
+  assert.match(svg, /^<svg[\s\S]*<\/svg>\s*$/, "the badge file is not an SVG");
+  assert.doesNotMatch(svg, /<image|href=|url\(/i, "the badge SVG references another resource");
+  const hosts = [...svg.matchAll(/https?:\/\/[^"'\s]+/g)].map((m) => m[0]);
+  assert.deepEqual([...new Set(hosts)], ["http://www.w3.org/2000/svg"], `the badge SVG names ${hosts.join(", ")}`);
 });
 
-test("A FLAG AND A URL ARE BOTH REQUIRED, and neither one on its own publishes a badge", () => {
-  /* THE PROPERTY THAT LET THE FLAG BE TURNED ON. site/flags.js spent a
-     release describing the hazard of an enabled badge with no href —
-     "worse than Coming soon" — as a thing to remember at the moment of
-     flipping it. Remembering is what this replaces.
+test("A FLAG, A URL AND LOCAL ARTWORK ARE ALL REQUIRED, and none of them alone publishes a badge", () => {
+  /* Driven in each direction, because a renderer that ignored any one
+     of the three would satisfy the other checks and ship that half. */
+  const live = (patch) =>
+    [...renderSitePatched(patch).querySelectorAll("[data-store-badges] a.storebadge")].map((n) => n.getAttribute("data-store"));
 
-     Driven in BOTH directions, because a renderer that ignored the
-     flag and a renderer that ignored the URL would each satisfy one
-     half and ship the other half of the bug. */
-  const live = (patch) => {
-    const doc = renderSitePatched(patch);
-    return [...doc.querySelectorAll("[data-store-badges] .badge")].map((n) => ({
-      name: n.querySelector("b").textContent,
-      tag: n.tagName,
-      text: n.textContent,
-    }));
-  };
+  /* NON-VACUITY: the unpatched page really shows the App Store badge. */
+  assert.deepEqual(live({}), ["ios"], "the unpatched render is not the live page, so the patched ones prove nothing");
 
-  /* A URL with the flag still off stays "Coming soon" — turning a
-     listing on is a decision, not a consequence of the URL existing. */
-  const urlOnly = live({ "store-listing.js": (src) => src.replace("export const PLAY_STORE_URL = null;", 'export const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=x";') });
-  const play = urlOnly.find((b) => b.name === "Google Play");
-  assert.equal(play.tag, "SPAN", "a URL alone published a badge nobody turned on");
-  assert.match(play.text, /Coming soon/);
-
-  /* And the flag with the URL taken away falls back rather than
-     rendering the dead link. This is the state production was one
-     boolean away from for a whole release. */
-  const flagOnly = live({ "store-listing.js": (src) => src.replace(/export const APP_STORE_URL = [^;]+;/, "export const APP_STORE_URL = null;") });
-  const apple = flagOnly.find((b) => b.name === "App Store");
-  assert.equal(apple.tag, "SPAN", "the badge says Get it now with no listing behind it");
-  assert.match(apple.text, /Coming soon/);
-
-  /* NON-VACUITY: the patcher really changes what is rendered, or both
-     assertions above are about a page that was never patched. */
-  const unpatched = live({});
-  assert.equal(unpatched.find((b) => b.name === "App Store").tag, "A", "the unpatched render is not the live page, so the patched ones prove nothing");
+  /* A Play URL alone — flag off, no artwork — publishes nothing. */
+  assert.deepEqual(
+    live({ "store-listing.js": (src) => src.replace("export const PLAY_STORE_URL = null;", 'export const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=x";') }),
+    ["ios"],
+    "a URL alone published a badge nobody turned on"
+  );
+  /* URL and flag but no local artwork — still nothing, rather than a
+     badge with a broken image or one loaded from Google. */
+  assert.deepEqual(
+    live({
+      "store-listing.js": (src) => src.replace("export const PLAY_STORE_URL = null;", 'export const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=x";'),
+      "flags.js": (src) => src.replace("playBadge: false", "playBadge: true"),
+    }),
+    ["ios"],
+    "Google Play was published with no badge artwork on this origin"
+  );
+  /* And the App Store flag with its URL taken away falls back to no
+     badge, not a dead link. */
+  assert.deepEqual(
+    live({ "store-listing.js": (src) => src.replace(/export const APP_STORE_URL = [^;]+;/, "export const APP_STORE_URL = null;") }),
+    [],
+    "the App Store badge rendered with no listing behind it"
+  );
 });
 
 test("THE DESKTOP-ONLY FACT SURVIVES WITH EVERY IMAGE REMOVED", () => {
@@ -2029,7 +2028,7 @@ test("THE DESKTOP-ONLY FACT SURVIVES WITH EVERY IMAGE REMOVED", () => {
     .replace(/\s+/g, " ");
   const sentences = prose.split(/(?<=[.!?])\s+/);
   const stated = sentences.some(
-    (line) => /desktop app/i.test(line) && /this computer'?s audio|computer'?s own audio/i.test(line)
+    (line) => /desktop app/i.test(line) && /this computer'?s audio|computer'?s own audio|playing through your speakers/i.test(line)
   );
   assert.ok(
     stated,
