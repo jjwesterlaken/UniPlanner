@@ -2843,7 +2843,11 @@ async function run() {
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     assert.match(pkg.scripts.promote || "", /promote\.mjs/, "the promote script is gone — the ritual is back to being folklore");
     const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
-    assert.match(workflow, /npm audit --audit-level=high/, "the dependency audit gate left CI");
+    /* The RUN line, not the comment above it: the comment names the
+       policy and would satisfy a bare grep on its own. */
+    const auditRun = workflow.split("\n").find((l) => /^\s*run:\s*npm audit\b/.test(l)) || "";
+    assert.match(auditRun, /--audit-level=high\b/, "the dependency audit gate left CI, or no longer blocks on high");
+    assert.match(auditRun, /--omit=dev\b/, "the audit gate is back to auditing build tooling, which has no fix path (GHSA-vfj7-8cjw-p6xm)");
     assert.ok(fs.existsSync(path.join(rootDir, "public/_headers")), "public/_headers is gone — Pages serves no security headers");
     assert.ok(fs.existsSync(path.join(rootDir, "dist-web/_headers")), "_headers did not survive the build into dist-web");
     const headers = fs.readFileSync(path.join(rootDir, "public/_headers"), "utf8");
