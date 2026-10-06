@@ -38,7 +38,7 @@
    ================================================================== */
 
 import { addDays } from "./srs.js";
-import { inBreak, teachingWeek, weekStart } from "./workload.js";
+import { breaksOf, inBreak, teachingWeek, weekStart } from "./workload.js";
 
 /** Default for "repeat N times" when the semester dates aren't set. */
 export const DEFAULT_REPEAT_COUNT = 12;
@@ -68,7 +68,7 @@ export function semesterEnd(settings) {
   const start = settings && settings.start;
   const n = teachingWeeksOf(settings);
   if (!isISO(start) || !n) return null;
-  const breaks = settings.breaks || [];
+  const breaks = breaksOf(settings);
   let monday = weekStart(start);
   // Every week is either a teaching week or a break week, so N teaching
   // weeks end within N + (number of breaks) weeks. The bound is generous.
@@ -99,7 +99,7 @@ function countOf(end) {
 /** The date of the last occurrence a bounded series can have, before `until`. */
 function lastByKind(event, settings) {
   const end = event.repeatEnd;
-  const breaks = (settings && settings.breaks) || [];
+  const breaks = breaksOf(settings);
   if (end.kind === "semester") {
     const last = semesterEnd(settings);
     if (last && last >= event.date) return last;
@@ -131,7 +131,7 @@ export function occursOn(event, iso, settings) {
   if (Array.isArray(event.skip) && event.skip.includes(iso)) return false;
   if (isISO(event.until) && iso > event.until) return false;
   if (!skipsBreaks(event)) return true; // legacy / no end: unchanged
-  if (inBreak(iso, (settings && settings.breaks) || [])) return false;
+  if (inBreak(iso, breaksOf(settings))) return false;
   return iso <= lastByKind(event, settings);
 }
 

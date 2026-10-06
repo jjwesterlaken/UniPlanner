@@ -148,7 +148,7 @@ they are on the same one. Sign in; most of this needs an account.
 There are two ways in, and both end on the same place:
 
 - [ ] **From the AI tab:** below the lecture notes there is a card,
-      **Feedback on a draft**, with a **Course (optional)** dropdown set
+      **Essay feedback**, with a **Course (optional)** dropdown set
       to **No course** and the draft and criteria boxes **right there**.
       Pick a course — it should switch to it. Paste, run, and the result
       should appear **on the AI tab**, without moving you anywhere. Then
@@ -158,21 +158,22 @@ There are two ways in, and both end on the same place:
       and tap away: the mark question should appear.
 - [ ] **Linking a draft to the real assessment.** Run a draft from the
       AI tab under a course, then add the real assessment (say "Essay 1",
-      with its weight) on Grades. The draft's row should now offer
+      with its weight) using **Add assessment** at the foot of that
+      course's card on Grades. The draft's row should now offer
       **This draft is for [Essay 1] · Link**. Link it: the draft's row
       disappears, and Essay 1 says it **includes feedback from a draft
       you linked**. Type a mark on Essay 1 and tap away: the mark
       question appears there. On a course with no real assessment, the
       draft's row should say to add the real one first.
-- [ ] **From Courses → Grades**, on any assessment row: **Get feedback on
-      a draft**.
+- [ ] **From Courses → Grades**, on any assessment row: **Essay
+      feedback**. (Named "Get feedback on a draft" before 1.3.1.)
 
 Every step below happens on that assessment's row. **Use your
 own account, not the reviewer account** — its consent is deliberately
 untouched for Apple. The order matters: a student meets the screens in
 this order.
 
-- [ ] **The consent screen first.** Tapping **Get feedback on a draft**
+- [ ] **The consent screen first.** Tapping **Essay feedback**
       the first time should show the AI consent screen (v8) if you have
       not agreed since it changed. It must say an essay is sent **exactly
       as written, including your name and student ID**, and that we do
@@ -225,8 +226,10 @@ this order.
       that is deliberate (your essay is never stored); **Save to notes**
       is how you keep one.
 - [ ] **Opening it again does not re-ask** the consent or the opt-in.
-- [ ] **Save to notes** files it into that course's folder, and the saved
-      note carries the not-a-prediction paragraph under the band.
+- [ ] **Save to notes** puts it in **Notes → Essay feedback**, titled
+      **"<assessment name> — <date>"**, and files it into that course's
+      folder. It opens **read-only** (no Edit), and it carries the
+      not-a-prediction paragraph under the band.
 - [ ] **"Was this useful?"** Pick **Partly**: reasons appear. The comment
       box stays closed until you tick **Also send a comment**, and when
       open it says it is only sent on the tick and trains nothing. Send

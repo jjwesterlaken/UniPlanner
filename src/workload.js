@@ -56,6 +56,23 @@ export const sameWeek = (a, b) => weekStart(a) === weekStart(b);
    stored as date ranges and skipped.
    ------------------------------------------------------------------ */
 
+/* OTHER NON-TEACHING WEEKS (1.3.1). `breaks` holds the mid-semester
+   break; `extraBreaks` holds any number of further ranges (a study week,
+   a public-holiday week). They live in a SEPARATE field on purpose: the
+   1.3.0 build rewrites `breaks` as a one-entry array whenever its
+   mid-semester break is edited, so extra entries stored there would be
+   dropped by any older device. An older build ignores `extraBreaks`
+   entirely and keeps it on the settings row, which costs an older
+   device its week numbering and never costs anybody their dates.
+
+   Every reader asks `breaksOf`, so a range is skipped the same way
+   whichever field it came from. A semester with no extra ranges reads
+   exactly what it read before. */
+export function breaksOf(calendar) {
+  if (!calendar) return [];
+  return [...(calendar.breaks || []), ...(calendar.extraBreaks || [])];
+}
+
 /** True when `day` falls inside one of the non-teaching ranges. */
 export function inBreak(day, breaks = []) {
   return (breaks || []).some((b) => b && b.from && b.to && day >= b.from && day <= b.to);
@@ -71,7 +88,7 @@ export function inBreak(day, breaks = []) {
 export function teachingWeek(day, calendar) {
   const start = calendar && calendar.start;
   if (!start || !day || day < start) return null;
-  if (inBreak(day, calendar.breaks)) return null;
+  if (inBreak(day, breaksOf(calendar))) return null;
 
   const from = weekStart(start);
   const to = weekStart(day);
@@ -81,8 +98,8 @@ export function teachingWeek(day, calendar) {
   // teaching weeks. Counted by their Monday so a break spanning a
   // weekend is still one week.
   let skipped = 0;
-  for (const b of calendar.breaks || []) {
-    if (!b || !b.from) continue;
+  for (const b of breaksOf(calendar)) {
+    if (!b || !b.from || !b.to) continue;
     const bw = weekStart(b.from);
     if (bw >= from && bw < to) skipped += 1;
   }
@@ -94,6 +111,7 @@ export function weekLabel(day, calendar, formatDate) {
   const n = teachingWeek(day, calendar);
   if (n !== null && n >= 1) return `Week ${n}`;
   if (calendar && calendar.start && inBreak(day, calendar.breaks)) return "Mid-semester break";
+  if (calendar && calendar.start && inBreak(day, calendar.extraBreaks)) return "Non-teaching week";
   return `Week of ${formatDate ? formatDate(day) : day}`;
 }
 
@@ -183,7 +201,11 @@ export function forecastWorkload({ assignments = [], assessments = [], today = l
 
   const byWeek = new Map();
   for (const item of items) {
-    if (item.due > horizon) continue;
+    /* EXAMS ARE NEVER BEYOND THE HORIZON (1.3.1). The exam countdown
+       was folded into Upcoming, and it listed every exam however far
+       off; an exam eleven weeks away must not vanish from the app
+       because the deadline view looks six weeks ahead. */
+    if (item.due > horizon && item.kind !== "exam") continue;
     const start = weekStart(item.due);
     if (!byWeek.has(start)) byWeek.set(start, []);
     /* PAST AND NOT FINISHED. `finished` is deliberately not consulted

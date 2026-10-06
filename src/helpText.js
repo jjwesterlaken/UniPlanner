@@ -151,14 +151,14 @@ export const HELP_TOPICS = {
       "Typing them is the cost, and it is the up-front one: nothing in the Study tab has anything to show until some exist. AI lecture notes can create them for you from a recording if you would rather not type.",
   },
 
-  exams: {
-    title: "Exams",
+  upcoming: {
+    title: "Upcoming",
     what:
-      "A countdown to each exam, and a day-by-day plan of which topic to study when.",
+      "What's due each week, from the due dates you have entered, with busy weeks flagged before they arrive. An exam shows on its week with the days left, and its row opens a day-by-day plan of which topic to study when.",
     example:
       "An exam in nine days with five topics gets a session a day: each topic once, then the rounds repeat, and the last day before the exam is left for reviewing everything. With only two days for those same five topics there is NO review day — spending one of two days revising what you never studied is worse than covering a second topic.",
     cost:
-      "It needs the exam entered with a date, and it needs study cards for that course — the topics in the plan ARE your cards' terms, so a course with no cards gets a countdown and no plan. The plan is worked out fresh each time rather than saved, so changing the date or adding cards changes it immediately.",
+      "Upcoming fills in from the due dates on your assignments and in Grades, and looks six weeks ahead; exams show however far off they are. A study plan needs the exam entered with a date, and it needs study cards for that course — the topics in the plan ARE your cards' terms, so a course with no cards gets a countdown and no plan. The plan is worked out fresh each time rather than saved, so changing the date or adding cards changes it immediately.",
   },
 };
 
