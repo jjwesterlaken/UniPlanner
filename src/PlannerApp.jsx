@@ -45,6 +45,7 @@ import {
   ROUNDING_RULES,
   DEFAULT_ROUNDING,
   inheritedRounding,
+  isMarked,
 } from "./grades.js";
 import {
   forecastWorkload,
@@ -113,6 +114,7 @@ import {
 import { AiNotesPanel, AiLectureNoteView, useRecordingSession, RecordingIndicator } from "./aiNotes.jsx";
 import { EssayFeedbackPanel, MarkCompareAsk, EssayDraftCard, PlaceholderLink, LinkedNote } from "./essayPanel.jsx";
 import { renameCourse, renameRefusal, removalPlan } from "./courseRename.js";
+import { linkedAssessments, gradesRecordsForPlan, planRecordsForGrades, gradesDatesOn, looksLikeAssessment, RECORDS_COPY } from "./assessmentRecords.js";
 import {
   optInNeeded,
   ESSAY_OPT_IN_VERSION,
@@ -1166,7 +1168,7 @@ function RubricPanel({ assignment, assignments, patchItem }) {
   );
 }
 
-function Assignments({ assignments, courses, addItem, patchItem, removeItem, focused, todos = [], onBreakdown, openId = null, onOpened = () => {} }) {
+function Assignments({ assignments, courses, addItem, patchItem, removeItem, focused, todos = [], onBreakdown, openId = null, onOpened = () => {}, assessments = [], onOpenAssessment = null }) {
   const blank = { course: "", title: "", due: "", requirements: "", notes: "" };
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
@@ -1191,14 +1193,20 @@ function Assignments({ assignments, courses, addItem, patchItem, removeItem, foc
     setForm(blank);
   };
 
+  /* ONE PIECE OF WORK, BOTH PLACES (1.3.1 item 9, Release A). The list
+     also shows Grades' dated records, read-only and labelled, so a
+     student who entered an essay in Grades sees it here too. Nothing is
+     merged or written: assessmentRecords.js decides what shows. */
+  const linked = useMemo(() => linkedAssessments(assignments, assessments), [assignments, assessments]);
+  const fromGrades = useMemo(() => gradesRecordsForPlan(assignments, assessments), [assignments, assessments]);
   const sorted = useMemo(
     () =>
-      [...assignments].sort((a, b) => {
+      [...assignments.map((a) => ({ a, grades: false })), ...fromGrades.map((a) => ({ a, grades: true }))].sort(({ a }, { a: b }) => {
         if (!a.due) return 1;
         if (!b.due) return -1;
         return a.due.localeCompare(b.due);
       }),
-    [assignments]
+    [assignments, fromGrades]
   );
 
   return (
@@ -1210,12 +1218,38 @@ function Assignments({ assignments, courses, addItem, patchItem, removeItem, foc
         </button>
       </div>
 
-      {assignments.length === 0 ? (
+      {sorted.length === 0 ? (
         <Empty>No assignments yet. All fields are optional, so add one and fill it in later.</Empty>
       ) : (
         <ul className="mt-4 space-y-2.5">
-          {sorted.map((a) => {
+          {sorted.map(({ a, grades }) => {
             const meta = dueMeta(a.due);
+            if (grades) {
+              return (
+                <li key={`g-${a.id}`} data-plan-record={a.id} data-from-grades className={`rounded-xl border border-dashed border-stone-200 p-3.5 ${focused && a.course === focused ? "u-highlight" : ""}`}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <CourseChip name={a.course} />
+                    <h3 className="font-medium text-stone-800">{a.title || <span className="text-stone-400">Untitled</span>}</h3>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-stone-500">
+                    <span>Due {formatAU(a.due)}</span>
+                    {meta && <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${meta.cls}`}>{meta.label}</span>}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="text-stone-500">
+                      {RECORDS_COPY.inGrades(a.w)}
+                      {isMarked(a) ? ` · ${RECORDS_COPY.marked(a.mark)}` : ""}
+                    </span>
+                    {onOpenAssessment && (
+                      <button className="font-medium u-accent-deeptext underline-offset-2 hover:underline u-focus" onClick={() => onOpenAssessment(a.id)} data-open-grades>
+                        {RECORDS_COPY.openGrades}
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            }
+            const pair = linked.get(a.id);
             if (editingId === a.id) {
               return (
                 <li key={a.id} className={editBox}>
@@ -1253,6 +1287,12 @@ function Assignments({ assignments, courses, addItem, patchItem, removeItem, foc
                     </button>
                   </div>
                 </div>
+                {pair && (
+                  <p className="mt-1.5 text-xs text-stone-500" data-linked-grades>
+                    {RECORDS_COPY.inGrades(pair.w)}
+                    {isMarked(pair) ? ` · ${RECORDS_COPY.marked(pair.mark)}` : ""}
+                  </p>
+                )}
                 {a.requirements && <p className="mt-2 whitespace-pre-wrap text-sm text-stone-600">{a.requirements}</p>}
                 {a.notes && <p className="mt-1.5 whitespace-pre-wrap text-sm text-stone-400">{a.notes}</p>}
                 <RubricPanel assignment={a} assignments={assignments} patchItem={patchItem} />
@@ -1377,7 +1417,7 @@ function repeatChip(e, settings) {
   return fillCopy(RECURRENCE_COPY.chipCount, { n: occurrenceCount(e, settings) });
 }
 
-function Calendar({ events, courses, settings = {}, addItem, patchItem, removeItem, focused }) {
+function Calendar({ events, courses, settings = {}, addItem, patchItem, removeItem, focused, assessments = [], onOpenAssessment = null }) {
   const today = new Date();
   const [viewY, setViewY] = useState(today.getFullYear());
   const [viewM, setViewM] = useState(today.getMonth());
@@ -1412,6 +1452,7 @@ function Calendar({ events, courses, settings = {}, addItem, patchItem, removeIt
 
   const todayISO = toISO(today);
   const dayEvents = eventsForDay(selected);
+  const dayGrades = gradesDatesOn(assessments, selected);
 
   const openAdd = () => {
     setForm({ ...blank, date: selected });
@@ -1445,7 +1486,9 @@ function Calendar({ events, courses, settings = {}, addItem, patchItem, removeIt
       <div className="mt-1 grid grid-cols-7 gap-1">
         {cells.map((iso, i) => {
           if (!iso) return <div key={`e${i}`} />;
-          const evs = eventsForDay(iso);
+          /* Grades' dates count towards a day's dots too: they are on
+             that day, whichever collection holds them. */
+          const evs = [...eventsForDay(iso), ...gradesDatesOn(assessments, iso)];
           const isSel = iso === selected;
           const isToday = iso === todayISO;
           let cls = "text-stone-700 hover:bg-stone-100";
@@ -1477,6 +1520,21 @@ function Calendar({ events, courses, settings = {}, addItem, patchItem, removeIt
       {showForm && (
         <div className={`mt-3 ${editBox}`}>
           <EventFields state={form} set={setForm} courses={courses} settings={settings} />
+          {/* A POINTER, NEVER A BLOCK (1.3.1 item 13). An event has no
+              type, so an exam can only be guessed from its title, and
+              "Exam review session" must still save. */}
+          {looksLikeAssessment(form.title) ? (
+            <div className="mt-2 rounded-lg u-accent-soft px-3 py-2 text-xs text-stone-700" data-exam-pointer>
+              {RECORDS_COPY.examPointer}
+              {onOpenAssessment && (
+                <button className="ml-1 font-medium u-accent-deeptext underline-offset-2 hover:underline u-focus" onClick={() => onOpenAssessment(null)}>
+                  {RECORDS_COPY.goToGrades}
+                </button>
+              )}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-stone-500" data-calendar-line>{RECORDS_COPY.calendarLine}</p>
+          )}
           <div className="mt-2 flex justify-end gap-2">
             <button className={btnGhost} onClick={() => setShowForm(false)}>
               <X size={15} /> Cancel
@@ -1489,7 +1547,32 @@ function Calendar({ events, courses, settings = {}, addItem, patchItem, removeIt
       )}
 
       <ul className="mt-3 space-y-2">
-        {dayEvents.length === 0 && !showForm && <Empty>No classes or events on this day.</Empty>}
+        {dayEvents.length === 0 && dayGrades.length === 0 && !showForm && <Empty>No classes or events on this day.</Empty>}
+        {/* GRADES' DATES, READ-ONLY. Shown so an exam entered in Grades
+            never has to be typed again here; edited only in Grades. */}
+        {dayGrades.map((g) => (
+          <li key={`g-${g.id}`} data-from-grades={g.id} className={`flex flex-wrap items-start gap-3 rounded-xl border border-dashed border-stone-200 p-3 ${focused && g.course === focused ? "u-highlight" : ""}`}>
+            <div className="flex w-16 flex-shrink-0 flex-col items-center rounded-lg bg-stone-100 py-1.5 text-xs font-semibold text-stone-500">
+              <Target size={15} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h5 className="font-medium text-stone-800">{g.title || "Assessment"}</h5>
+                <CourseChip name={g.course} />
+              </div>
+              <p className="mt-0.5 text-xs text-stone-500">
+                {RECORDS_COPY.fromGrades}
+                {Number(g.w) > 0 ? ` · ${g.w}%` : ""}
+                {g.kind === "exam" ? " · exam" : ""}
+              </p>
+            </div>
+            {onOpenAssessment && (
+              <button className="shrink-0 self-center text-xs font-medium u-accent-deeptext underline-offset-2 hover:underline u-focus" onClick={() => onOpenAssessment(g.id)} data-open-grades>
+                {RECORDS_COPY.openGrades}
+              </button>
+            )}
+          </li>
+        ))}
         {dayEvents.map((e) =>
           editingId === e.id ? (
             <li key={e.id} className={editBox}>
@@ -4681,7 +4764,21 @@ const ASSESSMENT_KINDS = [
   { id: "other", label: "Other" },
 ];
 
-export function Grades({ assessments, courses, addItem, patchItem, removeItem, focused, rule = DEFAULT_ROUNDING, essay = null, courseActions = null }) {
+export function Grades({ assessments, courses, addItem, patchItem, removeItem, focused, rule = DEFAULT_ROUNDING, essay = null, courseActions = null, assignments = [], onOpenAssignment = null, openId = null, onOpened = () => {} }) {
+  /* Plan assignments with no grade record, by course (Release A of the
+     one-record plan): shown on their course's card, read-only, never
+     counted. assessmentRecords.js decides which. */
+  const fromPlan = useMemo(() => planRecordsForGrades(assignments, assessments), [assignments, assessments]);
+
+  /* Opened from a Grades record listed in Plan: scroll to its row. */
+  useEffect(() => {
+    if (!openId) return;
+    onOpened();
+    setTimeout(() => {
+      const row = document.querySelector(`[data-assessment-row="${openId}"]`);
+      if (row && row.scrollIntoView) row.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 50);
+  }, [openId]);
   const [targets, setTargets] = useState({}); // course -> band code the student is aiming at
 
   /* ONE CARD PER COURSE (1.3.1). The separate add form and its Course
@@ -4705,10 +4802,13 @@ export function Grades({ assessments, courses, addItem, patchItem, removeItem, f
       if (!byCourse.has(a.course)) byCourse.set(a.course, []);
       byCourse.get(a.course).push(a);
     }
+    /* A course that only has Plan assignments still gets its card, so
+       they are listed somewhere in Grades. */
+    for (const name of fromPlan.keys()) if (name && !byCourse.has(name)) byCourse.set(name, []);
     const out = [...byCourse.entries()];
-    if (noCourse.length) out.push(["", noCourse]);
+    if (noCourse.length || (fromPlan.get("") || []).length) out.push(["", noCourse]);
     return out;
-  }, [assessments, courses]);
+  }, [assessments, courses, fromPlan]);
 
   const shown = cards.filter(([name]) => !focused || name === focused);
 
@@ -4751,6 +4851,8 @@ export function Grades({ assessments, courses, addItem, patchItem, removeItem, f
           courseActions={course && courseActions ? courseActions : null}
           isCourse={known.has(course)}
           focused={focused === course}
+          planOnly={fromPlan.get(course) || []}
+          onOpenAssignment={onOpenAssignment}
         />
       ))}
       {courseActions && <AddCourseCard courses={courses} onAdd={courseActions.add} empty={cards.length === 0} />}
@@ -4941,7 +5043,7 @@ function AddAssessmentRow({ onAdd }) {
   );
 }
 
-function CourseGrades({ course, list, target, rule, onTarget, onAdd, patchItem, removeItem, essay = null, courseActions = null, isCourse = true, focused = false }) {
+function CourseGrades({ course, list, target, rule, onTarget, onAdd, patchItem, removeItem, essay = null, courseActions = null, isCourse = true, focused = false, planOnly = [], onOpenAssignment = null }) {
   /* Which mark field has focus, so the ask waits until typing stops;
      and which rows were just answered, so the thanks outlives the
      flag that removes the ask (the recovery card's `gone` lesson). */
@@ -4986,7 +5088,7 @@ function CourseGrades({ course, list, target, rule, onTarget, onAdd, patchItem, 
 
       <ul className="mb-3 flex flex-col gap-1">
         {list.map((a) => (
-          <li key={a.id} className="rounded-lg border border-stone-100 text-sm">
+          <li key={a.id} data-assessment-row={a.id} className="rounded-lg border border-stone-100 text-sm">
           <div className="flex items-center gap-2 px-3 py-2">
             <span className="flex-1 truncate text-stone-800">
               {a.title}
@@ -5091,6 +5193,24 @@ function CourseGrades({ course, list, target, rule, onTarget, onAdd, patchItem, 
         )}
       </div>
       </>
+      )}
+      {planOnly.length > 0 && (
+        <div className="mt-3" data-plan-only>
+          <p className="mb-1 text-xs font-medium text-stone-500">{RECORDS_COPY.planSection}</p>
+          <ul className="flex flex-col gap-1">
+            {planOnly.map((a) => (
+              <li key={a.id} data-plan-record={a.id} className="flex items-center gap-2 rounded-lg border border-dashed border-stone-200 px-3 py-2 text-sm">
+                <span className="min-w-0 flex-1 truncate text-stone-700">{a.title || "Untitled assignment"}</span>
+                {a.due && <span className="shrink-0 text-xs text-stone-400">{formatAU(a.due)}</span>}
+                {onOpenAssignment && (
+                  <button className="shrink-0 text-xs font-medium u-accent-deeptext underline-offset-2 hover:underline u-focus" onClick={() => onOpenAssignment(a.id)} data-open-plan>
+                    {RECORDS_COPY.openPlan}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       <AddAssessmentRow onAdd={onAdd} />
     </Card>
@@ -5615,6 +5735,17 @@ export default function PlannerApp() {
      anything needs to deep-link to. */
   const [openNoteId, setOpenNoteId] = useState(null);
   const [openAssignmentId, setOpenAssignmentId] = useState(null);
+  /* Grades row to scroll to when opened from Plan or the Calendar. The
+     Calendar's exam pointer passes null: it opens Grades without a row. */
+  const [openAssessmentId, setOpenAssessmentId] = useState(null);
+  const openAssessment = (id) => {
+    setOpenAssessmentId(id);
+    setTab("courses");
+  };
+  const openAssignment = (id) => {
+    setOpenAssignmentId(id);
+    setTab("planner");
+  };
   const toggleFocus = (name) => setFocusedCourse((cur) => (cur === name ? null : name));
 
   const navRef = useRef(null);
@@ -6975,6 +7106,10 @@ export default function PlannerApp() {
                 focused={focused}
                 rule={rounding}
                 courseActions={courseActions}
+                assignments={sem.assignments}
+                onOpenAssignment={openAssignment}
+                openId={openAssessmentId}
+                onOpened={() => setOpenAssessmentId(null)}
               />
             </Section>
           </>
@@ -6989,7 +7124,7 @@ export default function PlannerApp() {
 
         {tab === "calendar" && (
           <Section icon={CalendarDays} title="Calendar" subtitle="Class times and important dates (DD/MM/YYYY)">
-            <Calendar events={sem.events} courses={sem.courses} settings={settings} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} />
+            <Calendar events={sem.events} courses={sem.courses} settings={settings} addItem={addItem} patchItem={patchItem} removeItem={removeItem} focused={focused} assessments={sem.assessments} onOpenAssessment={openAssessment} />
           </Section>
         )}
 
@@ -7025,6 +7160,8 @@ export default function PlannerApp() {
                 onBreakdown={applyBreakdown}
                 openId={openAssignmentId}
                 onOpened={() => setOpenAssignmentId(null)}
+                assessments={sem.assessments}
+                onOpenAssessment={openAssessment}
               />
             </Section>
           </>
@@ -7038,10 +7175,7 @@ export default function PlannerApp() {
               patchItem={patchItem}
               removeItem={removeItem}
               assignments={sem.assignments}
-              onOpenAssignment={(id) => {
-                setOpenAssignmentId(id);
-                setTab("planner");
-              }}
+              onOpenAssignment={openAssignment}
             />
           </Section>
         )}

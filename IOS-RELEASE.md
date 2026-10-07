@@ -427,7 +427,7 @@ questions.
 > limits are enforced on our server, not just in the prompt.
 >
 > To try it: sign in with the account above, open **Courses**, add an
-> assessment under **Grades**, and use **Get feedback on a draft** on
+> assessment on any card under **Grades**, and use **Essay feedback** on
 > its row. Paste any text into the draft box and anything into the
 > criteria box. The account has free trial credits; one read costs 9.
 >
@@ -516,6 +516,55 @@ is a legal one, and it is LEGAL-REVIEW.md §5.
 Section 3a: one row gains the `Analytics` purpose; nothing else
 changes. **Play's data-safety form takes the same edit** so the two
 labels agree (ANDROID-RELEASE.md §2).
+
+---
+
+## 3c. The App Store Connect text for 1.3.1 — paste-ready
+
+Drafted 7 October 2026. **What's New is Grace's to reword**; the facts
+in it are checked against what 1.3.1 contains (RELEASE-1.3.1.md).
+Written against **1.3.0, the version live on the App Store**.
+
+### Version
+
+`1.3.1` (the root `package.json`, stamped into both shells by
+`npm run settings`).
+
+### What's New
+
+> **Your courses and grades in one place.** Each course is now a card
+> in Grades: add, rename or remove a course right there, and add its
+> assessments on its own card. Exams show in Upcoming with the days to
+> go and a study plan, and your Grades dates now appear on the
+> Calendar.
+>
+> Also new: rate your AI lecture notes so we can make them better,
+> extra non-teaching weeks for study breaks and public holidays, saved
+> essay feedback in its own section of Notes, steps from "Break this
+> into steps" showing which assignment they belong to, and Drill (the
+> new name for running through every card in a course).
+
+### Reviewer notes
+
+Unchanged from 1.3.0 apart from the button name, corrected in section 3
+above: the essay feature is **Essay feedback** (it was "Get feedback on
+a draft"). Nothing new in 1.3.1 needs a reviewer note: the lecture-notes
+rating is free and appears after a recording, which the existing
+AI-notes note already covers.
+
+### App Privacy: no change
+
+The lecture-notes rating (migration 0026) is a rating, reasons and an
+opt-in comment **supplied by the student**: the same kind of data as
+1.3.0's essay rating, on the same `User Content -> Other User Content`
+row and for the same purpose (section 3a). It holds no lecture content.
+No new row, no new type, no new purpose.
+
+### Screenshots
+
+6.9" (1320×2868), iPhone only. The five screens and what each must
+show are in DEVICE-CHECK.md §9's last item. Taken on Grace's own seeded
+account, never the reviewer account.
 
 ---
 

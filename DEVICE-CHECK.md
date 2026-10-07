@@ -1,4 +1,4 @@
-# Device check for 1.3 — Grace
+# Device check for 1.3 and 1.3.1 — Grace
 
 Everything merged since 1.1.0 that a phone can actually show, and the
 new essay feedback in §8. Grouped
@@ -262,6 +262,94 @@ this order.
 Jared checks the database half of this from the dashboard: a
 `delivered` row per run, a `rated` row per answer, `on_mark` rows with
 `mark` and `band` null when the tick was off.
+
+---
+
+## 9. What's new in 1.3.1  **[app]** and **[web]**
+
+**Build 1.3.1 from `main` after the last 1.3.1 change has merged** (the
+pull request after #181). The Account tab's version must match the one
+Jared gives you. Seed a semester with two courses, each with two or
+three assessments (one an exam with a date), two assignments in Plan
+(one with the same title and date as an assessment), and a few study
+cards.
+
+**Courses and Grades**
+- [ ] **Courses tab** opens on **Semester setup**, then **Grades**.
+      There is no separate Courses list any more.
+- [ ] **Add a course** is the last card in Grades. Type a name you
+      already have, in different capitals: it says *"You already have a
+      course called …"* and the Add button stays off. A new name makes a
+      new card.
+- [ ] **Rename a course** with the pencil on its card. Afterwards its
+      assessments, its study cards, its assignments in Plan and its
+      readings all show the **new name**. Try renaming it to another
+      course's name: it refuses on the card and nothing changes.
+- [ ] **Remove a course** with the bin. Before anything happens it says
+      how many assessments go with it and that everything else keeps
+      the tag. Cancel works. Remove takes the card away; its study
+      cards still say the old name.
+- [ ] **Tap a course's tag** on its card: everything for that course is
+      highlighted across the app. Tap again to clear.
+- [ ] Each card has its own **Add assessment**; the new row lands on
+      that card. Assessments with no course are on a **No course** card
+      at the bottom.
+
+**The same piece of work in Plan and Grades**
+- [ ] **Plan → Assignments** also lists Grades' assessments that have a
+      date, in a dashed box, *"In Grades · 40%"*, with **Open in Grades →**.
+      Tap it: you land on that row in Grades.
+- [ ] **Grades** shows, on each course card, *"Also in Plan, no weight
+      yet"* with your Plan assignments for that course and **Open in
+      Plan →**. They are **not** counted in the mark.
+- [ ] The essay you entered in **both** places shows as **two rows on
+      both screens**, each labelled with where it lives. Nothing is
+      merged, and editing one does not change the other.
+
+**Calendar**
+- [ ] A day with a Grades date shows it in a dashed box, *"From
+      Grades · 40%"*, with **Open in Grades →**, and **no** edit or delete
+      buttons. The day has a dot for it.
+- [ ] **Add** on the Calendar: under the form, *"Exams and assessments go
+      in Courses → Grades…"*. Type a title with **exam**, **quiz** or
+      **test** in it: a note suggests Grades instead, and **Add to
+      calendar still works**.
+
+**Upcoming, non-teaching weeks, recurring events**
+- [ ] **Plan → Upcoming**: an exam shows on its own week as *"Exam · N
+      days to go"*, even ten weeks out, and its study plan opens from it.
+      There is no separate exam countdown in Study.
+- [ ] **Semester setup → Other non-teaching weeks**: add two ranges.
+      Teaching-week numbers in Upcoming skip them, and a week inside one
+      reads *"Non-teaching week"*.
+- [ ] A **weekly class** set to end with the semester skips the break
+      and both extra ranges.
+
+**Notes, Study, To-do, AI**
+- [ ] **Notes** has an **Essay feedback** section; a saved result opens
+      **read-only** (no Edit) and is not listed again among your notes.
+- [ ] **Study cards**: the per-course option is **Drill** ("Drill · 3 to
+      go", "Drill done", "Drill again"). Nothing in Study cards says
+      Practice; **Practice questions** (the AI one) still does.
+- [ ] **Break this into steps** on an assignment, then **To-do**: each
+      step says *"From <assignment> →"* on its own line; tapping it opens
+      that assignment with its steps showing. A ticked step's link is not
+      crossed out. Delete the assignment: its steps say *"From an
+      assignment you deleted"*.
+- [ ] **AI lecture notes**: after a result, *"Were these notes useful?"*
+      with Yes / Partly / No. Partly or No shows six reasons; the comment
+      box only appears when you tick to send one. Send says thanks. Save
+      first instead, and the question is still there on the Saved screen.
+      Jared checks the rows in `lecture_notes_feedback`.
+
+**The five store screenshots** (6.9", 1320×2868, iPhone only, your own
+seeded account, never the reviewer account)
+- [ ] 1. **Upcoming** with a busy week and an exam row with its days to go.
+- [ ] 2. **An AI lecture note result**, with the rating question visible.
+- [ ] 3. **An essay feedback result** on an assessment.
+- [ ] 4. **A Grades course card** showing what you need for an HD, with
+      its rename and remove controls.
+- [ ] 5. **A study card under review.**
 
 ---
 
