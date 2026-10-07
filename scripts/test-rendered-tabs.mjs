@@ -802,6 +802,118 @@ async function run() {
     assert.equal(onMark[0].rating, "partly");
   });
 
+  await test("A LECTURE-NOTES RESULT CARRIES THE RATING: rate it, and exactly two rows go out, neither carrying the lecture", async () => {
+    /* The real path to a result without a microphone: a parked
+       recovery key, "Get it back", and an intercepted ai-notes reply.
+       Then the control is PRESSED — a guard for a bug that needs a user
+       action has to perform the action. */
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+    const KEY = "11111111-2222-4333-8444-555555555555";
+    const OVERVIEW = "Working memory holds about four chunks, not seven.";
+    await page.addInitScript(
+      ({ ref, userId, tabKey, meta, key }) => {
+        const hour = Math.floor(Date.now() / 1000) + 3600;
+        localStorage.setItem(
+          `sb-${ref}-auth-token`,
+          JSON.stringify({
+            access_token: "test-token",
+            token_type: "bearer",
+            expires_at: hour,
+            expires_in: 3600,
+            refresh_token: "test-refresh",
+            user: { id: userId, email: "render-probe@example.test", aud: "authenticated", role: "authenticated" },
+          })
+        );
+        localStorage.setItem("uni-planner-mode", "light");
+        localStorage.setItem(tabKey, "ai-notes");
+        localStorage.setItem(
+          "uni-planner-v1",
+          JSON.stringify({
+            semester: "Semester 1",
+            semesters: {},
+            meta: { ...meta, pendingAiRecovery: { key, course: "PSYC1001", week: "3", startedAt: new Date().toISOString() } },
+          })
+        );
+      },
+      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, meta: CONSENTED_META, key: KEY }
+    );
+    const rows = [];
+    await page.route(`${SUPABASE_HOST}/**`, async (route) => {
+      const req = route.request();
+      const url = req.url();
+      if (url.includes("/functions/v1/ai-notes")) {
+        return route.fulfill(
+          json({
+            ok: true,
+            result: {
+              ok: true,
+              summaryFailed: false,
+              translated: null,
+              original: {
+                overview: OVERVIEW,
+                keyPoints: ["Chunking lets several items count as one, which is why phone numbers are grouped."],
+                terms: [{ term: "Chunk", content: "A group of items remembered as a single unit." }],
+                assessable: ["The lecturer said the four-chunk estimate will be on the exam."],
+                openQuestions: [],
+              },
+            },
+          })
+        );
+      }
+      if (url.includes("/rest/v1/lecture_notes_feedback") && req.method() === "POST") {
+        rows.push(JSON.parse(req.postData() || "null"));
+        return route.fulfill({ status: 201, headers: { "access-control-allow-origin": "*" }, body: "" });
+      }
+      if (url.includes("/auth/v1/user")) return route.fulfill(json({ id: USER_ID, email: "render-probe@example.test" }));
+      if (url.includes("/auth/v1/")) return route.fulfill(json({ access_token: "test-token", user: { id: USER_ID } }));
+      if (url.includes("/rest/v1/profiles")) return route.fulfill(json(PROFILE_ROW));
+      if (url.includes("/rest/v1/ai_usage")) return route.fulfill(json({ user_id: USER_ID, credits_used: 12 }));
+      return route.fulfill(json([]));
+    });
+
+    await page.goto("file://" + path.join(OUT, "index.html"));
+    await page.getByRole("button", { name: "Get it back" }).click();
+    await page.waitForSelector("[data-notes-rating]", { timeout: 10_000 });
+    await page.waitForTimeout(300);
+    assert.equal(rows.length, 1, `expected the delivered row as soon as the result showed, got ${rows.length}`);
+
+    await page.click('[data-notes-rating] [data-essay-rating="partly"]');
+    await page.getByLabel("Too long").check();
+    if (process.env.NOTES_RATING_SHOT) {
+      await page.locator("[data-notes-rating]").scrollIntoViewIfNeeded();
+      await page.evaluate(() => window.scrollBy(0, 120));
+      await page.screenshot({ path: process.env.NOTES_RATING_SHOT });
+    }
+    await page.locator("[data-notes-rating]").getByRole("button", { name: "Send" }).click();
+    await page.getByText("Thanks. That goes straight to the people improving it.").waitFor({ timeout: 5_000 });
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    await ctx.close();
+
+    assert.deepEqual(errors, []);
+    assert.equal(rows.length, 2, `expected delivered then rated, got ${rows.length} rows`);
+    const [delivered, rated] = rows.map((r) => (Array.isArray(r) ? r[0] : r));
+    assert.equal(delivered.occasion, "delivered");
+    assert.equal(rated.occasion, "rated");
+    assert.equal(rated.rating, "partly");
+    assert.deepEqual(rated.reasons, ["too-long"]);
+    assert.equal(rated.comment, null, "an unticked comment travelled");
+    assert.equal(rated.run_id, delivered.run_id, "the rating is not joined to its own delivered row");
+    assert.notEqual(rated.run_id, KEY, "the run id IS the idempotency key, which joins the rating to a transcript");
+    assert.equal(rated.user_id, USER_ID);
+    for (const row of [delivered, rated]) {
+      assert.deepEqual(
+        Object.keys(row).filter((k) => !["id", "user_id", "run_id", "course", "occasion", "rating", "reasons", "comment"].includes(k)),
+        [],
+        "a row carries a field 0026 does not have"
+      );
+      assert.ok(!JSON.stringify(row).includes("chunk") && !JSON.stringify(row).includes(KEY), "a row carries lecture content or the key");
+    }
+    assert.ok(overflow <= 0, `the result screen is ${overflow}px wider than a 390px phone`);
+  });
+
   await test("every tab was actually visited, so none of the above passed over nothing", () => {
     assert.deepEqual(visited, ids, `visited ${visited.length} of ${ids.length} tabs`);
   });

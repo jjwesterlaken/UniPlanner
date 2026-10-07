@@ -331,6 +331,8 @@ async function run() {
       /* 0023 likewise re-creates the function, naming entitlements and
          billing_events, which this fixture never created. */
       if (file.startsWith("0023_")) continue;
+      /* And 0026, which re-creates it from 0023's body. */
+      if (file.startsWith("0026_")) continue;
       applyMigration(db, file);
     }
     return db;
@@ -385,6 +387,14 @@ async function run() {
         `insert into public.assessment_feedback (id, user_id, assessment_id, run_id, occasion, deficiency_codes) values
            ('seed-af-mine', ${USER}, 'asmt-1', 'run-1', 'delivered', '{thesis-unclear}'),
            ('seed-af-theirs', ${OTHER}, 'asmt-2', 'run-2', 'delivered', '{}');`
+      );
+    }
+    if (one(db, `select to_regclass('public.lecture_notes_feedback') is not null;`) === "t") {
+      psqlOrThrow(
+        db,
+        `insert into public.lecture_notes_feedback (id, user_id, run_id, course, occasion) values
+           ('seed-nf-mine', ${USER}, 'run-1', 'PSYC1001', 'delivered'),
+           ('seed-nf-theirs', ${OTHER}, 'run-2', null, 'delivered');`
       );
     }
     /* The seed must cover everything the derivation finds, or the
@@ -745,7 +755,10 @@ async function run() {
          (${OTHER}, 'revenuecat', 'ai_max');
        insert into public.assessment_feedback (id, user_id, assessment_id, occasion, rating, mark, band) values
          ('af-del-mine', ${USER}, 'asmt-1', 'on_mark', 'yes', 72, 'Distinction'),
-         ('af-del-theirs', ${OTHER}, 'asmt-9', 'on_mark', 'no', null, null);`
+         ('af-del-theirs', ${OTHER}, 'asmt-9', 'on_mark', 'no', null, null);
+       insert into public.lecture_notes_feedback (id, user_id, run_id, course, occasion, rating, reasons) values
+         ('nf-del-mine', ${USER}, 'run-1', 'PSYC1001', 'rated', 'partly', '{too-long}'),
+         ('nf-del-theirs', ${OTHER}, 'run-9', null, 'delivered', null, '{}');`
     );
 
     const owned = one(
@@ -1269,6 +1282,10 @@ async function run() {
     "assessment_feedback.id": () => plannerUid(),
     "assessment_feedback.assessment_id": () => plannerUid(),
     "assessment_feedback.run_id": () => plannerUid(),
+    /* 0026: the row id and the run id are fresh uid()s minted in
+       Recorder; the run id is deliberately NOT the idempotency key. */
+    "lecture_notes_feedback.id": () => plannerUid(),
+    "lecture_notes_feedback.run_id": () => plannerUid(),
   };
 
   /* Columns no client value ever reaches. Each needs a reason, because
@@ -1280,6 +1297,7 @@ async function run() {
     "client_errors.id": "gen_random_uuid() default on the column; the client never supplies one",
     "client_errors.user_id": "the auth user id when signed in, null when not — only ever copied from the session",
     "assessment_feedback.user_id": "the auth user id, only ever copied from the session; the insert policy refuses any other value",
+    "lecture_notes_feedback.user_id": "the auth user id, only ever copied from the session; the insert policy refuses any other value",
     "auth_email_canary.id": "the constant 1 — a check constraint allows no other value, and only the canary function writes it, under the service role",
     "ai_task_costs.id": "generated always as identity, so not even the service role can supply one; no client can write this table at all — no grants, no policy, and the only writer is record_ai_task_cost(), executable by service_role alone",
     "function_errors.id": "gen_random_uuid() default on the column, and no client can write this table at all — anon and authenticated have no insert grant and no policy, so nothing outside the database ever mints one",
@@ -1368,6 +1386,10 @@ async function run() {
         `insert into public.assessment_feedback (id, user_id, assessment_id, run_id, occasion) values ('i-${v}', ${USER}, '${v}', 'r2-${v}', 'delivered')`,
       "assessment_feedback.run_id": (v) =>
         `insert into public.assessment_feedback (id, user_id, assessment_id, run_id, occasion) values ('j-${v}', ${USER}, 'a1', '${v}', 'delivered')`,
+      "lecture_notes_feedback.id": (v) =>
+        `insert into public.lecture_notes_feedback (id, user_id, run_id, occasion) values ('${v}', ${USER}, 'r-${v}', 'delivered')`,
+      "lecture_notes_feedback.run_id": (v) =>
+        `insert into public.lecture_notes_feedback (id, user_id, run_id, occasion) values ('j-${v}', ${USER}, '${v}', 'delivered')`,
     };
     for (const [col, gen] of Object.entries(GENERATED_IDS)) {
       const value = gen();
@@ -1429,6 +1451,36 @@ async function run() {
     assert.equal(as(USER, `update public.assessment_feedback set rating = 'yes';`).ok, false, "a row was updated");
     assert.equal(as(OTHER, `select count(*) from public.assessment_feedback;`).out, "0", "another account can read the row");
     assert.equal(psql(db, `set role anon; select count(*) from public.assessment_feedback;`).ok, false, "anon was answered rather than refused");
+  });
+
+  await test("0026 is re-runnable, and each apply prints its verified line", () => {
+    const db = withArchives();
+    const r = psql(db, fs.readFileSync(path.join(migrationsDir, "0026_lecture_notes_feedback.sql"), "utf8"));
+    assert.equal(r.ok, true, `a second apply of 0026 failed: ${r.err.slice(0, 200)}`);
+    assert.match(r.err, /0026 applied and verified: 11 properties checked\./, "the self-check did not report, so nobody can tell it ran");
+    assert.equal(one(db, `select count(*)::text from public.lecture_notes_feedback;`), "0", "the self-check left probe rows behind");
+  });
+
+  await test("0026's self-check REFUSES a deletion function that forgot the table (the check can fail)", () => {
+    /* Re-applying 0023 restores a body without lecture_notes_feedback;
+       0026's verification block, run on its own, must then raise. */
+    const db = withArchives();
+    applyMigration(db, "0023_assessment_feedback.sql");
+    const sql = fs.readFileSync(path.join(migrationsDir, "0026_lecture_notes_feedback.sql"), "utf8");
+    const r = psql(db, sql.slice(sql.lastIndexOf("do $$")));
+    assert.equal(r.ok, false, "the self-check passed a deletion function that leaves notes feedback behind");
+    assert.match(r.err, /does not delete from lecture_notes_feedback/);
+  });
+
+  await test("0026: a signed-in student can write their own rows and cannot update, read or write anyone else's", () => {
+    const db = withArchives();
+    seedTwoUsers(db);
+    const as = (uid, sql) => psql(db, `set test.uid = ${uid}; set role authenticated; ${sql}`);
+    assert.equal(as(USER, `insert into public.lecture_notes_feedback (id, user_id, run_id, occasion) values ('p1', ${USER}, 'r', 'delivered');`).ok, true);
+    assert.equal(as(USER, `insert into public.lecture_notes_feedback (id, user_id, run_id, occasion) values ('p2', ${OTHER}, 'r', 'delivered');`).ok, false, "a row was written for another account");
+    assert.equal(as(USER, `update public.lecture_notes_feedback set course = 'x';`).ok, false, "a row was updated");
+    assert.equal(as(OTHER, `select count(*) from public.lecture_notes_feedback;`).out, "0", "another account can read the row");
+    assert.equal(psql(db, `set role anon; select count(*) from public.lecture_notes_feedback;`).ok, false, "anon was answered rather than refused");
   });
 
   await test("0008 is re-runnable (a second apply changes nothing and fails nothing)", () => {

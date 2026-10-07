@@ -65,10 +65,18 @@ const blocks = Object.fromEntries(
 const EXPECTED_QUERIES = ["volume", "rating_split", "reasons", "by_code", "mark_gap", "mark_answers", "before_after", "comments"];
 
 const U = (n) => `00000000-0000-4000-8000-00000000e0${String(n).padStart(2, "0")}`;
+/* EVERY OFFSET IS SCALED INTO THE CURRENT SYDNEY WEEK. The fixture says
+   "one week" and the volume and rating_split assertions count week
+   rows, but "3 days ago" is LAST week from Monday to Wednesday — so this
+   file failed three days in seven, by the calendar, with nothing wrong.
+   The offsets are shrunk by (time since this Sydney Monday / 4 days),
+   capped at 1, which keeps their order and their relative spacing and
+   puts every row inside this week whatever day it is. */
+const SCALE = `least(1.0, extract(epoch from (now() - (date_trunc('week', now() at time zone 'Australia/Sydney') at time zone 'Australia/Sydney'))) / (4 * 86400.0))`;
 const row = (o) => {
   const lit = (v) => (v === null || v === undefined ? "null" : Array.isArray(v) ? `'{${v.join(",")}}'` : typeof v === "boolean" || typeof v === "number" ? String(v) : `'${String(v).replace(/'/g, "''")}'`);
   const cols = Object.keys(o);
-  return `insert into public.assessment_feedback (${cols.join(", ")}) values (${cols.map((c) => (c === "created_at" ? `now() - interval '${o[c]}'` : lit(o[c]))).join(", ")});`;
+  return `insert into public.assessment_feedback (${cols.join(", ")}) values (${cols.map((c) => (c === "created_at" ? `now() - interval '${o[c]}' * ${SCALE}` : lit(o[c]))).join(", ")});`;
 };
 
 /* THE FIXTURE, all within the last week so every window sees it.

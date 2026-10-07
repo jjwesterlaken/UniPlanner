@@ -940,6 +940,14 @@ async function run() {
       privacy: /record of how essay feedback did[\s\S]*?only sent if you tick[\s\S]*?only if you tick to share/i,
       deletion: /record of how essay feedback did/i,
     },
+    /* Lecture-notes quality records (0026): the essay record's shape,
+       minus the mark. The policy has to say BOTH halves — what a row
+       never holds (the lecture) and the one condition under which it
+       can hold the student's words (the ticked comment). */
+    lecture_notes_feedback: {
+      privacy: /record of how lecture notes did[\s\S]*?never the\s+lecture[\s\S]*?only sent if you tick/i,
+      deletion: /record of how lecture notes did/i,
+    },
     function_errors: {
       privacy: /record of the failure[\s\S]*?no identifier for\s+your account/i,
       deletion: /record of failures on our own servers/i,

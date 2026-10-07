@@ -63,6 +63,9 @@ import { subscribeEntitlement, entitlementVersion as readEntitlementVersion } fr
 import { AI_NOTES_COPY } from "./aiNotesCopy.js";
 import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes, callResummarise } from "./aiNotesClient.js";
 import { nowISO, supabase } from "./sync.js";
+import { FeedbackCapture } from "./essayPanel.jsx";
+import { recordFeedback } from "./essayFeedbackStore.js";
+import { NOTES_REASONS, ratable, notesDeliveredRow, notesRatedRow } from "./notesFeedback.js";
 import { inputCls, labelCls, btnPrimary, btnGhost, iconBtn, Card, CourseSelect, uid } from "./PlannerApp.jsx";
 
 /* ------------------------------------------------------------------ */
@@ -766,7 +769,7 @@ function downloadTranscript(text) {
   }
 }
 
-function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCards, onRetrySummary }) {
+function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCards, onRetrySummary, rating = null }) {
   /* Declared ABOVE the early return: a hook after a conditional return
      is the temporal-dead-zone shape that has taken this app down twice. */
   const [retryState, setRetryState] = useState({ status: "idle", message: "" });
@@ -931,6 +934,7 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
           <Globe size={12} /> A translated version was also generated and will be saved alongside the English original.
         </p>
       )}
+      {rating}
       <div className="flex justify-end gap-2">
         <button className={btnGhost} onClick={onDiscard}>
           <X size={15} /> Discard
@@ -1338,6 +1342,56 @@ function Recorder({ session, courses, recording }) {
   const showForm = state.status === "idle";
   const showControls = ["idle", "requesting", "recording", "paused"].includes(state.status);
 
+  /* THE RATING UNDER EVERY SET OF NOTES (0026). One run per result
+     OBJECT: a fresh recording, a recovered one and a retried summary
+     are each their own result, so each is rated on its own. The run id
+     is minted here and joins to nothing -- never the idempotency key,
+     which would tie a rating to a transcript. The delivered row is the
+     denominator and is written as soon as there is something to rate;
+     a failed summary has no notes and writes nothing.
+
+     Held here rather than in ReviewAndSave so it outlives the save: a
+     student who taps Save first is offered it again on the done screen,
+     and one who already sent it is not asked twice. Nothing here can
+     throw or block -- recordFeedback swallows, and no client (demo,
+     signed out) is a quiet no-op. */
+  const [rated, setRated] = useState({ result: null, runId: null, sent: false });
+  useEffect(() => {
+    const result = state.result;
+    if (!ratable(result) || rated.result === result) return;
+    const runId = uid();
+    setRated({ result, runId, sent: false });
+    if (session && session.user) {
+      recordFeedback({
+        supabaseClient: supabase,
+        table: "lecture_notes_feedback",
+        row: notesDeliveredRow({ id: uid(), userId: session.user.id, runId, course }),
+      });
+    }
+  }, [state.result]);
+  const sendRating = async (answer) => {
+    if (!session || !session.user || !rated.runId) return false;
+    const r = await recordFeedback({
+      supabaseClient: supabase,
+      table: "lecture_notes_feedback",
+      row: notesRatedRow({ id: uid(), userId: session.user.id, runId: rated.runId, course, ...answer }),
+    });
+    if (r.ok) setRated((x) => ({ ...x, sent: true }));
+    return r.ok;
+  };
+  /* "saved" resets the recorder to its initial state, result and all,
+     so the done screen reads the run held here instead. */
+  const ratingControl = rated.runId && (state.status === "done" || rated.result === state.result) && (
+    <FeedbackCapture
+      key={rated.runId}
+      copy={AI_NOTES_COPY.rating}
+      reasons={NOTES_REASONS}
+      marker={{ "data-notes-rating": true }}
+      sent={rated.sent}
+      onSend={sendRating}
+    />
+  );
+
   /* Definitively not entitled -- the read RAN and said so. The controls
      go entirely: a disabled record button invites tapping it to find
      out why, and a recording that cannot be summarised is not a thing
@@ -1467,6 +1521,7 @@ function Recorder({ session, courses, recording }) {
             selectedCards={selectedCards}
             setSelectedCards={setSelectedCards}
             onRetrySummary={onRetrySummary}
+            rating={ratingControl}
           />
         </>
       )}
@@ -1482,6 +1537,7 @@ function Recorder({ session, courses, recording }) {
           <p className="flex items-center gap-2 text-sm u-accent-text">
             <Check size={16} /> Saved — check the Notes and Study tabs.
           </p>
+          {ratingControl}
           <button className={btnGhost} onClick={discard}>
             Record another lecture
           </button>

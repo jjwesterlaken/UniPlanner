@@ -15,10 +15,15 @@
 
 export const DUPLICATE_KEY = "23505";
 
-export async function recordFeedback({ supabaseClient, row }) {
-  if (!supabaseClient || !row || !row.user_id) return { ok: false, skipped: true };
+/* `table` is one of the two capture tables, never anything a caller
+   builds: assessment_feedback (0023) or lecture_notes_feedback (0026),
+   which share this contract exactly. */
+export const FEEDBACK_TABLES = Object.freeze(["assessment_feedback", "lecture_notes_feedback"]);
+
+export async function recordFeedback({ supabaseClient, row, table = "assessment_feedback" }) {
+  if (!supabaseClient || !row || !row.user_id || !FEEDBACK_TABLES.includes(table)) return { ok: false, skipped: true };
   try {
-    const { error } = await supabaseClient.from("assessment_feedback").insert(row);
+    const { error } = await supabaseClient.from(table).insert(row);
     if (!error) return { ok: true };
     if (error.code === DUPLICATE_KEY) return { ok: true, existed: true };
     return { ok: false };
