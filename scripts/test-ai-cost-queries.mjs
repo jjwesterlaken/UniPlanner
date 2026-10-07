@@ -70,11 +70,33 @@ const FIXTURE = [
   row({ ago: 40, task: "explain", completion: 399, max: 400, usd: 1.0, credits: 1, outcome: "delivered" }), // outside every window
 ].join("\n");
 
+/* RECORDINGS (recording_lengths). minutes_billed is the credits charged,
+   max(minutes, 3). Two at the floor, two between 3 and 50, two at 50 or
+   more — and three rows the block must NOT count: one still processing,
+   one with no charge recorded, one from ten days ago. */
+const REC_USER = "00000000-0000-4000-8000-0000000c0571";
+const rec = (n, credits, { status = "done", ago = "1 day" } = {}) =>
+  `insert into public.ai_notes_requests (idempotency_key, user_id, status, result, minutes_billed, created_at)
+   values ('00000000-0000-4000-8000-${String(n).padStart(12, "0")}', '${REC_USER}', '${status}', '{"transcript":"never read"}', ${credits === null ? "null" : credits}, now() - interval '${ago}');`;
+const RECORDINGS = [
+  `insert into auth.users (id) values ('${REC_USER}');`,
+  rec(1, 3),
+  rec(2, 3),
+  rec(3, 10),
+  rec(4, 49.9),
+  rec(5, 50),
+  rec(6, 120),
+  rec(7, 30, { status: "processing" }),
+  rec(8, null),
+  rec(9, 30, { ago: "10 days" }),
+].join("\n");
+
 async function run() {
   pg.start();
   const db = pg.freshDb();
   for (const file of fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) pg.applyMigration(db, file);
   pg.psqlOrThrow(db, FIXTURE);
+  pg.psqlOrThrow(db, RECORDINGS);
 
   const q = (name) => {
     assert.ok(blocks[name], `no "-- @query ${name}" block in ai-cost-weekly.sql`);
@@ -83,7 +105,7 @@ async function run() {
   };
 
   await test("the file holds exactly the named queries and writes nothing", () => {
-    assert.deepEqual(Object.keys(blocks), ["by_task", "totals", "free_outcomes"]);
+    assert.deepEqual(Object.keys(blocks), ["by_task", "totals", "free_outcomes", "recording_lengths"]);
     assert.doesNotMatch(source.replace(/--.*$/gm, ""), /\b(insert|update|delete|create|alter|drop|grant|truncate)\b/i);
     pg.psqlOrThrow(db, source);
     assert.equal(pg.psqlOrThrow(db, "select count(*) from public.ai_task_costs").out, "8", "the fixture did not land whole");
@@ -109,6 +131,25 @@ async function run() {
 
   await test("FREE OUTCOMES: the absorbed spend by outcome, with the unknown one counted rather than read as zero", () => {
     assert.deepEqual(q("free_outcomes").map((x) => x.join("|")), ["explain|ai_failed|1|0.00030|0", "explain|provider_failed|1||1"]);
+  });
+
+  await test("RECORDING LENGTHS: done, charged, last 7 days, in three buckets — and the processing, uncharged and old rows left out", () => {
+    const rows = q("recording_lengths");
+    assert.deepEqual(
+      rows.map((x) => x.join("|")),
+      [
+        "1. floor (3 credits, up to 3 min)|2|33.3|6",
+        "2. over 3, under 50 min (below cost)|2|33.3|60",
+        "3. 50 min or more (at or above cost)|2|33.3|170",
+      ]
+    );
+  });
+
+  await test("RECORDING LENGTHS reads minutes_billed and nothing else off a row that holds a whole lecture", () => {
+    const sql = blocks.recording_lengths.replace(/--.*$/gm, "");
+    const fromRequests = sql.slice(sql.indexOf("select"), sql.indexOf("from public.ai_notes_requests"));
+    assert.match(fromRequests, /minutes_billed/);
+    assert.doesNotMatch(sql, /\bresult\b|transcript|select\s+\*|\w\.\*/, "the recording block selects a column that can hold lecture content");
   });
 
   await test("THE TRAPS ARE REAL: reading null as 0, or cover over every outcome, gives different answers on this fixture", () => {

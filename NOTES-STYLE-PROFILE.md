@@ -1,9 +1,18 @@
 # Notes style — a per-account profile for AI lecture notes (1.3.2)
 
 **A plan, not a build.** Written 7 October 2026 on Jared's instruction.
-No code exists for it yet. It depends on 1.3.1 item 8 (the
-lecture-notes rating, migration 0026) being live and collecting, because
-the ratings are what drive the suggestions below.
+No code exists for it yet. **It is 1.3.2, not 1.3.1** (Jared, 7 October
+2026): it depends on 1.3.1 item 8 (the lecture-notes rating, migration
+0026) being live and collecting, because the ratings are what drive the
+suggestions below.
+
+> **FOR A RULING, before any code: the consent wording.** Known terms
+> are study-card text, the existing `own-notes-and-cards` material
+> ("notes, study cards and explanations you have written"), but sent on a
+> route that has never carried them: alongside a lecture, to the notes
+> summariser. Does the v8 consent screen's description cover that, or
+> is it v9? The reasoning is under "Consent" below. The alternative that
+> needs no ruling is to ship 1.3.2 without known terms.
 
 ## What it is
 
@@ -229,8 +238,9 @@ stripped, the way `test-readings.mjs` does.
 `test-legal.mjs` should assert the paragraph's three claims: kept in
 the planner, sent as instructions, and no training.
 
-**Consent: probably no version bump, and the reasoning has to be
-checked, not assumed.** The consent rule is to bump for a change in
+**Consent: probably no version bump, but this needs a ruling (flagged
+at the top of this file), and the reasoning has to be checked, not
+assumed.** The consent rule is to bump for a change in
 what happens to content, and the material-type ledger
 (`aiMaterialTypes.js`) is the mechanism.
 

@@ -16,9 +16,17 @@ for that.
 | 6 | Tailwind 4 migration | **Not started.** A separate item, not part of any other change. It is the only fix npm offers for GHSA-vfj7-8cjw-p6xm (`braces`, reached only through Tailwind 3's build tooling); CI audits shipped dependencies only until then (#173). Breaking for the CSS and config, so it **needs Grace's visual check of the app and the site** before it merges |
 | 7 | Fewer sections, no overlaps (Jared, 6 October 2026) | **Built**, web first. Six changes, pinned by `scripts/test-fold.mjs`. See section 6 |
 | 8 | Lecture-notes feedback (Jared, 7 October 2026) | **Built.** The essay rating control under every AI notes result. Migration **0026**, `lecture_notes_feedback`, must be applied **before** the promote. Weekly query `supabase/checks/notes-quality-weekly.sql`, pinned by `scripts/test-notes-quality.mjs`. See section 7 |
+| 9 | One assessment record (Jared, 7 October 2026) | **Plan only, no code until approved.** Plan → Assignments and Courses → Grades hold the same piece of work twice; one entity shown by week in Plan and by mark in Grades. See section 8 |
+| 10 | Courses list folds into Grades | **Building**, web first. The Courses → Courses section goes; each Grades card is the course, with add, remove and rename on the card and an "Add a course" card at the end. Semester setup stays where it is |
+| 11 | Two features called "Practice" | **Building.** One is renamed so the two are distinct; the PR proposes two names, picks one and says why |
+| 12 | "Break into steps" tasks say where they came from | **Building.** In To-do and on the task itself |
+| 13 | Calendar "important dates" | **Awaiting a pick.** Block exams there with a pointer to Grades, or remove free-typed dates entirely; a recommendation went to Jared before anything is built |
 
 **Later**
 
+- Weak spots as a filter on Study cards rather than its own section.
+- Summarise a reading only on the reading row, not also on the AI tab.
+- A one-line explanation on "Hurdle minimum" in Grades.
 - Block disposable-email domains at signup: a small server-side blocklist, refused with a plain message, so one person can't farm trial credits with throwaway addresses. (Confirm email is on and anonymous sign-ins are off, checked in the dashboard on 5 October 2026, so the trial already needs a confirmed address.)
 
 ---
@@ -369,4 +377,14 @@ filed with no course for the same reason. That predates this item.
 
 **For Grace.** The question, the six reason labels and the comment note
 in `AI_NOTES_COPY.rating`.
+
+## 8. One assessment record (plan, 7 October 2026)
+
+Plan only until Jared approves. The plan was given in chat on 7 October
+2026, with the data-shape change called out. It is copied here when it
+is approved, so this file records the approved plan and not a draft.
+
+**Sequencing.** Grace's iOS list, the device checklist and the store
+screenshots are redone **after** items 9–13 merge, not before. No iOS
+1.3.1 build has been made.
 

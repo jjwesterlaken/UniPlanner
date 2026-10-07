@@ -180,12 +180,12 @@ test("THE SRS LADDER IS WHAT THE SCHEDULER ACTUALLY DOES", () => {
   assert.match(HELP_TOPICS.studyCards.example, /same session/i, "the Again behaviour is no longer stated");
 });
 
-test("the study-cards help justifies interleaving and explains practice mode's whole point", () => {
+test("the study-cards help justifies interleaving and explains drill mode's whole point", () => {
   const all = [HELP_TOPICS.studyCards.example, ...[].concat(HELP_TOPICS.studyCards.detail || [])].join(" ");
   assert.match(all, /mixes cards from all your courses|interleave/i, "interleaving is not justified — students think it is a bug");
   assert.match(all, /feels harder/i, "it does not acknowledge that interleaving feels worse, which is why it needs justifying");
-  assert.match(all, /night before an exam/i, "practice mode's reason to exist is not stated");
-  assert.match(all, /does NOT change when those cards next come up/i, "practice mode does not say it is free of consequence — that reassurance IS the point");
+  assert.match(all, /night before an exam/i, "drill mode's reason to exist is not stated");
+  assert.match(all, /does NOT change when those cards next come up/i, "drill mode does not say it is free of consequence — that reassurance IS the point");
 });
 
 test("weak spots quotes the real miss threshold and list size", () => {

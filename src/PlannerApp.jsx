@@ -583,7 +583,7 @@ function HelpPanel({ topic }) {
       <p className="mt-2 rounded-lg bg-surface px-3 py-2 text-stone-800">{t.example}</p>
       {/* `detail` may be one paragraph or several: the study-cards
           topic has to cover the scheduler, why reviews interleave, and
-          what practice mode is for, and running those together would
+          what drill mode is for, and running those together would
           be a wall. */}
       {[].concat(t.detail || []).map((d, i) => (
         <p key={i} className="mt-2 text-stone-600">
@@ -655,7 +655,17 @@ export { inputCls, labelCls, btnPrimary, btnGhost, iconBtn, editBox, Section, Ca
 /*  To-do                                                             */
 /* ------------------------------------------------------------------ */
 
-function Todos({ todos, addItem, patchItem, removeItem, assignments = [] }) {
+/* A generated step's text starts "<assignment title>: ", which the
+   source link beside it now says, so the prefix is dropped from the
+   display (never from the stored text) when it matches the assignment's
+   CURRENT title. A step the student retitled, or whose assignment has
+   since been renamed, shows exactly what is stored. */
+export function stepDisplayText(text, parentTitle) {
+  const prefix = parentTitle ? `${parentTitle}: ` : "";
+  return prefix && typeof text === "string" && text.startsWith(prefix) && text.length > prefix.length ? text.slice(prefix.length) : text;
+}
+
+function Todos({ todos, addItem, patchItem, removeItem, assignments = [], onOpenAssignment = null }) {
   const [text, setText] = useState("");
   const add = () => {
     const t = text.trim();
@@ -702,22 +712,22 @@ function Todos({ todos, addItem, patchItem, removeItem, assignments = [] }) {
                 >
                   {t.done && <Check size={13} />}
                 </button>
-                <span className={`flex-1 text-sm ${t.done ? "text-stone-400 line-through" : "text-stone-800"}`}>
-                  {t.text}
-                  {/* Sub-tasks live in this list rather than a parallel one,
-                      so they need to say what they belong to and when. */}
-                  {t.due && (
-                    <span className="ml-1.5 text-xs text-stone-400">
-                      {t.due < localDay() && !t.done ? "overdue · " : ""}
-                      {formatAU(t.due)}
-                    </span>
-                  )}
-                  {t.parentId && (
-                    <span className="ml-1.5 text-xs text-stone-400">
-                      {(assignments.find((a) => a.id === t.parentId) || {}).title || "assignment"}
-                    </span>
-                  )}
-                </span>
+                <div className="min-w-0 flex-1">
+                  <span className={`text-sm ${t.done ? "text-stone-400 line-through" : "text-stone-800"}`}>
+                    {t.parentId ? stepDisplayText(t.text, (assignments.find((a) => a.id === t.parentId) || {}).title) : t.text}
+                    {/* Sub-tasks live in this list rather than a parallel one,
+                        so they need to say what they belong to and when. */}
+                    {t.due && (
+                      <span className="ml-1.5 text-xs text-stone-400">
+                        {t.due < localDay() && !t.done ? "overdue · " : ""}
+                        {formatAU(t.due)}
+                      </span>
+                    )}
+                  </span>
+                  {/* Outside the struck-through span: a ticked step's
+                      source is still a working link, not crossed out. */}
+                  {t.parentId && <StepSource parent={assignments.find((a) => a.id === t.parentId)} onOpen={onOpenAssignment} />}
+                </div>
                 <button className={iconBtn} onClick={() => removeItem("todos", t.id)}>
                   <Trash2 size={15} />
                 </button>
@@ -728,6 +738,36 @@ function Todos({ todos, addItem, patchItem, removeItem, assignments = [] }) {
         </>
       )}
     </Card>
+  );
+}
+
+/* Where a "break into steps" task came from. It is on its own line
+   under the task, not a faint suffix, because a list that mixes the
+   student's own tasks with generated ones has to say which is which.
+   A link when the assignment still exists; a plain statement when it
+   has been deleted (the step survives it — tombstoning a parent never
+   removes the student's to-do). */
+function StepSource({ parent, onOpen }) {
+  if (!parent) {
+    return (
+      <span className="block text-xs text-stone-400" data-step-source="">
+        From an assignment you deleted
+      </span>
+    );
+  }
+  const label = `From ${parent.title || "Untitled assignment"}`;
+  return onOpen ? (
+    <button
+      className="block max-w-full truncate text-left text-xs font-medium u-accent-deeptext underline-offset-2 hover:underline u-focus"
+      data-step-source={parent.id}
+      onClick={() => onOpen(parent.id)}
+    >
+      {label} →
+    </button>
+  ) : (
+    <span className="block text-xs text-stone-500" data-step-source={parent.id}>
+      {label}
+    </span>
   );
 }
 
@@ -1126,11 +1166,25 @@ function RubricPanel({ assignment, assignments, patchItem }) {
   );
 }
 
-function Assignments({ assignments, courses, addItem, patchItem, removeItem, focused, todos = [], onBreakdown }) {
+function Assignments({ assignments, courses, addItem, patchItem, removeItem, focused, todos = [], onBreakdown, openId = null, onOpened = () => {} }) {
   const blank = { course: "", title: "", due: "", requirements: "", notes: "" };
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
   const [edit, setEdit] = useState({});
+
+  /* Opened from a step in To-do: scroll to the assignment and show its
+     steps. Cleared at once via onOpened, the Notes deep-link shape, so
+     coming back to Plan later does not jump again. */
+  const [showStepsFor, setShowStepsFor] = useState(null);
+  useEffect(() => {
+    if (!openId) return;
+    setShowStepsFor(openId);
+    onOpened();
+    setTimeout(() => {
+      const row = document.querySelector(`[data-assignment-row="${openId}"]`);
+      if (row && row.scrollIntoView) row.scrollIntoView({ block: "start", behavior: "smooth" });
+    }, 50);
+  }, [openId]);
 
   const add = () => {
     addItem("assignments", { id: uid(), ...form });
@@ -1178,7 +1232,7 @@ function Assignments({ assignments, courses, addItem, patchItem, removeItem, foc
               );
             }
             return (
-              <li key={a.id} className={`rounded-xl border border-stone-200 p-3.5 ${focused && a.course === focused ? "u-highlight" : ""}`}>
+              <li key={a.id} data-assignment-row={a.id} className={`rounded-xl border border-stone-200 p-3.5 ${focused && a.course === focused ? "u-highlight" : ""}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1203,7 +1257,7 @@ function Assignments({ assignments, courses, addItem, patchItem, removeItem, foc
                 {a.notes && <p className="mt-1.5 whitespace-pre-wrap text-sm text-stone-400">{a.notes}</p>}
                 <RubricPanel assignment={a} assignments={assignments} patchItem={patchItem} />
                 {onBreakdown && (
-                  <BreakdownPanel assignment={a} todos={todos} onBreakdown={onBreakdown} patchItem={patchItem} />
+                  <BreakdownPanel key={showStepsFor === a.id ? "opened" : "closed"} assignment={a} todos={todos} onBreakdown={onBreakdown} patchItem={patchItem} initiallyOpen={showStepsFor === a.id} />
                 )}
               </li>
             );
@@ -3209,7 +3263,7 @@ function StudyGame({ notes, onRate, session, textAllowance }) {
             </button>
 
             <p className="mb-2 text-sm text-stone-500">
-              Or drill one course — practice runs through every card and doesn't affect your review schedule.
+              Or drill one course: it runs through every card and doesn't affect your review schedule.
             </p>
             <div className="flex flex-col gap-2">
               {coursesWithNotes.map(([name, count]) => (
@@ -3240,7 +3294,7 @@ function StudyGame({ notes, onRate, session, textAllowance }) {
           <Check size={24} />
         </div>
         <h3 className="font-serif text-xl font-semibold text-stone-800">
-          {mode === "review" ? "Review done" : "Practice done"}
+          {mode === "review" ? "Review done" : "Drill done"}
         </h3>
         <p className="mt-1 text-sm text-stone-500">
           {done} card{done === 1 ? "" : "s"}
@@ -3254,12 +3308,12 @@ function StudyGame({ notes, onRate, session, textAllowance }) {
           <button className={btnGhost} onClick={exit}>Back to study</button>
           {mode === "review" && courseName === "" && coursesWithNotes.length > 0 && (
             <button className={btnPrimary} onClick={() => startPractice(coursesWithNotes[0][0])}>
-              <RotateCcw size={15} /> Practice a course
+              <RotateCcw size={15} /> Drill a course
             </button>
           )}
           {mode === "practice" && (
             <button className={btnPrimary} onClick={() => startPractice(courseName)}>
-              <RotateCcw size={15} /> Practice again
+              <RotateCcw size={15} /> Drill again
             </button>
           )}
         </div>
@@ -3274,7 +3328,7 @@ function StudyGame({ notes, onRate, session, textAllowance }) {
       <div className="mb-3 flex items-center justify-between">
         <span className="flex items-center gap-2 text-sm text-stone-500">
           <CourseChip name={(current.course || "") === "No course" ? "" : current.course || ""} />
-          {mode === "practice" ? "Practice" : "Review"} · {remaining} to go
+          {mode === "practice" ? "Drill" : "Review"} · {remaining} to go
         </span>
         <button className={iconBtn} onClick={exit} aria-label="Exit study">
           <X size={18} />
@@ -3317,7 +3371,7 @@ function StudyGame({ notes, onRate, session, textAllowance }) {
         </div>
       )}
       {mode === "practice" && revealed && (
-        <p className="mt-2 text-center text-xs text-stone-400">Practice doesn't change your review schedule.</p>
+        <p className="mt-2 text-center text-xs text-stone-400">Drilling doesn't change your review schedule.</p>
       )}
     </Card>
   );
@@ -4410,8 +4464,8 @@ function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onS
 /*  Assignment breakdown — sub-tasks that live in the real to-do list  */
 /* ------------------------------------------------------------------ */
 
-function BreakdownPanel({ assignment, todos, onBreakdown, patchItem }) {
-  const [open, setOpen] = useState(false);
+function BreakdownPanel({ assignment, todos, onBreakdown, patchItem, initiallyOpen = false }) {
+  const [open, setOpen] = useState(initiallyOpen);
   const [templateId, setTemplateId] = useState("essay");
 
   const mine = useMemo(
@@ -4428,7 +4482,7 @@ function BreakdownPanel({ assignment, todos, onBreakdown, patchItem }) {
   return (
     <div className="mt-2 border-t border-stone-100 pt-2">
       <button className="text-xs font-medium u-accent-deeptext u-focus" onClick={() => setOpen(!open)}>
-        {mine.length > 0 ? `${mine.filter((t) => !t.done).length} of ${mine.length} steps left` : "Break this into steps"}
+        {mine.length > 0 ? `${mine.filter((t) => !t.done).length} of ${mine.length} step${mine.length === 1 ? "" : "s"} left` : "Break this into steps"}
       </button>
 
       {stranded.length > 0 && (
@@ -4472,7 +4526,7 @@ function BreakdownPanel({ assignment, todos, onBreakdown, patchItem }) {
               <ul className="mt-2 flex flex-col gap-1">
                 {mine.map((t) => (
                   <li key={t.id} className="flex items-center gap-2 text-xs">
-                    <span className={`flex-1 truncate ${t.done ? "text-stone-400 line-through" : "text-stone-700"}`}>{t.text}</span>
+                    <span className={`flex-1 truncate ${t.done ? "text-stone-400 line-through" : "text-stone-700"}`}>{stepDisplayText(t.text, assignment.title)}</span>
                     {t.edited && <span className="shrink-0 text-stone-400">edited</span>}
                     <span className="shrink-0 text-stone-400">{t.due ? formatAU(t.due) : ""}</span>
                   </li>
@@ -5560,6 +5614,7 @@ export default function PlannerApp() {
      because there is no router here and one note is the only thing
      anything needs to deep-link to. */
   const [openNoteId, setOpenNoteId] = useState(null);
+  const [openAssignmentId, setOpenAssignmentId] = useState(null);
   const toggleFocus = (name) => setFocusedCourse((cur) => (cur === name ? null : name));
 
   const navRef = useRef(null);
@@ -6968,6 +7023,8 @@ export default function PlannerApp() {
                 focused={focused}
                 todos={sem.todos}
                 onBreakdown={applyBreakdown}
+                openId={openAssignmentId}
+                onOpened={() => setOpenAssignmentId(null)}
               />
             </Section>
           </>
@@ -6975,7 +7032,17 @@ export default function PlannerApp() {
 
         {tab === "todo" && (
           <Section icon={ListTodo} title="To-do list">
-            <Todos todos={sem.todos} addItem={addItem} patchItem={patchItem} removeItem={removeItem} assignments={sem.assignments} />
+            <Todos
+              todos={sem.todos}
+              addItem={addItem}
+              patchItem={patchItem}
+              removeItem={removeItem}
+              assignments={sem.assignments}
+              onOpenAssignment={(id) => {
+                setOpenAssignmentId(id);
+                setTab("planner");
+              }}
+            />
           </Section>
         )}
 
