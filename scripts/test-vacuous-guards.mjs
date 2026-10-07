@@ -129,9 +129,12 @@ function unguardedSets() {
       /* `.size` as well as `.length`: the detector was blind to a Set,
          so a guard that DID assert its derived set was non-empty was
          reported as one that did not — a false positive on the ratchet,
-         which is the direction that gets a check disabled. */
+         which is the direction that gets a check disabled. And an
+         EXACT count of one or more (`assert.equal(x.length, 2)`) is a
+         non-empty assertion too, and a stronger one: the same false
+         positive, found by test-fold's remove test in 1.3.1. */
       const guarded = new RegExp(
-        `assert\\.ok\\([^)]*${name}\\.(length|size)|assert\\.(equal|ok)\\([^;]*${name}\\.(length|size)\\s*[>=]|${name}\\.(length|size)\\s*[>=]{1,2}\\s*[1-9]`
+        `assert\\.ok\\([^)]*${name}\\.(length|size)|assert\\.(equal|ok)\\([^;]*${name}\\.(length|size)\\s*[>=]|${name}\\.(length|size)\\s*[>=]{1,2}\\s*[1-9]|assert\\.(equal|strictEqual)\\(\\s*${name}\\.(length|size)\\s*,\\s*[1-9]`
       ).test(ahead);
       if (!guarded) found.push(`${file}:${name}`);
     });
@@ -141,7 +144,7 @@ function unguardedSets() {
 
 /* THE GRANDFATHERED SET, and it may only ever SHRINK.
 
-   Twelve sites already iterate a derived set without asserting it
+   Twelve sites (eight once exact counts were recognised, 1.3.1) iterate a derived set without asserting it
    found anything. They are not all wrong — some sets are legitimately
    allowed to be empty — but none of them SAYS so, and telling those
    apart means reading twelve guards, which is its own change.
@@ -150,7 +153,7 @@ function unguardedSets() {
    it is asserted as a ceiling, and new code cannot add to it. Lower it
    when you fix one; a guard that gains a non-empty assertion, or an
    excuse written into its own file, drops off this list on its own. */
-const GRANDFATHERED = 12;
+const GRANDFATHERED = 8;
 
 test("no NEW guard iterates a set it never proved was non-empty", () => {
   const found = unguardedSets();
@@ -280,6 +283,36 @@ test("the guard above can see an import at all", () => {
     seen += [...readable(file).matchAll(/\bimport\(\s*[^)]*?\s*\)/g)].length;
   }
   assert.ok(seen >= 20, `only ${seen} dynamic module load(s) found across scripts/ — the pattern has stopped matching`);
+});
+
+/* SHAPE 4: A FAILURE THAT CANNOT REPORT. `assert.equal(el, null)` with
+   el a jsdom element is correct while it passes, and the day it FAILS,
+   node formats the element for the message — walking the whole jsdom
+   object graph, minutes of CPU and gigabytes of memory. The run looks
+   hung rather than red, gets killed, and the failure is never read.
+   Found mutation-checking test-fold (1.3.1 item 10): both mutations
+   "hung" for minutes when each should have printed one FAIL line.
+   Assert the element's absence with assert.ok(!el, message) instead.
+   THE HOLE, said: an element held in a variable and compared later is
+   invisible to this — it sees a querySelector/closest call written
+   directly as the first argument. */
+const DOM_COMPARE = /\bassert\.(?:equal|strictEqual|notEqual|notStrictEqual|deepEqual|deepStrictEqual)\(\s*[\w$.\]\[]+\.(?:querySelector|closest|getElementById)\([^()]*\)\s*,/g;
+
+test("no assertion compares a DOM element directly, which hangs instead of failing", () => {
+  const offenders = [];
+  for (const file of suites) {
+    for (const m of readable(file).matchAll(DOM_COMPARE)) offenders.push(`${file}: ${m[0].slice(0, 80)}`);
+  }
+  assert.deepEqual(offenders, [], "compare the element's absence with assert.ok(!el, msg):\n  " + offenders.join("\n  "));
+});
+
+test("the guard above can see the shape it forbids", () => {
+  const bad = "assert.equal(m.doc.querySelector('[x]'), null);";
+  const good = "assert.ok(!m.doc.querySelector('[x]'), 'gone');";
+  assert.ok([...bad.matchAll(DOM_COMPARE)].length === 1, "the pattern no longer matches the forbidden shape");
+  assert.ok([...good.matchAll(DOM_COMPARE)].length === 0, "the pattern matches the remedy");
+  const strings = "assert.equal(el.querySelector('b').textContent, 'x');";
+  assert.ok([...strings.matchAll(DOM_COMPARE)].length === 0, "the pattern matches a comparison of an element's TEXT, which is fine");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

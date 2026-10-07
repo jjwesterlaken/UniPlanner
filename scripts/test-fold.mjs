@@ -112,12 +112,12 @@ const SEMESTER = {
   ],
 };
 
-async function mount(tab) {
+async function mount(tab, semester = SEMESTER) {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { runScripts: "outside-only", url: "https://example.test/", pretendToBeVisual: true });
   const w = dom.window;
   const complaints = [];
   w.console.error = (...a) => complaints.push(a.join(" "));
-  w.localStorage.setItem("uni-planner-v1", JSON.stringify({ semester: "Semester 1", semesters: { "Semester 1": SEMESTER }, meta: { updatedAt: T } }));
+  w.localStorage.setItem("uni-planner-v1", JSON.stringify({ semester: "Semester 1", semesters: { "Semester 1": semester }, meta: { updatedAt: T } }));
   w.localStorage.setItem("uni-planner-tab", tab);
   w.eval(JS);
   await settle(400);
@@ -252,6 +252,111 @@ test('NAMING: "Essay feedback" replaces "Get feedback on a draft" everywhere it 
   for (const f of ["src/essayCopy.js", "src/essayPanel.jsx", "src/PlannerApp.jsx", "src/aiNotes.jsx"]) {
     assert.doesNotMatch(strip(fs.readFileSync(path.join(rootDir, f), "utf8")), /Get feedback on a draft|Feedback on a draft/, `${f} still says the old name`);
   }
+});
+
+
+/* ---------------- 1.3.1 item 10: the Courses list folds into Grades ---------------- */
+
+const live = (list) => (list || []).filter((x) => !x.deletedAt);
+
+test("COURSES IN GRADES: no separate Courses section; an Add a course card comes last", async () => {
+  const m = await mount("courses");
+  const headings = [...m.doc.querySelectorAll("h2")].map((h) => h.textContent.trim());
+  assert.ok(!headings.includes("Courses"), "the Courses section is still there");
+  assert.ok(headings.includes("Grades") && headings.includes("Semester setup"));
+  const grades = [...m.doc.querySelectorAll("h2")].find((h) => h.textContent.trim() === "Grades").closest("section");
+  const cards = [...grades.querySelectorAll("[data-grades-card], [data-add-course]")];
+  assert.ok(cards[cards.length - 1].hasAttribute("data-add-course"), "Add a course is not the last card");
+});
+
+test("COURSES IN GRADES: adding a course makes its card; the same name in another case is refused", async () => {
+  const m = await mount("courses");
+  const box = m.doc.querySelector("[data-add-course]");
+  const input = box.querySelector("input");
+  setValue(m.w, input, "biol1001");
+  await settle(50);
+  assert.match(box.textContent, /already have a course called biol1001/);
+  assert.ok(box.querySelector("button").disabled, "a duplicate course can still be added");
+  setValue(m.w, input, "CHEM1001");
+  await settle(50);
+  box.querySelector("button").click();
+  await settle(150);
+  assert.ok(m.doc.querySelector('[data-grades-card="CHEM1001"]'), "the new course has no card");
+  const sem = await m.stored();
+  assert.ok(live(sem.courses).some((c) => c.name === "CHEM1001"));
+});
+
+test("COURSES IN GRADES: rename on the card renames the course everywhere it is written", async () => {
+  const m = await mount("courses");
+  m.doc.querySelector('[aria-label="Rename BIOL1001"]').click();
+  await settle(50);
+  const box = m.doc.querySelector("[data-course-rename]");
+  setValue(m.w, box.querySelector("input"), "BIOL1002");
+  await settle(30);
+  [...box.querySelectorAll("button")].find((b) => /Save/.test(b.textContent)).click();
+  await settle(150);
+  assert.ok(m.doc.querySelector('[data-grades-card="BIOL1002"]'), "the card did not take the new name");
+  assert.ok(!m.doc.querySelector('[data-grades-card="BIOL1001"]'), "the old name still has a card");
+  const sem = await m.stored();
+  assert.deepEqual(live(sem.courses).map((c) => c.name).sort(), ["BIOL1002", "HIST1001", "STAT1001"]);
+  assert.deepEqual(live(sem.assessments).filter((a) => a.course === "BIOL1002").map((a) => a.id).sort(), ["a1", "a2"]);
+  assert.deepEqual(live(sem.notes).map((n) => n.course), ["BIOL1002", "BIOL1002"], "the study cards kept the old name");
+});
+
+test("COURSES IN GRADES: a rename onto another course's name is refused on the card, and nothing changes", async () => {
+  const m = await mount("courses");
+  m.doc.querySelector('[aria-label="Rename BIOL1001"]').click();
+  await settle(50);
+  const box = m.doc.querySelector("[data-course-rename]");
+  setValue(m.w, box.querySelector("input"), "hist1001");
+  await settle(30);
+  [...box.querySelectorAll("button")].find((b) => /Save/.test(b.textContent)).click();
+  await settle(150);
+  assert.match(m.doc.querySelector("[data-course-rename]").textContent, /already have a course called hist1001/);
+  const sem = await m.stored();
+  assert.deepEqual(live(sem.assessments).filter((a) => a.course === "BIOL1001").length, 2);
+});
+
+test("COURSES IN GRADES: remove says what goes, and takes the card's assessments with the course — tombstoned, not dropped", async () => {
+  const m = await mount("courses");
+  m.doc.querySelector('[aria-label="Remove BIOL1001"]').click();
+  await settle(50);
+  const box = m.doc.querySelector("[data-course-remove]");
+  assert.match(box.textContent, /Remove BIOL1001 and its 2 assessments from Grades\?/);
+  assert.match(box.textContent, /keep the tag/);
+  box.querySelector("[data-course-remove-confirm]").click();
+  await settle(150);
+  assert.ok(!m.doc.querySelector('[data-grades-card="BIOL1001"]'), "the card is still there");
+  const sem = await m.stored();
+  const dead = sem.assessments.filter((a) => a.course === "BIOL1001");
+  assert.equal(dead.length, 2, "the assessments were dropped rather than tombstoned");
+  assert.ok(dead.every((a) => a.deletedAt), "the card's assessments survived the course");
+  assert.ok(sem.courses.find((c) => c.name === "BIOL1001").deletedAt);
+  /* Everything else tagged BIOL1001 keeps the tag. */
+  assert.deepEqual(live(sem.notes).map((n) => n.course), ["BIOL1001", "BIOL1001"]);
+});
+
+test("COURSES IN GRADES: assessments under a course that isn't in the list get a card that can add it back", async () => {
+  const sem0 = { ...SEMESTER, assessments: [...SEMESTER.assessments, { id: "a9", course: "CHEM9999", title: "Lab", w: 20, kind: "assignment", updatedAt: T }] };
+  const m = await mount("courses", sem0);
+  const card = m.doc.querySelector('[data-grades-card="CHEM9999"]');
+  assert.match(card.textContent, /Not in your courses/);
+  [...card.querySelectorAll("button")].find((b) => b.textContent.trim() === "Add to courses").click();
+  await settle(150);
+  const sem = await m.stored();
+  assert.ok(live(sem.courses).some((c) => c.name === "CHEM9999"));
+  assert.doesNotMatch(m.doc.querySelector('[data-grades-card="CHEM9999"]').textContent, /Not in your courses/);
+});
+
+test("COURSES IN GRADES: the course tag on a card still highlights it across the app", async () => {
+  const m = await mount("courses");
+  const tag = m.doc.querySelector('[aria-label="Highlight HIST1001 across the app"]');
+  assert.ok(tag, "the highlight control went with the Courses section");
+  tag.click();
+  await settle(100);
+  assert.match(m.doc.body.textContent, /Highlighting|HIST1001/);
+  assert.ok(!m.doc.querySelector('[data-grades-card="BIOL1001"]'), "highlighting did not narrow Grades to the course");
+  assert.equal(m.doc.querySelector('[aria-label="Highlight HIST1001 across the app"]').getAttribute("aria-pressed"), "true");
 });
 
 for (const run of pending) await run();
