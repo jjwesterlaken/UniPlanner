@@ -214,8 +214,8 @@ card:**
   its question and the exam countdown/plan renders rather than showing
   preconditions.
 - **Six study cards rather than one** — six is `DEFAULT_CARDS_SELECTED`,
-  and practice over one card is a degenerate screen.
-- **One practice run with a couple of deliberate misses**, so Weak
+  and drilling one card is a degenerate screen.
+- **One review session with a couple of deliberate misses**, so Weak
   Spots has history to show instead of its empty state.
 - **Leave AI consent UNACCEPTED.** The reviewer should meet the
   consent gate — it is the flow Apple most wants to see working, and

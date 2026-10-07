@@ -88,7 +88,7 @@ export const HELP_TOPICS = {
       "Rate a card Again and it comes back in this same session — a card you just missed is not one to leave until tomorrow. Good sends it to tomorrow, then three days, then eight; Easy sends it three days out, then eleven, then forty-two. So a card you keep getting right disappears for weeks, and the twelve you keep missing are what fills your session.",
     detail: [
       "“Review what's due” deliberately mixes cards from all your courses together instead of doing one subject at a time. That feels harder, and that is the point — switching between topics is what makes recall stick. Drill a single course when you are cramming for one exam, and interleave the rest of the time.",
-      "Practice mode exists for the night before an exam, when nothing is “due” because you reviewed it all yesterday. It ignores the schedule and runs every card for a course — and it does NOT change when those cards next come up, so using it costs you nothing.",
+      "Drill mode exists for the night before an exam, when nothing is “due” because you reviewed it all yesterday. It ignores the schedule and runs every card for a course — and it does NOT change when those cards next come up, so using it costs you nothing.",
       "“Explain it back” during a review asks you to say the answer in your own words and marks it. It is the one part of the review that spends your AI allowance.",
     ],
     cost:
