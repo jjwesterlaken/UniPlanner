@@ -112,6 +112,7 @@ import {
 } from "lucide-react";
 import { AiNotesPanel, AiLectureNoteView, useRecordingSession, RecordingIndicator } from "./aiNotes.jsx";
 import { EssayFeedbackPanel, MarkCompareAsk, EssayDraftCard, PlaceholderLink, LinkedNote } from "./essayPanel.jsx";
+import { renameCourse, renameRefusal, removalPlan } from "./courseRename.js";
 import {
   optInNeeded,
   ESSAY_OPT_IN_VERSION,
@@ -649,59 +650,6 @@ export { inputCls, labelCls, btnPrimary, btnGhost, iconBtn, editBox, Section, Ca
 /* ------------------------------------------------------------------ */
 /*  Courses                                                           */
 /* ------------------------------------------------------------------ */
-
-function Courses({ courses, addItem, removeItem, focused, onToggleFocus }) {
-  const [name, setName] = useState("");
-  const add = () => {
-    const n = name.trim();
-    if (!n) return;
-    addItem("courses", { id: uid(), name: n });
-    setName("");
-  };
-  return (
-    <Card>
-      <div className="flex gap-2">
-        <input
-          className={inputCls}
-          placeholder="Add a course, e.g. PSYC1001"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && add()}
-        />
-        <button className={btnPrimary} onClick={add} disabled={!name.trim()}>
-          <Plus size={16} /> Add
-        </button>
-      </div>
-      {courses.length === 0 ? (
-        <Empty>Add the units you're taking this semester to tag everything else.</Empty>
-      ) : (
-        <>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {courses.map((c) => {
-              const isFocused = focused === c.name;
-              return (
-                <span
-                  key={c.id}
-                  className={`inline-flex items-center gap-1.5 rounded-full px-1 py-0.5 text-xs font-medium ${courseTag(c.name)} ${isFocused ? "u-highlight" : ""}`}
-                >
-                  <button onClick={() => onToggleFocus(c.name)} className="rounded-full px-1.5 py-0.5 u-focus" aria-pressed={isFocused} aria-label={`Highlight ${c.name}`}>
-                    {c.name}
-                  </button>
-                  <button className="rounded-full p-0.5 hover:bg-black/10" onClick={() => removeItem("courses", c.id)} aria-label={`Remove ${c.name}`}>
-                    <X size={12} />
-                  </button>
-                </span>
-              );
-            })}
-          </div>
-          <p className="mt-3 text-xs text-stone-400">
-            {focused ? `Highlighting "${focused}" across the app. Tap it again to clear.` : "Tap a course to highlight everything linked to it across the other tabs."}
-          </p>
-        </>
-      )}
-    </Card>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /*  To-do                                                             */
@@ -4679,7 +4627,7 @@ const ASSESSMENT_KINDS = [
   { id: "other", label: "Other" },
 ];
 
-export function Grades({ assessments, courses, addItem, patchItem, removeItem, focused, rule = DEFAULT_ROUNDING, essay = null }) {
+export function Grades({ assessments, courses, addItem, patchItem, removeItem, focused, rule = DEFAULT_ROUNDING, essay = null, courseActions = null }) {
   const [targets, setTargets] = useState({}); // course -> band code the student is aiming at
 
   /* ONE CARD PER COURSE (1.3.1). The separate add form and its Course
@@ -4725,23 +4673,155 @@ export function Grades({ assessments, courses, addItem, patchItem, removeItem, f
     return true;
   };
 
-  return shown.length === 0 ? (
-    <Card><Empty>Add your courses above. Each one gets a card here for its assessments, and this works out what you need.</Empty></Card>
-  ) : (
-    shown.map(([course, list]) => (
-      <CourseGrades
-        key={course || "\u0000no-course"}
-        course={course}
-        list={list}
-        target={targets[course]}
-        rule={rule}
-        onTarget={(code) => setTargets({ ...targets, [course]: code })}
-        onAdd={(form) => add(course, form)}
-        patchItem={patchItem}
-        removeItem={removeItem}
-        essay={essay}
-      />
-    ))
+  /* THE CARD IS THE COURSE (1.3.1 item 10). The Courses chip row that
+     sat above Grades is gone: a course is added with the "Add a course"
+     card at the end, and renamed or removed on its own card. Which
+     names are real courses (rather than tags left on assessments by a
+     course since removed) decides what the card offers. */
+  const known = new Set((courses || []).map((c) => c && c.name));
+
+  return (
+    <>
+      {shown.map(([course, list]) => (
+        <CourseGrades
+          key={course || "\u0000no-course"}
+          course={course}
+          list={list}
+          target={targets[course]}
+          rule={rule}
+          onTarget={(code) => setTargets({ ...targets, [course]: code })}
+          onAdd={(form) => add(course, form)}
+          patchItem={patchItem}
+          removeItem={removeItem}
+          essay={essay}
+          courseActions={course && courseActions ? courseActions : null}
+          isCourse={known.has(course)}
+          focused={focused === course}
+        />
+      ))}
+      {courseActions && <AddCourseCard courses={courses} onAdd={courseActions.add} empty={cards.length === 0} />}
+    </>
+  );
+}
+
+/* The last card on Grades: where a course comes from now that the
+   Courses chip row has folded in. A name another live course already
+   has, in any case, is refused rather than made into a second card for
+   the same unit. */
+function AddCourseCard({ courses, onAdd, empty }) {
+  const [name, setName] = useState("");
+  const n = name.trim();
+  const clash = !!n && (courses || []).some((c) => c && String(c.name).trim().toLowerCase() === n.toLowerCase());
+  const add = () => {
+    if (!n || clash) return;
+    onAdd(n);
+    setName("");
+  };
+  return (
+    <Card className="mb-4" data-add-course>
+      <label className={labelCls} htmlFor="add-course-name">
+        Add a course
+      </label>
+      <div className="flex gap-2">
+        <input
+          id="add-course-name"
+          className={inputCls}
+          placeholder="e.g. PSYC1001"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+        />
+        <button className={btnPrimary} onClick={add} disabled={!n || clash}>
+          <Plus size={16} /> Add
+        </button>
+      </div>
+      {clash ? (
+        <p className="mt-2 text-xs text-rose-700">You already have a course called {n}.</p>
+      ) : (
+        <p className="mt-2 text-xs text-stone-500">
+          {empty
+            ? "Add the units you're taking this semester. Each gets a card here for its assessments, and everything else in the app can be tagged with it."
+            : "Each course gets its own card. Tap a course's tag to highlight everything linked to it across the app."}
+        </p>
+      )}
+    </Card>
+  );
+}
+
+/* Rename and remove, in a card's header. Inline rather than a dialog:
+   rename is one field, and remove needs one sentence of consequence and
+   two buttons. The removal sentence is decided by removalPlan, so what
+   it says is what happens. */
+function CourseCardActions({ course, isCourse, count, actions }) {
+  const [mode, setMode] = useState(null); // null | "rename" | "remove"
+  const [name, setName] = useState(course);
+  const [refused, setRefused] = useState(null);
+  if (mode === "rename") {
+    const save = () => {
+      const r = actions.rename(course, name);
+      if (r && r.refused) setRefused(r.refused);
+      else setMode(null);
+    };
+    return (
+      <div className="mt-2 w-full" data-course-rename>
+        <div className="flex gap-2">
+          <input
+            className={inputCls}
+            aria-label={`New name for ${course}`}
+            value={name}
+            autoFocus
+            onChange={(e) => { setName(e.target.value); setRefused(null); }}
+            onKeyDown={(e) => e.key === "Enter" && save()}
+          />
+          <button className={btnPrimary} onClick={save}>
+            <Check size={15} /> Save
+          </button>
+          <button className={btnGhost} onClick={() => { setMode(null); setName(course); setRefused(null); }} aria-label="Cancel rename">
+            <X size={15} />
+          </button>
+        </div>
+        <p className={`mt-1.5 text-xs ${refused ? "text-rose-700" : "text-stone-500"}`}>
+          {refused === "exists"
+            ? `You already have a course called ${name.trim()}.`
+            : refused === "empty"
+              ? "A course needs a name."
+              : "Everything tagged with this course is renamed with it."}
+        </p>
+      </div>
+    );
+  }
+  if (mode === "remove") {
+    return (
+      <div className="mt-2 w-full rounded-lg bg-stone-50 p-3" data-course-remove>
+        <p className="text-sm text-stone-700">
+          {count > 0
+            ? `Remove ${course} and its ${count} assessment${count === 1 ? "" : "s"} from Grades?`
+            : `Remove ${course}?`}
+        </p>
+        <p className="mt-1 text-xs text-stone-500">Assignments, readings, cards and notes tagged {course} keep the tag.</p>
+        <div className="mt-2 flex justify-end gap-2">
+          <button className={btnGhost} onClick={() => setMode(null)}>Cancel</button>
+          <button className={btnPrimary} onClick={() => actions.remove(course)} data-course-remove-confirm>
+            <Trash2 size={15} /> Remove
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <span className="flex shrink-0 items-center gap-0.5">
+      {!isCourse && (
+        <button className="mr-1 text-xs font-medium u-accent-deeptext underline-offset-2 hover:underline u-focus" onClick={() => actions.add(course)}>
+          Add to courses
+        </button>
+      )}
+      <button className={iconBtn} onClick={() => setMode("rename")} aria-label={`Rename ${course}`} title="Rename">
+        <Pencil size={15} />
+      </button>
+      <button className={iconBtn} onClick={() => setMode("remove")} aria-label={`Remove ${course}`} title="Remove">
+        <Trash2 size={15} />
+      </button>
+    </span>
   );
 }
 
@@ -4807,7 +4887,7 @@ function AddAssessmentRow({ onAdd }) {
   );
 }
 
-function CourseGrades({ course, list, target, rule, onTarget, onAdd, patchItem, removeItem, essay = null }) {
+function CourseGrades({ course, list, target, rule, onTarget, onAdd, patchItem, removeItem, essay = null, courseActions = null, isCourse = true, focused = false }) {
   /* Which mark field has focus, so the ask waits until typing stops;
      and which rows were just answered, so the thanks outlives the
      flag that removes the ask (the recovery card's `gone` lesson). */
@@ -4823,15 +4903,31 @@ function CourseGrades({ course, list, target, rule, onTarget, onAdd, patchItem, 
 
   return (
     <Card className="mb-4" data-grades-card={course || "No course"}>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <span className="flex items-center gap-2">
-          <CourseChip name={course} />
-          <span className="font-medium text-stone-800">{course || "No course"}</span>
-        </span>
-        <span className="text-sm text-stone-500">
+      <div className="mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-2">
+            {course && courseActions ? (
+              <button
+                className={`shrink-0 rounded-full u-focus ${focused ? "u-highlight" : ""}`}
+                onClick={() => courseActions.toggleFocus(course)}
+                aria-pressed={focused}
+                aria-label={`Highlight ${course} across the app`}
+                title="Highlight everything tagged with this course"
+              >
+                <CourseChip name={course} />
+              </button>
+            ) : (
+              <CourseChip name={course} />
+            )}
+            <span className="truncate font-medium text-stone-800">{course || "No course"}</span>
+          </span>
+          {courseActions && <CourseCardActions key={course} course={course} isCourse={isCourse} count={list.length} actions={courseActions} />}
+        </div>
+        <p className="mt-1 text-sm text-stone-500">
+          {!isCourse && course ? "Not in your courses · " : ""}
           {list.length === 0 ? "No assessments yet" : summary.average === null ? "Nothing marked yet" : `${displayMark(summary.average)}% so far`}
           {summary.markedWeight > 0 && ` · ${summary.markedWeight}% of the unit marked`}
-        </span>
+        </p>
       </div>
 
       <ul className="mb-3 flex flex-col gap-1">
@@ -5465,6 +5561,7 @@ export default function PlannerApp() {
      anything needs to deep-link to. */
   const [openNoteId, setOpenNoteId] = useState(null);
   const toggleFocus = (name) => setFocusedCourse((cur) => (cur === name ? null : name));
+
   const navRef = useRef(null);
   const [navScroll, setNavScroll] = useState({ left: false, right: false });
 
@@ -6412,6 +6509,39 @@ export default function PlannerApp() {
 
   // What the UI works with: the active semester, minus anything deleted.
   const rawSem = data.semesters[data.semester] || makeSemester();
+  /* Add, rename and remove a course, from the Grades cards (1.3.1 item
+     10). Rename rewrites the name everywhere it is written down
+     (courseRename.js); a refusal is returned to the card to say why and
+     nothing is written. Remove tombstones the course and the assessments
+     on its card, never removes: union-by-id merge would bring a hard
+     delete back. */
+  const courseActions = {
+    add: (name) => addItem("courses", { id: uid(), name: String(name).trim() }),
+    rename: (from, to) => {
+      const d = dataRef.current || {};
+      const current = (d.semesters && d.semesters[d.semester]) || {};
+      const refused = renameRefusal(current, from, to);
+      if (refused) return { refused };
+      updateSem((s) => {
+        const r = renameCourse(s, { from, to, now: nowISO() });
+        return r.refused ? s : r.semester;
+      });
+      setFocusedCourse((cur) => (cur === from ? String(to).trim() : cur));
+      return { ok: true };
+    },
+    remove: (name) => {
+      const stamp = nowISO();
+      updateSem((s) => {
+        const { course, assessmentIds } = removalPlan(s, name);
+        const dead = new Set([...(course ? [course.id] : []), ...assessmentIds]);
+        const kill = (list) => (list || []).map((it) => (dead.has(it.id) ? { ...it, deletedAt: stamp, updatedAt: stamp } : it));
+        return { ...s, courses: kill(s.courses), assessments: kill(s.assessments) };
+      });
+      setFocusedCourse((cur) => (cur === name ? null : cur));
+    },
+    toggleFocus,
+  };
+
   const sem = useMemo(() => {
     const out = {};
     for (const key of COLLECTIONS) out[key] = live(rawSem[key]);
@@ -6776,9 +6906,6 @@ export default function PlannerApp() {
 
         {tab === "courses" && (
           <>
-            <Section icon={BookOpen} title="Courses" subtitle="Your units this semester">
-              <Courses courses={sem.courses} addItem={addItem} removeItem={removeItem} focused={focused} onToggleFocus={toggleFocus} />
-            </Section>
             <Section icon={CalendarClock} title="Semester setup" subtitle="Teaching weeks and how your marks are rounded" help="semesterSetup">
               <SemesterSetup settings={settings} rounding={rounding} patchSettings={patchSettings} />
             </Section>
@@ -6792,6 +6919,7 @@ export default function PlannerApp() {
                 removeItem={removeItem}
                 focused={focused}
                 rule={rounding}
+                courseActions={courseActions}
               />
             </Section>
           </>

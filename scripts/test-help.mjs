@@ -409,7 +409,7 @@ test("a NEW screen without help fails here rather than passing silently", () => 
      a Section added later lands in neither list and goes red. That
      is the device-store guard's shape: partial coverage is fine,
      silent partial coverage is not. */
-  const NOT_YET_COVERED = [ "Courses", "Calendar",
+  const NOT_YET_COVERED = [ "Calendar",
     "Weekly reading planner", "Assignments", "To-do list", "Notes",
     "Folders", "Account"
   ];
