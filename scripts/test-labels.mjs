@@ -152,7 +152,7 @@ test("STEPS: a generated step says which assignment it came from, and drops the 
   /* A ticked step's text is struck through; its source link is not. */
   const ticked = rowOf(m, "Find three sources");
   assert.ok(ticked.querySelector(".line-through"), "the control failed: the ticked step is not struck through at all");
-  assert.equal(ticked.querySelector('[data-step-source="as1"]').closest(".line-through"), null, "the source link is crossed out with the step");
+  assert.ok(!ticked.querySelector('[data-step-source="as1"]').closest(".line-through"), "the source link is crossed out with the step");
 });
 
 test("STEPS: a step from a deleted assignment says so, and a task the student typed says nothing", async () => {
@@ -160,9 +160,9 @@ test("STEPS: a step from a deleted assignment says so, and a task the student ty
   const orphan = rowOf(m, "Old report: Draft");
   assert.ok(orphan, "a step outlived its assignment's deletion and vanished");
   assert.match(orphan.textContent, /From an assignment you deleted/);
-  assert.equal(orphan.querySelector("button[data-step-source]"), null, "a deleted assignment is offered as a link");
+  assert.ok(!orphan.querySelector("button[data-step-source]"), "a deleted assignment is offered as a link");
   const mine = rowOf(m, "Buy printer ink");
-  assert.equal(mine.querySelector("[data-step-source]"), null, "a typed task claims a source");
+  assert.ok(!mine.querySelector("[data-step-source]"), "a typed task claims a source");
 });
 
 test("STEPS: the link opens Plan at that assignment with its steps showing", async () => {
