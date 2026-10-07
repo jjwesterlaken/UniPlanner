@@ -16,11 +16,11 @@ for that.
 | 6 | Tailwind 4 migration | **Not started.** A separate item, not part of any other change. It is the only fix npm offers for GHSA-vfj7-8cjw-p6xm (`braces`, reached only through Tailwind 3's build tooling); CI audits shipped dependencies only until then (#173). Breaking for the CSS and config, so it **needs Grace's visual check of the app and the site** before it merges |
 | 7 | Fewer sections, no overlaps (Jared, 6 October 2026) | **Built**, web first. Six changes, pinned by `scripts/test-fold.mjs`. See section 6 |
 | 8 | Lecture-notes feedback (Jared, 7 October 2026) | **Built.** The essay rating control under every AI notes result. Migration **0026**, `lecture_notes_feedback`, must be applied **before** the promote. Weekly query `supabase/checks/notes-quality-weekly.sql`, pinned by `scripts/test-notes-quality.mjs`. See section 7 |
-| 9 | One assessment record (Jared, 7 October 2026) | **Plan only, no code until approved.** Plan → Assignments and Courses → Grades hold the same piece of work twice; one entity shown by week in Plan and by mark in Grades. See section 8 |
-| 10 | Courses list folds into Grades | **Building**, web first. The Courses → Courses section goes; each Grades card is the course, with add, remove and rename on the card and an "Add a course" card at the end. Semester setup stays where it is |
-| 11 | Two features called "Practice" | **Building.** One is renamed so the two are distinct; the PR proposes two names, picks one and says why |
-| 12 | "Break into steps" tasks say where they came from | **Building.** In To-do and on the task itself |
-| 13 | Calendar "important dates" | **Awaiting a pick.** Block exams there with a pointer to Grades, or remove free-typed dates entirely; a recommendation went to Jared before anything is built |
+| 9 | One assessment record (Jared, 7 October 2026) | **Release A built** (plan approved 7 October 2026): Plan and Grades read one merged view of assignments and assessments, read-only across, nothing converted or written, older builds unaffected. `src/assessmentRecords.js`, pinned by `scripts/test-merged-view.mjs`. **Release B (convert on first edit, late edits) is 1.3.2**, gated in RELEASE-1.3.2.md. The approved plan is section 8 |
+| 10 | Courses list folds into Grades | **Built** (#181). Each Grades card is the course: add, rename (everywhere the name is written, `src/courseRename.js`) and remove on the card; Semester setup stays |
+| 11 | Two features called "Practice" | **Built** (#180). The study-cards mode is "Drill"; "Practice questions" keeps its name |
+| 12 | "Break into steps" tasks say where they came from | **Built** (#180). "From <assignment> →" on each step in To-do, opening it with its steps shown |
+| 13 | Calendar "important dates" | **Built**, Jared's pick (option A, 7 October 2026): Grades' dates on the Calendar read-only, labelled "From Grades"; the add form says where exams go; an exam-like title gets a pointer, never a block |
 
 **Later**
 
@@ -378,11 +378,39 @@ filed with no course for the same reason. That predates this item.
 **For Grace.** The question, the six reason labels and the comment note
 in `AI_NOTES_COPY.rating`.
 
-## 8. One assessment record (plan, 7 October 2026)
+## 8. One assessment record (approved 7 October 2026)
 
-Plan only until Jared approves. The plan was given in chat on 7 October
-2026, with the data-shape change called out. It is copied here when it
-is approved, so this file records the approved plan and not a draft.
+Plan → Assignments and Courses → Grades held the same piece of work
+twice. The approved plan makes **`assessments` the one record**, shown by
+week in Plan and by mark in Grades, in two releases.
+
+**What the code said before any of it:** `assessment.assignmentId` is read
+by the workload forecast and **set by nothing** (its only history is
+Batch 2), so linked pairs essentially do not exist in real data.
+Essay-feedback rows on the server and saved essay notes point at
+**assessment** ids, which must therefore never change. Steps point at
+the **assignment** id through `todos.parentId`. Recurring events carry
+neither.
+
+**Release A — 1.3.1, built.** Readers only. Plan's Assignments list also
+shows Grades' dated records (read-only, "In Grades · 40%", Open in
+Grades); each Grades card also lists its course's Plan assignments with
+no grade record (read-only, "Also in Plan, no weight yet", never
+counted); a linked pair shows once on each. An unlinked look-alike pair
+is two rows on both screens, never merged. Nothing is written, so a
+1.3.0 device sees exactly what it saw — a test round-trips a 1.3.0-shaped
+planner and proves, with a control, that it would see a write.
+
+**Release B — 1.3.2.** Convert on first edit; the gate and the rest are
+in RELEASE-1.3.2.md.
+
+**Data shape (Release B, recorded here because the plan was approved
+whole):** `assessments` gain optional `requirements`, `notes`, `rubric`;
+a converted assignment becomes an assessment with **the same id** (so its
+steps' `parentId` resolves unchanged) and the assignment is tombstoned;
+a linked pair's assessment absorbs it and carries `formerAssignmentId`;
+`assignments` stays in COLLECTIONS for ever, written by no new build.
+No migration, no server change, no growth.
 
 **Sequencing.** Grace's iOS list, the device checklist and the store
 screenshots are redone **after** items 9–13 merge, not before. No iOS
