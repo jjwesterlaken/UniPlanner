@@ -74,7 +74,6 @@ import {
   TrendingDown,
   Sparkles,
   Target,
-  AlarmClock,
   CalendarClock,
   Brain,
   CalendarDays,
@@ -121,6 +120,7 @@ import {
   ratedRow,
   onMarkRow,
   essayNoteFields,
+  isEssayFeedbackNote,
   withAiUse,
   feedbackEntry,
   rewriteEntry,
@@ -614,9 +614,9 @@ function Section({ icon: Icon, title, subtitle, help, children }) {
   );
 }
 
-function Card({ children, className = "" }) {
+function Card({ children, className = "", ...rest }) {
   return (
-    <div className={`rounded-2xl border border-stone-200 bg-surface p-4 shadow-sm ${className}`}>{children}</div>
+    <div className={`rounded-2xl border border-stone-200 bg-surface p-4 shadow-sm ${className}`} {...rest}>{children}</div>
   );
 }
 
@@ -2217,7 +2217,7 @@ function NoteRow({ p, folders, expanded, onToggle, onMove, onDelete, children })
                   A note can be both now, so naming one is wrong as often
                   as it is right -- the page STYLE is the part that is
                   still true of the whole note. */}
-              {isReferenceSheet(p) ? "Reference sheet" : `${p.style} page`}
+              {isReferenceSheet(p) ? "Reference sheet" : isEssayFeedbackNote(p) ? <span className="normal-case">Essay feedback · read-only</span> : `${p.style || "lined"} page`}
             </span>
             {f && (
               <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5" style={{ backgroundColor: folderColor(f.color).soft, color: folderColor(f.color).text }}>
@@ -2380,9 +2380,13 @@ function NoteView({ page, folders, onEdit, onClose, onMove, onDelete }) {
           {page.title || "Untitled note"}
         </h3>
         <div className="flex flex-shrink-0 gap-0.5">
-          <button className={btnGhost} onClick={onEdit}>
-            <Pencil size={15} /> Edit
-          </button>
+          {/* No Edit on a saved essay-feedback result: it is a record
+              of what the feedback said, read-only by ruling. */}
+          {onEdit && (
+            <button className={btnGhost} onClick={onEdit}>
+              <Pencil size={15} /> Edit
+            </button>
+          )}
           {/* The ⋯ menu stays in BOTH modes -- move and delete are things
               you want while reading, not only while editing. */}
           <NoteMenu page={page} folders={folders} onMove={onMove} onDelete={onDelete} />
@@ -2753,6 +2757,45 @@ function Notes({ pages, folders, addItem, patchItem, removeItem, session, textAl
   );
 }
 
+/* Notes -> Essay feedback: one row per saved result, newest first,
+   each opening read-only through the same row and viewer every other
+   note uses. Move to a folder and delete still work; editing does not. */
+function EssayFeedbackNotes({ pages, folders, patchItem, removeItem }) {
+  const [expandedId, setExpandedId] = useState(null);
+  const list = [...pages].sort((a, b) => ((a.updatedAt || "") < (b.updatedAt || "") ? 1 : -1));
+  return (
+    <Card>
+      <ul className="space-y-2" data-essay-feedback-notes>
+        {list.map((p) => (
+          <NoteRow
+            key={p.id}
+            p={p}
+            folders={folders}
+            expanded={expandedId === p.id}
+            onToggle={() => setExpandedId(expandedId === p.id ? null : p.id)}
+            onMove={(id, folderId) => patchItem("pages", id, { folderId })}
+            onDelete={(id) => {
+              removeItem("pages", id);
+              if (expandedId === id) setExpandedId(null);
+            }}
+          >
+            <ExpandedNote
+              page={p}
+              folders={folders}
+              draft={null}
+              setDraft={() => {}}
+              onSave={() => {}}
+              patchItem={patchItem}
+              removeItem={removeItem}
+              onCollapse={() => setExpandedId(null)}
+            />
+          </NoteRow>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 /* What an opened row shows: the right read-only view for the page's
    type, or the right editor once Edit is chosen. Shared by the Notes
    and Folders tabs, which is what makes the accordion one change and
@@ -2821,7 +2864,7 @@ function ExpandedNote({ page, folders, draft, setDraft, onSave, sheetOk = true, 
     <NoteView
       page={page}
       folders={folders}
-      onEdit={() => setDraft({ ...page })}
+      onEdit={isEssayFeedbackNote(page) ? null : () => setDraft({ ...page })}
       onClose={onCollapse}
       onMove={(id, folderId) => patchItem("pages", id, { folderId })}
       onDelete={(id) => {
@@ -4513,9 +4556,16 @@ function SemesterSetup({ settings, rounding, patchSettings }) {
     patchSettings({ breaks: next.from && next.to ? [next] : [] });
   };
 
+  /* OTHER NON-TEACHING WEEKS, any number, in their own field (see
+     breaksOf in workload.js for why not `breaks`). A half-filled range
+     is kept so the second date can be typed; every reader ignores a
+     range until it has both ends. */
+  const extra = settings.extraBreaks || [];
+  const setExtra = (next) => patchSettings({ extraBreaks: next });
+
   return (
     <Card>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label className={labelCls}>Semester starts (week 1, Monday)</label>
           <input
@@ -4531,11 +4581,44 @@ function SemesterSetup({ settings, rounding, patchSettings }) {
         <div>
           <label className={labelCls}>Mid-semester break</label>
           <div className="flex gap-2">
-            <input className={inputCls} type="date" value={first.from || ""} onChange={(e) => setBreak({ from: e.target.value })} aria-label="Break starts" />
-            <input className={inputCls} type="date" value={first.to || ""} onChange={(e) => setBreak({ to: e.target.value })} aria-label="Break ends" />
+            <input className={`${inputCls} min-w-0`} type="date" value={first.from || ""} onChange={(e) => setBreak({ from: e.target.value })} aria-label="Break starts" />
+            <input className={`${inputCls} min-w-0`} type="date" value={first.to || ""} onChange={(e) => setBreak({ to: e.target.value })} aria-label="Break ends" />
           </div>
           <p className="mt-1 text-xs text-stone-400">
             Counting straight through a non-teaching week puts everything after it a week out.
+          </p>
+        </div>
+        <div className="sm:col-span-2" data-extra-breaks>
+          <label className={labelCls}>Other non-teaching weeks</label>
+          {extra.map((b, i) => (
+            /* A grid with min-w-0, not a flex row: two date inputs and a
+               button side by side were wider than a 390px phone, and a
+               date input will not shrink below its own content in flex. */
+            <div key={b.id || i} className="mb-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2" data-extra-break={i}>
+              <input
+                className={`${inputCls} min-w-0`}
+                type="date"
+                value={b.from || ""}
+                onChange={(e) => setExtra(extra.map((x, j) => (j === i ? { ...x, from: e.target.value } : x)))}
+                aria-label={`Non-teaching weeks ${i + 1} start`}
+              />
+              <input
+                className={`${inputCls} min-w-0`}
+                type="date"
+                value={b.to || ""}
+                onChange={(e) => setExtra(extra.map((x, j) => (j === i ? { ...x, to: e.target.value } : x)))}
+                aria-label={`Non-teaching weeks ${i + 1} end`}
+              />
+              <button className={iconBtn} onClick={() => setExtra(extra.filter((_, j) => j !== i))} aria-label={`Remove non-teaching weeks ${i + 1}`}>
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+          <button className={btnGhost} onClick={() => setExtra([...extra, { id: uid(), from: "", to: "" }])}>
+            <Plus size={15} /> Add non-teaching weeks
+          </button>
+          <p className="mt-1 text-xs text-stone-400">
+            Optional. A study week or a public-holiday week, skipped like the break.
           </p>
         </div>
         <div>
@@ -4555,7 +4638,7 @@ function SemesterSetup({ settings, rounding, patchSettings }) {
             }}
           />
           <p className="mt-1 text-xs text-stone-400">
-            Optional. Not counting the break. With the start date, repeating classes can end with the semester.
+            Optional. Not counting breaks. With the start date, repeating classes can end with the semester.
           </p>
         </div>
       </div>
@@ -4597,104 +4680,134 @@ const ASSESSMENT_KINDS = [
 ];
 
 export function Grades({ assessments, courses, addItem, patchItem, removeItem, focused, rule = DEFAULT_ROUNDING, essay = null }) {
-  const blank = { course: "", title: "", w: "", mark: "", kind: "assignment", due: "", hurdle: "" };
-  const [form, setForm] = useState(blank);
   const [targets, setTargets] = useState({}); // course -> band code the student is aiming at
 
-  const byCourse = useMemo(() => {
-    const map = new Map();
+  /* ONE CARD PER COURSE (1.3.1). The separate add form and its Course
+     dropdown are gone: each course's card adds to that course, so an
+     assessment can't be filed under the wrong one. A course with
+     nothing in it yet still gets its card, because that card is where
+     its first assessment is added. Assessments naming a course that
+     has since been removed keep a card of their own, as before, and
+     everything with no course at all — the AI tab's essay-draft
+     placeholders included — is one "No course" card, last. The data
+     is unchanged: `course` is still the name string it always was. */
+  const cards = useMemo(() => {
+    const byCourse = new Map();
+    for (const c of courses || []) if (c && c.name && !byCourse.has(c.name)) byCourse.set(c.name, []);
+    const noCourse = [];
     for (const a of assessments) {
-      const key = a.course || "No course";
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(a);
+      if (!a.course) {
+        noCourse.push(a);
+        continue;
+      }
+      if (!byCourse.has(a.course)) byCourse.set(a.course, []);
+      byCourse.get(a.course).push(a);
     }
-    return map;
-  }, [assessments]);
+    const out = [...byCourse.entries()];
+    if (noCourse.length) out.push(["", noCourse]);
+    return out;
+  }, [assessments, courses]);
 
-  const shown = [...byCourse.entries()].filter(([name]) => !focused || name === focused);
+  const shown = cards.filter(([name]) => !focused || name === focused);
 
-  const add = () => {
+  const add = (course, form) => {
     const w = Number(form.w);
-    if (!form.title.trim() || !Number.isFinite(w) || w <= 0) return;
+    if (!form.title.trim() || !Number.isFinite(w) || w <= 0) return false;
     addItem("assessments", {
       id: uid(),
-      course: form.course,
+      course,
       title: form.title.trim(),
       w,
-      // Absent, not zero: an unmarked assessment and one marked zero are
-      // different things and must never be conflated.
-      ...(form.mark === "" ? {} : { mark: Number(form.mark) }),
       kind: form.kind,
       ...(form.due ? { due: form.due } : {}),
       ...(form.hurdle === "" ? {} : { hurdle: Number(form.hurdle) }),
     });
-    setForm({ ...blank, course: form.course, kind: form.kind });
+    return true;
   };
 
-  return (
-    <>
-      <Card className="mb-4">
-        <div className="grid gap-2 sm:grid-cols-2">
-          <div>
-            <label className={labelCls}>Course</label>
-            <CourseSelect courses={courses} value={form.course} onChange={(v) => setForm({ ...form, course: v })} />
-          </div>
-          <div>
-            <label className={labelCls}>What is it</label>
-            <input className={inputCls} placeholder="Essay 1" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-          </div>
-          <div>
-            <label className={labelCls}>Worth (% of the unit)</label>
-            <input className={inputCls} type="number" inputMode="decimal" placeholder="30" value={form.w} onChange={(e) => setForm({ ...form, w: e.target.value })} />
-          </div>
-          <div>
-            <label className={labelCls}>Your mark (%) — leave blank if not marked yet</label>
-            <input className={inputCls} type="number" inputMode="decimal" placeholder="" value={form.mark} onChange={(e) => setForm({ ...form, mark: e.target.value })} />
-          </div>
-          <div>
-            <label className={labelCls}>Type</label>
-            <select className={inputCls} value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
-              {ASSESSMENT_KINDS.map((k) => (
-                <option key={k.id} value={k.id}>{k.label}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className={labelCls}>Due / exam date</label>
-            <input className={inputCls} type="date" value={form.due} onChange={(e) => setForm({ ...form, due: e.target.value })} />
-          </div>
-          <div>
-            <label className={labelCls}>Hurdle minimum (%) — only if the unit has one</label>
-            <input className={inputCls} type="number" inputMode="decimal" placeholder="e.g. 45" value={form.hurdle} onChange={(e) => setForm({ ...form, hurdle: e.target.value })} />
-          </div>
-        </div>
-        <button className={`${btnPrimary} mt-3`} onClick={add} disabled={!form.title.trim() || !Number(form.w)}>
-          <Plus size={16} /> Add assessment
-        </button>
-      </Card>
-
-      {shown.length === 0 ? (
-        <Card><Empty>Add your assessments from the unit outline and this works out what you need.</Empty></Card>
-      ) : (
-        shown.map(([course, list]) => (
-          <CourseGrades
-            key={course}
-            course={course}
-            list={list}
-            target={targets[course]}
-            rule={rule}
-            onTarget={(code) => setTargets({ ...targets, [course]: code })}
-            patchItem={patchItem}
-            removeItem={removeItem}
-            essay={essay}
-          />
-        ))
-      )}
-    </>
+  return shown.length === 0 ? (
+    <Card><Empty>Add your courses above. Each one gets a card here for its assessments, and this works out what you need.</Empty></Card>
+  ) : (
+    shown.map(([course, list]) => (
+      <CourseGrades
+        key={course || "\u0000no-course"}
+        course={course}
+        list={list}
+        target={targets[course]}
+        rule={rule}
+        onTarget={(code) => setTargets({ ...targets, [course]: code })}
+        onAdd={(form) => add(course, form)}
+        patchItem={patchItem}
+        removeItem={removeItem}
+        essay={essay}
+      />
+    ))
   );
 }
 
-function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeItem, essay = null }) {
+/* The "+ Add assessment" row at the foot of a course card. Collapsed to
+   one control until it is wanted, so a card full of marks stays a card
+   full of marks. The mark is not asked for here: it goes in the row's
+   own mark field once the assessment exists, which is the one place
+   marks are entered. */
+function AddAssessmentRow({ onAdd }) {
+  const blank = { title: "", w: "", kind: "assignment", due: "", hurdle: "" };
+  const [form, setForm] = useState(null);
+  if (!form) {
+    return (
+      <button className={`${btnGhost} mt-2`} onClick={() => setForm(blank)} data-add-assessment>
+        <Plus size={15} /> Add assessment
+      </button>
+    );
+  }
+  const ok = form.title.trim() && Number(form.w) > 0;
+  return (
+    <div className="mt-2 rounded-lg border border-stone-200 p-3" data-add-assessment-form>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <label className={labelCls}>What is it</label>
+          <input className={inputCls} placeholder="Essay 1" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+        </div>
+        <div>
+          <label className={labelCls}>Worth (% of the unit)</label>
+          <input className={inputCls} type="number" inputMode="decimal" placeholder="30" value={form.w} onChange={(e) => setForm({ ...form, w: e.target.value })} />
+        </div>
+        <div>
+          <label className={labelCls}>Type</label>
+          <select className={inputCls} value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+            {ASSESSMENT_KINDS.map((k) => (
+              <option key={k.id} value={k.id}>{k.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={labelCls}>Due / exam date</label>
+          <input className={inputCls} type="date" value={form.due} onChange={(e) => setForm({ ...form, due: e.target.value })} />
+        </div>
+        <div className="sm:col-span-2">
+          <label className={labelCls}>Hurdle minimum (%) — only if the unit has one</label>
+          <input className={inputCls} type="number" inputMode="decimal" placeholder="e.g. 45" value={form.hurdle} onChange={(e) => setForm({ ...form, hurdle: e.target.value })} />
+        </div>
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <button className={btnGhost} onClick={() => setForm(null)}><X size={15} /> Cancel</button>
+        <button
+          className={btnPrimary}
+          disabled={!ok}
+          onClick={() => {
+            /* Stays open for the next one, type kept: a unit outline is
+               usually entered three or four rows at a time. */
+            if (onAdd(form)) setForm({ ...blank, kind: form.kind });
+          }}
+        >
+          <Plus size={16} /> Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CourseGrades({ course, list, target, rule, onTarget, onAdd, patchItem, removeItem, essay = null }) {
   /* Which mark field has focus, so the ask waits until typing stops;
      and which rows were just answered, so the thanks outlives the
      flag that removes the ask (the recovery card's `gone` lesson). */
@@ -4709,14 +4822,14 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
   const hurdles = result.hurdles;
 
   return (
-    <Card className="mb-4">
+    <Card className="mb-4" data-grades-card={course || "No course"}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <span className="flex items-center gap-2">
-          <CourseChip name={course === "No course" ? "" : course} />
-          <span className="font-medium text-stone-800">{course}</span>
+          <CourseChip name={course} />
+          <span className="font-medium text-stone-800">{course || "No course"}</span>
         </span>
         <span className="text-sm text-stone-500">
-          {summary.average === null ? "Nothing marked yet" : `${displayMark(summary.average)}% so far`}
+          {list.length === 0 ? "No assessments yet" : summary.average === null ? "Nothing marked yet" : `${displayMark(summary.average)}% so far`}
           {summary.markedWeight > 0 && ` · ${summary.markedWeight}% of the unit marked`}
         </span>
       </div>
@@ -4783,7 +4896,7 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
       {/* A course holding only weightless items (an essay draft filed
           from the AI tab) has nothing to calculate, and "your weights
           add up to 0%" would read as a mistake the student made. */}
-      {summary.weightSum === 0 ? (
+      {list.length === 0 ? null : summary.weightSum === 0 ? (
         <p data-no-weights className="text-xs text-stone-500">{ESSAY_COPY.noWeightsCourse}</p>
       ) : (
       <>
@@ -4829,6 +4942,7 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
       </div>
       </>
       )}
+      <AddAssessmentRow onAdd={onAdd} />
     </Card>
   );
 }
@@ -4837,11 +4951,15 @@ function CourseGrades({ course, list, target, rule, onTarget, patchItem, removeI
 /*  Workload forecast — crunch weeks, derived from existing dates      */
 /* ------------------------------------------------------------------ */
 
-function WorkloadForecast({ assignments, assessments, calendar }) {
+function WorkloadForecast({ assignments, assessments, calendar, notes = [], addItem = () => {} }) {
   const weeks = useMemo(
     () => forecastWorkload({ assignments, assessments, today: localDay() }),
     [assignments, assessments]
   );
+  /* The exam countdown lives here now (1.3.1): days left on the exam's
+     own row, and its study plan opening from that row. */
+  const examsById = useMemo(() => new Map(examCountdowns(assessments, localDay()).map((e) => [e.id, e])), [assessments]);
+  const [openExam, setOpenExam] = useState(null);
   if (weeks.length === 0) {
     return <Card><Empty>Nothing due in the next six weeks. Add due dates and this fills in.</Empty></Card>;
   }
@@ -4867,7 +4985,8 @@ function WorkloadForecast({ assignments, assessments, calendar }) {
             )}
             <ul className="mt-1.5 flex flex-col gap-1">
               {w.items.map((i) => (
-                <li key={i.id} className="flex items-center gap-2 text-sm">
+                <li key={i.id} className="text-sm" data-upcoming-kind={i.kind}>
+                  <div className="flex items-center gap-2">
                   <CourseChip name={i.course} />
                   {/* STRIKETHROUGH MEANS DONE — Grace's call, its own
                       commit so it can be reverted alone.
@@ -4903,6 +5022,24 @@ function WorkloadForecast({ assignments, assessments, calendar }) {
                     {i.past && i.finished ? "done" : i.overdue ? "overdue" : formatAU(i.due)}
                     {i.weight ? ` · ${i.weight}%` : ""}
                   </span>
+                  </div>
+                  {/* The exam's second line: days left, then its study
+                      plan. On its own line so the title is never
+                      squeezed to an initial on a phone. */}
+                  {i.kind === "exam" && examsById.get(i.id) && !(i.past && i.finished) && (
+                    <p className="ml-1 mt-0.5 text-xs font-medium u-accent-deeptext" data-exam-days={i.id}>
+                      Exam · {daysLeftLabel(examsById.get(i.id))}
+                    </p>
+                  )}
+                  {i.kind === "exam" && examsById.get(i.id) && !i.past && (
+                    <ExamStudyPlan
+                      exam={examsById.get(i.id)}
+                      notes={notes}
+                      addItem={addItem}
+                      open={openExam === i.id}
+                      onToggle={() => setOpenExam(openExam === i.id ? null : i.id)}
+                    />
+                  )}
                 </li>
               ))}
             </ul>
@@ -4914,70 +5051,51 @@ function WorkloadForecast({ assignments, assessments, calendar }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Exam countdown + a derived study plan                             */
+/*  An exam's study plan, opened from its row in Upcoming             */
 /* ------------------------------------------------------------------ */
 
-function ExamPlanner({ assessments, notes, addItem }) {
+/* The exam countdown was its own section on the Study tab until 1.3.1;
+   it is folded into Upcoming, where the exam already had a row. The
+   plan logic is unchanged (buildStudyPlan, derived and never stored). */
+function daysLeftLabel(e) {
+  if (e.past) return `was ${Math.abs(e.days)} day${Math.abs(e.days) === 1 ? "" : "s"} ago`;
+  if (e.today) return "today";
+  return `${e.days} day${e.days === 1 ? "" : "s"} to go`;
+}
+
+function ExamStudyPlan({ exam: e, notes, addItem, open, onToggle }) {
   const today = localDay();
-  const exams = useMemo(() => examCountdowns(assessments, today), [assessments, today]);
-  const [openId, setOpenId] = useState(null);
-
-  if (exams.length === 0) {
-    return <Card><Empty>Add an assessment with the type "Exam" and a date, and its countdown appears here.</Empty></Card>;
+  const topics = topicsForCourse(notes, e.course);
+  const plan = buildStudyPlan({ exam: e, topics, today });
+  if (plan.length === 0) {
+    return (
+      <p className="ml-1 mt-0.5 text-xs text-stone-400" data-exam-plan={e.id}>
+        {topics.length === 0 ? "Add study cards for this course and a study plan appears here." : "No days left to plan."}
+      </p>
+    );
   }
-
   return (
-    <Card>
-      <div className="flex flex-col gap-2">
-        {exams.map((e) => {
-          const topics = topicsForCourse(notes, e.course);
-          const plan = buildStudyPlan({ exam: e, topics, today });
-          const open = openId === e.id;
-          return (
-            <div key={e.id} className="rounded-xl border border-stone-100 px-3 py-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="flex items-center gap-2">
-                  <CourseChip name={e.course} />
-                  <span className="font-medium text-stone-800">{e.title}</span>
-                </span>
-                <span className="text-sm text-stone-500">
-                  {e.past ? `was ${Math.abs(e.days)} day${Math.abs(e.days) === 1 ? "" : "s"} ago` : e.today ? "today" : `${e.days} day${e.days === 1 ? "" : "s"} to go`}
-                  {" · "}{formatAU(e.due)}
-                </span>
-              </div>
-              {plan.length > 0 && (
-                <>
-                  <button className="mt-1 text-xs font-medium u-accent-deeptext u-focus" onClick={() => setOpenId(open ? null : e.id)}>
-                    {open ? "Hide" : "Show"} a study plan ({plan.length} sessions across {topics.length} topic{topics.length === 1 ? "" : "s"})
-                  </button>
-                  {open && (
-                    <ul className="mt-1.5 flex flex-col gap-1">
-                      {plan.map((p) => (
-                        <li key={p.day} className="flex items-center gap-2 text-sm">
-                          <span className="w-20 shrink-0 text-xs text-stone-400">{formatAU(p.day)}</span>
-                          <span className={`flex-1 ${p.review ? "font-medium text-stone-800" : "text-stone-700"}`}>{p.topic}</span>
-                          <button
-                            className="shrink-0 text-xs text-stone-500 underline u-focus"
-                            onClick={() => addItem("events", { id: uid(), title: `Study: ${p.topic}`, course: e.course, date: p.day, start: "", end: "", location: "", repeat: "none" })}
-                          >
-                            add to calendar
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </>
-              )}
-              {plan.length === 0 && !e.past && (
-                <p className="mt-1 text-xs text-stone-400">
-                  {topics.length === 0 ? "Add study cards for this course and a plan appears here." : "No days left to plan."}
-                </p>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </Card>
+    <div className="ml-1 mt-0.5" data-exam-plan={e.id}>
+      <button className="text-xs font-medium u-accent-deeptext u-focus" onClick={onToggle} aria-expanded={open}>
+        {open ? "Hide" : "Show"} a study plan ({plan.length} sessions across {topics.length} topic{topics.length === 1 ? "" : "s"})
+      </button>
+      {open && (
+        <ul className="mt-1.5 flex flex-col gap-1">
+          {plan.map((p) => (
+            <li key={p.day} className="flex items-center gap-2 text-sm">
+              <span className="w-20 shrink-0 text-xs text-stone-400">{formatAU(p.day)}</span>
+              <span className={`flex-1 ${p.review ? "font-medium text-stone-800" : "text-stone-700"}`}>{p.topic}</span>
+              <button
+                className="shrink-0 text-xs text-stone-500 underline u-focus"
+                onClick={() => addItem("events", { id: uid(), title: `Study: ${p.topic}`, course: e.course, date: p.day, start: "", end: "", location: "", repeat: "none" })}
+              >
+                add to calendar
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -6392,7 +6510,7 @@ export default function PlannerApp() {
           }).then((r) => !!r.ok),
         onSave: (assessment, { result }) => {
           const id = uid();
-          let page = { id, ...essayNoteFields({ result, assessment, copy: ESSAY_COPY, pageId: id }), folderId: null };
+          let page = { id, ...essayNoteFields({ result, assessment, copy: ESSAY_COPY, pageId: id, date: formatAU(localDay()) }), folderId: null };
           /* Filed into the course's folder like a recording or a
              reading summary, in its own try: a folder is a convenience
              and must never take down work just paid for. */
@@ -6694,8 +6812,8 @@ export default function PlannerApp() {
 
         {tab === "planner" && (
           <>
-            <Section icon={CalendarClock} title="What's coming" subtitle="Crunch weeks, from your due dates">
-              <WorkloadForecast assignments={sem.assignments} assessments={sem.assessments} calendar={settings} />
+            <Section icon={CalendarClock} title="Upcoming" subtitle="What's due each week, and your exams" help="upcoming">
+              <WorkloadForecast assignments={sem.assignments} assessments={sem.assessments} calendar={settings} notes={sem.notes} addItem={addItem} />
             </Section>
             <Section icon={ClipboardList} title="Weekly reading planner" subtitle="Add as many weeks per course as you need">
               <Textbook
@@ -6735,7 +6853,15 @@ export default function PlannerApp() {
 
         {tab === "notes" && (
           <Section icon={StickyNote} title="Notes" subtitle="Titled notes on lined or blank pages">
-            <Notes pages={sem.pages} folders={sem.folders} addItem={addItem} patchItem={patchItem} removeItem={removeItem} session={session} textAllowance={textAllowance} onSummariseNote={summariseNote} openId={openNoteId} onOpened={() => setOpenNoteId(null)} />
+            {/* Saved essay-feedback results are listed in their own
+                section below, never twice. */}
+            <Notes pages={sem.pages.filter((p) => !isEssayFeedbackNote(p))} folders={sem.folders} addItem={addItem} patchItem={patchItem} removeItem={removeItem} session={session} textAllowance={textAllowance} onSummariseNote={summariseNote} openId={openNoteId} onOpened={() => setOpenNoteId(null)} />
+          </Section>
+        )}
+
+        {tab === "notes" && sem.pages.some(isEssayFeedbackNote) && (
+          <Section icon={FileText} title={ESSAY_COPY.notesSection} subtitle={ESSAY_COPY.notesSectionSubtitle}>
+            <EssayFeedbackNotes pages={sem.pages.filter((p) => isEssayFeedbackNote(p) && !p.archivedIn)} folders={sem.folders} patchItem={patchItem} removeItem={removeItem} />
           </Section>
         )}
 
@@ -6793,9 +6919,6 @@ export default function PlannerApp() {
                   <Empty>Sign in to use the AI study features.</Empty>
                 </Card>
               )}
-            </Section>
-            <Section icon={AlarmClock} title="Exams" subtitle="Countdown, and a plan for the time left" help="exams">
-              <ExamPlanner assessments={sem.assessments} notes={sem.notes} addItem={addItem} />
             </Section>
           </>
         )}

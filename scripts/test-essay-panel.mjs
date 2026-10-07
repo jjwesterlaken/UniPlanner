@@ -138,13 +138,17 @@ await test("THE SAVED NOTE NEVER CARRIES A BAND WITHOUT THE DISCLAIMER, and esca
       { deficiency: "claim-without-evidence", quote: "It is true", note: "No support." },
     ],
   };
-  const f = essayNoteFields({ result, assessment: { title: "Essay 1" }, copy: ESSAY_COPY, pageId: "p1" });
+  const f = essayNoteFields({ result, assessment: { id: "a1", title: "Essay 1" }, copy: ESSAY_COPY, pageId: "p1", date: "06/10/2026" });
   const b = f.blocks[0];
   assert.ok(b.html.includes(ESSAY_COPY.bandLine("Credit")) && b.html.includes("not a prediction of your mark"));
   assert.ok(b.body.includes(ESSAY_COPY.disclaimer));
   assert.ok(!b.html.includes("<script>"), "model output was written into the note as markup");
   assert.ok(b.html.indexOf("It is true") < b.html.indexOf("&lt;script"), "the fundamental point is not first");
-  assert.equal(f.title, "Essay feedback — Essay 1");
+  assert.equal(f.title, "Essay 1 — 06/10/2026", "the title is <assessment name> — <date>");
+  assert.deepEqual(f.essayFeedback, { assessmentId: "a1" }, "the note is not marked as an essay-feedback result, so Notes cannot list it there");
+  /* NO ESSAY TEXT BEYOND THE QUOTES. The marker names the assessment
+     only, and every string in the note is the feedback's own. */
+  assert.deepEqual(Object.keys(f.essayFeedback), ["assessmentId"], "the marker grew a field; check it carries no essay text");
   const noBand = essayNoteFields({ result: { ...result, band: "" }, assessment: {}, copy: ESSAY_COPY, pageId: "p2" });
   assert.ok(!noBand.blocks[0].html.includes("reads like"));
 });

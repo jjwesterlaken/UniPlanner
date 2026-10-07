@@ -379,10 +379,10 @@ test("the streak help explains the archive reset, which otherwise reads as data 
 });
 
 test("the exam help states its two preconditions and the no-review-day rule", () => {
-  const all = [HELP_TOPICS.exams.example, HELP_TOPICS.exams.cost].join(" ");
+  const all = [HELP_TOPICS.upcoming.example, HELP_TOPICS.upcoming.cost].join(" ");
   assert.match(all, /needs the exam entered with a date/i, "it does not say a date is required");
   assert.match(all, /study cards for that course/i, "it does not say the topics come from cards");
-  assert.match(HELP_TOPICS.exams.example, /NO review day|no review day/i,
+  assert.match(HELP_TOPICS.upcoming.example, /NO review day|no review day/i,
     "the deliberate no-review-day behaviour is unexplained, so it reads as a bug");
 });
 
@@ -409,7 +409,7 @@ test("a NEW screen without help fails here rather than passing silently", () => 
      a Section added later lands in neither list and goes red. That
      is the device-store guard's shape: partial coverage is fine,
      silent partial coverage is not. */
-  const NOT_YET_COVERED = [ "Courses", "Calendar", "What's coming",
+  const NOT_YET_COVERED = [ "Courses", "Calendar",
     "Weekly reading planner", "Assignments", "To-do list", "Notes",
     "Folders", "Account"
   ];

@@ -28,11 +28,11 @@ const RELOAD_LOSES = "A result you haven't saved is lost if the app reloads or c
 
 export const ESSAY_COPY = {
   reloadLoses: RELOAD_LOSES,
-  rowAction: "Get feedback on a draft",
+  rowAction: "Essay feedback",
 
   /* The AI tab's draft card: one optional course, then the draft. */
   entry: {
-    title: "Feedback on a draft",
+    title: "Essay feedback",
     subtitle: "Paste an essay before you submit it and see what to work on",
     courseLabel: "Course (optional)",
     where: "The feedback is kept under this course in Courses → Grades, so if you enter your mark there later we can ask how we did.",
@@ -43,7 +43,7 @@ export const ESSAY_COPY = {
     label: "This draft is for",
     choose: "Choose the assessment…",
     go: "Link",
-    none: "Add the real assessment above, then link this draft to it so your mark and the feedback go together.",
+    none: "Add the real assessment to its course's card, then link this draft to it so your mark and the feedback go together.",
     /* On the real assessment's row, once a draft is linked to it. */
     linkedNote: (n) =>
       `Includes feedback from ${n === 1 ? "a draft" : `${n} drafts`} you linked. When you enter the mark here, we'll ask how the feedback compared.`,
@@ -51,7 +51,7 @@ export const ESSAY_COPY = {
   /* The assessment a run from the AI tab is filed under. */
   placeholderTitle: (date) => `Essay draft, ${date}`,
   rowNoWeight: "no weight",
-  noWeightsCourse: "Nothing here has a weight yet, so there's nothing to work out. Add the unit's assessments with their weights above.",
+  noWeightsCourse: "Nothing here has a weight yet, so there's nothing to work out. Add the unit's assessments with their weights below.",
 
   /* Marking criteria from a photo, on the criteria box. The essay stays
      paste-only; this fills the criteria box with editable text. */
@@ -160,8 +160,13 @@ export const ESSAY_COPY = {
   recordEmpty: "No AI help recorded yet.",
 
   save: "Save to notes",
-  saved: "Saved to your notes",
-  noteTitle: (title) => (title ? `Essay feedback — ${title}` : "Essay feedback"),
+  saved: "Saved to Notes, under Essay feedback",
+  /* "<assessment name> — <date>" (Jared, 6 October 2026). Each result
+     is its own note, so the date is what tells two runs apart. */
+  noteTitle: (title, date) => `${title || "Essay"} — ${date}`,
+  /* The Notes section the saved results are listed under. */
+  notesSection: "Essay feedback",
+  notesSectionSubtitle: "Feedback you saved, one note per result. Read-only.",
 
   capture: {
     question: "Was this useful?",

@@ -12,6 +12,12 @@ as a commitment. It goes in whichever release it is scheduled for.
 Nothing here merges to `main` until 1.1.0 is approved and the closed
 test is running.
 
+**WHERE IT HANGS (1.3.1, 6 October 2026).** The exam countdown is no
+longer its own section on the Study tab: an exam is a row in **Plan →
+Upcoming**, in its own week, with the days left, and its study plan
+opens from that row. So the pack's entry point is the **exam row in
+Upcoming**, beside the study plan, not a separate screen.
+
 The feature as scoped: for one exam the student has already entered, the
 app assembles what it already holds for that course — the study cards,
 the weak spots, the AI lecture notes — and produces **one revision pack

@@ -282,6 +282,61 @@ async function run() {
     assert.equal(teachingWeek("2026-10-12", CAL), 11);
   });
 
+  /* ---------- other non-teaching weeks (1.3.1) ---------- */
+
+  /* The mid-semester break in calendar week 9 (21-27 Sep), plus two
+     more ranges: calendar week 4 (17-23 Aug) and week 12 (12-18 Oct). */
+  const CAL2 = {
+    ...CAL,
+    extraBreaks: [
+      { id: "x1", from: "2026-08-17", to: "2026-08-23" },
+      { id: "x2", from: "2026-10-12", to: "2026-10-18" },
+    ],
+  };
+
+  await test("OTHER NON-TEACHING WEEKS: a semester with two extra ranges numbers its teaching weeks around all three", () => {
+    assert.equal(teachingWeek("2026-08-10", CAL2), 3, "before the first extra range nothing moves");
+    assert.equal(teachingWeek("2026-08-18", CAL2), null, "inside an extra range there is no teaching week");
+    assert.equal(teachingWeek("2026-08-24", CAL2), 4, "the week after it is week 4, not 5");
+    assert.equal(teachingWeek("2026-09-14", CAL2), 7, "the week before the break is week 7");
+    assert.equal(teachingWeek("2026-09-23", CAL2), null, "the break still has no teaching week");
+    assert.equal(teachingWeek("2026-10-05", CAL2), 9);
+    assert.equal(teachingWeek("2026-10-14", CAL2), null, "the second extra range");
+    assert.equal(teachingWeek("2026-10-19", CAL2), 10, "after all three, three weeks are skipped");
+    /* THE CONTROL: the same dates with the break alone. */
+    assert.equal(teachingWeek("2026-08-24", CAL), 5);
+    assert.equal(teachingWeek("2026-10-19", CAL), 12);
+  });
+
+  await test("OTHER NON-TEACHING WEEKS: Upcoming labels an extra range as a non-teaching week and the break as the break", () => {
+    assert.equal(weekLabel("2026-08-17", CAL2), "Non-teaching week");
+    assert.equal(weekLabel("2026-10-12", CAL2), "Non-teaching week");
+    assert.equal(weekLabel("2026-09-21", CAL2), "Mid-semester break");
+    assert.equal(weekLabel("2026-08-24", CAL2), "Week 4");
+  });
+
+  await test("OTHER NON-TEACHING WEEKS: none, an empty list, or a half-typed range read exactly as before", () => {
+    for (const day of ["2026-08-10", "2026-08-18", "2026-08-24", "2026-09-23", "2026-10-19"]) {
+      const before = teachingWeek(day, CAL);
+      assert.equal(teachingWeek(day, { ...CAL, extraBreaks: [] }), before, day);
+      assert.equal(teachingWeek(day, { ...CAL, extraBreaks: [{ id: "h", from: "2026-08-17", to: "" }] }), before, `${day}: a half-typed range was applied`);
+      assert.equal(weekLabel(day, { ...CAL, extraBreaks: [] }), weekLabel(day, CAL), day);
+    }
+  });
+
+  await test("OTHER NON-TEACHING WEEKS: crunch detection treats a week in an extra range exactly as a week in the break", () => {
+    /* Crunch is decided per calendar week from due dates and weights; it
+       has never read the calendar, so the break and an extra range are
+       treated identically. Pinned so a later change has to treat both. */
+    const due = (d) => [1, 2, 3].map((i) => ({ id: `${d}${i}`, title: `T${i}`, due: d, w: 5 }));
+    const inBreak = forecastWorkload({ assessments: due("2026-09-23"), today: "2026-09-01", weeks: 8 });
+    const inExtra = forecastWorkload({ assessments: due("2026-10-14"), today: "2026-09-22", weeks: 8 });
+    assert.equal(inBreak.length, 1);
+    assert.equal(inExtra.length, 1);
+    assert.equal(inBreak[0].crunch, inExtra[0].crunch);
+    assert.equal(inBreak[0].crunch, true);
+  });
+
   /* ---------- marked, unmarked and zero ---------- */
 
   await test("an unmarked assessment and one marked zero are not the same thing", () => {

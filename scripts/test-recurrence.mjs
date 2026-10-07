@@ -185,6 +185,50 @@ test("THE FIELDS RIDE THE MERGE: a delete on one device reaches the other, and a
   }
 });
 
+/* OTHER NON-TEACHING WEEKS (1.3.1): the same semester with two more
+   ranges, in calendar weeks 4 and 12. They are skipped exactly as the
+   break is, so twelve teaching weeks now take fifteen calendar weeks. */
+const SEM2 = {
+  ...SEM,
+  extraBreaks: [
+    { id: "x1", from: "2026-08-17", to: "2026-08-23" },
+    { id: "x2", from: "2026-10-12", to: "2026-10-18" },
+  ],
+};
+
+test("OTHER NON-TEACHING WEEKS: with two extra ranges the semester ends two calendar weeks later", () => {
+  assert.equal(R.semesterEnd(SEM), "2026-10-25", "the control: one break, thirteen calendar weeks");
+  assert.equal(R.semesterEnd(SEM2), "2026-11-08", "two extra ranges and the break: fifteen calendar weeks");
+});
+
+test("OTHER NON-TEACHING WEEKS: a semester series skips both extra ranges and the break, and still runs twelve classes", () => {
+  const e = { id: "e", date: TUE, repeat: "weekly", repeatEnd: { kind: "semester" } };
+  const got = on(e, SEM2);
+  const skipped = ["2026-08-18", "2026-09-29", "2026-10-13"];
+  for (const d of skipped) assert.ok(!got.includes(d), `a class on ${d}, inside a non-teaching range`);
+  assert.equal(got.length, 12, `${got.length} classes`);
+  assert.equal(got.at(-1), "2026-11-03", "the last class is in teaching week 12");
+  /* NON-VACUITY: without the extra ranges the same series has classes
+     on both of those dates, so the skip above is the ranges' doing. */
+  const control = on(e, SEM);
+  assert.ok(control.includes("2026-08-18") && control.includes("2026-10-13"), "the control never had classes on those dates");
+});
+
+test("OTHER NON-TEACHING WEEKS: N times skips them and does not count them", () => {
+  const e = { id: "e", date: TUE, repeat: "weekly", repeatEnd: { kind: "count", n: 12 } };
+  const got = on(e, SEM2);
+  assert.equal(got.length, 12);
+  assert.ok(!got.includes("2026-08-18") && !got.includes("2026-10-13"));
+  assert.equal(R.occurrenceCount(e, SEM2), 12);
+});
+
+test("OTHER NON-TEACHING WEEKS: an empty list, or a half-typed range, changes nothing", () => {
+  const e = { id: "e", date: TUE, repeat: "weekly", repeatEnd: { kind: "semester" } };
+  assert.deepEqual(on(e, { ...SEM, extraBreaks: [] }), on(e, SEM));
+  assert.deepEqual(on(e, { ...SEM, extraBreaks: [{ id: "h", from: "2026-08-17", to: "" }] }), on(e, SEM), "a range with one end was applied");
+  assert.equal(R.semesterEnd({ ...SEM, extraBreaks: [{ id: "h", from: "2026-08-17" }] }), "2026-10-25");
+});
+
 test("THE SIZE: a fully-used bounded series stays under a kilobyte", () => {
   let e = { id: "x".repeat(14), title: "Statistics lecture", course: "STAT1001", date: TUE, start: "09:00", end: "11:00", location: "Building 8, Room 204", repeat: "weekly", repeatEnd: { kind: "semester" }, updatedAt: new Date().toISOString() };
   for (const d of on(e)) e = { ...e, ...R.skipPatch(e, d) };

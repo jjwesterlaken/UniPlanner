@@ -152,9 +152,9 @@ const esc = (s) =>
  * claim escapes its caveat, so both are written together or neither.
  * `copy` is essayCopy.js, passed in so this module holds no wording.
  */
-export function essayNoteFields({ result, assessment, copy, pageId }) {
+export function essayNoteFields({ result, assessment, copy, pageId, date = "" }) {
   const points = orderedPoints(result);
-  const title = copy.noteTitle(assessment && assessment.title);
+  const title = copy.noteTitle(assessment && assessment.title, date);
   const html = [];
   const text = [];
   if (result && result.band) {
@@ -183,8 +183,18 @@ export function essayNoteFields({ result, assessment, copy, pageId }) {
     body: "",
     strokes: [],
     blocks: [{ id: `${pageId}:t0`, type: "text", html: html.join(""), body: text.join("\n") }],
+    /* WHAT MAKES IT AN ESSAY-FEEDBACK NOTE: listed under Notes ->
+       Essay feedback, opened read-only. An ordinary field on a page,
+       so it rides the per-item merge with no merge change, and an older
+       build simply shows it as an ordinary note. It names the
+       assessment and nothing else: no essay text is stored anywhere,
+       and the body above is the feedback's own quoted phrases. */
+    essayFeedback: { assessmentId: (assessment && assessment.id) || null },
   };
 }
+
+/** Is this page a saved essay-feedback result? */
+export const isEssayFeedbackNote = (page) => !!(page && !page.deletedAt && page.essayFeedback);
 
 /* ---------- the example rewrite, client side ---------- */
 

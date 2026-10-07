@@ -294,9 +294,12 @@ if (studyTab) {
   // Batch 2 lands on three tabs; each renders from an empty semester,
   // which is the shape that has crashed demo mode before.
   for (const [tabName, phrases] of [
-    ["Courses", ["Grades", "Add assessment", "Semester setup"]],
-    ["Planner", ["What's coming", "Assignments"]],
-    ["Study", ["Exams"]],
+    /* 1.3.1: no separate add form any more; with no course yet the
+       Grades card says where assessments will go. The exam countdown
+       folded into Upcoming, so Study no longer has an Exams section. */
+    ["Courses", ["Grades", "Each one gets a card here", "Semester setup", "Other non-teaching weeks"]],
+    ["Planner", ["Upcoming", "Assignments"]],
+    ["Study", ["Study cards"]],
     ["To-do", ["Nothing on the list yet"]],
   ]) {
     const tabButton = await goTo(tabName);

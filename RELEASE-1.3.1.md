@@ -14,6 +14,7 @@ for that.
 | 4 | Auth email failure detection | **Built, 27 September 2026.** A canary every four hours (`auth-email-canary`, migration 0025), plus app-side reports of signup and reset email failures, which the digest now reads. Setup is SUPABASE-SETUP.md §3e |
 | 5 | Bounded recurring events | **Live on the web, 1 October 2026** (#170, promoted). In the iOS and Android 1.3.1 builds. `src/recurrence.js`, a teaching-weeks field on Semester setup, pinned by `scripts/test-recurrence.mjs`. See section 5 |
 | 6 | Tailwind 4 migration | **Not started.** A separate item, not part of any other change. It is the only fix npm offers for GHSA-vfj7-8cjw-p6xm (`braces`, reached only through Tailwind 3's build tooling); CI audits shipped dependencies only until then (#173). Breaking for the CSS and config, so it **needs Grace's visual check of the app and the site** before it merges |
+| 7 | Fewer sections, no overlaps (Jared, 6 October 2026) | **Built**, web first. Six changes, pinned by `scripts/test-fold.mjs`. See section 6 |
 
 **Later**
 
@@ -268,3 +269,53 @@ weeks field is on her Semester setup screen. The end choice is radio
 buttons under the weekly checkbox, and the delete choices are a row of
 three buttons under the event. Both are plain controls, waiting for
 her pass.
+
+---
+
+## 6. Fewer sections, no overlaps
+
+Six changes from Jared's 6 October brief. The goal across all of them:
+fewer sections, nothing said twice, nothing confusing.
+
+1. **"Essay feedback" is the name.** The per-assessment link and the AI
+   tab's card both say it, where they said "Get feedback on a draft" and
+   "Feedback on a draft". Both entry points stay.
+2. **Grades is one card per course.** The separate add form and its
+   Course dropdown are gone. Each course's card has its assessment rows,
+   the mark field, the bands and "what you need" as before, plus an
+   **Add assessment** row at the foot (name, worth, type, due date,
+   hurdle). A course with nothing in it yet still gets a card, because
+   that is where its first assessment goes. Assessments with no course,
+   the AI tab's "Essay draft, <date>" placeholders included, are one
+   **No course** card at the bottom, and linking a placeholder works
+   from there. No data shape change.
+3. **"What's coming" is "Upcoming", and the exam countdown is folded
+   into it.** An exam is a row in its week with the days left, and its
+   study plan opens from that row. The separate Exams section on the
+   Study tab is gone; the plan logic is unchanged and nothing is
+   stored. Exams show however far off they are, as the countdown did,
+   even though deadlines look six weeks ahead. The help topic moved
+   with it.
+4. **Other non-teaching weeks.** Semester setup takes any number of
+   extra ranges beside the mid-semester break, in a new
+   `settings.extraBreaks` field. A separate field, not more entries in
+   `breaks`: the 1.3.0 build rewrites `breaks` as a single entry
+   whenever its mid-semester break is edited, so extra entries there
+   would be dropped by any older device. An older build ignores the new
+   field and keeps it. Week numbering, Upcoming's labels and bounded
+   recurrence all skip them through one function (`breaksOf`). Crunch
+   detection has never read the calendar, so it treats them exactly as
+   it treats the break.
+5. **Saved essay feedback is its own Notes section.** One note per
+   result, titled "<assessment name> — <date>", read-only, filed in the
+   course folder when there is one. Saving is free and the note holds
+   the feedback's own quoted phrases and nothing else of the essay.
+   Notes saved before 1.3.1 carry no marker, so they stay ordinary
+   notes.
+6. **The site** drops the Exam countdown tile and says Upcoming.
+
+**For Grace.** Every new string is plain and waiting for her pass:
+`ESSAY_COPY.notesSection` and `notesSectionSubtitle`, the Upcoming
+subtitle, "Other non-teaching weeks" and its hint, "No assessments yet",
+and the "Add assessment" row.
+
