@@ -135,8 +135,8 @@ export function EssayResult({ result, rewrites = null }) {
 }
 
 /** Yes / partly / no, reasons, and a comment only when ticked. Shared by the result and the mark ask. */
-export function RatingFields({ state, set, rewriteRequested = false, allowComment = true }) {
-  const c = ESSAY_COPY.capture;
+export function RatingFields({ state, set, rewriteRequested = false, allowComment = true, copy = ESSAY_COPY.capture, reasons = null }) {
+  const c = copy;
   const toggle = (r) =>
     set((s) => ({ ...s, reasons: s.reasons.includes(r) ? s.reasons.filter((x) => x !== r) : [...s.reasons, r] }));
   return (
@@ -158,7 +158,7 @@ export function RatingFields({ state, set, rewriteRequested = false, allowCommen
       {state.rating && state.rating !== "yes" && (
         <fieldset className="space-y-1">
           <legend className="text-xs text-stone-500">{c.reasonsLabel}</legend>
-          {reasonsFor({ rewriteRequested }).map((r) => (
+          {(reasons || reasonsFor({ rewriteRequested })).map((r) => (
             <label key={r} className="flex items-center gap-2 text-sm text-stone-700">
               <input type="checkbox" checked={state.reasons.includes(r)} onChange={() => toggle(r)} />
               {c.reasons[r]}
@@ -229,15 +229,18 @@ export function AiUseRecord({ assessment }) {
 
 const blankRating = () => ({ rating: null, reasons: [], sendComment: false, comment: "" });
 
-function FeedbackCapture({ onSend, rewriteRequested = false, sent = false }) {
-  const c = ESSAY_COPY.capture;
+/* Shared with the lecture-notes rating (aiNotes.jsx), which passes its
+   own copy, its own reasons and its own marker attribute; the defaults
+   are the essay capture exactly as it was. */
+export function FeedbackCapture({ onSend, rewriteRequested = false, sent = false, copy = ESSAY_COPY.capture, reasons = null, marker = { "data-essay-capture": true } }) {
+  const c = copy;
   const [state, setState] = useState(blankRating());
   const [status, setStatus] = useState(null); // null | "sent" | "failed"
   if (sent || status === "sent") return <p className="text-xs text-stone-500">{c.thanks}</p>;
   return (
-    <div data-essay-capture className="space-y-2 border-t border-stone-200 pt-2">
+    <div {...marker} className="space-y-2 border-t border-stone-200 pt-2">
       <p className="text-sm font-medium text-stone-700">{c.question}</p>
-      <RatingFields state={state} set={setState} rewriteRequested={rewriteRequested} />
+      <RatingFields state={state} set={setState} rewriteRequested={rewriteRequested} copy={c} reasons={reasons} />
       {state.rating && (
         <button
           className={btnGhost}

@@ -373,4 +373,29 @@ export const AI_NOTES_COPY = {
     unreachable:
       "We couldn't reach the server just then, so your notes are still waiting — nothing has been lost. Try again when you have a connection.",
   },
+  /* The rating under every set of notes (0026). The essay capture's
+     shape and its three ratings, word for word, so a student who has
+     rated one has rated both; only the question and the reasons are the
+     notes' own. Sending costs nothing, and the comment note says the
+     one thing a student would want to know before typing: it is stored,
+     and a quote from the lecture is stored with it. */
+  rating: {
+    question: "Were these notes useful?",
+    ratings: { yes: "Yes", partly: "Partly", no: "No" },
+    reasonsLabel: "What was wrong with them?",
+    reasons: {
+      "too-long": "Too long",
+      "too-short": "Too short",
+      "missed-assessable": "Missed something that will be assessed",
+      "wrong-terms": "Got terms wrong",
+      "wrong-structure": "Organised the wrong way",
+      other: "Something else",
+    },
+    commentTick: "Also send a comment",
+    commentNote: (max) =>
+      `Only sent if you tick the box. It's stored with your rating so we can read it, it trains nothing, and if you paste wording from the lecture here, that is stored too. Up to ${max} characters.`,
+    send: "Send",
+    thanks: "Thanks. That goes straight to the people improving it.",
+    failed: "That didn't send. Your notes weren't affected.",
+  },
 };

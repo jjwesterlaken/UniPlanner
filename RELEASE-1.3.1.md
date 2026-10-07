@@ -15,6 +15,7 @@ for that.
 | 5 | Bounded recurring events | **Live on the web, 1 October 2026** (#170, promoted). In the iOS and Android 1.3.1 builds. `src/recurrence.js`, a teaching-weeks field on Semester setup, pinned by `scripts/test-recurrence.mjs`. See section 5 |
 | 6 | Tailwind 4 migration | **Not started.** A separate item, not part of any other change. It is the only fix npm offers for GHSA-vfj7-8cjw-p6xm (`braces`, reached only through Tailwind 3's build tooling); CI audits shipped dependencies only until then (#173). Breaking for the CSS and config, so it **needs Grace's visual check of the app and the site** before it merges |
 | 7 | Fewer sections, no overlaps (Jared, 6 October 2026) | **Built**, web first. Six changes, pinned by `scripts/test-fold.mjs`. See section 6 |
+| 8 | Lecture-notes feedback (Jared, 7 October 2026) | **Built.** The essay rating control under every AI notes result. Migration **0026**, `lecture_notes_feedback`, must be applied **before** the promote. Weekly query `supabase/checks/notes-quality-weekly.sql`, pinned by `scripts/test-notes-quality.mjs`. See section 7 |
 
 **Later**
 
@@ -318,4 +319,54 @@ fewer sections, nothing said twice, nothing confusing.
 `ESSAY_COPY.notesSection` and `notesSectionSubtitle`, the Upcoming
 subtitle, "Other non-teaching weeks" and its hint, "No assessments yet",
 and the "Add assessment" row.
+
+## 7. Lecture-notes feedback
+
+After every AI notes result, the same control the essay feature uses:
+"Were these notes useful?" Yes / Partly / No, and on anything but Yes,
+six reasons (too long, too short, missed something that will be
+assessed, got terms wrong, organised the wrong way, something else),
+and a comment only if the student ticks to send one. Free; it calls no
+provider and spends no credits.
+
+**Stored like `assessment_feedback`, and narrower.** Migration 0026,
+`lecture_notes_feedback`: one `delivered` row per result (the
+denominator) and one `rated` row if answered. Insert-only, three
+policies, nothing to anon, cleared by account deletion, self-checking
+(11 properties). A row holds the student's id, a run id, the course
+label, the rating, the reasons and the opt-in comment, and **nothing
+from the lecture**. The run id is minted fresh per result and is NOT
+the idempotency key, so a rating cannot be joined to a transcript in
+`ai_notes_requests`. The reasons are a closed set in the database's
+CHECK too, so a stale client cannot invent one; a test holds the
+migration, the client, the copy and the weekly query to one list.
+
+**It outlives the save.** A student who taps Save first is offered the
+rating again on the "Saved" screen; one who already sent it is not
+asked twice. A failed summary has no notes, so it writes no row and
+shows no control.
+
+**Order: apply 0026, then promote.** It widens. A client promoted first
+has every insert refused, and the control swallows that (a rating must
+never take down notes the student paid for), so nothing would look
+wrong and nothing would be recorded. No function deploy is needed.
+
+1. Apply `0026_lecture_notes_feedback.sql` in the SQL editor. It must
+   end `0026 applied and verified: 11 properties checked.`
+2. Promote.
+3. Verify after one real rating:
+   `select occasion, rating, reasons, course from lecture_notes_feedback order by created_at desc limit 5;`
+
+**Weekly:** `supabase/checks/notes-quality-weekly.sql`. Five blocks:
+volume, rating split, reasons (every reason listed, at zero if unused),
+by course (course labels lowercased and trimmed; the row count is the
+course count), and comments last, on their own.
+
+**Known gap, recorded rather than fixed here.** A result picked up from
+the recovery card ("Get it back") is rated with no course, because the
+recorder's course field is empty on that path, and the note it saves is
+filed with no course for the same reason. That predates this item.
+
+**For Grace.** The question, the six reason labels and the comment note
+in `AI_NOTES_COPY.rating`.
 
