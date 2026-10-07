@@ -246,6 +246,19 @@ jobs:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-consent.mjs
 
+      - name: A lecture recorded from another tab survives its own ending
+        # The 7 October recorder incident: the share ended on its own in a
+        # tab nobody was watching, and a recording that outlives a token
+        # sent the expired one. Tab capture needs a HEADFUL Chromium
+        # (headless closes the page the moment capture starts), so this
+        # one runs under xvfb.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: xvfb-run -a node scripts/test-recorder-session.mjs
+      - name: A sync refused for clock skew is retried, not shown
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-sync-clock-skew.mjs
       - name: The path split's two nav controls are really on screen
         # "Both controls, visible without scrolling" is a claim about
         # LAYOUT, and markup containing two links satisfies none of it —
