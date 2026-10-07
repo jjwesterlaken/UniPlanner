@@ -143,21 +143,46 @@ price change. `SUMMARY_MAX_TOKENS` (8,000) is unchanged, so the worst
 case per call is bounded exactly as it is today. "Shorter" moves the
 other way.
 
-**Where it is NOT comfortably inside: very short recordings.** This is
+**Where it is NOT comfortably inside: short recordings.** This is
 pre-existing and should be said plainly. The credit is cost-neutral at
-50 minutes by construction, so short recordings are already
-cross-subsidised by long ones:
+50 minutes by construction, so most recordings shorter than that cost
+more than they are charged.
 
-| Recording | Charged | Cost today | Charged ÷ cost |
+How a recording is costed, all from `_shared/credits.ts`:
+
+- transcription: $0.04 per hour, which is $0.0006667 a minute;
+- one summary at the measured typical size (1,600 in, 1,203 out):
+  $0.0009618, whatever the length;
+- one credit: $0.0006667 + $0.0009618 ÷ 50 = **$0.0006859**.
+
+So a recording of *m* minutes costs `m × 0.0006667 + 0.0009618`, and is
+charged `max(m, 3)` credits (`billedCredits` in `ai-notes/guards.js`:
+exact minutes, not rounded, floor of 3). In credits:
+
+| Recording | Charged | Real cost | Charged ÷ cost |
 |---|---|---|---|
-| 1 min | 3 credits | $0.00163 | 1.26 |
-| 3 min | 3 credits | $0.00296 | **0.69** |
-| 10 min | 10 credits | $0.00763 | 0.90 |
-| 50 min | 50 credits | $0.03430 | 1.00 |
-| 120 min | 120 credits | $0.08096 | 1.02 |
+| 1 min | 3 credits | 2.37 credits ($0.00163) | 1.26 |
+| 1.64 min | 3 credits | 3.00 credits | 1.00 (break-even on the floor) |
+| 2 min | 3 credits | 3.35 credits | 0.90 |
+| 3 min | 3 credits | **4.32 credits** ($0.00296) | **0.69** |
+| 10 min | 10 credits | 11.12 credits ($0.00763) | 0.90 |
+| 50 min | 50 credits | 50.00 credits ($0.03430) | 1.00 (break-even by definition) |
+| 120 min | 120 credits | 118.04 credits ($0.08096) | 1.02 |
 
-A "thorough" summary of a 3-minute clip pushes 0.69 lower, to about
-0.55 at +1,200 output tokens. It's a few hundredths of a cent, and only
+**Every recording between 1.64 and 50 minutes is charged below its
+cost.** Under 1.64 minutes the floor of 3 covers it, and over 50 the
+fixed summary is spread thin enough to come out above. The worst point
+is just over the floor, at 3 minutes: 1.40 credits of summary plus 2.92
+of transcription is 4.32, against 3 charged.
+
+(A correction, for the record: a chat summary of this file on 7 October
+said a short clip was "3 credits charged against 1.4 credits of real
+cost". The 1.4 is the summary alone; it dropped the transcription. The
+table above was right and the summary of it was not.)
+
+A "thorough" summary of a 3-minute clip pushes 0.69 lower, to **0.56**:
++1,200 output tokens is $0.00072, so the cost becomes 5.37 credits
+against the same 3. It's a few hundredths of a cent, and only
 on an action nobody repeats at volume. But it's a real number, so it's
 recorded rather than rounded away. **This is not a reason to price the
 profile.** It's a reason to measure first. Per tier, the
