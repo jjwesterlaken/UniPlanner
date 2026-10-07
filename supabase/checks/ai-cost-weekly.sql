@@ -99,3 +99,45 @@ select task,
    and day >= (now() at time zone 'utc')::date - 27
  group by task, outcome
  order by absorbed_usd desc nulls last, task, outcome;
+
+
+-- @query recording_lengths
+-- How long recorded lectures are, by what they were charged, over the
+-- last 7 days. This is the trigger for DECISIONS.md's 7 October 2026
+-- entry: a recording between ~2 and 50 minutes is charged below its
+-- modelled cost (worst 0.69x at 3 minutes), accepted because a 50-minute
+-- lecture breaks even and long ones carry short ones. Revisit if the
+-- short buckets dominate.
+--
+-- ai_task_costs does NOT cover lectures (0024 records ai-text only), so
+-- this reads ai_notes_requests — ONE column, minutes_billed, which holds
+-- the credits charged: max(minutes, 3). Nothing else on the row is read,
+-- and the transcript and result are never selected. Rows are swept after
+-- 7 or 30 days, so 7 days is the window every row is still inside.
+--
+-- The floor bucket mixes recordings under 1.64 minutes (charged above
+-- cost) with ones from 1.64 to 3 (below): minutes_billed cannot tell
+-- them apart, because both bill 3.
+with charged as (
+  select minutes_billed as credits
+    from public.ai_notes_requests
+   where status = 'done'
+     and minutes_billed is not null
+     and created_at >= now() - interval '7 days'
+),
+bucketed as (
+  select case
+           when credits <= 3  then '1. floor (3 credits, up to 3 min)'
+           when credits < 50  then '2. over 3, under 50 min (below cost)'
+           else                    '3. 50 min or more (at or above cost)'
+         end as bucket,
+         credits
+    from charged
+)
+select bucket,
+       count(*)                                                     as recordings,
+       round(100.0 * count(*) / nullif(sum(count(*)) over (), 0), 1) as pct,
+       round(sum(credits)::numeric, 0)                              as credits_charged
+  from bucketed
+ group by bucket
+ order by bucket;

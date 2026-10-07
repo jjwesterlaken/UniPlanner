@@ -504,6 +504,9 @@ entitlement.
 
 ### The comparison the brief asked for: minutes charged vs real cost
 
+> **Short recordings (2–50 minutes) are charged below modelled cost, worst 0.69x
+> at 3 minutes. Accepted as is, 7 October 2026: see DECISIONS.md.**
+
 > **The re-summarise row below is HISTORICAL** — the action it describes cannot
 > be taken any more, per (a). The photo row is live, and section 13 prices what
 > it costs an account.
