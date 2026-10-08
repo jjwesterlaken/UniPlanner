@@ -759,7 +759,7 @@ async function run() {
     assert.equal(r.attempts.done, 2, `expected the refused write and one retry, got ${r.attempts.done}`);
     const row = r.rows.find((x) => x._t === "ai_notes_requests");
     assert.equal(row.summary_failed, false, "the row still says the summary failed");
-    assert.ok(row.result && row.result.original, "the retried summary is not on the row");
+    assert.ok(row.result && row.result.summaryFailed === false, "the row still holds the failed result, not the retried one");
   });
 
   await test("re-summarising someone else's lecture is refused IDENTICALLY to a malformed key", async () => {

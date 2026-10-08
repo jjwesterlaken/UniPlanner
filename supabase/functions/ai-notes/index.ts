@@ -25,6 +25,9 @@ import {
   isUuid,
   sanitizeCourse,
   normalizeTranslateTo,
+  retryClockSkewOnce,
+  endReasonForLog,
+  recordedSecondsForLog,
 } from "./guards.js";
 import { deepgramAdapter } from "./deepgram.js";
 import { groqAdapter } from "./groq.js";
@@ -320,7 +323,15 @@ Deno.serve(async (req: Request) => {
        someone later to start trusting it — which is exactly how `path`
        became a vulnerability. If `week` is wanted, it comes back
        validated. */
-    const { course: rawCourse, translateTo: rawTranslateTo, estimatedDurationSeconds, idempotencyKey, consentProviders } = body || {};
+    const {
+      course: rawCourse,
+      translateTo: rawTranslateTo,
+      estimatedDurationSeconds,
+      idempotencyKey,
+      consentProviders,
+      /* Logged at the claim and nothing else -- see endReasonForLog. */
+      endReason: rawEndReason,
+    } = body || {};
 
     /* AND THE OTHER HALF OF FAILING CLOSED: the set of companies the
        STUDENT agreed to must be the set in force.
@@ -521,11 +532,17 @@ Deno.serve(async (req: Request) => {
       }
 
       const retried = { ok: true, transcript, summaryFailed: false, original: summary.original, translated: summary.translated };
-      await supabaseAdmin
-        .from("ai_notes_requests")
-        .update({ status: "done", result: retried, summary_failed: false })
-        .eq("idempotency_key", idempotencyKey)
-        .eq("user_id", userId);
+      /* Read, and retried once on a clock-skew refusal, like the success
+         path's write below: unread, a refused write left the row saying
+         the summary failed while the student held a retried one. */
+      const { error: retriedWriteErr } = await retryClockSkewOnce(() =>
+        supabaseAdmin
+          .from("ai_notes_requests")
+          .update({ status: "done", result: retried, summary_failed: false })
+          .eq("idempotency_key", idempotencyKey)
+          .eq("user_id", userId)
+      );
+      if (retriedWriteErr) logFailure("mark_done", retriedWriteErr, { resummarise: true });
 
       scheduleCleanup();
       return jsonResponse({ ok: true, result: retried, creditsBilled: billed });
@@ -533,10 +550,17 @@ Deno.serve(async (req: Request) => {
 
     // 5. Race-safe idempotency claim.
     stage = "idempotency_insert";
-    logStage(stage);
-    const { error: insertErr } = await supabaseAdmin
-      .from("ai_notes_requests")
-      .insert({ idempotency_key: idempotencyKey, user_id: userId, status: "processing" });
+    /* Why the recording ended and how long it ran, as the client says.
+       Logged, never trusted: on 7 October a three-minute request was the
+       only trace of a two-hour meeting, and nothing on the server could
+       say whether the student stopped it or the share ended. */
+    logStage(stage, { endReason: endReasonForLog(rawEndReason), recordedSeconds: recordedSecondsForLog(estimatedDurationSeconds) });
+    /* Retried once on a clock-skew refusal (PGRST303). Nothing has been
+       spent yet, and a refusal of the token means nothing was inserted,
+       so the retry cannot double-claim. */
+    const { error: insertErr } = await retryClockSkewOnce(() =>
+      supabaseAdmin.from("ai_notes_requests").insert({ idempotency_key: idempotencyKey, user_id: userId, status: "processing" })
+    );
 
     if (insertErr) {
       // 23505 = unique_violation: someone already holds this key.
@@ -801,11 +825,21 @@ Deno.serve(async (req: Request) => {
     }
 
     // 13. Mark the request done.
-    await supabaseAdmin
-      .from("ai_notes_requests")
-      .update({ status: "done", result, minutes_billed: creditsBilled, summary_failed: summaryFailed })
-      .eq("idempotency_key", idempotencyKey)
-      .eq("user_id", userId);
+    /* THE ERROR IS READ NOW. It never was, so a refused write left the
+       row "processing" with the result nowhere but this response -- and
+       if the response was lost too, the recovery card's retry reclaimed
+       the stale row, found no audio (deleted at step 10) and called a
+       paid lecture missing. Retried once on a clock-skew refusal; a
+       failure that survives is logged, and the student still gets the
+       notes, because the work is done and billed. */
+    const { error: doneErr } = await retryClockSkewOnce(() =>
+      supabaseAdmin
+        .from("ai_notes_requests")
+        .update({ status: "done", result, minutes_billed: creditsBilled, summary_failed: summaryFailed })
+        .eq("idempotency_key", idempotencyKey)
+        .eq("user_id", userId)
+    );
+    if (doneErr) logFailure("mark_done", doneErr, { credits: creditsBilled });
 
     // 14. Best-effort housekeeping, doesn't block the response.
     scheduleCleanup();

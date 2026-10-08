@@ -141,3 +141,46 @@ export function normalizeTranslateTo(value, allowed) {
   const code = value.trim().toLowerCase();
   return (allowed || []).includes(code) ? code : null;
 }
+
+/* ------------------------------------------------------------------
+   "JWT issued at future": a refusal one waited retry clears.
+
+   PostgREST refuses a JWT whose issued-at is ahead of its own clock --
+   PGRST303. The service credential meets it as well as a student's
+   token can: the stripe-webhook delivery did, and cleared on Stripe's
+   own retry 18 s later, and on 7 October a student's sync met it while
+   the error report sent a moment later with the same token went
+   through. A refusal of the TOKEN happens before the statement runs,
+   so retrying a write is safe: nothing was written the first time.
+
+   Once, after a wait. A skew that does not clear is not a skew, and a
+   loop would hold the request open on a database that is refusing it. */
+export const CLOCK_SKEW_RETRY_MS = 1500;
+
+export const isClockSkewRefusal = (error) =>
+  !!error && (error.code === "PGRST303" || /issued at future/i.test(String(error.message || "")));
+
+export async function retryClockSkewOnce(run, wait = (ms) => new Promise((r) => setTimeout(r, ms))) {
+  const first = await run();
+  if (!isClockSkewRefusal(first && first.error)) return first;
+  await wait(CLOCK_SKEW_RETRY_MS);
+  return run();
+}
+
+/* WHY a recording ended, as the client says, for the claim's log line:
+   the one fact the 7 October investigation could not get from the
+   server. It decides nothing, and it is client input reaching a log, so
+   only a short lowercase token survives -- "share-ended", "you-stopped"
+   -- and anything else is "other". No list of reasons here on purpose:
+   a list would have to be kept in step with the recorder's, and a log
+   line has no use for one. */
+export function endReasonForLog(raw) {
+  if (raw === undefined || raw === null || raw === "") return null;
+  return typeof raw === "string" && raw.length <= 32 && /^[a-z]+(?:-[a-z]+)*$/.test(raw) ? raw : "other";
+}
+
+/** The recorded length the client estimated, as a whole number of seconds, or null. */
+export function recordedSecondsForLog(raw) {
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? Math.round(raw) : null;
+}
+
