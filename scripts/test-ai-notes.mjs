@@ -1284,7 +1284,7 @@ async function run() {
        guard that silently stops covering the thing it was aimed at as
        soon as a comment grows. */
     const start = src.indexOf("const runUpload =");
-    const end = src.indexOf("const result = await callAiNotes", start);
+    const end = src.indexOf("const result = await withFreshToken", start);
     assert.ok(start >= 0 && end > start, "runUpload's shape changed — this guard is reading the wrong region");
     const run = src.slice(start, end);
     const check = run.indexOf("uploadRefusal");

@@ -703,27 +703,66 @@ export const supabaseBackend = {
   },
 
   async pull({ session }) {
-    const { data, error } = await supabase
-      .from(TABLE)
-      .select("data")
-      .eq("user_id", session.user.id)
-      .maybeSingle();
-    if (error) throw new Error(readable(error));
+    const { data, error } = await retryClockSkewOnce(() =>
+      supabase.from(TABLE).select("data").eq("user_id", session.user.id).maybeSingle()
+    );
+    if (error) throw syncFailure(error);
     return data ? data.data : null; // null means nothing saved yet
   },
 
   async push({ session, data }) {
     const updatedAt = nowISO();
-    const { error } = await supabase
-      .from(TABLE)
-      .upsert(
-        { user_id: session.user.id, data, updated_at: updatedAt },
-        { onConflict: "user_id" }
-      );
-    if (error) throw new Error(readable(error));
+    const { error } = await retryClockSkewOnce(() =>
+      supabase.from(TABLE).upsert({ user_id: session.user.id, data, updated_at: updatedAt }, { onConflict: "user_id" })
+    );
+    if (error) throw syncFailure(error);
     return { serverUpdatedAt: updatedAt };
   },
 };
+
+/* ------------------------------------------------------------------
+   "JWT issued at future": a refusal that clears itself.
+
+   PostgREST refuses a token whose issued-at is later than its own
+   clock -- PGRST303. It happens to a token used within moments of
+   being minted, while PostgREST's clock trails the issuer's, and the
+   moment that happens is a tab coming back after more than an hour:
+   auth-js refreshes the expired session and the sync that becoming
+   visible started goes out on the brand-new token. On 7 October, at
+   1:50:19 pm, the pull was refused and the error report sent a moment
+   later with the SAME token was accepted -- a skew under a second.
+
+   So it is retried once, after a wait long enough to outlast a
+   sub-second skew, and only a refusal that survives that is an error:
+   shown in plain words (syncFailureSentence), reported with its code.
+   Once, not a loop: a skew that does not clear is not a skew. */
+export const CLOCK_SKEW_RETRY_MS = 1500;
+
+export const isClockSkewRefusal = (error) =>
+  !!error && (error.code === "PGRST303" || /issued at future/i.test(String(error.message || "")));
+
+export async function retryClockSkewOnce(run, wait = (ms) => new Promise((r) => setTimeout(r, ms))) {
+  const first = await run();
+  if (!isClockSkewRefusal(first && first.error)) return first;
+  await wait(CLOCK_SKEW_RETRY_MS);
+  return run();
+}
+
+/* The thrown error keeps the provider's code, so a report says WHICH
+   refusal it was; the sentence a student reads is chosen separately. */
+function syncFailure(error) {
+  const err = new Error(readable(error));
+  if (error && error.code) err.code = error.code;
+  return err;
+}
+
+/** What the Account tab says about a failed sync. Plain words for the
+    clock-skew refusal -- "JWT issued at future" is a sentence about
+    our servers, not something a student can act on. */
+export function syncFailureSentence(err) {
+  if (isClockSkewRefusal(err)) return "Couldn't sync just now. Your planner is still saved on this device — press Sync to try again.";
+  return (err && err.message) || "Couldn't sync. Please try again.";
+}
 
 /* ==================================================================
    Which backend is in use.

@@ -21,6 +21,7 @@ for that.
 | 11 | Two features called "Practice" | **Built** (#180). The study-cards mode is "Drill"; "Practice questions" keeps its name |
 | 12 | "Break into steps" tasks say where they came from | **Built** (#180). "From <assignment> →" on each step in To-do, opening it with its steps shown |
 | 13 | Calendar "important dates" | **Built**, Jared's pick (option A, 7 October 2026): Grades' dates on the Calendar read-only, labelled "From Grades"; the add form says where exams go; an exam-like title gets a pointer, never a block |
+| 14 | The recorder fixes (the 7 October incident) | **Built**, client half. A recording's token is read when the call is made; a share that ends on its own is seen from the other tab and offers **Record the rest**; the recorder notices its own end; a sync refused for clock skew is retried. Pinned by `scripts/test-recorder-session.mjs` and `scripts/test-sync-clock-skew.mjs`. The server half (fix 5) is its own PR and deploys **before** the promote. **Grace's iOS build waits for the client half to be on `main`.** See section 9 |
 
 **Later**
 
@@ -415,4 +416,49 @@ No migration, no server change, no growth.
 **Sequencing.** Grace's iOS list, the device checklist and the store
 screenshots are redone **after** items 9–13 merge, not before. No iOS
 1.3.1 build has been made.
+
+---
+
+## 9. The recorder fixes (Jared, 8 October 2026)
+
+**The incident.** On 7 October a meeting recorded from another browser
+tab produced one three-minute request at 12:04 pm and nothing after,
+while the meeting ran until 1:50. Nothing failed: the share ended about
+three minutes in, the recorder stopped and uploaded what it had, as
+designed, in a tab nobody was looking at. Investigating it found that a
+recording which ran to the end would very likely have failed there, and
+three smaller gaps. The analysis was accepted on 8 October; these are
+fixes 1–4 of it.
+
+1. **The token is read when the call is made** (`withFreshToken`,
+   `src/aiNotesClient.js`). auth-js does not refresh a hidden tab, so
+   after an hour in the background the token React held had expired; the
+   upload worked (the storage client asks auth-js itself) and the call
+   after it was refused with a 401. Now the upload, the recovery card and
+   the summary retry ask auth-js at the call, and a 401 gets one forced
+   refresh and one retry, never a loop.
+2. **A share that ends on its own is seen from the other tab.** The
+   planner's own tab title reads *"● Recording · UniPlanner"* while
+   recording and *"Recording stopped · UniPlanner"* after an end on its
+   own, until the tab is seen. The review screen offers **Record the
+   rest**: it saves these notes and starts a new recording for the same
+   course and week (the new one starts first, inside the tap, because the
+   share picker needs it). Each request carries `endReason`
+   (`you-stopped`, `share-ended`, `mic-ended`, `recorder-ended`) beside
+   the recorded seconds it already sent, and the saved note keeps both.
+3. **The recorder notices its own end.** Its stop and error handlers are
+   attached when it is built, so a recorder the browser stops still
+   becomes notes, and Stop on an already-stopped recorder finishes
+   instead of hanging (Chromium fires nothing for it — measured). A
+   microphone that goes away stops a microphone recording and keeps what
+   was captured (with "Both" it warns, because the meeting audio is still
+   recording); shared audio that goes muted is warned about.
+4. **"JWT issued at future" is retried, not shown.** One refusal is
+   retried after 1.5 s and neither shown nor reported; one that persists
+   is shown in plain words and reported with its code.
+
+**Waiting on Grace:** a chime and a system notification when a share
+ends on its own. Both are **off** until she rules — the notification
+needs a permission prompt, and the chime is a sound in someone else's
+meeting. The tab title and Record the rest were ruled in and are built.
 

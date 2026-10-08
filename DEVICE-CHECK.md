@@ -336,6 +336,19 @@ cards.
       that assignment with its steps showing. A ticked step's link is not
       crossed out. Delete the assignment: its steps say *"From an
       assignment you deleted"*.
+- [ ] **Recording, Stop and Pause** (the recorder's ending was rebuilt in
+      1.3.1, and phones are the one place no test here can drive it):
+      record a minute from the microphone, **Pause**, **Resume**, then
+      **Stop** — notes arrive as before. Stop from the floating
+      indicator on another tab does the same. A Stop that does nothing
+      is the failure to report.
+- [ ] **[web, on a computer]** **This computer's audio**, share a tab that
+      is playing sound, then go to that tab: the planner's tab reads
+      *"● Recording · UniPlanner"*. Close the shared tab: it reads
+      *"Recording stopped · UniPlanner"* until you go back to it. The
+      review says sharing stopped and offers **Record the rest**; tap it:
+      the notes so far are saved and the share picker opens for the same
+      course and week.
 - [ ] **AI lecture notes**: after a result, *"Were these notes useful?"*
       with Yes / Partly / No. Partly or No shows six reasons; the comment
       box only appears when you tick to send one. Send says thanks. Save

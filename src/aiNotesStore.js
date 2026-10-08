@@ -109,6 +109,12 @@ export const KEPT_META_KEYS = [
      caught its absence. */
   "convertedAt",
   "convertedFrom",
+  /* Why a recording ended, and after how long (the 7 October recorder
+     fixes). A three-minute note from a two-hour meeting is explained by
+     "share-ended"; without the key the stub would drop it on the first
+     sync and the note would be unexplained again next month. */
+  "endReason",
+  "recordedSeconds",
 ];
 
 export function buildStub(page) {
