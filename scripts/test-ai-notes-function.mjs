@@ -90,7 +90,14 @@ const KEY = "3f9a1c2e-7b4d-4e6f-9a1b-2c3d4e5f6a7b";
 // seeded row is invisible to it and every billing test starts from zero.
 const monthNow = () => new Date().toISOString().slice(0, 7);
 
-function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used: 0 }) {
+/* PostgREST's answer to a token whose issued-at is ahead of its clock
+   (PGRST303) -- byte for byte what the stripe-webhook delivery and the
+   7 October sync received. `skew` scripts how many times the claim
+   insert and the mark-done write get it before they succeed. */
+const CLOCK_SKEW = { code: "PGRST303", details: null, hint: null, message: "JWT issued at future" };
+
+function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used: 0 }, skew = { claim: 0, claimOther: 0, done: 0 }) {
+  const attempts = { claim: 0, done: 0 };
   // Every filter applied to a request-row query is recorded, so a test can
   // assert that writes are scoped even where the effect isn't observable
   // (the key is a primary key, so a mis-scoped update can't hit another
@@ -127,6 +134,17 @@ function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used:
         return found ? { data: found, error: null } : { data: null, error: { code: "PGRST116" } };
       },
       insert: async (row) => {
+        if (name === "ai_notes_requests") {
+          attempts.claim += 1;
+          if (skew.claim > 0) {
+            skew.claim -= 1;
+            return { error: CLOCK_SKEW };
+          }
+          if (skew.claimOther > 0) {
+            skew.claimOther -= 1;
+            return { error: { code: "08006", message: "connection failure" } };
+          }
+        }
         if (rows.some((r) => r._t === name && r.idempotency_key === row.idempotency_key)) {
           return { error: { code: "23505", message: "duplicate key value violates unique constraint" } };
         }
@@ -149,6 +167,13 @@ function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used:
             return { data: hit, error: null };
           },
           then: (resolve) => {
+            if (name === "ai_notes_requests" && pending && pending.status === "done") {
+              attempts.done += 1;
+              if (skew.done > 0) {
+                skew.done -= 1;
+                return Promise.resolve({ error: CLOCK_SKEW }).then(resolve);
+              }
+            }
             apply();
             return Promise.resolve({ error: null }).then(resolve);
           },
@@ -225,18 +250,18 @@ function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used:
       }),
     },
   };
-  return { client, rows, writes, storageCalls, rpcCalls };
+  return { client, rows, writes, storageCalls, rpcCalls, attempts };
 }
 
 /* ---------- invoke the handler ---------- */
 
-async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath, tier = "ai", trialCreditsUsed = 0, estimatedDurationSeconds, mode, summariserOk = false, usage, env = {}, consentProviders } = {}) {
+async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = false, storedExt = "webm", bodyPath, tier = "ai", trialCreditsUsed = 0, estimatedDurationSeconds, mode, summariserOk = false, usage, env = {}, consentProviders, skew, endReason } = {}) {
   if (usage) rows = [...rows, { _t: "ai_usage", user_id: callerId, month: usage.month, credits_used: usage.creditsUsed || 0 }];
   /* One object, shared between the profiles fake and the RPC fake, so
      a trial bill is VISIBLE to a later read in the same run — which is
      what makes "the trial does not refill" testable at all. */
   const trial = { used: trialCreditsUsed };
-  const db = makeDb(rows, missingObject, storedExt, trial);
+  const db = makeDb(rows, missingObject, storedExt, trial, skew ? { claim: 0, claimOther: 0, done: 0, ...skew } : undefined);
   db.client.auth.getUser = async () => ({ data: { user: { id: callerId } }, error: null });
   const baseFrom = db.client.from;
   db.client.from = (name) => {
@@ -325,6 +350,7 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
               idempotencyKey: key,
               ...(estimatedDurationSeconds === undefined ? {} : { estimatedDurationSeconds }),
               ...(consentProviders === undefined ? {} : { consentProviders }),
+              ...(endReason === undefined ? {} : { endReason }),
             }
       ),
     })
@@ -336,6 +362,7 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
   return {
     status: res.status, bodyText, body: JSON.parse(bodyText),
     rows: db.rows, writes: db.writes, storageCalls: db.storageCalls, rpcCalls: db.rpcCalls, trial, logs, providerCalls,
+    attempts: db.attempts,
   };
 }
 
@@ -358,6 +385,78 @@ const staleRow = (userId, status) => ({
 });
 
 async function run() {
+  /* ---------- "JWT issued at future", inside the function (fix 5) ------
+
+     The 7 October investigation: PostgREST refuses a JWT whose issued-at
+     is ahead of its own clock, and the function's service credential can
+     meet that as well as a student's token can -- the stripe-webhook
+     delivery did, and cleared on Stripe's own retry 18 s later. Two
+     writes here matter: the CLAIM, refused before anything is spent,
+     which used to answer 500 on a refusal one waited retry fixes; and
+     MARK DONE, whose error was never read at all, so a refused write
+     left the row "processing" while the student was handed the notes --
+     and if that response was lost too, the retry found no audio (it is
+     deleted at transcription) and called a paid lecture missing. */
+
+  await test("A CLAIM REFUSED FOR CLOCK SKEW IS RETRIED ONCE AFTER A WAIT, AND THE RECORDING IS PROCESSED", async () => {
+    const r = await invoke({ skew: { claim: 1 } });
+    assert.equal(r.status, 200, `expected the recording processed, got ${r.status}: ${r.bodyText}`);
+    assert.equal(r.attempts.claim, 2, `expected the refused claim and one retry, got ${r.attempts.claim}`);
+    assert.ok(r.providerCalls.some((u) => u.includes("groq")), "the recording was never transcribed");
+    const row = r.rows.find((x) => x._t === "ai_notes_requests");
+    assert.ok(row && row.status === "done", `the request row is ${row && row.status}`);
+  });
+
+  await test("A CLAIM STILL REFUSED AFTER THE RETRY STOPS THERE AND FAILS CLEANLY — ONE RETRY, NOT A LOOP", async () => {
+    const r = await invoke({ skew: { claim: 2 } });
+    assert.equal(r.attempts.claim, 2, `expected the refused claim and exactly one retry, got ${r.attempts.claim}`);
+    assert.equal(r.status, 500, `a claim that stays refused should fail cleanly, got ${r.status}`);
+    assert.deepEqual(r.providerCalls, [], "the provider was called for a request that was never claimed");
+    assert.deepEqual(r.rpcCalls, [], "an unclaimed request was billed");
+  });
+
+  await test("A CLAIM REFUSED FOR ANY OTHER REASON IS NOT RETRIED — the control", async () => {
+    /* Passes before and after, by design: without it, "the claim is
+       retried" is satisfied by a function that retries every failure,
+       including the ones a wait cannot fix. */
+    const r = await invoke({ skew: { claimOther: 1 } });
+    assert.equal(r.attempts.claim, 1, `a non-skew refusal was retried (${r.attempts.claim} attempts)`);
+    assert.equal(r.status, 500);
+    assert.deepEqual(r.providerCalls, []);
+  });
+
+  await test("A 'MARK DONE' REFUSED FOR CLOCK SKEW IS RETRIED, SO THE ROW HOLDS THE RESULT", async () => {
+    const r = await invoke({ skew: { done: 1 } });
+    assert.equal(r.status, 200, r.bodyText);
+    assert.equal(r.attempts.done, 2, `expected the refused write and one retry, got ${r.attempts.done}`);
+    const row = r.rows.find((x) => x._t === "ai_notes_requests");
+    assert.equal(row && row.status, "done", "the row was left 'processing' with the result nowhere but the response");
+    assert.ok(row && row.result && row.result.transcript, "the row does not hold the result");
+  });
+
+  await test("A 'MARK DONE' THAT FAILS FOR GOOD IS LOGGED — AND THE STUDENT STILL GETS THE NOTES", async () => {
+    const r = await invoke({ skew: { done: 2 } });
+    assert.equal(r.status, 200, `the student should still get the notes, got ${r.status}`);
+    assert.ok(r.body.result && r.body.result.transcript, "the notes did not come back");
+    const line = r.logs.find((l) => /FAILURE/.test(l) && /mark_done/.test(l));
+    assert.ok(line, "a mark-done write that failed for good left no failure line — the row says 'processing' and nothing says why");
+  });
+
+  await test("THE REQUEST'S END REASON AND RECORDED SECONDS ARE LOGGED AT THE CLAIM — and only as a short token and a number", async () => {
+    const r = await invoke({ endReason: "share-ended", estimatedDurationSeconds: 180 });
+    const claim = r.logs.find((l) => l.includes('"stage":"idempotency_insert"'));
+    assert.ok(claim, "no claim line was logged");
+    assert.match(claim, /"endReason":"share-ended"/, `the claim line does not say why the recording ended: ${claim}`);
+    assert.match(claim, /"recordedSeconds":180/, `the claim line does not say how long it was: ${claim}`);
+    /* What a client sends is logged, so it must not be able to put
+       anything in a log line but a short lowercase token. */
+    const odd = await invoke({ endReason: "<b>hello</b> " + "x".repeat(200), estimatedDurationSeconds: "lots" });
+    const oddClaim = odd.logs.find((l) => l.includes('"stage":"idempotency_insert"')) || "";
+    assert.match(oddClaim, /"endReason":"other"/, `an odd end reason was logged as given: ${oddClaim}`);
+    assert.doesNotMatch(oddClaim, /<b>|hello|x{20}/, "client text reached the log line");
+    assert.match(oddClaim, /"recordedSeconds":null/, `a non-number was logged as given: ${oddClaim}`);
+  });
+
   /* ---------- the consent closure, at the boundary that spends money ---
 
      Deepgram used to be NAMED ON THE CONSENT SCREEN although nothing used
@@ -650,6 +749,17 @@ async function run() {
     summary_failed: true,
     result: { transcript: "the lecture transcript", summaryFailed: true },
     created_at: new Date().toISOString(),
+  });
+
+  await test("THE SUMMARY RETRY'S 'MARK DONE' IS RETRIED THE SAME WAY, SO THE RETRIED SUMMARY IS ON THE ROW", async () => {
+    /* The same unread write, one path over: a refusal left the row
+       saying the summary failed while the student held a retried one. */
+    const r = await invoke({ mode: "resummarise", rows: [failedRow(OWNER)], summariserOk: true, skew: { done: 1 } });
+    assert.equal(r.status, 200, r.bodyText);
+    assert.equal(r.attempts.done, 2, `expected the refused write and one retry, got ${r.attempts.done}`);
+    const row = r.rows.find((x) => x._t === "ai_notes_requests");
+    assert.equal(row.summary_failed, false, "the row still says the summary failed");
+    assert.ok(row.result && row.result.original, "the retried summary is not on the row");
   });
 
   await test("re-summarising someone else's lecture is refused IDENTICALLY to a malformed key", async () => {
