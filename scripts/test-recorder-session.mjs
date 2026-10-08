@@ -642,19 +642,26 @@ async function run() {
   });
 
   await test("SHARED AUDIO THAT GOES MUTED IS WARNED ABOUT; THE VIDEO TRACK'S ROUTINE MUTE IS NOT", async () => {
+    /* BOTH MUTES ARE DISPATCHED. The video track of a shared tab goes
+       muted on its own a few seconds into a share of a still page in
+       some environments (this container's Chromium, 4.3 s, measured)
+       and not in others (GitHub's runner: never) -- so a test that
+       WAITED for it asserted the environment, and went red in CI over
+       nothing the app does. What is under test is which track the app
+       listens to, and a dispatched event asks exactly that. */
     const { ctx, page } = await openApp(browser);
     await startRecording(page);
-    await page.waitForTimeout(6000);
-    const videoMuted = await page.evaluate(() => window.__displayStreams[0].getVideoTracks()[0].muted);
-    const beforeAudioMute = await page.locator("[data-share-muted]").count();
+    await page.waitForTimeout(1000);
+    await page.evaluate(() => window.__displayStreams[0].getVideoTracks()[0].dispatchEvent(new Event("mute")));
+    await page.waitForTimeout(600);
+    const afterVideoMute = await page.locator("[data-share-muted]").count();
     await page.evaluate(() => window.__displayStreams[0].getAudioTracks()[0].dispatchEvent(new Event("mute")));
     const warned = await page
       .locator("[data-share-muted]")
       .waitFor({ timeout: 3_000 })
       .then(() => true, () => false);
     await ctx.close();
-    assert.ok(videoMuted, "precondition: the shared tab's video track never went muted, so “no warning” below would prove nothing");
-    assert.equal(beforeAudioMute, 0, "the video track's routine mute raised a warning — it would on every share of a still page");
+    assert.equal(afterVideoMute, 0, "the video track's mute raised a warning — it would on every share of a still page");
     assert.ok(warned, "the shared audio went muted and nothing said so — that is a recording of silence, billed");
   });
 
