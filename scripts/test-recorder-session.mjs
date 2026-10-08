@@ -578,37 +578,50 @@ async function run() {
 
   /* ---------------- fix 3: the recorder notices its own end ---------------- */
 
-  await test("A RECORDER THE BROWSER STOPS BY ITSELF STILL BECOMES NOTES — AND STOP AFTERWARDS DOES NOT HANG", async () => {
+  /* Real: a recorded stream whose track set changes makes Chromium fire
+     error (InvalidModificationError), then data, then stop. */
+  const browserStopsTheRecorder = (page, { appHearsIt = true } = {}) =>
+    page.evaluate((hears) => {
+      const r = window.__recorders[window.__recorders.length - 1];
+      /* The case a recorder with no handler of its own was in: the
+         browser's stop arrives and nothing of the app's is listening. */
+      if (!hears) r.onstop = null;
+      const c = new AudioContext();
+      r.stream.addTrack(c.createMediaStreamDestination().stream.getAudioTracks()[0]);
+    }, appHearsIt);
+
+  await test("A RECORDER THE BROWSER STOPS BY ITSELF BECOMES NOTES ON ITS OWN — NOBODY HAS TO PRESS ANYTHING", async () => {
     const { ctx, page, net } = await openApp(browser);
     await startRecording(page);
     await page.waitForTimeout(2500);
-    /* Real: a recorded stream whose track set changes makes Chromium
-       fire error (InvalidModificationError), then data, then stop. */
-    await page.evaluate(() => {
-      const r = window.__recorders[window.__recorders.length - 1];
-      const c = new AudioContext();
-      r.stream.addTrack(c.createMediaStreamDestination().stream.getAudioTracks()[0]);
-    });
+    await browserStopsTheRecorder(page);
     const onItsOwn = await until(() => net.uploads.length >= 1, 4_000);
-    let pressedStop = false;
-    if (!onItsOwn) {
-      /* What a student does next, seeing "Recording" with a timer. */
-      pressedStop = true;
-      await page.getByRole("button", { name: "Stop" }).first().click({ timeout: 2_000 }).catch(() => {});
-      await until(() => net.uploads.length >= 1, 5_000);
-    }
     await until(() => net.fn.length >= 1, 8_000);
     await page.waitForTimeout(600);
     const reachedReview = await review(page).isVisible();
+    const said = await page.locator("[data-ended-reason='recorder-ended']").isVisible();
     await ctx.close();
-    assert.ok(
-      net.uploads.length === 1 && net.uploads[0].bytes > 0,
-      pressedStop
-        ? "the browser stopped the recorder, the screen kept saying Recording, and pressing Stop did nothing — the audio never left the device"
-        : "the recording never reached the server"
-    );
+    assert.ok(onItsOwn, "the browser stopped the recorder and the screen went on saying Recording — the audio never left the device");
+    assert.ok(net.uploads[0].bytes > 0, "the upload was empty");
     assert.equal(net.fn[0] && net.fn[0].body.endReason, "recorder-ended");
     assert.ok(reachedReview, "the notes never reached the review screen");
+    assert.ok(said, "the review screen does not say the browser stopped the recording");
+  });
+
+  await test("STOP ON A RECORDER THE BROWSER HAS ALREADY STOPPED FINISHES — IT DOES NOT HANG", async () => {
+    /* A stop() on an inactive recorder fires no event at all (measured),
+       so anything that waits for one waits for ever. */
+    const { ctx, page, net } = await openApp(browser);
+    await startRecording(page);
+    await page.waitForTimeout(2500);
+    await browserStopsTheRecorder(page, { appHearsIt: false });
+    await page.waitForTimeout(800);
+    await page.getByRole("button", { name: "Stop" }).first().click({ timeout: 3_000 });
+    const finished = await until(() => net.uploads.length >= 1, 5_000);
+    await until(() => net.fn.length >= 1, 8_000);
+    await ctx.close();
+    assert.ok(finished, "Stop was pressed on a recorder the browser had already stopped, and nothing happened — the minutes stayed in memory");
+    assert.ok(net.uploads[0].bytes > 0, "the upload was empty");
   });
 
   await test("A MICROPHONE THAT GOES AWAY STOPS THE RECORDING AND KEEPS WHAT WAS CAPTURED", async () => {
