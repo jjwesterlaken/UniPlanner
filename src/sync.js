@@ -741,7 +741,7 @@ export const CLOCK_SKEW_RETRY_MS = 1500;
 export const isClockSkewRefusal = (error) =>
   !!error && (error.code === "PGRST303" || /issued at future/i.test(String(error.message || "")));
 
-async function retryClockSkewOnce(run, wait = (ms) => new Promise((r) => setTimeout(r, ms))) {
+export async function retryClockSkewOnce(run, wait = (ms) => new Promise((r) => setTimeout(r, ms))) {
   const first = await run();
   if (!isClockSkewRefusal(first && first.error)) return first;
   await wait(CLOCK_SKEW_RETRY_MS);

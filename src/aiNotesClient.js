@@ -6,7 +6,7 @@
    network/Storage I/O (aiNotesLogic.js stays pure).
    ================================================================== */
 
-import { supabase, backend } from "./sync.js";
+import { supabase, backend, shapeSession } from "./sync.js";
 import { allowanceForTier } from "./aiTextLimits.js";
 import { MINIMUM_BILLED_CREDITS_HINT, uploadRefusal } from "./aiNotesLogic.js";
 import { deviceStanding } from "./deviceIdentity.js";
@@ -249,9 +249,11 @@ export async function uploadAudio({ session, audioBlob, mimeType, extension, ide
 export async function currentAccessToken(session, supabaseClient = supabase) {
   if (supabaseClient && supabaseClient.auth) {
     try {
+      /* Through shapeSession, like every other reader: the provider's
+         field names stay inside sync.js (test-purchases.mjs sweeps). */
       const { data } = await supabaseClient.auth.getSession();
-      const token = data && data.session && data.session.access_token;
-      if (token) return token;
+      const shaped = shapeSession(data && data.session);
+      if (shaped && shaped.token) return shaped.token;
     } catch (e) {
       /* fall back to what the caller holds */
     }
@@ -275,7 +277,8 @@ export async function withFreshToken(session, call, supabaseClient = supabase) {
     let again = null;
     try {
       const { data } = await supabaseClient.auth.refreshSession();
-      again = data && data.session && data.session.access_token;
+      const shaped = shapeSession(data && data.session);
+      again = shaped && shaped.token;
     } catch (e) {
       /* the original refusal is the better report */
     }
