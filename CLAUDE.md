@@ -851,6 +851,21 @@ free-variable sweep only knows exported names. Every test was run
 against `main` first and failed for the reason it names; the pair is in
 the pull request.
 
+**AND THE FIRST LIVE CHECK READ A FIELD THE OLD BUNDLE ALSO SENT.** The
+claim line said `"endReason":null,"recordedSeconds":28` for a panel
+Stop, and "it sent recordedSeconds, so it's the new bundle" was the
+inference — but `recordedSeconds` is `estimatedDurationSeconds`, which
+every build has sent for months. A field both builds send says nothing
+about which one ran; only the field one of them LACKS does. The other
+two signals failed the same way: curl reads the server, and the Account
+tab's build id is read from `index.html`'s meta tag, not from the
+script, so neither says what JavaScript an already-open tab is running.
+The suite now presses each Stop by where it is drawn, from every
+source, and the pair is the evidence: the pre-promote bundle sends
+exactly that line, production's sends `you-stopped`. What identifies
+the running build from inside the tab is a behaviour only the new build
+has — here, the tab title while recording.
+
 ### ASK THE OBJECT WHAT IT IS. DO NOT TEST WHETHER IT EXISTS.
 
 Reported by Jared on 18 September 2026: on Windows, "This computer's

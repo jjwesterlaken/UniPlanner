@@ -541,6 +541,77 @@ async function run() {
     assert.deepEqual(strays, [], `a stopped-by-the-student recording showed other titles: ${JSON.stringify(strays)}`);
   });
 
+  /* ---------------- every Stop a student can press, read off the wire ---------------- */
+
+  /* The live check of 8 October logged `endReason: null` for a
+     recording stopped from the AI panel, while the test above was
+     green. That test presses the first "Stop" in the page -- the
+     panel's, checked, but only because of document order -- records
+     from tab audio only, and never pauses. These press each Stop by
+     where it is drawn, from every source, and read the body of the
+     request the function receives. Run against the pre-promote bundle
+     they reproduce the live line exactly: a recorded length and no
+     reason. (So the live recording came from a build without the
+     change, which nothing in that check could see -- RELEASE-1.3.1 §9.)
+
+     The panel's Stop is found as the one sharing a row with Pause (or
+     Resume), which is how RecorderControls draws it; the floating
+     indicator has a Stop and no Pause, so this cannot reach it. Two
+     Stops must exist while recording on the AI tab, or this no longer
+     knows which one it is pressing. */
+  const panelStop = (page, beside) => page.locator(`xpath=//button[normalize-space()='${beside}']/../button[normalize-space()='Stop']`);
+  const allStops = (page) => page.getByRole("button", { name: "Stop", exact: true });
+
+  for (const [source, pausedFirst] of [
+    ["microphone", false],
+    ["system", false],
+    ["both", false],
+    ["microphone", true],
+  ]) {
+    await test(`THE PANEL'S OWN STOP SENDS “you-stopped” TO THE FUNCTION — ${SOURCE[source]}${pausedFirst ? ", paused first" : ""}`, async () => {
+      const { ctx, page, net } = await openApp(browser);
+      await startRecording(page, source);
+      await page.waitForTimeout(1500);
+      if (pausedFirst) {
+        await page.getByRole("button", { name: "Pause", exact: true }).click();
+        await page.getByRole("button", { name: "Resume", exact: true }).waitFor({ timeout: 5_000 });
+      }
+      const stop = panelStop(page, pausedFirst ? "Resume" : "Pause");
+      const stops = await allStops(page).count();
+      const found = await stop.count();
+      const inIndicator = found === 1 ? await stop.evaluate((el) => !!el.closest(".fixed")) : null;
+      if (found === 1) await stop.click();
+      await until(() => net.fn.length >= 1, 10_000);
+      await page.waitForTimeout(500);
+      await ctx.close();
+      assert.equal(stops, 2, `expected the panel's Stop and the indicator's, found ${stops} — this test no longer knows which one it presses`);
+      assert.equal(found, 1, `found ${found} Stop buttons beside ${pausedFirst ? "Resume" : "Pause"} — the panel's controls are not where this test looks`);
+      assert.equal(inIndicator, false, "the Stop pressed here is inside the floating indicator, not the panel");
+      assert.equal(net.fn.length, 1, `expected one request to the ai-notes function, got ${net.fn.length}`);
+      const { body } = net.fn[0];
+      assert.equal(body.endReason, "you-stopped", `the panel's Stop sent ${JSON.stringify({ endReason: body.endReason, estimatedDurationSeconds: body.estimatedDurationSeconds })}`);
+      assert.ok(body.estimatedDurationSeconds >= 1, "the request carries no recorded length");
+    });
+  }
+
+  await test("THE INDICATOR'S STOP, PRESSED FROM ANOTHER TAB, SENDS “you-stopped” TOO", async () => {
+    const { ctx, page, net } = await openApp(browser);
+    await startRecording(page, "microphone");
+    await page.waitForTimeout(1500);
+    await page.getByRole("button", { name: "Plan", exact: true }).first().click();
+    await page.getByRole("button", { name: "Pause", exact: true }).waitFor({ state: "detached", timeout: 5_000 });
+    const stops = await allStops(page).count();
+    const inIndicator = stops === 1 ? await allStops(page).evaluate((el) => !!el.closest(".fixed")) : null;
+    if (stops === 1) await allStops(page).click();
+    await until(() => net.fn.length >= 1, 10_000);
+    await page.waitForTimeout(500);
+    await ctx.close();
+    assert.equal(stops, 1, `off the AI tab there should be one Stop, the indicator's — found ${stops}`);
+    assert.equal(inIndicator, true, "the only Stop off the AI tab is not the floating indicator's");
+    assert.equal(net.fn.length, 1, `expected one request to the ai-notes function, got ${net.fn.length}`);
+    assert.equal(net.fn[0].body.endReason, "you-stopped", `the indicator's Stop sent endReason ${JSON.stringify(net.fn[0].body.endReason)}`);
+  });
+
   await test("RECORD THE REST: SAVES THE FIRST PART AND STARTS AGAIN FOR THE SAME COURSE AND WEEK", async () => {
     const { ctx, page, target, net } = await openApp(browser);
     await startRecording(page);

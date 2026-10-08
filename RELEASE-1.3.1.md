@@ -471,6 +471,25 @@ fixes 1–4 of it.
    `endReason` (a short lowercase token, anything else "other") and
    recorded seconds — what would have answered 7 October from the logs.
 
+**Reading that claim line: `recordedSeconds` does not say which build
+sent it.** It is `estimatedDurationSeconds`, which every build has sent
+for months; only `endReason` is new. So `"endReason":null` beside a
+non-zero `recordedSeconds` is a recording stopped in a build from
+before 8 October — a tab opened before the promote and not reloaded
+(nothing reloads an open tab onto a new build), the desktop app (1.2.0)
+or a phone build. The first live check, 8 October 20:40 Sydney, read
+exactly that, and `scripts/test-recorder-session.mjs` reproduces it:
+the panel's Stop on the pre-promote bundle (`2a26dd3ded50`) sends
+`{"estimatedDurationSeconds":1}` and no reason, while on production's
+bundle (`091b57aaebcc`) every Stop sends `you-stopped` — microphone,
+tab audio, both, paused first, and the indicator's Stop from another
+tab. Neither curl nor the Account tab can tell you which bundle a tab
+is running: curl reads the server, and the Account tab's build id comes
+from `index.html`, not from the script. **The check that does:** while
+recording, the planner's own tab title reads *"● Recording ·
+UniPlanner"*. Only builds from 8 October on do that; if it does not
+change, reload before recording.
+
 **Waiting on Grace:** a chime and a system notification when a share
 ends on its own. Both are **off** until she rules — the notification
 needs a permission prompt, and the chime is a sound in someone else's
