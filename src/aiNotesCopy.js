@@ -26,6 +26,10 @@
 
 import { FAILED_RESULT_RETENTION_DAYS } from "./aiNotesRetention.js";
 
+/* One sentence, said in two places: under the share options and as the
+   share-ended reason on the review screen. */
+const SHARE_ENDED = "Sharing stopped, so the recording ended there. Everything up to that point was kept.";
+
 export const AI_NOTES_COPY = {
   /* Why a two-minute recording shows as more credits used than it ran.
 
@@ -305,7 +309,7 @@ export const AI_NOTES_COPY = {
     /* The share ending mid-recording. Without this the recorder happily
        carries on producing silence and the billed duration keeps
        climbing, which is the same failure as above arriving late. */
-    shareEnded: "Sharing stopped, so the recording ended there. Everything up to that point was kept.",
+    shareEnded: SHARE_ENDED,
 
     /* Only reachable for "Both", where mixing two inputs is the whole
        point and there is no useful half of it to fall back to. */
@@ -342,6 +346,43 @@ export const AI_NOTES_COPY = {
      lecture over three seconds of it is the worse failure. */
   micMuted:
     "Your microphone has gone quiet — something else may have taken it, or the app may have been in the background. The recording is still going, but this part may be silent.",
+
+  /* Why a recording ended when the student did not end it, said on the
+     review screen. Keyed by the end reason the request carries, so a
+     new reason without a sentence is a test failure rather than a
+     blank line. "you-stopped" has none: the student knows. */
+  ended: {
+    "share-ended": SHARE_ENDED,
+    "mic-ended": "Your microphone stopped, so the recording ended there. Everything up to that point was kept.",
+    "recorder-ended": "The browser stopped the recording, so it ended there. Everything up to that point was kept.",
+  },
+
+  /* The SHARED audio went quiet mid-recording -- the counterpart of
+     micMuted, and a warning for the same reason: a mute can be
+     momentary. Only the audio track: the video track of a shared tab
+     goes muted a few seconds into every share of a page that is not
+     repainting (measured), so a warning on it would fire every time. */
+  shareMuted:
+    "The shared audio has gone quiet. The recording is still going, but this part may be silent — check the meeting is still being shared.",
+
+  /* After a recording ended on its own: keep what was captured AND
+     carry on. One tap saves these notes and starts a new recording for
+     the same course and week, so noticing ten minutes late costs ten
+     minutes rather than the rest of the meeting. */
+  recordTheRest: {
+    action: "Record the rest",
+    hint: "Saves these notes and starts a new recording for the same course and week.",
+  },
+
+  /* The planner's own browser tab, while a recording runs and after one
+     ends on its own -- the only part of the app a student in another
+     tab can see. The stopped title stays until they come back to the
+     tab. */
+  tabTitle: {
+    recording: "● Recording",
+    paused: "Paused",
+    stopped: "Recording stopped",
+  },
 
   /* The app was backgrounded during a recording on a phone. Said when
      they come back, because there is nothing useful to do about it at
@@ -399,3 +440,14 @@ export const AI_NOTES_COPY = {
     failed: "That didn't send. Your notes weren't affected.",
   },
 };
+
+/** The planner tab's title for a recording state. `unseenEnd` is a
+    recording that ended on its own while the tab was not being looked
+    at; it outranks everything until the tab is seen. */
+export function recordingTabTitle(base, { status, unseenEnd = false } = {}) {
+  const t = AI_NOTES_COPY.tabTitle;
+  if (unseenEnd) return `${t.stopped} · ${base}`;
+  if (status === "recording") return `${t.recording} · ${base}`;
+  if (status === "paused") return `${t.paused} · ${base}`;
+  return base;
+}

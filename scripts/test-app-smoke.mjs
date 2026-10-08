@@ -740,6 +740,9 @@ for (const [tabName, phrases] of [
          controls -- through the REAL Recorder, not a re-implementation. */
       "export const fetchRecordingAccess = async () => globalThis.__recordingAccess || { unknown: true };\n" +
       "export const uploadAudio = async () => ({ path: 'u/k.webm' });\n" +
+      /* The token helper, as the real one behaves with no auth client:
+         the caller's own session token, one call. */
+      "export const withFreshToken = async (session, call) => call(session && session.token);\n" +
       /* The retry endpoint. Steerable so the probe can drive both the
          success path and the two refusals the failure screen words
          differently. */

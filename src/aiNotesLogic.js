@@ -767,7 +767,7 @@ export const defaultCardSelection = (terms = []) => (terms || []).map((_, i) => 
  * rather than none. An array of all-false is a DECISION -- the student
  * unticked everything -- and must not be read as "nothing supplied".
  */
-export function mapAiResultToItems({ result, course, week, language, uid, nowISO, selectedCards }) {
+export function mapAiResultToItems({ result, course, week, language, uid, nowISO, selectedCards, endReason = null, recordedSeconds = 0 }) {
   const title = `${course || "Lecture"} — Week ${week || "?"} notes`;
 
   if (result.summaryFailed) {
@@ -827,6 +827,13 @@ export function mapAiResultToItems({ result, course, week, language, uid, nowISO
         generatedAt: nowISO(),
         activeLanguage: requested,
         translations,
+        /* Why and after how long the recording ended, kept on the note
+           so it still says so next month: a three-minute note from a
+           two-hour meeting is explained by "share-ended", and nothing
+           else would explain it. Recordings only -- a recovered or
+           retried result has no recorder to ask. */
+        ...(endReason ? { endReason } : {}),
+        ...(recordedSeconds > 0 ? { recordedSeconds } : {}),
       },
     },
     requestedLanguage: requested,
@@ -942,7 +949,14 @@ export function setPendingRecovery(meta, { key, course, week, startedAt }) {
   return { ...(meta || {}), pendingAiRecovery: { key, course: course || "", week: week || "", startedAt } };
 }
 
-export function clearPendingRecovery(meta) {
+/* With a `key`, clears only THAT recording's parked key. "Record the
+   rest" saves the first part while the next recording is already
+   running, and that recording parks its own key when it stops --
+   possibly before the first part's save finishes. An unconditional
+   clear there would throw away the handle on the recording in flight. */
+export function clearPendingRecovery(meta, key = null) {
+  const parked = meta && meta.pendingAiRecovery;
+  if (key && parked && parked.key && parked.key !== key) return { ...(meta || {}) };
   return { ...(meta || {}), pendingAiRecovery: null };
 }
 
@@ -973,12 +987,20 @@ export const INITIAL_RECORDER_STATE = {
   result: null,
   errorCode: null,
   errorMessage: null,
+  /* Why the recording ended: "you-stopped", "share-ended",
+     "mic-ended" or "recorder-ended". Null until one has. */
+  endReason: null,
 };
 
 export function recorderReducer(state, action) {
   switch (action.type) {
+    /* A fresh recording starts from nothing. "Record the rest" starts
+       one from the review screen, so the last recording's result and
+       end reason must not ride into the next: the result has been
+       handed to the save by then, and a stale reason would describe
+       the wrong recording. */
     case "request":
-      return { ...state, status: "requesting", errorMessage: null, errorCode: null };
+      return { ...INITIAL_RECORDER_STATE, status: "requesting" };
 
     case "requestDenied":
       return {
@@ -1012,6 +1034,7 @@ export function recorderReducer(state, action) {
         extension: action.extension,
         idempotencyKey: action.idempotencyKey,
         estimatedDurationSeconds: action.estimatedDurationSeconds,
+        endReason: action.endReason || null,
       };
 
     case "discard":

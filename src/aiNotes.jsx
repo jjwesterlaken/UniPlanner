@@ -60,8 +60,8 @@ import { noteCache } from "./noteCache.js";
 import { maybeAskForReview } from "./appReview.js";
 import { MONTHLY_CREDITS_LIMIT, allowanceForTier } from "./aiTextLimits.js";
 import { subscribeEntitlement, entitlementVersion as readEntitlementVersion } from "./entitlementRefresh.js";
-import { AI_NOTES_COPY } from "./aiNotesCopy.js";
-import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes, callResummarise } from "./aiNotesClient.js";
+import { AI_NOTES_COPY, recordingTabTitle } from "./aiNotesCopy.js";
+import { fetchUsage, fetchRecordingAccess, uploadAudio, callAiNotes, callResummarise, withFreshToken } from "./aiNotesClient.js";
 import { nowISO, supabase } from "./sync.js";
 import { FeedbackCapture } from "./essayPanel.jsx";
 import { recordFeedback } from "./essayFeedbackStore.js";
@@ -147,6 +147,9 @@ function useLectureRecorder() {
      listener below -- so both are surfaced instead. */
   const [micMuted, setMicMuted] = useState(false);
   const [wentToBackground, setWentToBackground] = useState(false);
+  /* The shared tab's AUDIO went quiet. Warned about, never stopped
+     on, for the reason micMuted is: a mute can be momentary. */
+  const [shareMuted, setShareMuted] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
@@ -168,12 +171,21 @@ function useLectureRecorder() {
   const startTimeRef = useRef(0);
   const pausedMsRef = useRef(0);
   const pauseStartRef = useRef(0);
-  /* Set when the recording ended because the share did, so the review
-     screen can say so rather than leaving a short recording unexplained.
-     stopRef exists because the track listener is registered inside
-     start(), above where stop() is defined. */
-  const shareEndedRef = useRef(false);
+  /* WHY the recording is ending: "you-stopped", "share-ended",
+     "mic-ended" or "recorder-ended". Set by whatever starts the end,
+     first one wins, and carried on the "stop" action -- so the review
+     screen can explain a short recording, the request can tell the
+     server, and the note can still say so next month.
+
+     stopRef and finalizeRef exist because the listeners are registered
+     inside start(), above where stop() and finalize() are defined. */
+  const endReasonRef = useRef(null);
   const stopRef = useRef(() => {});
+  const finalizeRef = useRef(() => {});
+  /* One recording ends exactly once, however many things try to end
+     it, and everybody who asked to stop it hears when it has. */
+  const finalizedRef = useRef(false);
+  const stopWaitersRef = useRef([]);
 
   const cleanupStream = () => {
     if (streamsRef.current.length) {
@@ -386,6 +398,19 @@ function useLectureRecorder() {
     recorder.ondataavailable = (e) => {
       if (e.data && e.data.size) chunksRef.current.push(e.data);
     };
+    /* THE RECORDER'S OWN END IS HEARD FROM THE START. These used to be
+       attached inside stop(), so a recorder the BROWSER stopped -- an
+       encoder error, a changed track set -- fired error, data and stop
+       (measured, Chromium 141) into handlers that did not exist yet:
+       the screen went on saying "Recording" with the timer climbing,
+       and pressing Stop then called stop() on an inactive recorder,
+       which fires nothing at all (also measured). The minutes were in
+       memory and went when the tab did. Now any end, ours or the
+       browser's, goes through finalize(). */
+    recorder.onerror = () => {
+      if (!endReasonRef.current) endReasonRef.current = "recorder-ended";
+    };
+    recorder.onstop = () => finalizeRef.current();
     mediaRecorderRef.current = recorder;
 
     /* The student clicking Chrome's "Stop sharing" bar, closing the tab
@@ -415,18 +440,29 @@ function useLectureRecorder() {
       micStream.getAudioTracks().forEach((t) => {
         t.addEventListener("mute", () => setMicMuted(true));
         t.addEventListener("unmute", () => setMicMuted(false));
+        /* A microphone that goes AWAY -- a headset unplugged, a device
+           the OS took back -- ENDS rather than mutes, and nothing was
+           listening: the graph kept the recorder alive on silence, the
+           timer climbed, and the silence was billed. Alone, it is the
+           whole recording, so it stops and keeps what it has. With
+           "Both" the shared audio is still being recorded, so it
+           warns instead of throwing the rest of the meeting away. */
+        t.addEventListener("ended", () => {
+          if (sysStream) setMicMuted(true);
+          else stopRef.current("mic-ended");
+        });
       });
     }
 
     if (sysStream) {
-      sysStream.getTracks().forEach((t) =>
-        t.addEventListener("ended", () => {
-          if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-            shareEndedRef.current = true;
-            stopRef.current();
-          }
-        })
-      );
+      sysStream.getTracks().forEach((t) => t.addEventListener("ended", () => stopRef.current("share-ended")));
+      /* The AUDIO track only. The video track of a shared tab goes
+         muted a few seconds into every share of a page that is not
+         repainting (measured), so watching it would warn every time. */
+      sysStream.getAudioTracks().forEach((t) => {
+        t.addEventListener("mute", () => setShareMuted(true));
+        t.addEventListener("unmute", () => setShareMuted(false));
+      });
     }
 
     if (graph) {
@@ -446,8 +482,11 @@ function useLectureRecorder() {
 
     startTimeRef.current = Date.now();
     pausedMsRef.current = 0;
-    shareEndedRef.current = false;
+    endReasonRef.current = null;
+    finalizedRef.current = false;
+    stopWaitersRef.current = [];
     setMicMuted(false);
+    setShareMuted(false);
     setWentToBackground(false);
     setElapsedSeconds(0);
     recorder.start(1000);
@@ -496,32 +535,50 @@ function useLectureRecorder() {
     }
   };
 
-  const stop = () =>
+  /* The one way a recording becomes a file. Idempotent: the student's
+     Stop, the share ending, the microphone going and the browser's own
+     stop can all arrive, in any order, and the first one wins. */
+  const finalize = () => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || finalizedRef.current) return;
+    finalizedRef.current = true;
+    const mimeType = recorder.mimeType;
+    const blob = new Blob(chunksRef.current, { type: mimeType });
+    const estimatedDurationSeconds = Math.max(1, Math.floor((Date.now() - startTimeRef.current - pausedMsRef.current) / 1000));
+    cleanupStream();
+    // A UUID, not uid(): this value goes into a `uuid` column.
+    dispatch({
+      type: "stop",
+      blob,
+      mimeType,
+      /* The candidate that was picked, not a lookup on
+         recorder.mimeType — which a platform may return with extra
+         codec parameters that no exact-match map would recognise. */
+      extension: pickedRef.current && pickedRef.current.extension,
+      idempotencyKey: newIdempotencyKey(),
+      estimatedDurationSeconds,
+      endReason: endReasonRef.current || "recorder-ended",
+    });
+    const waiting = stopWaitersRef.current;
+    stopWaitersRef.current = [];
+    waiting.forEach((resolve) => resolve());
+  };
+  finalizeRef.current = finalize;
+
+  /* `reason` only when it is a string: the Stop buttons pass their
+     click event, and that is the student stopping it. */
+  const stop = (reason) =>
     new Promise((resolve) => {
       const recorder = mediaRecorderRef.current;
-      if (!recorder) return resolve();
-      const mimeType = recorder.mimeType;
-      recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        const estimatedDurationSeconds = Math.max(
-          1,
-          Math.floor((Date.now() - startTimeRef.current - pausedMsRef.current) / 1000)
-        );
-        cleanupStream();
-        // A UUID, not uid(): this value goes into a `uuid` column.
-        dispatch({
-          type: "stop",
-          blob,
-          mimeType,
-          /* The candidate that was picked, not a lookup on
-             recorder.mimeType — which a platform may return with extra
-             codec parameters that no exact-match map would recognise. */
-          extension: pickedRef.current && pickedRef.current.extension,
-          idempotencyKey: newIdempotencyKey(),
-          estimatedDurationSeconds,
-        });
-        resolve();
-      };
+      if (!recorder || finalizedRef.current) return resolve();
+      if (!endReasonRef.current) endReasonRef.current = typeof reason === "string" ? reason : "you-stopped";
+      stopWaitersRef.current.push(resolve);
+      /* Already stopped by the browser: asking again fires nothing, so
+         finish here rather than wait for an event that never comes. */
+      if (recorder.state === "inactive") {
+        finalize();
+        return;
+      }
       recorder.stop();
     });
 
@@ -531,8 +588,8 @@ function useLectureRecorder() {
     cleanupStream();
     setElapsedSeconds(0);
     setLevel(0);
-    shareEndedRef.current = false;
     setMicMuted(false);
+    setShareMuted(false);
     setWentToBackground(false);
     dispatch({ type: "discard" });
   };
@@ -547,8 +604,8 @@ function useLectureRecorder() {
     resume,
     stop,
     discard,
-    shareEnded: shareEndedRef,
     micMuted,
+    shareMuted,
     wentToBackground,
   };
 }
@@ -979,7 +1036,7 @@ function ReviewAndSave({ result, onSave, onDiscard, selectedCards, setSelectedCa
  */
 export function useRecordingSession({ session, folders = [], addItem, setData }) {
   const recorder = useLectureRecorder();
-  const { state, dispatch, discard } = recorder;
+  const { state, dispatch, discard, start } = recorder;
 
   const [course, setCourse] = useState("");
   const [week, setWeek] = useState("");
@@ -1032,13 +1089,19 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
         extension: state.extension,
         idempotencyKey: state.idempotencyKey,
       });
-      const result = await callAiNotes({
-        token: session.token,
-        course,
-        translateTo: translateTo || null,
-        idempotencyKey: state.idempotencyKey,
-        estimatedDurationSeconds: state.estimatedDurationSeconds,
-      });
+      /* The token is read NOW, not taken from `session` -- which is the
+         one React held when the recording stopped, and after an hour in
+         a hidden tab that one has expired. See withFreshToken. */
+      const result = await withFreshToken(session, (token) =>
+        callAiNotes({
+          token,
+          course,
+          translateTo: translateTo || null,
+          idempotencyKey: state.idempotencyKey,
+          estimatedDurationSeconds: state.estimatedDurationSeconds,
+          endReason: state.endReason,
+        })
+      );
       dispatch({ type: "processed", result });
     } catch (err) {
       const message = err.body ? parseAiNotesError(err.body, err.status) : err.message;
@@ -1060,56 +1123,75 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
      separate "recovered note" path that would need its own testing. */
   const acceptRecovered = (result) => dispatch({ type: "processed", result });
 
+  /* Saving a result, given everything it needs rather than reading the
+     recorder's state: "Record the rest" saves the first part while the
+     next recording is already starting, and by then the state belongs
+     to the new one. Throws on failure; the callers decide what that
+     means on their screen. */
+  const persistResult = async ({ result, selectedCards: chosen, course: forCourse, week: forWeek, translateTo: lang, endReason, recordedSeconds, clearKey = null }) => {
+    const { pageItem, noteItems } = mapAiResultToItems({
+      result,
+      course: forCourse,
+      week: forWeek,
+      language: lang || null,
+      uid,
+      nowISO,
+      selectedCards: chosen,
+      endReason,
+      recordedSeconds,
+    });
+
+    /* The content goes to its own row FIRST, and only a stub reaches
+       the blob. Same ordering rule as migrating an old note, for the
+       same reason: if the row write fails we keep the full note in the
+       blob, which is heavy but correct, rather than a stub pointing at
+       nothing. migrateNote returns the stub only on success, so the
+       fallback is simply the page we already have.
+
+       Signed out or in demo mode there is no row to write and the note
+       stays whole in the blob — that path is unchanged, and the
+       migration pass picks it up on the next sign-in. */
+    let toStore = pageItem;
+    if (supabase && session && session.user) {
+      const { ok, stub } = await migrateNote({ supabaseClient: supabase, userId: session.user.id, page: pageItem });
+      if (ok) {
+        toStore = stub;
+        // Readable offline from the moment it is saved, which is the
+        // state the student expects: they just watched it appear.
+        await noteCache.put(pageItem.id, buildContent(pageItem));
+      }
+    }
+
+    /* The folder is a CONVENIENCE and must never block the note. It is
+       computed and created inside its own try, so a failure here leaves
+       the note filed nowhere -- visible in the list, exactly as before
+       this feature existed -- rather than losing a lecture someone just
+       recorded. */
+    try {
+      const { folderId, newFolder } = folderForRecording({ folders, course: forCourse, uid, nowISO });
+      if (newFolder) addItem("folders", newFolder);
+      if (folderId) toStore = { ...toStore, folderId };
+    } catch (e) {
+      /* filed nowhere, saved anyway */
+    }
+
+    addItem("pages", toStore);
+    noteItems.forEach((n) => addItem("notes", n));
+    if (setData) setData((d) => ({ ...d, meta: clearPendingRecovery(d.meta, clearKey) }));
+  };
+
   const onSave = async () => {
     dispatch({ type: "save" });
     try {
-      const { pageItem, noteItems } = mapAiResultToItems({
+      await persistResult({
         result: state.result,
+        selectedCards,
         course,
         week,
-        language: translateTo || null,
-        uid,
-        nowISO,
-        selectedCards,
+        translateTo,
+        endReason: state.endReason,
+        recordedSeconds: state.estimatedDurationSeconds,
       });
-
-      /* The content goes to its own row FIRST, and only a stub reaches
-         the blob. Same ordering rule as migrating an old note, for the
-         same reason: if the row write fails we keep the full note in the
-         blob, which is heavy but correct, rather than a stub pointing at
-         nothing. migrateNote returns the stub only on success, so the
-         fallback is simply the page we already have.
-
-         Signed out or in demo mode there is no row to write and the note
-         stays whole in the blob — that path is unchanged, and the
-         migration pass picks it up on the next sign-in. */
-      let toStore = pageItem;
-      if (supabase && session && session.user) {
-        const { ok, stub } = await migrateNote({ supabaseClient: supabase, userId: session.user.id, page: pageItem });
-        if (ok) {
-          toStore = stub;
-          // Readable offline from the moment it is saved, which is the
-          // state the student expects: they just watched it appear.
-          await noteCache.put(pageItem.id, buildContent(pageItem));
-        }
-      }
-
-      /* The folder is a CONVENIENCE and must never block the note. It is
-         computed and created inside its own try, so a failure here leaves
-         the note filed nowhere -- visible in the list, exactly as before
-         this feature existed -- rather than losing a lecture someone just
-         recorded. */
-      try {
-        const { folderId, newFolder } = folderForRecording({ folders, course, uid, nowISO });
-        if (newFolder) addItem("folders", newFolder);
-        if (folderId) toStore = { ...toStore, folderId };
-      } catch (e) {
-        /* filed nowhere, saved anyway */
-      }
-
-      addItem("pages", toStore);
-      noteItems.forEach((n) => addItem("notes", n));
-      if (setData) setData((d) => ({ ...d, meta: clearPendingRecovery(d.meta) }));
       dispatch({ type: "saved" });
 
       /* THE ONE MOMENT WORTH ASKING AT: the student is looking at
@@ -1136,6 +1218,37 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
     discard();
   };
 
+  /* RECORD THE REST, offered when a recording ended on its own. Saves
+     what was captured and starts again for the same course and week.
+
+     THE NEW RECORDING STARTS FIRST, inside the tap: the share picker
+     needs the tap's user activation, and the save awaits the network
+     (the row write), which on a slow connection can outlast it. The
+     first part is captured whole before anything starts, saved
+     alongside, and clears only its OWN parked key -- the new recording
+     parks its own when it stops, possibly before this save finishes. A
+     failed row write still keeps the note whole in the planner, as Save
+     does, so the save cannot lose the first part. */
+  const recordTheRest = () => {
+    const firstPart = {
+      result: state.result,
+      selectedCards,
+      course,
+      week,
+      translateTo,
+      endReason: state.endReason,
+      recordedSeconds: state.estimatedDurationSeconds,
+      clearKey: state.idempotencyKey,
+    };
+    const starting = start(source, deviceId);
+    setSelectedCards(null);
+    persistResult(firstPart).catch(() => {
+      /* Nothing more to do here: the parked key is kept, so the
+         recovery card can still bring the first part back. */
+    });
+    return starting;
+  };
+
   /* Retry the SUMMARY only, for a lecture whose transcription already
      succeeded and was already billed. The transcript is on the server,
      owner-scoped, so nothing is re-uploaded and nothing is
@@ -1152,7 +1265,7 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
       err.code = "bad_idempotency_key";
       throw err;
     }
-    const { result } = await callResummarise({ token: session && session.token, idempotencyKey: key, translateTo });
+    const { result } = await withFreshToken(session, (token) => callResummarise({ token, idempotencyKey: key, translateTo }));
     /* `processed` is exactly the transition this needs — review, with
        the new result — so the retry reuses it rather than adding a
        second way into the same state. */
@@ -1166,6 +1279,33 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
   const busyStatuses = ["requesting", "recording", "paused", "stopped", "uploading", "review", "saving"];
   const active = busyStatuses.includes(state.status);
   const capturing = state.status === "recording" || state.status === "paused";
+
+  /* THE PLANNER'S OWN TAB TITLE -- the one thing a student in another
+     tab can see. "● Recording" while it runs; "Recording stopped" when
+     it ended on its own while the tab was not being looked at, kept
+     until the tab is seen. On 7 October a share ended three minutes
+     into a two-hour meeting and the only sign anywhere was Chrome's
+     sharing bar disappearing from the meeting tab. */
+  const endedOnItsOwn = !!state.endReason && state.endReason !== "you-stopped";
+  const [unseenEnd, setUnseenEnd] = useState(false);
+  const baseTitleRef = useRef(typeof document === "undefined" ? "" : document.title);
+  useEffect(() => {
+    if (state.status === "stopped" && endedOnItsOwn && typeof document !== "undefined" && document.hidden) setUnseenEnd(true);
+    if (state.status === "requesting") setUnseenEnd(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.status]);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const seen = () => {
+      if (!document.hidden) setUnseenEnd(false);
+    };
+    document.addEventListener("visibilitychange", seen);
+    return () => document.removeEventListener("visibilitychange", seen);
+  }, []);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.title = recordingTabTitle(baseTitleRef.current, { status: state.status, unseenEnd });
+  }, [state.status, unseenEnd]);
 
   return {
     ...recorder,
@@ -1187,6 +1327,8 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
     onSave,
     onDiscard,
     onRetrySummary,
+    recordTheRest,
+    endedOnItsOwn,
     active,
     capturing,
   };
@@ -1293,8 +1435,8 @@ function Recorder({ session, courses, recording }) {
     resume,
     stop,
     discard,
-    shareEnded,
     micMuted,
+    shareMuted,
     wentToBackground,
     course,
     setCourse,
@@ -1313,6 +1455,8 @@ function Recorder({ session, courses, recording }) {
     onSave,
     onDiscard,
     onRetrySummary,
+    recordTheRest,
+    endedOnItsOwn,
   } = recording;
 
   /* THE TIER, READ BEFORE THE WORK. The server refuses a free-tier
@@ -1472,16 +1616,32 @@ function Recorder({ session, courses, recording }) {
       {/* The two ways a recording quietly becomes silence. Both are
           warnings rather than stops -- see the mute listener. */}
       {micMuted && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{AI_NOTES_COPY.micMuted}</p>}
+      {shareMuted && (
+        <p data-share-muted className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {AI_NOTES_COPY.shareMuted}
+        </p>
+      )}
       {wentToBackground && (
         <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{AI_NOTES_COPY.wentToBackground}</p>
       )}
 
-      {/* The recording stopped on its own because the share did. Said
-          here rather than left as an unexplained short recording. */}
-      {shareEnded.current && ["uploading", "review", "saving"].includes(state.status) && (
-        <p className="mb-3 rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-600">
-          {AI_NOTES_COPY.audioSource.shareEnded}
+      {/* The recording ended on its own -- the share stopped, the
+          microphone went, the browser stopped the recorder. Said here
+          rather than left as an unexplained short recording. */}
+      {endedOnItsOwn && AI_NOTES_COPY.ended[state.endReason] && ["uploading", "review", "saving"].includes(state.status) && (
+        <p data-ended-reason={state.endReason} className="mb-3 rounded-lg bg-stone-100 px-3 py-2 text-sm text-stone-600">
+          {AI_NOTES_COPY.ended[state.endReason]}
         </p>
+      )}
+
+      {/* ...and the way to carry on: keep this part, record the rest. */}
+      {endedOnItsOwn && state.status === "review" && state.result && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-stone-200 p-3">
+          <p className="min-w-0 flex-1 text-sm text-stone-600">{AI_NOTES_COPY.recordTheRest.hint}</p>
+          <button data-record-the-rest className={btnPrimary} onClick={recordTheRest}>
+            <Mic size={15} /> {AI_NOTES_COPY.recordTheRest.action}
+          </button>
+        </div>
       )}
 
       {state.status === "uploading" && (
@@ -1713,13 +1873,17 @@ function RecoveryGate({ session, courses, data, setData, recording }) {
     setBusy(true);
     setError("");
     try {
-      const result = await callAiNotes({
-        token: session.token,
-        course: pending.course,
-        translateTo: null,
-        idempotencyKey: pending.key,
-        estimatedDurationSeconds: 0,
-      });
+      /* Read at the tap: a tab the student has just come back to may
+         still be finishing the refresh that becoming visible started. */
+      const result = await withFreshToken(session, (token) =>
+        callAiNotes({
+          token,
+          course: pending.course,
+          translateTo: null,
+          idempotencyKey: pending.key,
+          estimatedDurationSeconds: 0,
+        })
+      );
       recording.acceptRecovered(result);
     } catch (err) {
       /* NEVER TREAT A FAILED REQUEST AS EVIDENCE OF ABSENCE. This used

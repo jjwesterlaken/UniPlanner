@@ -9,6 +9,7 @@ import {
   COUNTABLE_COLLECTIONS,
   supabase,
   shapeSession,
+  syncFailureSentence,
 } from "./sync.js";
 import {
   schedule,
@@ -5915,7 +5916,7 @@ export default function PlannerApp() {
         cache: noteCache,
       }).catch(() => {});
     } catch (e) {
-      setSyncError(e.message || "Couldn't sync. Please try again.");
+      setSyncError(syncFailureSentence(e));
       // The cheap explicit report: sync failures are the breakage a
       // tester hits most and describes worst. Deduped and capped by
       // the reporter, so a flaky connection cannot flood the table.

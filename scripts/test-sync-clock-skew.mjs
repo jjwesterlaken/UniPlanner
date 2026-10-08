@@ -188,15 +188,25 @@ async function run() {
 
   await test("ONE THAT PERSISTS IS SHOWN IN PLAIN WORDS AND REPORTED — AFTER EXACTLY ONE WAITED RETRY, NOT A LOOP", async () => {
     const { ctx, page, net } = await openAccount(browser, 99);
-    await page.waitForTimeout(5000);
-    const text = await accountText(page);
-    const shown = await shownSyncError(page);
+    /* WATCHED, not read once: each sync clears the message as it
+       starts, and the app's own scheduled sync (about four seconds in)
+       spends its retry wait with nothing on screen. */
+    const seen = new Set();
+    const jargon = [];
+    const end = Date.now() + 7000;
+    while (Date.now() < end) {
+      for (const t of await shownSyncError(page)) if (t.trim()) seen.add(t.trim());
+      if (/issued at future|JWT/i.test(await accountText(page))) jargon.push(Date.now());
+      await page.waitForTimeout(100);
+    }
+    const shown = [...seen];
+    const text = jargon.length ? "JWT" : "";
     await ctx.close();
     assert.ok(net.pulls.length >= 1, "the app never pulled the planner, so nothing here was tested");
     const firstSync = net.pulls.filter((t) => t - net.pulls[0] < 3000);
     assert.equal(firstSync.length, 2, `the first sync made ${firstSync.length} pull(s) in its first 3 s — expected the refused pull and one waited retry, and no more`);
     assert.ok(firstSync[1] - firstSync[0] >= 1000, `the retry did not wait: ${firstSync[1] - firstSync[0]} ms after the refusal`);
-    assert.ok(shown.length === 1 && shown[0].trim().length > 0, `expected one sync error on screen, found ${JSON.stringify(shown)}`);
+    assert.ok(shown.length === 1, `expected one sync error on screen, saw ${JSON.stringify(shown)}`);
     assert.ok(!/issued at future|JWT/i.test(text), `the Account tab shows the token jargon: ${JSON.stringify(shown)}`);
     assert.ok(net.reports.length >= 1, "a refusal that persisted through the retry was not reported");
   });

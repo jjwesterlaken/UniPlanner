@@ -226,6 +226,64 @@ export async function uploadAudio({ session, audioBlob, mimeType, extension, ide
   return path;
 }
 
+/* ------------------------------------------------------------------ */
+/*  The token is read when the call is made                            */
+/* ------------------------------------------------------------------ */
+
+/* THE 1:50 DEFECT, found by the 7 October investigation. The recorder
+   sent the ai-notes function `session.token` -- the token React held
+   when the recording stopped. auth-js does not refresh while a tab is
+   hidden, so a recording started from another tab and stopped more
+   than an hour later carried a token that had expired in the
+   meantime. The UPLOAD still worked, because the storage client asks
+   auth-js itself (which refreshes inline); the call after it was
+   refused by the functions gateway with a 401, the student was told
+   "Something went wrong (401)", and the audio waited for the hourly
+   orphan sweep.
+
+   So the token is asked for at the moment of the call. getSession()
+   refreshes an expired session, and waits on auth-js's lock when a
+   refresh is already in flight -- which is the case a tab that has
+   just become visible is in. The session the caller holds is only a
+   fallback for a client with no auth (demo mode). */
+export async function currentAccessToken(session, supabaseClient = supabase) {
+  if (supabaseClient && supabaseClient.auth) {
+    try {
+      const { data } = await supabaseClient.auth.getSession();
+      const token = data && data.session && data.session.access_token;
+      if (token) return token;
+    } catch (e) {
+      /* fall back to what the caller holds */
+    }
+  }
+  return (session && session.token) || null;
+}
+
+/**
+ * Runs `call(token)` with a token read now. A 401 gets ONE forced
+ * refresh and ONE retry: the audio is already uploaded, so there is
+ * nothing for the student to do that a fresh token would not do for
+ * them. Never a loop -- a second refusal is the answer, and it is
+ * thrown as it came.
+ */
+export async function withFreshToken(session, call, supabaseClient = supabase) {
+  const token = await currentAccessToken(session, supabaseClient);
+  try {
+    return await call(token);
+  } catch (err) {
+    if (!err || err.status !== 401 || !supabaseClient || !supabaseClient.auth) throw err;
+    let again = null;
+    try {
+      const { data } = await supabaseClient.auth.refreshSession();
+      again = data && data.session && data.session.access_token;
+    } catch (e) {
+      /* the original refusal is the better report */
+    }
+    if (!again || again === token) throw err;
+    return call(again);
+  }
+}
+
 /**
  * Calls the ai-notes Edge Function with just metadata (never the audio)
  * and returns its parsed JSON result. `fetchImpl` is injectable so this
@@ -243,7 +301,7 @@ export async function uploadAudio({ session, audioBlob, mimeType, extension, ide
  * can come back if it earns its place, validated.
  */
 export async function callAiNotes(
-  { token, course, translateTo, idempotencyKey, estimatedDurationSeconds },
+  { token, course, translateTo, idempotencyKey, estimatedDurationSeconds, endReason = null },
   fetchImpl = fetch
 ) {
   // Same reasoning as callAiText: the gate belongs at the boundary, not
@@ -268,7 +326,19 @@ export async function callAiNotes(
        refuses a set that is no longer in force — see ai-notes' consent
        check. It is the one field here the server uses to protect the
        student from this client rather than the other way round. */
-    body: JSON.stringify({ course, translateTo, idempotencyKey, estimatedDurationSeconds, consentProviders: acceptedProviders() }),
+    /* `endReason` says WHY the recording ended -- the student stopped
+       it, the share ended, the microphone went away, the browser
+       stopped the recorder. It is logged and decides nothing: the
+       7 October investigation could not tell those apart from the
+       server, and this is the one field that would have. */
+    body: JSON.stringify({
+      course,
+      translateTo,
+      idempotencyKey,
+      estimatedDurationSeconds,
+      ...(endReason ? { endReason } : {}),
+      consentProviders: acceptedProviders(),
+    }),
   });
   let json = null;
   try {

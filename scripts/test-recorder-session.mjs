@@ -362,6 +362,23 @@ const plannerPages = (page) =>
 
 async function run() {
   assert.ok(fs.existsSync(path.join(OUT, "app.js")), "dist-web is missing — run npm run build:web first");
+
+  await test("EVERY WAY THE RECORDER CAN END ON ITS OWN HAS A SENTENCE ON THE REVIEW SCREEN — derived from the recorder's source", () => {
+    /* Read out of the recorder, not listed here: a fifth way to end
+       added later must arrive with its sentence, or the review screen
+       shows a short recording and says nothing about why. Comments are
+       stripped first -- the explanations name the reasons too. */
+    const src = fs
+      .readFileSync(path.join(rootDir, "src/aiNotes.jsx"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    const reasons = [...new Set([...src.matchAll(/"([a-z]+-ended)"/g)].map((m) => m[1]))].sort();
+    assert.ok(reasons.length >= 3, `found ${JSON.stringify(reasons)} — the recorder names no way of ending on its own, so this checks nothing`);
+    const ended = AI_NOTES_COPY.ended || {};
+    const silent = reasons.filter((r) => typeof ended[r] !== "string" || !ended[r].trim());
+    assert.deepEqual(silent, [], `the recorder can end with ${JSON.stringify(silent)} and the review screen has nothing to say about it`);
+  });
+
   const browser = await launch();
   if (!browser) {
     const message = "no headful Chromium (needs a display or xvfb-run) — skipping (REQUIRE_BROWSER=1 to fail)";

@@ -779,6 +779,73 @@ on iOS the `audio` background mode and an App Store review that asks why
 a study app records in the background. Different product, different
 submission risk.
 
+### A TOKEN IN REACT STATE IS A CLAIM ABOUT WHEN IT WAS READ
+
+The 7 October incident, and the defect the investigation found behind
+it. A meeting recorded from another tab ended three minutes in: the
+share stopped, the recorder's own listener uploaded what it had — by
+design, in a tab nobody was watching — and the student found out at
+1:50. Nothing failed, so nothing reported anything.
+
+**The worse half was what 1:50 would have done.** `runUpload` sent the
+ai-notes function `session.token`, the token React held when the
+recording stopped. **auth-js does not refresh a hidden tab** (it stops
+its ticker on `visibilitychange`), so after an hour in the background
+that token had expired. The upload still worked, because the storage
+client asks auth-js itself and auth-js refreshes inline; the call one
+line later was refused by the functions gateway with a 401. Two calls,
+one auth source each, and the one that reads React's copy is the one
+that breaks. **`withFreshToken` asks auth-js at the call**, and a 401
+gets one forced refresh and one retry, never a loop. The recovery card
+and the summary retry go through it too: a tab that has just become
+visible is still finishing the refresh becoming visible started, and on
+a slow connection a tap lands first.
+
+**A recorder's end must be heard from its construction.** `onstop` used
+to be attached inside `stop()`, so a recorder the BROWSER stopped fired
+error, data, stop into handlers that did not exist yet — and `stop()` on
+an inactive recorder fires **nothing** (measured, Chromium 141), so the
+Stop button then hung with the minutes in memory. Every end now goes
+through one idempotent `finalize()`, and carries an `endReason`
+(`you-stopped`, `share-ended`, `mic-ended`, `recorder-ended`) that the
+review screen explains, the request reports and the note keeps.
+
+**The tab title is the only surface a student in another tab can see**,
+so it says "● Recording" while recording and "Recording stopped" after
+an end on its own, until the tab is seen. A chime and a system
+notification were proposed beside it and are **off pending Grace**.
+
+**"JWT issued at future" (PGRST303) is a sub-second skew, and the proof
+was in our own table**: at 1:50:19 the sync was refused and the error
+report sent a moment later with the SAME token was accepted. Sync now
+retries once after 1.5 s and reports only what survives the retry.
+
+**Three things the tests had to learn first, all of which made a green
+run mean nothing:**
+
+- **Playwright never hides a page** — `bringToFront` changes no
+  `visibilityState` — so the hidden state is SIMULATED through exactly
+  what the app and auth-js read: the two properties and a bubbling
+  `visibilitychange`.
+- **`--use-fake-ui-for-media-stream` shares a FAKE SCREEN, not a tab.**
+  The investigation's first experiment ran with it and reported that
+  closing the shared tab ended nothing. The suite now asserts the track
+  labels say "Tab audio" before anything else, and shares through
+  `--auto-select-tab-capture-source-by-title` instead. Headless closes
+  the page when tab capture starts, so it runs headful under xvfb.
+- **A test that waits a fixed time for a token to expire passed on
+  today's code by coincidence**: the app's own 4-second debounced push
+  minted a fresh token while the page was "hidden". The wait is now
+  "until every token ever minted has expired", which moves when anything
+  mints.
+
+**And the behavioural test caught what the build could not:** "Record
+the rest" called `start` without destructuring it — a free variable,
+which esbuild leaves as a global without a word. The static
+free-variable sweep only knows exported names. Every test was run
+against `main` first and failed for the reason it names; the pair is in
+the pull request.
+
 ### ASK THE OBJECT WHAT IT IS. DO NOT TEST WHETHER IT EXISTS.
 
 Reported by Jared on 18 September 2026: on Windows, "This computer's
