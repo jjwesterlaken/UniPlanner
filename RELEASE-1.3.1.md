@@ -21,7 +21,7 @@ for that.
 | 11 | Two features called "Practice" | **Built** (#180). The study-cards mode is "Drill"; "Practice questions" keeps its name |
 | 12 | "Break into steps" tasks say where they came from | **Built** (#180). "From <assignment> →" on each step in To-do, opening it with its steps shown |
 | 13 | Calendar "important dates" | **Built**, Jared's pick (option A, 7 October 2026): Grades' dates on the Calendar read-only, labelled "From Grades"; the add form says where exams go; an exam-like title gets a pointer, never a block |
-| 14 | The recorder fixes (the 7 October incident) | **Built**, client half. A recording's token is read when the call is made; a share that ends on its own is seen from the other tab and offers **Record the rest**; the recorder notices its own end; a sync refused for clock skew is retried. Pinned by `scripts/test-recorder-session.mjs` and `scripts/test-sync-clock-skew.mjs`. The server half (fix 5) is its own PR and deploys **before** the promote. **Grace's iOS build waits for the client half to be on `main`.** See section 9 |
+| 14 | The recorder fixes (the 7 October incident) | **Built**, client half. A recording's token is read when the call is made; a share that ends on its own is seen from the other tab and offers **Record the rest**; the recorder notices its own end; a sync refused for clock skew is retried. Pinned by `scripts/test-recorder-session.mjs` and `scripts/test-sync-clock-skew.mjs`. The server half (fix 5) is its own PR: the ai-notes function retries a clock-skew refusal at the claim and at mark done, reads mark done's error for the first time, and logs the end reason. It deploys **before** the promote. The client half is on `main` (#183), so **Grace's iOS build can go**. See section 9 |
 
 **Later**
 
@@ -456,6 +456,20 @@ fixes 1–4 of it.
 4. **"JWT issued at future" is retried, not shown.** One refusal is
    retried after 1.5 s and neither shown nor reported; one that persists
    is shown in plain words and reported with its code.
+
+5. **The function's own writes** (`supabase/functions/ai-notes`, its
+   own PR). The service credential meets "JWT issued at future" as well
+   as a student's token can — the stripe-webhook delivery did. The
+   **claim** insert is retried once after 1.5 s (nothing is spent yet,
+   and a refused token inserted nothing); **mark done's** error is read
+   for the first time and retried the same way, on the recording path
+   and the summary retry. A refused write used to leave the row
+   "processing" while the student was handed the notes, and if that
+   response was lost too, the recovery retry found no audio and called a
+   paid lecture missing. A failure that survives is logged at stage
+   `mark_done`. The claim's log line now carries the request's
+   `endReason` (a short lowercase token, anything else "other") and
+   recorded seconds — what would have answered 7 October from the logs.
 
 **Waiting on Grace:** a chime and a system notification when a share
 ends on its own. Both are **off** until she rules — the notification

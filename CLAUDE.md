@@ -818,7 +818,12 @@ notification were proposed beside it and are **off pending Grace**.
 **"JWT issued at future" (PGRST303) is a sub-second skew, and the proof
 was in our own table**: at 1:50:19 the sync was refused and the error
 report sent a moment later with the SAME token was accepted. Sync now
-retries once after 1.5 s and reports only what survives the retry.
+retries once after 1.5 s and reports only what survives the retry. The
+ai-notes function does the same at its two writes that matter — the
+claim, and mark done, whose error had never been read at all: a
+refused write left the row "processing" while the student held the
+notes. A refusal of the TOKEN happens before the statement runs, which
+is what makes retrying a write safe.
 
 **Three things the tests had to learn first, all of which made a green
 run mean nothing:**
