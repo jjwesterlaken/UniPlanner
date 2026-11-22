@@ -279,6 +279,23 @@ jobs:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-path-split.mjs
 
+      - name: The mid-semester break saves when its dates are typed one at a time
+        # Typed digit by digit at 390px, the way a student enters a
+        # date, then reopened, then read back as the week label of a
+        # deadline after the break.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-semester-setup.mjs
+
+      - name: The site's headers, as the browser receives them
+        # dist-site served with every rule in its _headers applied: a
+        # photographed page must show a thumbnail under that policy (with
+        # a control proving the policy is enforced), and the files an
+        # update depends on must arrive with no-cache.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-served-headers.mjs
+
       - name: Run the three journeys
         # Against the live Supabase project with a dedicated test account
         # (see e2e/helpers.mjs for why its data cannot accumulate).

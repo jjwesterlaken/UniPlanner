@@ -4637,9 +4637,15 @@ function SemesterSetup({ settings, rounding, patchSettings }) {
   const rule = rounding || DEFAULT_ROUNDING;
   const inherited = !settings.rounding && rule !== DEFAULT_ROUNDING;
 
+  /* A HALF-FILLED BREAK IS KEPT, as "Other non-teaching weeks" keeps
+     one, so the second date has a first to pair with. This stored a
+     range only once it had both ends, and the first date typed was
+     dropped before the second could be: the break could not be saved
+     at all. Every reader skips a range until it has both ends
+     (`inBreak`, `teachingWeek`). Clearing both dates removes it. */
   const setBreak = (patch) => {
     const next = { ...first, ...patch };
-    patchSettings({ breaks: next.from && next.to ? [next] : [] });
+    patchSettings({ breaks: next.from || next.to ? [next] : [] });
   };
 
   /* OTHER NON-TEACHING WEEKS, any number, in their own field (see
