@@ -7,6 +7,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  # Once a day as well, on the default branch, so a test that starts
+  # failing with nothing pushed is seen within a day rather than at the
+  # next push. GitHub emails a scheduled failure to whoever last changed
+  # this cron line.
+  schedule:
+    - cron: "41 19 * * *"
 
 jobs:
   test:

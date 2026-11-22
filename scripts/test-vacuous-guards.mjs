@@ -28,6 +28,8 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -314,6 +316,74 @@ test("the guard above can see the shape it forbids", () => {
   const strings = "assert.equal(el.querySelector('b').textContent, 'x');";
   assert.ok([...strings.matchAll(DOM_COMPARE)].length === 0, "the pattern matches a comparison of an element's TEXT, which is fine");
 });
+
+/* ------------------------------------------------------------------ */
+/*  Shape 5: a browser suite that skips still reports what it ran      */
+/* ------------------------------------------------------------------ */
+
+/* Two browser suites run checks that need no browser before they look
+   for one. The CI job that runs `npm test` has no Chromium, so those
+   checks only count if the skip path exits on their result. This runs
+   each suite in a throwaway copy of the repository with Chromium hidden,
+   once as it is and once with one of its own static checks made to
+   fail, and requires the second run to exit non-zero. The first run is
+   the control: a suite that exits non-zero whenever the browser is
+   missing would satisfy the second half alone. */
+function runWithoutBrowser(suite, breakIt) {
+  const root = path.join(SCRIPTS, "..");
+  const web = path.join(root, "dist-web", "app.js");
+  assert.ok(fs.existsSync(web), "dist-web is missing — run npm run build:web first");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "suite-skip-"));
+  try {
+    const listed = spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" });
+    assert.equal(listed.status, 0, "git ls-files failed, so there is no copy to run in");
+    const files = listed.stdout.split("\0").filter(Boolean);
+    assert.ok(files.length > 100, `only ${files.length} tracked files listed — the copy would be the wrong tree`);
+    for (const f of files) {
+      const from = path.join(root, f);
+      if (!fs.existsSync(from) || fs.statSync(from).isDirectory()) continue;
+      fs.mkdirSync(path.dirname(path.join(tmp, f)), { recursive: true });
+      fs.copyFileSync(from, path.join(tmp, f));
+    }
+    fs.symlinkSync(path.join(root, "node_modules"), path.join(tmp, "node_modules"), "dir");
+    fs.symlinkSync(path.join(root, "dist-web"), path.join(tmp, "dist-web"), "dir");
+    if (breakIt) breakIt(tmp);
+    const noBrowsers = path.join(tmp, "no-browsers");
+    fs.mkdirSync(noBrowsers);
+    const env = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: noBrowsers, RECORDER_UNDER_XVFB: "1" };
+    delete env["REQUIRE_" + "BROWSER"];
+    const r = spawnSync(process.execPath, [path.join(tmp, "scripts", suite)], { cwd: tmp, env, encoding: "utf8", timeout: 180_000 });
+    return { status: r.status, out: `${r.stdout || ""}${r.stderr || ""}` };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+const SKIPPING_SUITES = [
+  {
+    suite: "test-rendered-tabs.mjs",
+    /* A module that calls another module's export without importing it,
+       which the free-variable check exists to refuse. */
+    breakIt: (tmp) => fs.writeFileSync(path.join(tmp, "src", "zz-skip-probe.js"), "export const skipProbe = () => newIdempotencyKey();\n"),
+  },
+  {
+    suite: "test-recorder-session.mjs",
+    /* A way for the recorder to end that the review screen has no
+       sentence for, which the ending check exists to refuse. */
+    breakIt: (tmp) => fs.appendFileSync(path.join(tmp, "src", "aiNotes.jsx"), '\nconst skipProbeReason = "probe-ended";\n'),
+  },
+];
+
+for (const { suite, breakIt } of SKIPPING_SUITES) {
+  test(`${suite}: a failing check that needs no browser fails the run when Chromium is missing`, () => {
+    const control = runWithoutBrowser(suite, null);
+    assert.match(control.out, /skip\s+-/, `the control run did not reach the skip path, so this is not testing it:\n${control.out.slice(-600)}`);
+    assert.equal(control.status, 0, `the control run (nothing broken, no browser) exited ${control.status}:\n${control.out.slice(-600)}`);
+    const broken = runWithoutBrowser(suite, breakIt);
+    assert.match(broken.out, /FAIL\s+-/, `the broken copy printed no FAIL, so the check never saw the fault:\n${broken.out.slice(-600)}`);
+    assert.notEqual(broken.status, 0, `the suite printed FAIL and exited 0:\n${broken.out.slice(-600)}`);
+  });
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

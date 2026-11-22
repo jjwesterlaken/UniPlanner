@@ -50,8 +50,14 @@ function test(name, fn) {
 
 /* ---------- the fixture, and the fake server ---------- */
 
-const T0 = "2026-09-01T00:00:00.000Z";
-const AT = "2026-09-18T04:00:00.000Z";
+/* Both dates are taken from the clock. The sync's tombstone purge runs
+   on the REAL clock with a 60-day window, so a fixed clear date stops
+   being a recent clear once 60 days have passed and the fixture tests
+   the purge instead of the clear. Yesterday's clear of last month's
+   planner is always inside the window. */
+const DAY = 86_400_000;
+const T0 = new Date(Date.now() - 18 * DAY).toISOString();
+const AT = new Date(Date.now() - 1 * DAY).toISOString();
 
 const item = (id, extra = {}) => ({ id, updatedAt: T0, ...extra });
 

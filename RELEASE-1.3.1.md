@@ -16,7 +16,7 @@ for that.
 | 6 | Tailwind 4 migration | **Not started.** A separate item, not part of any other change. It is the only fix npm offers for GHSA-vfj7-8cjw-p6xm (`braces`, reached only through Tailwind 3's build tooling); CI audits shipped dependencies only until then (#173). Breaking for the CSS and config, so it **needs Grace's visual check of the app and the site** before it merges |
 | 7 | Fewer sections, no overlaps (Jared, 6 October 2026) | **Built**, web first. Six changes, pinned by `scripts/test-fold.mjs`. See section 6 |
 | 8 | Lecture-notes feedback (Jared, 7 October 2026) | **Built.** The essay rating control under every AI notes result. Migration **0026**, `lecture_notes_feedback`, must be applied **before** the promote. Weekly query `supabase/checks/notes-quality-weekly.sql`, pinned by `scripts/test-notes-quality.mjs`. See section 7 |
-| 9 | One assessment record (Jared, 7 October 2026) | **Release A built** (plan approved 7 October 2026): Plan and Grades read one merged view of assignments and assessments, read-only across, nothing converted or written, older builds unaffected. `src/assessmentRecords.js`, pinned by `scripts/test-merged-view.mjs`. **Release B (convert on first edit, late edits) is 1.3.2**, gated in RELEASE-1.3.2.md. The approved plan is section 8 |
+| 9 | One assessment record (Jared, 7 October 2026) | **Release A built** (plan approved 7 October 2026): Plan and Grades read one merged view of assignments and assessments, read-only across, nothing converted or written, older builds unaffected. `src/assessmentRecords.js`, pinned by `scripts/test-merged-view.mjs`. **Release B (convert on first edit, late edits) is 1.4.0**, gated in RELEASE-1.4.0.md (it was planned for 1.3.2 until 1.3.2 became the hardening release). The approved plan is section 8 |
 | 10 | Courses list folds into Grades | **Built** (#181). Each Grades card is the course: add, rename (everywhere the name is written, `src/courseRename.js`) and remove on the card; Semester setup stays |
 | 11 | Two features called "Practice" | **Built** (#180). The study-cards mode is "Drill"; "Practice questions" keeps its name |
 | 12 | "Break into steps" tasks say where they came from | **Built** (#180). "From <assignment> →" on each step in To-do, opening it with its steps shown |
@@ -402,8 +402,9 @@ is two rows on both screens, never merged. Nothing is written, so a
 1.3.0 device sees exactly what it saw — a test round-trips a 1.3.0-shaped
 planner and proves, with a control, that it would see a write.
 
-**Release B — 1.3.2.** Convert on first edit; the gate and the rest are
-in RELEASE-1.3.2.md.
+**Release B — 1.4.0** (planned for 1.3.2 until 1.3.2 became the
+hardening release). Convert on first edit; the gate and the rest are in
+RELEASE-1.4.0.md.
 
 **Data shape (Release B, recorded here because the plan was approved
 whole):** `assessments` gain optional `requirements`, `notes`, `rubric`;

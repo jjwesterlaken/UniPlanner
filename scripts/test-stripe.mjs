@@ -852,9 +852,15 @@ async function run() {
        right one sitting in the payload, which is why the mapper is what
        had to be fixed and why this test asserts the date rather than
        merely asserting that something was written. */
+    /* The period end is taken from the clock, a month ahead, because a
+       live subscription's period end is always in the future — and the
+       projection below reads the row as expired once it has passed. A
+       fixed date here is a test that breaks on a calendar day. */
+    const periodEnd = DEFAULT_PERIOD_END;
+    const expected = new Date(periodEnd * 1000).toISOString();
     const itemOnly = subscription({
       current_period_end: undefined,
-      items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: 1791547235 }] },
+      items: { data: [{ price: { lookup_key: "uniplanner_studyai_monthly" }, current_period_end: periodEnd }] },
     });
     const w = makeWorld({ profiles: { [USER]: profile() }, stripeRoutes: { "/subscriptions/sub_1": itemOnly } });
     const res = await deliver(event());
@@ -864,12 +870,12 @@ async function run() {
     const row = Object.values(w.entitlements)[0];
     assert.ok(row, "no entitlements row was written at all, so this proves nothing");
     assert.equal(row.tier, "ai");
-    assert.equal(row.expires_at, "2026-10-09T12:00:35.000Z", "THE LIVE BUG: the row landed with a null expiry");
+    assert.equal(row.expires_at, expected, "THE LIVE BUG: the row landed with a null expiry");
 
     /* And profiles carries it too — the projection reads the row it
        just wrote, so a null there would mean the same thing one table
        over. */
-    assert.equal(w.profiles[USER].entitlement_expires_at, "2026-10-09T12:00:35.000Z");
+    assert.equal(w.profiles[USER].entitlement_expires_at, expected);
 
     /* WHICH SHAPE CARRIED IT REACHES THE LOG. This repository cannot
        ask Stripe which location a given API version uses, so the only
