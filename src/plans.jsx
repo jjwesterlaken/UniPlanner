@@ -47,11 +47,11 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { CreditCard, ExternalLink, RefreshCw } from "lucide-react";
 import { fetchUsage } from "./aiNotesClient.js";
-import { DURATION_ORDER, SELLABLE_TIERS, groupPackages, manageSubscriptionUrl, displayPriceFor } from "./purchasePlans.js";
+import { DURATION_ORDER, SELLABLE_TIERS, groupPackages, manageSubscriptionUrl, displayPriceFor, checkoutReturn, withoutCheckout } from "./purchasePlans.js";
 import { purchaseCapability, loadPackages, purchasePackage, restorePurchases, introEligibility } from "./purchases.js";
 import {
   ACTIONS,
-  ACTIVATING_NOTICE,
+  activatingNotice,
   DISCLOSURES,
   refundLine,
   LINKS,
@@ -70,6 +70,8 @@ import {
   unavailableLine,
   webFailureMessage,
   introLine,
+  deletionSubscriptionLine,
+  DELETION_CARD_ELSEWHERE,
 } from "./plansCopy.js";
 import { bumpEntitlement, entitlementVersion, refreshEntitlementSoon, subscribeEntitlement } from "./entitlementRefresh.js";
 import { STRIPE_ENABLED, WEB_PLANS } from "./billingFlags.js";
@@ -114,6 +116,16 @@ export function PlansPanel({ session }) {
   const [message, setMessage] = useState(null);
   const [activating, setActivating] = useState(false);
   const cancelPoll = useRef(null);
+  /* The plan as last read, and the plan when the ladder started: the
+     notice comes down once a read shows a paid plan that differs from
+     the one the student had, rather than staying beside the plan it was
+     waiting for. `undefined` means no ladder is running. */
+  const tierRef = useRef(null);
+  const activatingFrom = useRef(undefined);
+  /* The server refused a second card subscription, so one is running
+     even if the profile has not caught up: the panel shows where to
+     change it rather than the buy buttons that were just refused. */
+  const [cardRunning, setCardRunning] = useState(false);
 
   /* Read once per mount and again on every bump. An unknown tier is
      kept as null rather than coerced to "free": the copy has a sentence
@@ -131,9 +143,15 @@ export function PlansPanel({ session }) {
     let cancelled = false;
     fetchUsage(session).then((u) => {
       if (cancelled) return;
-      setTier((u && u.tier) || null);
+      const read = (u && u.tier) || null;
+      tierRef.current = read;
+      setTier(read);
       setStore((u && u.store) || null);
       setNoAccount(!!(u && u.noAccount));
+      if (activatingFrom.current !== undefined && read && read !== "free" && read !== activatingFrom.current) {
+        activatingFrom.current = undefined;
+        setActivating(false);
+      }
     });
     return () => {
       cancelled = true;
@@ -180,10 +198,28 @@ export function PlansPanel({ session }) {
   useEffect(() => () => cancelPoll.current && cancelPoll.current(), []);
 
   const startPolling = useCallback(() => {
+    activatingFrom.current = tierRef.current;
     setActivating(true);
     if (cancelPoll.current) cancelPoll.current();
     cancelPoll.current = refreshEntitlementSoon();
   }, []);
+
+  /* BACK FROM STRIPE CHECKOUT, whose return URLs carry `?checkout=`.
+     PlannerApp opened on this tab because of it. On `done` the payment
+     has been taken and the webhook has probably not landed yet, so the
+     same bounded ladder a store purchase uses starts here. The
+     parameter comes off the address either way, so a reload does not
+     start it again. */
+  useEffect(() => {
+    const back = checkoutReturn(window.location.search);
+    if (!back) return;
+    try {
+      window.history.replaceState(window.history.state, "", withoutCheckout(window.location.href));
+    } catch (e) {
+      /* an address we could not tidy costs one more re-read on a reload */
+    }
+    if (back === "done") startPolling();
+  }, [startPolling]);
 
   const buy = async (pkg) => {
     setBusy(pkg.identifier);
@@ -217,6 +253,33 @@ export function PlansPanel({ session }) {
      offering it a card payment instead of fixing the build would be the
      wrong answer to the wrong question. */
   const webPurchases = STRIPE_ENABLED && !capability.available && capability.reason === "web" && !!session;
+
+  /* AND WHENEVER THE STUDENT COMES BACK TO THIS TAB. Checkout opens in
+     a new tab and paying takes longer than the ladder lasts, so the tab
+     they return to re-reads the plan instead of showing the one they
+     had before they paid. Web only: a store purchase completes inside
+     the app, where the ladder covers it. Focus and visibility both
+     fire on a return, so one re-read a second is plenty. */
+  useEffect(() => {
+    if (!webPurchases) return undefined;
+    let last = 0;
+    const back = () => {
+      const now = Date.now();
+      if (document.visibilityState !== "visible" || now - last < 1000) return;
+      last = now;
+      bumpEntitlement();
+    };
+    window.addEventListener("focus", back);
+    document.addEventListener("visibilitychange", back);
+    return () => {
+      window.removeEventListener("focus", back);
+      document.removeEventListener("visibilitychange", back);
+    };
+  }, [webPurchases]);
+
+  /* A card subscription that is running: change plan in the portal,
+     never by buying the other one (see WEB.changePlan). */
+  const cardSubscriber = (store === "stripe" && !!tier && tier !== "free") || cardRunning;
 
   /* Derived from the same six plans the phones sell, so the web cannot
      silently be missing one — grouped here rather than in a constant
@@ -257,6 +320,10 @@ export function PlansPanel({ session }) {
       startPolling();
     } catch (err) {
       setMessage(webFailureMessage(err && err.code, err && err.store));
+      if (err && err.code === "stripe_subscription_active") {
+        setCardRunning(true);
+        bumpEntitlement();
+      }
     } finally {
       setBusy("");
     }
@@ -305,7 +372,7 @@ export function PlansPanel({ session }) {
           {currentPlanLine(tier, { signedOut: noAccount })}
         </p>
         {tier && <p className="mt-1 text-xs text-stone-500">{resetLine(tier)}</p>}
-        {activating && <p className="mt-1 text-xs text-stone-500">{ACTIVATING_NOTICE}</p>}
+        {activating && <p className="mt-1 text-xs text-stone-500" data-activating>{activatingNotice(capability.reason)}</p>}
       </div>
       {message && <p className="mt-2 rounded-lg bg-stone-50 px-3 py-2 text-sm text-stone-700">{message}</p>}
 
@@ -332,23 +399,35 @@ export function PlansPanel({ session }) {
            desktop build, which already refuses to open an http link
            in-app (desktop/main.js) and hands it to the OS. */
         <div className="mt-4 space-y-4" data-web-purchase>
-          {webGroups.map((group) => (
-            <div key={group.tier} className="space-y-1.5">
-              {group.durations.map((duration) => (
-                <button
-                  key={`${group.tier}-${duration}`}
-                  type="button"
-                  className={`${btnPrimary} w-full`}
-                  disabled={!!busy}
-                  onClick={() => buyOnWeb(group.tier, duration)}
-                  data-web-plan={`${group.tier}-${duration}`}
-                >
-                  {buyLabel(group.tier, duration, webPriceLabel(group.tier, duration))}
-                </button>
+          {cardSubscriber ? (
+            /* CHANGING PLAN IS THE PORTAL'S JOB. Six buy buttons here
+               would each start a second subscription beside the one
+               that is running, and the server now refuses that. */
+            <button type="button" className={`${btnPrimary} w-full`} disabled={!!busy} onClick={manageOnWeb} data-web-change-plan>
+              <ExternalLink size={14} />
+              {WEB.changePlan}
+            </button>
+          ) : (
+            <>
+              {webGroups.map((group) => (
+                <div key={group.tier} className="space-y-1.5">
+                  {group.durations.map((duration) => (
+                    <button
+                      key={`${group.tier}-${duration}`}
+                      type="button"
+                      className={`${btnPrimary} w-full`}
+                      disabled={!!busy}
+                      onClick={() => buyOnWeb(group.tier, duration)}
+                      data-web-plan={`${group.tier}-${duration}`}
+                    >
+                      {buyLabel(group.tier, duration, webPriceLabel(group.tier, duration))}
+                    </button>
+                  ))}
+                </div>
               ))}
-            </div>
-          ))}
-          <p className="text-xs text-stone-500">{WEB.buyHint}</p>
+              <p className="text-xs text-stone-500">{WEB.buyHint}</p>
+            </>
+          )}
           {/* THE LAUNCH CODE, where it is typed: Stripe Checkout, which
               this button opens. site/promo.js holds the words and the
               end date the marketing banner uses, so this line comes down
@@ -357,12 +436,12 @@ export function PlansPanel({ session }) {
               purchase cannot take the code. Not shown to a student who
               already has a web subscription: the code is for a FIRST
               payment. */}
-          {store !== "stripe" && promoPlanLine(Date.now()) && (
+          {store !== "stripe" && !cardSubscriber && promoPlanLine(Date.now()) && (
             <p className="text-xs font-medium text-stone-700" data-promo-line>
               {promoPlanLine(Date.now())}
             </p>
           )}
-          {store === "stripe" && (
+          {(store === "stripe" || cardRunning) && (
             <button type="button" className={`${btnGhost} w-full`} disabled={!!busy} onClick={manageOnWeb} data-web-manage>
               <ExternalLink size={14} />
               {WEB.manage}
@@ -514,6 +593,67 @@ export function PlansPanel({ session }) {
         </a>
       </div>
     </Card>
+  );
+}
+
+/**
+ * THE SUBSCRIPTION, ON THE DELETE-ACCOUNT CONFIRMATION.
+ *
+ * Deleting an account does not cancel a subscription, so the
+ * confirmation names the plan and who takes the payment and hands over
+ * the control that cancels it (`deletionSubscriptionLine` has the
+ * reasoning). It never stands in the way of the deletion: Apple
+ * requires deletion to work in the app.
+ *
+ * The portal is offered where the plans panel offers it, on the web;
+ * a store subscription links to the store's own page on any platform.
+ */
+export function DeletionSubscriptionNotice({ session }) {
+  const [paying, setPaying] = useState(null);
+  const [message, setMessage] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchUsage(session).then(
+      (u) => !cancelled && setPaying({ tier: (u && u.tier) || null, store: (u && u.store) || null }),
+      () => !cancelled && setPaying({ tier: null, store: null })
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [session && session.user && session.user.id]);
+
+  const line = paying && deletionSubscriptionLine(paying);
+  if (!line) return null;
+  const card = paying.store === "stripe";
+  const web = purchaseCapability().reason === "web";
+  const storePage = card ? null : manageSubscriptionUrl({ store: paying.store });
+  const portal = async () => {
+    setMessage(null);
+    try {
+      const { url } = await openPortal({ token: session && session.token });
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setMessage(webFailureMessage(err && err.code, err && err.store));
+    }
+  };
+  return (
+    <div className="mt-2 space-y-1 text-xs text-rose-800" data-delete-subscription>
+      <p>{line}</p>
+      {card && web && (
+        <button type="button" className="inline-flex items-center gap-1 font-medium underline" onClick={portal} data-delete-manage>
+          {ACTIONS.manage}
+          <ExternalLink size={12} />
+        </button>
+      )}
+      {card && !web && <p>{DELETION_CARD_ELSEWHERE}</p>}
+      {storePage && (
+        <a className="inline-flex items-center gap-1 font-medium underline" href={storePage} target="_blank" rel="noreferrer" data-delete-manage>
+          {ACTIONS.manage}
+          <ExternalLink size={12} />
+        </a>
+      )}
+      {message && <p>{message}</p>}
+    </div>
   );
 }
 

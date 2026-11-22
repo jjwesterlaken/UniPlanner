@@ -193,7 +193,8 @@ import {
 import { escapeHtml, isConverted, isLectureNote, convertPatch } from "./aiNoteConvert.js";
 import { noteCache } from "./noteCache.js";
 import { deleteAccount, confirmationMatches, DELETE_CONFIRMATION_PHRASE } from "./accountDeletion.js";
-import { PlansPanel } from "./plans.jsx";
+import { PlansPanel, DeletionSubscriptionNotice } from "./plans.jsx";
+import { checkoutReturn } from "./purchasePlans.js";
 import { configurePurchases, logOutPurchases } from "./purchases.js";
 import {
   nextReadState,
@@ -4411,6 +4412,7 @@ function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onS
                   This removes your planner, your notes and everything we hold, on every device.
                   It can't be undone. Back up your planner first if you want to keep any of it.
                 </p>
+                <DeletionSubscriptionNotice session={session} />
                 <label className={`${labelCls} mt-3 text-rose-800`}>
                   Type {DELETE_CONFIRMATION_PHRASE} to confirm
                 </label>
@@ -5638,8 +5640,13 @@ export default function PlannerApp() {
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState("idle");
   /* Restored from this device, not from the blob. Lazy initialiser so
-     the read happens once rather than on every render. */
-  const [tab, setTab] = useState(readLastTab);
+     the read happens once rather than on every render. A return from
+     Stripe Checkout (`?checkout=`) opens on Settings, where the plans
+     are, whatever tab was open before; PlansPanel takes the parameter
+     off the address. */
+  const [tab, setTab] = useState(() =>
+    checkoutReturn(typeof window !== "undefined" ? window.location.search : "") ? SETTINGS_TAB.id : readLastTab()
+  );
   useEffect(() => {
     writeLastTab(tab);
   }, [tab]);

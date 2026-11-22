@@ -1055,6 +1055,18 @@ would flap the tier between them and the student would be paying twice.
 That closes the door we control; buying in the App Store while a Stripe
 subscription is live is not ours to refuse and is a support note.
 
+**AND A CARD SUBSCRIBER CANNOT BUY A SECOND ONE (1.3.2).** Checkout makes
+a new subscription each time it completes, so `billing-checkout` refuses
+with `stripe_subscription_active` while the account holds a running card
+subscription (`RUNNING_SUBSCRIPTION_STATUSES` in `_shared/stripe.ts`). It
+asks the profile and then Stripe, which knows about a payment the
+webhook has not delivered, and a failed Stripe read refuses too. The
+panel shows **Change plan** in place of the buy buttons for a card
+subscriber, and it opens the Customer Portal — so **the Portal is where
+a plan is changed, and it must have plan switching on with the six
+prices listed** (step 3 below). Without that, Change plan opens a portal
+that can only cancel.
+
 **Identity, and the two things a client never supplies.** The uid comes
 out of the verified JWT and goes into `client_reference_id`, the
 session metadata AND the subscription metadata — the third is what
@@ -1083,7 +1095,10 @@ this repository can check is that the Stripe Price actually charges it
    18.99 / 94.99 / 169.99.
 3. **Configure the Customer Portal once** in the Stripe dashboard.
    Stripe refuses to create a portal session until it has been set up,
-   and that failure only appears when a real student taps Manage.
+   and that failure only appears when a real student taps Manage. Turn
+   on switching between plans and list all six prices: Change plan
+   sends a card subscriber here, because checkout refuses a second
+   subscription.
 4. **Set the two secrets** in Supabase → Edge Functions → Secrets:
    `STRIPE_SECRET_KEY` (the `sk_test_…` one to begin with) and
    `STRIPE_WEBHOOK_SECRET` (`whsec_…`, from the endpoint in step 5).

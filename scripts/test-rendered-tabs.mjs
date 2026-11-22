@@ -1027,6 +1027,11 @@ async function run() {
     signedOut = false,
     usageStatus = 200,
     now = undefined,
+    /* Where the app was left, and what the address carries: a return
+       from Stripe Checkout arrives with `?checkout=` on whatever tab the
+       student had open. */
+    tab = "account",
+    search = "",
   }) {
     const dir = await keyedBuild();
     const ctx = await browser.newContext();
@@ -1038,7 +1043,7 @@ async function run() {
     const errors = [];
     page.on("pageerror", (err) => errors.push(String(err)));
     await page.addInitScript(
-      ({ ref, userId, tabKey, consent, signedOut: out }) => {
+      ({ ref, userId, tabKey, consent, signedOut: out, tab: lastTab }) => {
         const hour = Math.floor(Date.now() / 1000) + 3600;
         if (!out) localStorage.setItem(
           `sb-${ref}-auth-token`,
@@ -1052,7 +1057,7 @@ async function run() {
           })
         );
         localStorage.setItem("uni-planner-mode", "light");
-        localStorage.setItem(tabKey, "account");
+        localStorage.setItem(tabKey, lastTab);
         localStorage.setItem(
           "uni-planner-v1",
           JSON.stringify({ semester: "Semester 1", semesters: {}, meta: consent })
@@ -1068,7 +1073,7 @@ async function run() {
           return null;
         };
       },
-      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consent: CONSENTED_META, signedOut }
+      { ref: projectRef, userId: USER_ID, tabKey: TAB_KEY, consent: CONSENTED_META, signedOut, tab }
     );
     await page.addInitScript(bridgeScript({ native, packages: PACKAGES, customerInfo, rejectSdk }));
     /* EVERY EDGE FUNCTION CALL THE PAGE MAKES, with the Authorization
@@ -1098,7 +1103,7 @@ async function run() {
       }
       return route.fulfill(json([]));
     });
-    await page.goto("file://" + path.join(dir, "index.html"));
+    await page.goto("file://" + path.join(dir, "index.html") + search);
     await page.waitForSelector("#root > *", { timeout: 15_000 });
     await page.waitForTimeout(1200);
     const read = async () => ({
@@ -1724,6 +1729,123 @@ async function run() {
       signedIn.html.includes("data-web-purchase"),
       "the signed-in mount drew no checkout either, so the absence above is not about the session"
     );
+  });
+
+  /* ---------- a card subscriber, a return from checkout, and deleting ---------- */
+
+  const plansCopy = await import(pathToFileURL(path.join(rootDir, "src/plansCopy.js")).href);
+  const { DELETE_CONFIRMATION_PHRASE } = await import(pathToFileURL(path.join(rootDir, "src/accountDeletion.js")).href);
+  const planLine = (page) => page.locator("[data-plan-line]").innerText({ timeout: 2000 });
+  async function within(ms, check) {
+    const end = Date.now() + ms;
+    for (;;) {
+      if (await check()) return true;
+      if (Date.now() > end) return false;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+
+  await test("A CARD SUBSCRIBER IS OFFERED CHANGE PLAN, not six ways to buy a second subscription", async () => {
+    const m = await mountAccount({ native: false, profile: { ...PROFILE_ROW, tier: "ai", store: "stripe" } });
+    const plans = (m.html.match(/data-web-plan=/g) || []).length;
+    const change = m.page.locator("[data-web-change-plan]");
+    const count = await change.count();
+    if (count === 1) await change.click();
+    await m.page.waitForTimeout(600);
+    const after = await m.read();
+    await m.close();
+    assert.deepEqual(m.errors, [], m.errors.join("\n        "));
+    assert.match(m.html, /data-web-purchase/, "the web panel did not render, so the absences below prove nothing");
+    assert.equal(plans, 0, `a Study AI card subscriber is shown ${plans} buy buttons, each of which starts a second subscription`);
+    assert.equal(count, 1, "a card subscriber has no Change plan control");
+    const portal = after.fnCalls.filter((c) => c.fn === "billing-portal");
+    assert.equal(portal.length, 1, `Change plan made ${portal.length} calls to billing-portal: ${after.fnCalls.map((c) => c.fn).join(", ")}`);
+    assert.match(portal[0].auth, /^Bearer .+/);
+    /* The control: a card subscription that has ENDED is free to buy again. */
+    const lapsed = await mountAccount({ native: false, profile: { ...PROFILE_ROW, tier: "free", store: "stripe" } });
+    await lapsed.close();
+    assert.ok((lapsed.html.match(/data-web-plan=/g) || []).length > 0, "the control: a lapsed card subscriber is offered nothing to buy");
+    assert.ok(!lapsed.html.includes("data-web-change-plan"), "the control: a lapsed card subscriber is offered Change plan");
+  });
+
+  await test("THE PANEL RE-READS THE PLAN WHEN THE STUDENT COMES BACK TO THE TAB", async () => {
+    const profile = { ...PROFILE_ROW, tier: "free", store: null };
+    const m = await mountAccount({ native: false, profile });
+    const before = await planLine(m.page);
+    /* Paid in the other tab; the webhook has written the plan. */
+    profile.tier = "ai";
+    profile.store = "stripe";
+    await m.page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    const moved = await within(4000, async () => (await planLine(m.page)) === plansCopy.currentPlanLine("ai"));
+    const after = await planLine(m.page);
+    await m.close();
+    assert.equal(before, plansCopy.currentPlanLine("free"), `the panel opened on "${before}"`);
+    assert.ok(moved, `coming back to the tab left the plan reading "${after}"`);
+  });
+
+  await test("COMING BACK FROM CHECKOUT OPENS THE PLANS, NAMES STRIPE, AND FOLLOWS THE PAYMENT UNTIL IT LANDS", async () => {
+    const profile = { ...PROFILE_ROW, tier: "free", store: null };
+    const m = await mountAccount({ native: false, profile, tab: "planner", search: "?checkout=done" });
+    try {
+      assert.equal(await m.page.locator("[data-plan-box]").count(), 1, "a return from checkout opened on the student's last tab, not on the plans");
+      const notice = await m.page.locator("[data-activating]").innerText({ timeout: 2000 }).catch(() => "");
+      assert.equal(notice, plansCopy.WEB.activating, `the notice while the payment lands reads "${notice}"`);
+      const search = await m.page.evaluate(() => location.search);
+      assert.ok(!/checkout=/.test(search), `the address still carries "${search}", so a reload starts this again`);
+      /* The webhook lands. */
+      profile.tier = "ai";
+      profile.store = "stripe";
+      const landed = await within(12_000, async () => (await planLine(m.page)) === plansCopy.currentPlanLine("ai"));
+      assert.ok(landed, "the plan never moved to Study AI after the payment landed");
+      assert.equal(await m.page.locator("[data-activating]").count(), 0, "the waiting notice is still up beside the plan it was waiting for");
+      assert.deepEqual(m.errors, [], m.errors.join("\n        "));
+    } finally {
+      await m.close();
+    }
+  });
+
+  await test("THE DELETE CONFIRMATION NAMES A RUNNING CARD SUBSCRIPTION, HANDS OVER THE PORTAL, AND STILL DELETES", async () => {
+    const m = await mountAccount({ native: false, profile: { ...PROFILE_ROW, tier: "ai", store: "stripe" } });
+    await m.page.getByRole("button", { name: "Delete account" }).click();
+    const notice = m.page.locator("[data-delete-subscription]");
+    const shown = await within(4000, async () => (await notice.count()) === 1);
+    const text = shown ? (await notice.locator("p").first().innerText()) : "";
+    const manage = m.page.locator("[data-delete-manage]");
+    const controls = await manage.count();
+    if (controls === 1) await manage.click();
+    await m.page.waitForTimeout(600);
+    const after = await m.read();
+    await m.page.getByLabel(`Type ${DELETE_CONFIRMATION_PHRASE} to confirm`).fill(DELETE_CONFIRMATION_PHRASE);
+    const enabled = await m.page.getByRole("button", { name: /Delete everything/ }).isEnabled();
+    await m.close();
+    assert.deepEqual(m.errors, [], m.errors.join("\n        "));
+    assert.ok(shown, "the delete confirmation says nothing about a running Study AI subscription");
+    assert.equal(text, plansCopy.deletionSubscriptionLine({ tier: "ai", store: "stripe" }));
+    assert.equal(controls, 1, "the confirmation names the subscription but offers no way to cancel it");
+    const portal = after.fnCalls.filter((c) => c.fn === "billing-portal");
+    assert.equal(portal.length, 1, `Manage subscription made ${portal.length} calls to billing-portal`);
+    assert.ok(enabled, "the notice stands in the way of the deletion");
+  });
+
+  await test("A STORE SUBSCRIPTION IS NAMED AND LINKED TO THE STORE'S OWN PAGE; A FREE ACCOUNT IS TOLD NOTHING", async () => {
+    const ios = await mountAccount({ native: "ios", profile: { ...PROFILE_ROW, tier: "ai_max", store: "app_store" } });
+    await ios.page.getByRole("button", { name: "Delete account" }).click();
+    const shown = await within(4000, async () => (await ios.page.locator("[data-delete-subscription]").count()) === 1);
+    const text = shown ? await ios.page.locator("[data-delete-subscription] p").first().innerText() : "";
+    const href = shown ? await ios.page.locator("[data-delete-manage]").getAttribute("href", { timeout: 2000 }).catch(() => null) : null;
+    await ios.close();
+    assert.ok(shown, "the delete confirmation says nothing about a running App Store subscription");
+    assert.equal(text, plansCopy.deletionSubscriptionLine({ tier: "ai_max", store: "app_store" }));
+    assert.equal(href, "https://apps.apple.com/account/subscriptions", `the App Store subscription links to ${href}`);
+
+    const free = await mountAccount({ native: false, profile: { ...PROFILE_ROW, tier: "free", store: null } });
+    await free.page.getByRole("button", { name: "Delete account" }).click();
+    await free.page.waitForTimeout(1200);
+    const none = await free.page.locator("[data-delete-subscription]").count();
+    const box = await free.page.getByLabel(`Type ${DELETE_CONFIRMATION_PHRASE} to confirm`).count();
+    await free.close();
+    assert.equal(box, 1, "the control: the confirmation did not open, so the absence below proves nothing");
+    assert.equal(none, 0, "a free account is warned about a subscription it does not have");
   });
 
   await browser.close();

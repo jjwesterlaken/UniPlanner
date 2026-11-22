@@ -1755,6 +1755,76 @@ async function run() {
     assert.match(copy.webFailureMessage(res.body.code, "play_store"), /Google Play/i);
   });
 
+  /* A SECOND CARD SUBSCRIPTION. Checkout made a new subscription every
+     time it was opened, so a student changing plan by buying the other
+     one held both and paid for both. A plan is changed in the portal;
+     checkout is for an account with nothing running. */
+  const checkoutWorld = (over, subscriptions) =>
+    makeWorld({
+      profiles: { [USER]: profile(over) },
+      stripeRoutes: {
+        "/subscriptions?": subscriptions,
+        "/prices?": { data: [{ id: "price_1" }] },
+        "/customers": { id: "cus_new" },
+        "/checkout/sessions": { url: "https://checkout.stripe.com/c/pay/x" },
+      },
+    });
+  const created = (w) => w.stripeCalls.filter((c) => c.method === "POST").map((c) => c.url.replace("https://api.stripe.com/v1", ""));
+
+  await test("A CARD SUBSCRIBER CANNOT OPEN A SECOND CHECKOUT, and is pointed at the portal", async () => {
+    const w = checkoutWorld(
+      { tier: "ai", tier_source: "stripe", store: "stripe", stripe_customer_id: "cus_mine" },
+      { data: [{ id: "sub_1", status: "active" }] }
+    );
+    const res = await post(CHECKOUT, { token: `token:${USER}`, body: { tier: "ai_max", duration: "monthly" } });
+    w.restore();
+    assert.equal(res.status, 409, JSON.stringify(res.body));
+    assert.equal(res.body.code, "stripe_subscription_active");
+    assert.deepEqual(created(w), [], "a refused checkout still created something at Stripe");
+    const said = copy.webFailureMessage(res.body.code);
+    assert.ok(said.includes(copy.WEB.changePlan) && said.includes(copy.WEB.manage), `the refusal does not name the portal's two controls: "${said}"`);
+  });
+
+  await test("A SUBSCRIPTION STRIPE HOLDS REFUSES A CHECKOUT BEFORE THE WEBHOOK HAS WRITTEN THE PLAN", async () => {
+    /* The profile still says free: the payment completed and the
+       webhook has not landed. Stripe is asked, for THIS account's
+       customer. */
+    const w = checkoutWorld({ stripe_customer_id: "cus_mine" }, { data: [{ id: "sub_1", status: "trialing" }] });
+    const res = await post(CHECKOUT, { token: `token:${USER}`, body: { tier: "ai", duration: "monthly" } });
+    w.restore();
+    assert.equal(res.status, 409, JSON.stringify(res.body));
+    assert.equal(res.body.code, "stripe_subscription_active");
+    const asked = w.stripeCalls.find((c) => c.url.includes("/subscriptions?"));
+    assert.ok(asked, `Stripe was never asked about subscriptions: ${w.trace.join(" -> ")}`);
+    assert.ok(new URL(asked.url).searchParams.get("customer") === "cus_mine", `the lookup asked about ${asked.url}`);
+    assert.deepEqual(created(w), [], "a refused checkout still created something at Stripe");
+  });
+
+  await test("which subscriptions count as running: these refuse a second checkout, and an ended one does not", async () => {
+    const refuse = ["active", "trialing", "past_due", "unpaid", "paused"];
+    const allow = ["canceled", "incomplete", "incomplete_expired"];
+    for (const status of [...refuse, ...allow]) {
+      const w = checkoutWorld({ stripe_customer_id: "cus_mine" }, { data: [{ id: "sub_1", status }] });
+      const res = await post(CHECKOUT, { token: `token:${USER}`, body: { tier: "ai", duration: "monthly" } });
+      w.restore();
+      if (refuse.includes(status)) {
+        assert.equal(res.body.code, "stripe_subscription_active", `a ${status} subscription did not refuse a second checkout`);
+      } else {
+        assert.equal(res.status, 200, `a ${status} subscription blocked a new one: ${JSON.stringify(res.body)}`);
+        assert.ok(created(w).includes("/checkout/sessions"), `a ${status} subscription: no session was created`);
+      }
+    }
+  });
+
+  await test("a failed subscription read refuses the checkout rather than guessing there is none", async () => {
+    const w = checkoutWorld({ stripe_customer_id: "cus_mine" }, { __status: 500 });
+    const res = await post(CHECKOUT, { token: `token:${USER}`, body: { tier: "ai", duration: "monthly" } });
+    w.restore();
+    assert.equal(res.status, 503, JSON.stringify(res.body));
+    assert.equal(res.body.code, "upstream_unavailable");
+    assert.deepEqual(created(w), [], "a checkout went ahead on a subscription list Stripe never gave us");
+  });
+
   await test("the customer is STORED before the session is created", async () => {
     /* The aiNotesStore ordering rule, one integration over: never leave
        something at Stripe this side has no record of, or the next

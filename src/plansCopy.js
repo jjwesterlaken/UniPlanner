@@ -156,6 +156,33 @@ export function refundLine(reason) {
 const STORE_NAMES = { app_store: "the App Store", play_store: "Google Play" };
 
 /**
+ * WHAT THE DELETE-ACCOUNT CONFIRMATION SAYS ABOUT A SUBSCRIPTION.
+ *
+ * Deleting an account does not cancel a subscription: the stores never
+ * let anybody but the subscriber cancel theirs, and a card subscription
+ * goes on charging until it is cancelled in the portal. So a student
+ * about to delete is told, by plan and by who takes the payment, and is
+ * handed the control that cancels it. Deletion is NEVER blocked on it:
+ * Apple requires deletion to work in the app.
+ *
+ * Three answers, the `fetchNote` way: a paid plan with a store behind it
+ * is named; a read that FAILED (tier unknown) still gets a sentence,
+ * because a failed read must not hide the warning from the one student
+ * it is for; and a free plan, or a gift with no store behind it, has
+ * nothing to cancel and gets nothing.
+ */
+/** On a phone, where the portal is not offered: where a card subscription is managed. */
+export const DELETION_CARD_ELSEWHERE = "A card subscription is managed on the web: open UniPlanner in a browser and use Manage or cancel.";
+
+export function deletionSubscriptionLine({ tier = null, store = null } = {}) {
+  if (!tier) return "If you subscribe to a plan, deleting your account doesn't cancel it. Cancel it first where you bought it, or you'll keep being charged.";
+  if (tier === "free" || !store) return null;
+  const plan = TIER_NAMES[tier] || "a paid plan";
+  const paid = store === "stripe" ? "by card through Stripe" : `through ${STORE_NAMES[store] || "your app store"}`;
+  return `You subscribe to ${plan}, paid ${paid}. Deleting your account doesn't cancel it, so cancel it first or you'll keep being charged.`;
+}
+
+/**
  * WHO TAKES THE PAYMENT, on THIS platform.
  *
  * It was one flat sentence — "the App Store or Google Play" — written
@@ -344,6 +371,9 @@ export function outcomeMessage(kind, reason) {
 /** Shown while the ladder in ENTITLEMENT_POLL_DELAYS_MS is still running. */
 export const ACTIVATING_NOTICE = "Waiting for the store to confirm — you can keep using the app.";
 
+/** Which of the two, by where the purchase was made. */
+export const activatingNotice = (reason) => (reason === "web" ? WEB.activating : ACTIVATING_NOTICE);
+
 /* ---------- buying on the web (Phase 6, behind STRIPE_ENABLED) ----------
 
    THE SAME PANEL, A DIFFERENT PAYMENT PROVIDER, and the copy has to be
@@ -351,9 +381,23 @@ export const ACTIVATING_NOTICE = "Waiting for the store to confirm — you can k
    somebody to a completely different place depending on where they
    bought, and sending a Stripe subscriber to Apple's page (or the other
    way) is a dead end that reads as the app being broken. */
+const CHANGE_PLAN = "Change plan";
+const MANAGE_OR_CANCEL = "Manage or cancel";
+
 export const WEB = {
   buyHint: "Card payment, in your browser. You can cancel any time.",
-  manage: "Manage or cancel",
+  manage: MANAGE_OR_CANCEL,
+  /* A CARD SUBSCRIBER CHANGES PLAN IN THE PORTAL, never by buying the
+     other one: checkout makes a new subscription each time, and the
+     student would hold both and pay for both. So a running card
+     subscription shows this in place of the buy buttons, and the
+     server refuses a second checkout with `stripe_subscription_active`
+     and the sentence below. */
+  changePlan: CHANGE_PLAN,
+  alreadyPaidByCard: `You already have a plan paid by card. To switch plans, use ${CHANGE_PLAN}. To stop it, use ${MANAGE_OR_CANCEL}.`,
+  /* The web half of ACTIVATING_NOTICE. Nothing about a web purchase
+     goes through a store, so the sentence names who it is waiting for. */
+  activating: "Waiting for Stripe to confirm your payment. You can keep using the app.",
   /* THE REFUSAL THAT NEEDS A SPECIFIC SENTENCE. An account already
      holding a store subscription cannot buy again here: two providers
      writing the same tier would flap it between them, and the student
@@ -382,6 +426,7 @@ export const WEB = {
  */
 export function webFailureMessage(code, store) {
   if (code === "store_subscription_active") return WEB.alreadySubscribed(store);
+  if (code === "stripe_subscription_active") return WEB.alreadyPaidByCard;
   if (code === "plan_unavailable") return WEB.planUnavailable;
   if (code === "no_stripe_customer") return WEB.noCustomer;
   if (code === "unauthenticated") return "Please sign in again.";

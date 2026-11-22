@@ -248,3 +248,26 @@ export function manageSubscriptionUrl({ customerInfo = null, store = null } = {}
    forever; and when the ladder runs out the copy says the plan is still
    activating rather than that anything failed, because it usually is. */
 export const ENTITLEMENT_POLL_DELAYS_MS = [0, 2000, 5000, 10000];
+
+/* COMING BACK FROM STRIPE CHECKOUT. The session's return URLs carry
+   `?checkout=done` or `?checkout=cancelled` (CHECKOUT_SUCCESS_URL in
+   supabase/functions/_shared/stripe.ts). The app opens on the plans
+   when it sees either, re-reads the plan until the payment lands, and
+   takes the parameter off the address so a reload does not do it again.
+   Anything else is not a return from checkout. */
+export function checkoutReturn(search) {
+  let value = null;
+  try {
+    value = new URLSearchParams(search || "").get("checkout");
+  } catch (e) {
+    return null;
+  }
+  return value === "done" || value === "cancelled" ? value : null;
+}
+
+/** The same address without `checkout`, keeping every other parameter and the hash. */
+export function withoutCheckout(href) {
+  const url = new URL(href);
+  url.searchParams.delete("checkout");
+  return `${url.pathname}${url.search}${url.hash}`;
+}
