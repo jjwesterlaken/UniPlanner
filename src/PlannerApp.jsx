@@ -4246,8 +4246,9 @@ function BackupPanel({ data, onRestore, session }) {
             aria-hidden="true"
           />
           <p className="mt-3 text-xs text-stone-400">
-            The backup is a single file holding everything - courses, notes, drawings, assignments,
-            both semesters. Keep it somewhere safe like a cloud drive.
+            The backup is a single file holding your planner - courses, notes, assignments, both
+            semesters. It leaves out the full text of your AI notes and any semesters you have
+            archived, which stay with your account. Keep it somewhere safe like a cloud drive.
           </p>
         </>
       )}

@@ -460,15 +460,23 @@ function test_thirdParty() {
      something the policy no longer says, and neither shows up as a
      failure. The published document is where being quietly wrong costs
      most. */
+  /* TWO HALVES, because this file proves two things: a quiet walk
+     sends nothing (so what a student types never leaves), and a broken
+     app sends one error report to our own table, with no account on
+     it. The sentence used to be "Nothing reaches us", which section 3
+     above proved false, and this check pinned it in place. */
   const policy = fs.readFileSync(path.join(rootDir, "public/privacy.html"), "utf8").replace(/\s+/g, " ");
+  const signedOut = (/<h3>If you use the app without an account<\/h3>(.*?)<h3>/i.exec(policy) || [])[1] || "";
+  check(signedOut.length > 0, "the policy still has a section about using the app without an account");
   check(
-    /without an account/i.test(policy),
-    "the policy still has a section about using the app without an account"
+    /you type[^.]*never\s+leaves/i.test(signedOut),
+    "the policy still promises what you type never leaves the device without an account",
+    "the promise sections 1 and 2 prove has been reworded — re-point the test, or stop claiming it"
   );
   check(
-    /never\s+leaves\s+it/i.test(policy) && /nothing reaches us/i.test(policy),
-    "the policy still promises nothing leaves the device without an account",
-    "the promise this whole file exists to prove has been reworded — re-point the test, or stop claiming it"
+    /error report/i.test(signedOut) && /not linked to any account/i.test(signedOut),
+    "the policy names the one thing a signed-out app sends: an error report linked to no account",
+    "section 3 proves a signed-out app sends an error report, and the policy's section on using the app without an account doesn't say so"
   );
 }
 

@@ -38,6 +38,10 @@ import { allowanceForTier, TRIAL_CREDITS } from "../src/aiTextLimits.js";
 /* The desktop mic prompt is compared against this rather than against a
    typed sentence — the same constant every other shell interpolates. */
 import { MIC_USAGE_DESCRIPTION } from "../mobile/scripts/native-permissions.mjs";
+import { AI_PROVIDERS } from "../src/aiProviders.js";
+import { confirmationMatches, DELETE_CONFIRMATION_PHRASE } from "../src/accountDeletion.js";
+import { ESSAY_REWRITE_ENABLED } from "../src/essayFeedback.js";
+import { TASKS as ESSAY_TASKS } from "../supabase/functions/ai-text/prompts.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
@@ -1383,18 +1387,129 @@ test("every in-page link points at something that exists", () => {
   }
 });
 
-test("the page's factual claims are ones the code can back", () => {
-  /* Three claims on a public page that are checkable here, and were
-     checked rather than assumed: the Sydney one against the privacy
-     policy, the in-app deletion one against the code that does it, and
-     the no-account one against the test that proves it. */
-  assert.match(source("public/privacy.html"), /ap-southeast-2|Sydney/, "the page says Sydney and the policy does not");
-  assert.ok(PAGE.includes("Stored in Sydney"), "the Sydney claim has gone from the page but stays in this test");
-  assert.ok(
-    fs.existsSync(path.join(rootDir, "src/accountDeletion.js")),
-    "the page promises one-tap account deletion and the module that does it is gone"
-  );
+/* THE PAGE'S FACTUAL CLAIMS, each checked against what decides it.
+
+   This used to be one test that asserted src/accountDeletion.js EXISTS
+   — which a module deleting nothing would satisfy — beside a page that
+   said "Your data stays in Australia" while every lecture went to two
+   companies in the United States, "Nothing is sent anywhere" while the
+   database accepts an error report from a signed-out app, and "One tap"
+   for a deletion the app makes you type DELETE to confirm. Every claim
+   below is read against where it is DECIDED: the providers from
+   aiProviders.js, deletion from the latest delete_my_account_data, what
+   a signed-out app may send from the policy on client_errors, the essay
+   from the task list and the panel that renders it.
+
+   WHAT IT CANNOT SEE, said rather than implied: the database's region is
+   a dashboard setting, so the Sydney claim is checked against the policy
+   that records it, not against the project itself. */
+const PAGE_TEXT = PAGE.replace(/<script[\s\S]*?<\/script>/gi, " ")
+  .replace(/<style[\s\S]*?<\/style>/gi, " ")
+  .replace(/<[^>]+>/g, " ")
+  .replace(/&rsquo;|&#39;|&apos;/g, "'")
+  .replace(/&amp;/g, "&")
+  .replace(/\s+/g, " ");
+const stripJsComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+const MIGRATIONS = fs.readdirSync(path.join(rootDir, "supabase/migrations")).filter((f) => f.endsWith(".sql")).sort();
+const migration = (f) => source(`supabase/migrations/${f}`);
+
+/* How the page names a provider's country. A new country in the
+   provider list fails here until somebody decides what the page says. */
+const COUNTRY_ON_PAGE = { "the United States": /\b(US|USA|United States)\b/ };
+
+test("THE PAGE SAYS WHAT LEAVES AUSTRALIA, AND WHERE IT GOES — read from the provider list", () => {
+  const countries = [...new Set(AI_PROVIDERS.map((p) => p.country))];
+  assert.ok(countries.length > 0, "aiProviders.js names nobody, so this would check nothing");
+  if (countries.some((c) => !/Australia/i.test(c))) {
+    assert.doesNotMatch(
+      PAGE_TEXT,
+      /\b(stays?|kept|remains?) in Australia\b/i,
+      `the page says something stays in Australia, and lectures and text go to ${AI_PROVIDERS.map((p) => `${p.name} (${p.country})`).join(", ")}`
+    );
+  }
+  for (const country of countries) {
+    if (/Australia/i.test(country)) continue;
+    assert.ok(COUNTRY_ON_PAGE[country], `the provider list names ${country} and this test does not know how the page names it; declare it in COUNTRY_ON_PAGE`);
+    assert.match(PAGE_TEXT, COUNTRY_ON_PAGE[country], `the page never says that lectures and text go to ${country}`);
+  }
+  /* The storage half. The policy is the record of the region. */
+  assert.match(source("public/privacy.html"), /Sydney[^<]*<\/strong>\s*\(<code>ap-southeast-2<\/code>\)/, "the policy no longer records where the planner is stored");
+  assert.match(PAGE_TEXT, /stored in Australia/i, "the page no longer says where the planner is stored");
+  assert.match(PAGE_TEXT, /Stored in Sydney/, "the page no longer says Sydney");
+});
+
+test("THE PAGE'S DELETION CLAIM IS WHAT DELETING DOES — typed in the app, and removing the planner, notes and recordings", () => {
+  /* Typed, not tapped: the app asks for the phrase before it deletes. */
+  assert.equal(confirmationMatches(""), false, "the deletion no longer needs a typed confirmation, so re-read this claim");
+  assert.equal(confirmationMatches(DELETE_CONFIRMATION_PHRASE), true);
+  assert.doesNotMatch(PAGE_TEXT, /\bone tap\b|\binstantly\b/i, `the page says deleting is one tap, and the app asks the student to type ${DELETE_CONFIRMATION_PHRASE} first`);
   assert.match(source("src/PlannerApp.jsx"), /deleteAccount\(/, "nothing in the app calls deleteAccount");
+
+  /* What it removes, from the LATEST migration that defines the
+     function: an older body is exactly how a table went missing from
+     account deletion once already. */
+  const defining = MIGRATIONS.filter((f) => /create\s+or\s+replace\s+function\s+public\.delete_my_account_data\s*\(/i.test(migration(f)));
+  assert.ok(defining.length > 0, "no migration defines delete_my_account_data");
+  const sql = migration(defining[defining.length - 1]);
+  const at = sql.search(/create\s+or\s+replace\s+function\s+public\.delete_my_account_data\s*\(/i);
+  const open = sql.indexOf("$$", at);
+  const body = sql.slice(open, sql.indexOf("$$", open + 2));
+  const emptied = new Set([...body.matchAll(/delete\s+from\s+public\.(\w+)/gi)].map((m) => m[1]));
+  assert.ok(emptied.size > 0, `read no deletes out of ${defining[defining.length - 1]}, so the rows below were not checked`);
+  const CLAIMED = { planner: ["planner_data"], notes: ["ai_notes", "semester_archives"], recordings: ["ai_notes_requests"] };
+  for (const [word, tables] of Object.entries(CLAIMED)) {
+    assert.match(PAGE_TEXT, new RegExp(`\\b${word}\\b[^.]*removed from our servers|removed[^.]*\\b${word}\\b`, "i"), `the page doesn't say deleting removes your ${word}`);
+    for (const t of tables) assert.ok(emptied.has(t), `the page says deleting removes your ${word}, and ${defining[defining.length - 1]} never empties ${t}`);
+  }
+  /* The recordings themselves are files, removed through Storage before
+     the rows go — the function cannot reach them over SQL. */
+  const del = stripJsComments(source("src/accountDeletion.js"));
+  const flow = del.slice(del.indexOf("export async function deleteAccount"));
+  const audio = flow.indexOf("removeOwnAudio(");
+  const rows = flow.indexOf('rpc("delete_my_account")');
+  assert.ok(audio > -1 && rows > -1 && audio < rows, "deleting an account no longer removes the stored audio before the rows");
+});
+
+test("WITHOUT AN ACCOUNT, THE PAGE AND THE STORE LISTING NAME THE ONE THING SENT: an anonymous error report", () => {
+  /* What a signed-out app may send is decided by the database: anon may
+     insert an error report, and only with no account on the row. The
+     behaviour (zero requests on a quiet walk, then the one report) is
+     proved in test-local-only.mjs. */
+  const all = MIGRATIONS.map(migration).join("\n");
+  assert.match(
+    all,
+    /client_errors_insert_anon"?\s+on\s+public\.client_errors\s+for\s+insert\s+to\s+anon\s+with\s+check\s+\(\s*user_id\s+is\s+null\s*\)/i,
+    "anon can no longer send an error report, so this claim is out of date: re-read it"
+  );
+  assert.match(source("scripts/test-local-only.mjs"), /client_errors/, "the walk that proves what a signed-out app sends is gone");
+  for (const [where, text] of [["the page", PAGE_TEXT], ["the store listing", FULL_DESCRIPTION]]) {
+    assert.doesNotMatch(text, /nothing is sent|sent nowhere|nothing leaves|never leaves/i, `${where} says nothing is sent without an account, and a signed-out app sends an error report when it breaks`);
+    assert.match(text, /anonymous (crash|error) report/i, `${where} doesn't say what a signed-out app sends`);
+  }
+});
+
+test("THE AUDIO STEP SAYS WHAT HAPPENS TO THE AUDIO: held until it is transcribed, then deleted", () => {
+  /* The client uploads the recording and the function deletes it once
+     transcribed, so it IS stored, briefly. */
+  assert.match(stripJsComments(source("src/aiNotesClient.js")), /storage\.from\(BUCKET\)\.upload\(/, "the app no longer uploads the recording, so re-read the audio claim");
+  assert.match(source("supabase/functions/ai-notes/index.ts"), /storage\.from\(LECTURE_AUDIO_BUCKET\)\.remove\(\[objectPath\]\)/, "the function no longer deletes the audio after transcribing it");
+  assert.match(PAGE_TEXT, /transcribed[^.]*then deleted/i, "the page no longer says the audio is deleted");
+  assert.doesNotMatch(PAGE_TEXT, /never stored/i, "the page says the audio is never stored, and it is uploaded and kept until it is transcribed");
+});
+
+test("THE ESSAY CLAIM: it writes an example rewrite on request, shows it beside the text, and nothing but the student writes the essay", () => {
+  if (ESSAY_TASKS.includes("rewrite") && ESSAY_REWRITE_ENABLED) {
+    assert.doesNotMatch(PAGE_TEXT, /never writes/i, "the page says it never writes for you, and it writes an example rewrite when asked");
+    assert.match(PAGE_TEXT, /example rewrite[^.]*beside your text[^.]*never inserted/i, "the page no longer says where an example rewrite goes");
+  }
+  /* "Never inserted", read from the panel: the essay is written by the
+     textarea and by nothing else, and a rewrite lands in its own map. */
+  const panel = stripJsComments(source("src/essayPanel.jsx"));
+  const calls = [...panel.matchAll(/setEssay\(([^)]*)\)/g)].map((m) => m[1].trim());
+  assert.ok(calls.length > 0, "found no writer of the essay at all, so this checked nothing");
+  assert.deepEqual(calls, ["e.target.value"], `something other than the student's typing writes the essay: ${calls.join(", ")}`);
+  assert.equal((panel.match(/\bessay\s*:/g) || []).length, 1, "the essay is written somewhere other than setEssay");
+  assert.match(panel, /rewrites:\s*\{\s*\.\.\.cur\.rewrites/, "a rewrite no longer lands in its own map");
 });
 
 test("the page renders its tiers and downloads from data, never from typed HTML", () => {

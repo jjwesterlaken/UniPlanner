@@ -123,7 +123,7 @@ export const AI_NOTES_COPY = {
      gated. */
   signedOutTools: {
     tools: "Record a lecture · Summarise a reading",
-    detail: "AI study help needs an account. Sign in (or create one) from the Account tab first.",
+    detail: "AI study help needs an account. Sign in (or create one) in Settings first.",
   },
 
   /* After declining the consent screen. NOT a dead end and NOT a

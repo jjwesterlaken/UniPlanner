@@ -50,7 +50,7 @@ AND THE REST OF IT
 Notes with real formatting, folders per course, a reference sheet for the formulas you keep looking up, and a semester archive so next year starts clean without losing last year.
 
 WORKS WITHOUT AN ACCOUNT
-Everything works signed out, stored on your own device and sent nowhere. Make an account and it syncs across your devices — you choose when.
+Everything works signed out, and your planner stays on your own device. The one thing ever sent is an anonymous crash report if the app hits an error. Make an account and it syncs across your devices — you choose when.
 
 ABOUT THE AI FEATURES
 Recording lectures, summarising a reading you supply, and the study help are optional and use a credit allowance. Every plan includes credits to try them. Your recordings are deleted as soon as they have been transcribed, and nothing you type is used to train anybody's model.`;
