@@ -27,9 +27,11 @@
 -- the function, with a DEDICATED secret read from Vault at execution
 -- time — pg_net stores each request, headers included, in a queue
 -- table for hours, so the service role key must never be the thing
--- that authenticates it. Without pg_cron, pg_net or the two Vault
--- secrets, the migration applies cleanly and raises a NOTICE naming
--- what is missing, rather than failing.
+-- that authenticates it. Without pg_cron or pg_net the migration
+-- applies cleanly and raises a NOTICE naming what is missing. With both
+-- present, a missing Vault secret REFUSES, naming the one it could not
+-- find: a schedule that quietly did not happen is the failure this
+-- whole migration exists to catch.
 --
 -- IT WIDENS, so it is applied BEFORE the function is deployed. A
 -- function deployed first would fail every run at "state_read" (500,
@@ -73,12 +75,34 @@ begin
     return;
   end if;
 
+  -- BOTH VAULT SECRETS, BY EXACT NAME, AND A MISSING ONE REFUSES.
+  -- This used to raise a NOTICE and skip the schedule when the URL was
+  -- missing, and never looked for the bearer secret at all. On 1 October
+  -- 2026 the canary's URL had been saved under the wrong name: the
+  -- migration "applied", nothing was scheduled, and only a live probe
+  -- showed it. A NOTICE in a SQL editor nobody reads afterwards is not
+  -- a report (CLAUDE.md, "A MIGRATION THAT CAN SKIP SILENTLY..."), so
+  -- the apply now fails and names the one it could not find. The
+  -- secret is checked here as well as read at run time, because a job
+  -- scheduled without it sends "Bearer " + null to the function on
+  -- every run, and cron.job_run_details reports each one as a success.
+  -- An empty value counts as missing.
+  if pg_catalog.to_regclass('vault.decrypted_secrets') is null then
+    raise exception '0025 REFUSED: Supabase Vault is not available (vault.decrypted_secrets does not exist), so the Auth email canary cannot be scheduled. See SUPABASE-SETUP.md §3b.';
+  end if;
+
   select decrypted_secret into fn_url
   from vault.decrypted_secrets where name = 'auth_canary_function_url';
 
-  if fn_url is null then
-    raise notice 'Vault secret auth_canary_function_url is missing — skipping the canary schedule. See SUPABASE-SETUP.md.';
-    return;
+  if coalesce(fn_url, '') = '' then
+    raise exception '0025 REFUSED: Vault secret "auth_canary_function_url" was not found (or is empty), so the Auth email canary was NOT scheduled. Add it under exactly that name in Project Settings → Vault, then re-run this migration. See SUPABASE-SETUP.md §3b.';
+  end if;
+
+  if not exists (
+    select 1 from vault.decrypted_secrets
+    where name = 'auth_canary_secret' and coalesce(decrypted_secret, '') <> ''
+  ) then
+    raise exception '0025 REFUSED: Vault secret "auth_canary_secret" was not found (or is empty), so every run of the Auth email canary would be refused by its function. Add it under exactly that name in Project Settings → Vault, then re-run this migration. See SUPABASE-SETUP.md §3b.';
   end if;
 
   perform cron.unschedule('auth-email-canary')

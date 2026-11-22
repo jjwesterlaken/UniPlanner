@@ -63,6 +63,8 @@ $$;
 -- tests run against a plain postgres container that has neither. A
 -- project without them still gets a migration that applies cleanly --
 -- and the notice says what is missing rather than leaving it silent.
+-- With both extensions present, a missing VAULT secret is different: it
+-- REFUSES, naming the secret (see the block below).
 -- ---------------------------------------------------------------------
 
 do $$
@@ -82,12 +84,34 @@ begin
   -- tracked migration. The job body reads the OTHER secret at execution
   -- time, so the credential is never stored in cron.job's command text
   -- either -- only the lookup that fetches it.
+  -- BOTH VAULT SECRETS, BY EXACT NAME, AND A MISSING ONE REFUSES.
+  -- This used to raise a NOTICE and skip the schedule when the URL was
+  -- missing, and never looked for the bearer secret at all. On 1 October
+  -- 2026 the canary's URL had been saved under the wrong name: the
+  -- migration "applied", nothing was scheduled, and only a live probe
+  -- showed it. A NOTICE in a SQL editor nobody reads afterwards is not
+  -- a report (CLAUDE.md, "A MIGRATION THAT CAN SKIP SILENTLY..."), so
+  -- the apply now fails and names the one it could not find. The
+  -- secret is checked here as well as read at run time, because a job
+  -- scheduled without it sends "Bearer " + null to the function on
+  -- every run, and cron.job_run_details reports each one as a success.
+  -- An empty value counts as missing.
+  if pg_catalog.to_regclass('vault.decrypted_secrets') is null then
+    raise exception '0004 REFUSED: Supabase Vault is not available (vault.decrypted_secrets does not exist), so the retention sweep cannot be scheduled. See SUPABASE-SETUP.md §3b.';
+  end if;
+
   select decrypted_secret into fn_url
   from vault.decrypted_secrets where name = 'ai_notes_function_url';
 
-  if fn_url is null then
-    raise notice 'Vault secret ai_notes_function_url is missing — skipping the cron schedule. See SUPABASE-SETUP.md.';
-    return;
+  if coalesce(fn_url, '') = '' then
+    raise exception '0004 REFUSED: Vault secret "ai_notes_function_url" was not found (or is empty), so the retention sweep was NOT scheduled. Add it under exactly that name in Project Settings → Vault, then re-run this migration. See SUPABASE-SETUP.md §3b.';
+  end if;
+
+  if not exists (
+    select 1 from vault.decrypted_secrets
+    where name = 'ai_notes_sweep_secret' and coalesce(decrypted_secret, '') <> ''
+  ) then
+    raise exception '0004 REFUSED: Vault secret "ai_notes_sweep_secret" was not found (or is empty), so every run of the retention sweep would be refused by its function. Add it under exactly that name in Project Settings → Vault, then re-run this migration. See SUPABASE-SETUP.md §3b.';
   end if;
 
   perform cron.unschedule('ai-notes-retention-sweep')
