@@ -308,7 +308,10 @@ function forwarder(name, { pathname = "/", search = "", hash = "", standalone = 
       .filter((l) => l.trim() && !l.trim().startsWith("#"));
     const swAt = blocks.findIndex((l) => l.trim() === "/sw.js");
     assert.ok(swAt >= 0, "no _headers rule matches /sw.js — the edge may hold the stub, or the worker it replaces");
-    const rule = blocks.slice(swAt + 1).filter((l) => /^\s/.test(l));
+    /* The rule's own lines: up to the next path, so a later rule's
+       headers are never read as this one's. */
+    const next = blocks.findIndex((l, i) => i > swAt && !/^\s/.test(l));
+    const rule = blocks.slice(swAt + 1, next < 0 ? undefined : next);
     assert.ok(rule.length > 0, "the /sw.js rule carries no headers — this check would pass over nothing");
     assert.ok(
       rule.some((l) => /^\s*Cache-Control:\s*no-store\s*$/i.test(l)),

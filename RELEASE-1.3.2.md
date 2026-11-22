@@ -13,8 +13,8 @@ v1.3.1 is published.
 
 | # | Item | State |
 |---|---|---|
-| 1 | CI: test fixtures take their dates from the clock; the test workflow also runs once a day; a browser suite that skips for want of Chromium still fails on a check that ran | In review |
-| 2 | Semester setup: the mid-semester break saves when its two dates are entered one at a time. Website: photos added to a reading or to marking criteria show their thumbnails. The app's script, styles and worker are revalidated on every load | Planned |
+| 1 | CI: test fixtures take their dates from the clock; the test workflow also runs once a day; a browser suite that skips for want of Chromium still fails on a check that ran | Merged (#186) |
+| 2 | Semester setup: the mid-semester break saves when its two dates are entered one at a time. Website: a photographed page shows its thumbnail, and a photo of marking criteria is read. The app's script, styles and worker are revalidated on every load | In review |
 | 3 | Plans: a web subscriber changes plan in the billing portal; the panel follows a web purchase until it lands and names Stripe; the account-deletion confirmation names an active subscription and links to managing it | Planned |
 | 4 | Lecture notes: "Get it back" keeps the lecture's course, week and translation, and a recovered summary can be retried | Planned |
 | 5 | Wording: the website, privacy policy, terms, store listing and backup panel describe what the app does | Planned |

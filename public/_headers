@@ -42,6 +42,12 @@
 #   the project ever moves, this line is a second place that names it.
 # - media-src blob:: the recording review screen plays back the
 #   just-recorded audio from a blob URL.
+# - img-src blob:: a photographed page is decoded from a blob URL
+#   before it is scaled down (downscalePhoto in src/aiText.jsx), for a
+#   reading and for an essay's marking criteria alike. Without it every
+#   photo fails to load and is skipped without a word, so no thumbnail
+#   ever appears. scripts/test-served-headers.mjs adds one under this
+#   exact policy.
 # - The pages.dev PREVIEWS get these same headers (one file, every
 #   deploy), which is fine: same app, same backend.
 #
@@ -57,7 +63,7 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Permissions-Policy: microphone=(self), camera=(self), geolocation=(), payment=(), usb=()
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://kuhtogvewcooigudmgwj.supabase.co; img-src 'self' data:; media-src 'self' blob:; object-src 'none'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://kuhtogvewcooigudmgwj.supabase.co; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'none'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
 
 # THE ROOT WORKER MUST NOT BE HELD BY ANY CACHE, and this rule is the
 # reason the fix is not just a file. The stale root worker was being
@@ -72,11 +78,29 @@
 # one path is enforced as the INTERSECTION with the origin's, and the
 # app's is the permissive side. Cache-Control is the only line this
 # path needs to differ on.
-#
-# `/app/sw.js` is deliberately NOT listed. It is the live worker, its
-# filename carries no hash, and the app's own update story (a build-id
-# cache name plus a network-first shell) is built around the ordinary
-# caching it already gets.
 
 /sw.js
   Cache-Control: no-store
+
+# THE THREE FILES AN UPDATE DEPENDS ON ARE REVALIDATED ON EVERY LOAD.
+# Their names carry no hash, so a copy a browser holds is not stale by
+# name. Served with a max-age, a reload after a promote runs the OLD
+# script under the new index.html for as long as that copy is fresh, and
+# the worker's network-first shell fetch reads through the same HTTP
+# cache, so it does not help. 14400 is the age the zone was serving
+# /sw.js with before the rule above.
+#
+# no-cache rather than no-store: the browser keeps its copy and asks
+# before each use, which costs a 304 when nothing changed. These rules
+# ADD Cache-Control and nothing else, for the same reason as /sw.js.
+# scripts/test-served-headers.mjs serves the site with every rule in this
+# file applied and reads what the browser receives for each one.
+
+/app/app.js
+  Cache-Control: no-cache
+
+/app/app.css
+  Cache-Control: no-cache
+
+/app/sw.js
+  Cache-Control: no-cache

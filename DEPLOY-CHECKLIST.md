@@ -650,6 +650,22 @@ reached an origin that had anything new to say. `no-store` stops it
 being held again; it does not evict what is already there. Re-run the
 curl above afterwards and check `cf-cache-status` is not `HIT`.
 
+**And the three files an update depends on, plus the photo policy:**
+
+```bash
+for f in app.js app.css sw.js; do
+  printf '%-8s %s\n' "$f" "$(curl -sI https://www.uniplannerapp.com/app/$f | grep -i '^cache-control:' | tr -d '\r')"
+done
+curl -sI https://www.uniplannerapp.com/app/ | grep -io "img-src[^;]*"
+```
+
+Expect `cache-control: no-cache` on all three, and
+`img-src 'self' data: blob:`. A `max-age=14400` on any of the three
+means the zone is rewriting the header (Caching → Configuration →
+Browser Cache TTL), which is what it did to `/sw.js`.
+`scripts/test-served-headers.mjs` checks the same two things against
+the built site; this is the check against the real one.
+
 ### 7b. DNS
 
 Nothing moves. `www` already points at the Pages project; the apex
