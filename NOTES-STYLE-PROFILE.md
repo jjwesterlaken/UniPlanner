@@ -1,8 +1,9 @@
-# Notes style — a per-account profile for AI lecture notes (1.3.2)
+# Notes style — a per-account profile for AI lecture notes (1.4.0)
 
 **A plan, not a build.** Written 7 October 2026 on Jared's instruction.
-No code exists for it yet. **It is 1.3.2, not 1.3.1** (Jared, 7 October
-2026): it depends on 1.3.1 item 8 (the lecture-notes rating, migration
+No code exists for it yet. **It is 1.4.0** — it was 1.3.2, not 1.3.1
+(Jared, 7 October 2026), and moved with the rest of that list on 22
+November 2026 when 1.3.2 became the hardening release: it depends on 1.3.1 item 8 (the lecture-notes rating, migration
 0026) being live and collecting, because the ratings are what drive the
 suggestions below.
 
@@ -12,7 +13,7 @@ suggestions below.
 > route that has never carried them: alongside a lecture, to the notes
 > summariser. Does the v8 consent screen's description cover that, or
 > is it v9? The reasoning is under "Consent" below. The alternative that
-> needs no ruling is to ship 1.3.2 without known terms.
+> needs no ruling is to ship 1.4.0 without known terms.
 
 ## What it is
 
@@ -201,7 +202,7 @@ ships.
 
 **The measurement gate, before any of the above is believed.** Every
 figure here is modelled, and `TYPICAL_SUMMARY_OUTPUT_TOKENS` was once a
-model that turned out to be 5.9× reality. Before 1.3.2 ships, run
+model that turned out to be 5.9× reality. Before 1.4.0 ships, run
 `scripts/measure-summary-depth.mjs` as a **pair** (the prompt-change
 rule): the same recording under defaults and under shorter, longer and
 thorough, printing output tokens and words per key point for each arm.

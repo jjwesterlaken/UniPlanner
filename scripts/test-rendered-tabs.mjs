@@ -228,6 +228,11 @@ async function run() {
       process.exit(1);
     }
     console.log(`skip  - ${message}`);
+    /* The checks above this point need no browser and have already
+       run. Their result decides the exit code here too: returning
+       without it would turn a FAIL printed above into exit 0. */
+    console.log(`\n${passed} passed, ${failed} failed (browser checks skipped)`);
+    if (failed > 0) process.exit(1);
     return;
   }
 

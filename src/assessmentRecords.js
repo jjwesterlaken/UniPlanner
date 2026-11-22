@@ -8,7 +8,7 @@
    Grades also lists the Plan assignments that have no grade record, and
    the Calendar shows Grades' dates. No item is converted, merged, moved
    or re-stamped, so an older build on another device sees exactly what
-   it saw before. Converting on first edit is Release B (RELEASE-1.3.2.md).
+   it saw before. Converting on first edit is Release B (RELEASE-1.4.0.md).
 
    THE ONE LINK THAT EXISTS: `assessment.assignmentId`. Nothing in the
    app has ever set it, but the workload forecast honours it and so does

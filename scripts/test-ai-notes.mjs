@@ -2736,6 +2736,21 @@ async function run() {
     assert.match(workflow, /fetch-depth:\s*0/, "CI checks out shallow, so the coverage ratchet has no origin/main to compare against");
   });
 
+  await test("the test workflow runs once a day as well as on every push", () => {
+    /* A suite can start failing with nothing pushed — a fixture date
+       passing is how it happened — and a push-only workflow stays green
+       on the last push until somebody pushes again. The schedule is
+       read out of the workflow's own `on:` block, so a cron line
+       anywhere else in the file does not count. */
+    const workflow = fs.readFileSync(path.join(rootDir, ".github/workflows/test.yml"), "utf8");
+    const start = workflow.indexOf("\non:");
+    const end = workflow.indexOf("\njobs:");
+    assert.ok(start >= 0 && end > start, "could not find test.yml's on: block, so this reads nothing");
+    const on = workflow.slice(start, end);
+    assert.match(on, /\n\s+push:/, "test.yml no longer runs on push");
+    assert.match(on, /\n\s+schedule:\s*\n\s+-\s*cron:\s*["'][^"']+["']/, "test.yml has no schedule, so nothing runs the suite on a day nobody pushes");
+  });
+
   await test("every browser suite is named in CI's browser job — the list is DERIVED, not remembered", () => {
     /* The browser suites (computed-ground, rendered-tabs, paper-ink)
        skip without Chromium, so in the plain npm-test job they skip
