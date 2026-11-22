@@ -160,6 +160,36 @@ async function run() {
     assert.equal(clearPendingRecovery(parkedNext).pendingAiRecovery, null, "an unkeyed clear (Save, Discard) must still clear");
   });
 
+  await test("A RECOVERED RESULT REACHES REVIEW CARRYING ITS KEY AND ITS ESTIMATE", () => {
+    /* Without the key, "Try the summary again" on a recovered failed
+       summary has nothing to send; without the estimate the note says it
+       was 0 seconds long. */
+    const { recorderReducer, INITIAL_RECORDER_STATE } = logic;
+    const result = { ok: true, summaryFailed: true, transcript: "t" };
+    const out = recorderReducer(INITIAL_RECORDER_STATE, { type: "recovered", result, idempotencyKey: "k", estimatedDurationSeconds: 1800 });
+    assert.equal(out.status, "review");
+    assert.equal(out.result, result);
+    assert.equal(out.idempotencyKey, "k", "the recovered result reached review without its key");
+    assert.equal(out.estimatedDurationSeconds, 1800);
+    /* A parked record from a build that kept neither still reaches review. */
+    const bare = recorderReducer(INITIAL_RECORDER_STATE, { type: "recovered", result, idempotencyKey: "k" });
+    assert.equal(bare.status, "review");
+    assert.equal(bare.estimatedDurationSeconds, 0);
+  });
+
+  await test("THE PARKED RECORD KEEPS THE LANGUAGE AND THE ESTIMATE, AND ONLY WHEN THERE ARE ONES", () => {
+    const { setPendingRecovery, pendingRecovery } = logic;
+    const full = setPendingRecovery({}, { key: "3f2504e0-4f89-11d3-9a0c-0305e82c3301", course: "PSYC2001", week: "7", language: "es", seconds: 10800.4, startedAt: "2026-11-22T11:00:00.000Z" });
+    assert.deepEqual(
+      { language: pendingRecovery(full).language, seconds: pendingRecovery(full).seconds },
+      { language: "es", seconds: 10800 }
+    );
+    const bytes = Buffer.byteLength(JSON.stringify(full));
+    assert.ok(bytes < 200, `a parked record with a language and a three-hour estimate is ${bytes} bytes`);
+    const bare = pendingRecovery(setPendingRecovery({}, { key: "k", course: "C", week: "3", language: null, seconds: 0, startedAt: "t" }));
+    assert.ok(!("language" in bare) && !("seconds" in bare), `nothing to keep was kept: ${JSON.stringify(bare)}`);
+  });
+
   await test("A SAVED RECORDING KEEPS WHY AND AFTER HOW LONG IT ENDED; A RECOVERED ONE KEEPS NOTHING INVENTED", async () => {
     const result = {
       ok: true, summaryFailed: false, translated: null,

@@ -96,8 +96,12 @@ const monthNow = () => new Date().toISOString().slice(0, 7);
    insert and the mark-done write get it before they succeed. */
 const CLOCK_SKEW = { code: "PGRST303", details: null, hint: null, message: "JWT issued at future" };
 
-function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used: 0 }, skew = { claim: 0, claimOther: 0, done: 0 }) {
-  const attempts = { claim: 0, done: 0 };
+function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used: 0 }, skew = { claim: 0, claimOther: 0, done: 0, lookup: 0, lookupOther: 0, listOther: 0, signOther: 0 }) {
+  const attempts = { claim: 0, done: 0, lookup: 0 };
+  /* A failure that says nothing about whether the thing exists: a
+     dropped connection, a 503 from storage. What the function makes of
+     one of these is the question the recovery card depends on. */
+  const TRANSIENT = { code: "08006", message: "connection failure" };
   // Every filter applied to a request-row query is recorded, so a test can
   // assert that writes are scoped even where the effect isn't observable
   // (the key is a primary key, so a mis-scoped update can't hit another
@@ -128,7 +132,20 @@ function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used:
         filters.push(["__lt__" + col, val]);
         return chain;
       },
-      maybeSingle: async () => ({ data: rows.find((r) => r._t === name && matches(r, filters)) || null, error: null }),
+      maybeSingle: async () => {
+        if (name === "ai_notes_requests") {
+          attempts.lookup += 1;
+          if (skew.lookup > 0) {
+            skew.lookup -= 1;
+            return { data: null, error: CLOCK_SKEW };
+          }
+          if (skew.lookupOther > 0) {
+            skew.lookupOther -= 1;
+            return { data: null, error: TRANSIENT };
+          }
+        }
+        return { data: rows.find((r) => r._t === name && matches(r, filters)) || null, error: null };
+      },
       single: async () => {
         const found = rows.find((r) => r._t === name && matches(r, filters));
         return found ? { data: found, error: null } : { data: null, error: { code: "PGRST116" } };
@@ -237,10 +254,18 @@ function makeDb(rows, missingObject = false, storedExt = "webm", trial = { used:
              two different recordings indistinguishable — and a test
              billing twice in one month then silently bills once. */
           const named = (opts && opts.search) || KEY;
+          if (skew.listOther > 0) {
+            skew.listOther -= 1;
+            return { data: null, error: { statusCode: "503", message: "storage unavailable" } };
+          }
           return { data: missingObject ? [] : [{ name: `${named}.${storedExt}`, metadata: { size: 1000 } }], error: null };
         },
         createSignedUrl: async (p) => {
           storageCalls.push({ op: "sign", path: p });
+          if (skew.signOther > 0) {
+            skew.signOther -= 1;
+            return { data: null, error: { statusCode: "503", message: "storage unavailable" } };
+          }
           return { data: { signedUrl: "https://groq.test/audio" }, error: null };
         },
         remove: async (paths) => {
@@ -261,7 +286,7 @@ async function invoke({ rows = [], key = KEY, callerId = OWNER, missingObject = 
      a trial bill is VISIBLE to a later read in the same run — which is
      what makes "the trial does not refill" testable at all. */
   const trial = { used: trialCreditsUsed };
-  const db = makeDb(rows, missingObject, storedExt, trial, skew ? { claim: 0, claimOther: 0, done: 0, ...skew } : undefined);
+  const db = makeDb(rows, missingObject, storedExt, trial, skew ? { claim: 0, claimOther: 0, done: 0, lookup: 0, lookupOther: 0, listOther: 0, signOther: 0, ...skew } : undefined);
   db.client.auth.getUser = async () => ({ data: { user: { id: callerId } }, error: null });
   const baseFrom = db.client.from;
   db.client.from = (name) => {
@@ -440,6 +465,69 @@ async function run() {
     assert.ok(r.body.result && r.body.result.transcript, "the notes did not come back");
     const line = r.logs.find((l) => /FAILURE/.test(l) && /mark_done/.test(l));
     assert.ok(line, "a mark-done write that failed for good left no failure line — the row says 'processing' and nothing says why");
+  });
+
+  /* ---- a failed read is not an answer ----
+
+     The recovery card forgets its key on exactly two codes,
+     `bad_idempotency_key` and `recording_missing`, because those say the
+     result is definitively gone. Three reads answered with one of them
+     on ANY error: the ownership lookup, the storage listing and URL
+     signing. So one dropped connection on a finished, paid lecture told
+     the card it was gone, and the card threw away the only handle on it.
+     An error is unknown, and unknown answers 500, which the card keeps
+     the key for. */
+
+  const FINISHED = () => [
+    { _t: "ai_notes_requests", idempotency_key: KEY, user_id: OWNER, status: "done", created_at: new Date().toISOString(), result: { ok: true, transcript: "a lecture", summaryFailed: true } },
+  ];
+
+  await test("A FAILED OWNERSHIP LOOKUP ANSWERS 500, NOT bad_idempotency_key", async () => {
+    const r = await invoke({ rows: FINISHED(), skew: { lookupOther: 1 } });
+    assert.equal(r.status, 500, `expected 500 for an unknown, got ${r.status}: ${r.bodyText}`);
+    assert.equal(r.body.code, "server_error", `a passing error answered "${r.body.code}", which the recovery card reads as gone`);
+    assert.deepEqual(r.providerCalls, [], "an unverified request reached a provider");
+  });
+
+  await test("AN OWNERSHIP LOOKUP REFUSED FOR CLOCK SKEW IS RETRIED ONCE, AND THE FINISHED NOTES COME BACK", async () => {
+    const r = await invoke({ rows: FINISHED(), skew: { lookup: 1 } });
+    assert.equal(r.status, 200, `expected the stored result, got ${r.status}: ${r.bodyText}`);
+    assert.equal(r.attempts.lookup, 2, `expected the refused lookup and one retry, got ${r.attempts.lookup}`);
+    assert.ok(r.body.result && r.body.result.transcript, "the finished notes did not come back");
+    assert.deepEqual(r.providerCalls, [], "a finished lecture was processed again");
+  });
+
+  await test("AN OWNERSHIP LOOKUP STILL REFUSED AFTER THE RETRY ANSWERS 500 — one retry, not a loop", async () => {
+    const r = await invoke({ rows: FINISHED(), skew: { lookup: 2 } });
+    assert.equal(r.attempts.lookup, 2, `expected exactly one retry, got ${r.attempts.lookup} lookups`);
+    assert.equal(r.status, 500, `got ${r.status}: ${r.bodyText}`);
+    assert.equal(r.body.code, "server_error");
+  });
+
+  await test("A FAILED STORAGE LISTING ANSWERS 500, NOT recording_missing, AND FREES THE ROW FOR A RETRY", async () => {
+    const r = await invoke({ skew: { listOther: 1 } });
+    assert.equal(r.status, 500, `expected 500 for an unknown, got ${r.status}: ${r.bodyText}`);
+    assert.equal(r.body.code, "server_error", `storage being briefly unavailable answered "${r.body.code}"`);
+    assert.deepEqual(r.providerCalls, [], "the provider was called without the audio");
+    assert.deepEqual(r.rpcCalls, [], "a request that never reached the audio was billed");
+    const row = r.rows.find((x) => x._t === "ai_notes_requests");
+    assert.equal(row && row.status, "failed", `the row was left "${row && row.status}", so a retry would be told it is already processing`);
+  });
+
+  await test("A FAILED URL SIGNING ANSWERS 500, NOT recording_missing", async () => {
+    const r = await invoke({ skew: { signOther: 1 } });
+    assert.equal(r.status, 500, `expected 500 for an unknown, got ${r.status}: ${r.bodyText}`);
+    assert.equal(r.body.code, "server_error", `a listed recording whose URL could not be signed answered "${r.body.code}"`);
+    assert.deepEqual(r.providerCalls, []);
+    assert.deepEqual(r.rpcCalls, []);
+  });
+
+  await test("THE CONTROL: A LISTING THAT RAN AND FOUND NOTHING IS STILL recording_missing", async () => {
+    /* Passes before and after: without it, the three above are satisfied
+       by a function that answers 500 to everything. */
+    const r = await invoke({ missingObject: true });
+    assert.equal(r.status, 404, `got ${r.status}: ${r.bodyText}`);
+    assert.equal(r.body.code, "recording_missing");
   });
 
   await test("THE REQUEST'S END REASON AND RECORDED SECONDS ARE LOGGED AT THE CLAIM — and only as a short token and a number", async () => {

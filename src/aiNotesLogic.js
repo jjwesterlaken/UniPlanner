@@ -944,9 +944,27 @@ export function aiNotePreview(page, limit = 200) {
    Note the null rather than a delete in clearPendingRecovery: mergeData
    spreads local.meta then newer.meta, so a key simply removed on one
    device would be reinstated by the other's copy. An explicit null is
-   what propagates a clear. */
-export function setPendingRecovery(meta, { key, course, week, startedAt }) {
-  return { ...(meta || {}), pendingAiRecovery: { key, course: course || "", week: week || "", startedAt } };
+   what propagates a clear.
+
+   THE LANGUAGE AND THE ESTIMATE TRAVEL WITH THE KEY. "Get it back" used
+   to send no translation and an estimate of 0, and the recovered result
+   was saved under whatever the form held at the time: a requested
+   translation was dropped, the cards had no course, and the summary
+   could not be retried because the key never reached the review screen.
+   Both fields are written only when they have a value, so a record from
+   a build without them reads exactly as it did. */
+export function setPendingRecovery(meta, { key, course, week, language, seconds, startedAt }) {
+  return {
+    ...(meta || {}),
+    pendingAiRecovery: {
+      key,
+      course: course || "",
+      week: week || "",
+      ...(language ? { language } : {}),
+      ...(Number(seconds) > 0 ? { seconds: Math.round(Number(seconds)) } : {}),
+      startedAt,
+    },
+  };
 }
 
 /* With a `key`, clears only THAT recording's parked key. "Record the
@@ -1051,6 +1069,21 @@ export function recorderReducer(state, action) {
 
     case "processed":
       return { ...state, status: "review", result: action.result };
+
+    /* A result fetched back by "Get it back". It enters the review
+       screen exactly as a processed one does, carrying the key (so the
+       summary can be retried) and the recording's estimate (so the note
+       records how long it was), which a fresh session does not have. */
+    case "recovered":
+      return {
+        ...state,
+        status: "review",
+        result: action.result,
+        idempotencyKey: action.idempotencyKey || null,
+        estimatedDurationSeconds: Number(action.estimatedDurationSeconds) || 0,
+        errorCode: null,
+        errorMessage: null,
+      };
 
     case "retry":
       // Only meaningful from "error", and only if there's still a blob

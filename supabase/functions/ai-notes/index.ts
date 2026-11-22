@@ -575,12 +575,24 @@ Deno.serve(async (req: Request) => {
          applied has to be written here instead. Without the user_id
          filter this returned `result` -- a full transcript and summary --
          to anyone presenting a key that already had a completed row. */
-      const { data: existing } = await supabaseAdmin
-        .from("ai_notes_requests")
-        .select("*")
-        .eq("idempotency_key", idempotencyKey)
-        .eq("user_id", userId)
-        .maybeSingle();
+      /* A FAILED LOOKUP IS NOT "NOT YOURS". Its error used to be ignored,
+         so a dropped connection read as an empty answer and was refused
+         as a bad key, which the recovery card treats as gone for good and
+         forgets the only handle on a lecture already paid for. A clock
+         skew refusal gets the one waited retry the claim gets; any other
+         error answers 500, which the card keeps the key for. */
+      const { data: existing, error: lookupErr } = await retryClockSkewOnce(() =>
+        supabaseAdmin
+          .from("ai_notes_requests")
+          .select("*")
+          .eq("idempotency_key", idempotencyKey)
+          .eq("user_id", userId)
+          .maybeSingle()
+      );
+      if (lookupErr) {
+        logFailure("idempotency_insert", lookupErr, { outcome: "lookup_failed" });
+        return errorResponse("idempotency_insert", "server_error", "Something went wrong. Please try again.", 500);
+      }
 
       if (!existing) {
         // The key is taken (23505) but not by this user. Rejected exactly
@@ -637,9 +649,18 @@ Deno.serve(async (req: Request) => {
        allowlist. That keeps the whole path free of request input. */
     const folder = userId;
     const nameAllowed = new RegExp(`^${idempotencyKey}\\.(${AUDIO_EXTENSIONS.join("|")})$`, "i");
-    const { data: listing } = await supabaseAdmin.storage
+    const { data: listing, error: listErr } = await supabaseAdmin.storage
       .from(LECTURE_AUDIO_BUCKET)
       .list(folder, { search: idempotencyKey });
+    /* A listing that FAILED says nothing about whether the recording is
+       there, so it is not `recording_missing`, which the client treats
+       as definitive. The row is freed so the retry can claim it again
+       rather than be told the recording is already processing. */
+    if (listErr) {
+      logFailure("size_guard", listErr, { bucket: LECTURE_AUDIO_BUCKET });
+      await markFailed(idempotencyKey, userId);
+      return errorResponse("size_guard", "server_error", "Something went wrong. Please try again.", 500);
+    }
     const objectMeta = (listing || []).find((f) => nameAllowed.test(f.name));
     const objectPath = objectMeta ? `${folder}/${objectMeta.name}` : null;
     if (!objectMeta || !objectPath) {
@@ -689,9 +710,12 @@ Deno.serve(async (req: Request) => {
       .from(LECTURE_AUDIO_BUCKET)
       .createSignedUrl(objectPath, SIGNED_URL_TTL_SECONDS);
     if (signErr || !signed?.signedUrl) {
+      /* The object was LISTED a step ago, so a URL that could not be
+         signed is a failure to sign, not an absence: 500, never
+         `recording_missing`. */
       logFailure("signed_url", signErr || new Error("no signed URL returned for an object that was listed"));
       await markFailed(idempotencyKey, userId);
-      return errorResponse("signed_url", "recording_missing", "We couldn't find that recording — please record it again.", 404);
+      return errorResponse("signed_url", "server_error", "Something went wrong. Please try again.", 500);
     }
 
     // 9. Transcribe. Object is left in place on failure so a retry can

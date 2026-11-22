@@ -1075,6 +1075,8 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
           key: state.idempotencyKey,
           course,
           week,
+          language: translateTo || null,
+          seconds: state.estimatedDurationSeconds,
           startedAt: nowISO(),
         }),
       }));
@@ -1120,8 +1122,16 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
 
   /* A recovered result re-enters the flow at exactly the point the app
      closed: the review screen, with Save and Discard, rather than a
-     separate "recovered note" path that would need its own testing. */
-  const acceptRecovered = (result) => dispatch({ type: "processed", result });
+     separate "recovered note" path that would need its own testing.
+     The parked record puts back what the form held when the recording
+     stopped, so the note is saved under its own course, week and
+     language, and "Try the summary again" has a key to send. */
+  const acceptRecovered = (result, parked = {}) => {
+    setCourse(parked.course || "");
+    setWeek(parked.week || "");
+    setTranslateTo(parked.language || "");
+    dispatch({ type: "recovered", result, idempotencyKey: parked.key, estimatedDurationSeconds: parked.seconds });
+  };
 
   /* Saving a result, given everything it needs rather than reading the
      recorder's state: "Record the rest" saves the first part while the
@@ -1215,6 +1225,17 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
 
   const onDiscard = () => {
     if (setData) setData((d) => ({ ...d, meta: clearPendingRecovery(d.meta) }));
+    discard();
+  };
+
+  /* DISCARD ON THE ERROR SCREEN lets go of the parked key too. It used
+     to discard the recording and leave the key, so the recovery card
+     then offered "Get it back" for a recording the server had refused,
+     and claimed to have finished processing it. Only THIS recording's
+     key: another recording may have parked its own since. */
+  const onDiscardFailed = () => {
+    const key = state.idempotencyKey;
+    if (setData && key) setData((d) => ({ ...d, meta: clearPendingRecovery(d.meta, key) }));
     discard();
   };
 
@@ -1326,6 +1347,7 @@ export function useRecordingSession({ session, folders = [], addItem, setData })
     acceptRecovered,
     onSave,
     onDiscard,
+    onDiscardFailed,
     onRetrySummary,
     recordTheRest,
     endedOnItsOwn,
@@ -1454,6 +1476,7 @@ function Recorder({ session, courses, recording }) {
     runUpload,
     onSave,
     onDiscard,
+    onDiscardFailed,
     onRetrySummary,
     recordTheRest,
     endedOnItsOwn,
@@ -1657,7 +1680,7 @@ function Recorder({ session, courses, recording }) {
             {/* "Discard" is wrong when nothing was ever recorded -- which
                 is every failure that happens before the recorder starts,
                 including picking the wrong thing in the share dialog. */}
-            <button className={btnGhost} onClick={discard}>
+            <button className={btnGhost} onClick={onDiscardFailed}>
               <X size={15} /> {state.blob ? "Discard" : "Back"}
             </button>
             {state.blob && !PERMANENT_FAILURE_CODES.has(state.errorCode) && (
@@ -1879,12 +1902,12 @@ function RecoveryGate({ session, courses, data, setData, recording }) {
         callAiNotes({
           token,
           course: pending.course,
-          translateTo: null,
+          translateTo: pending.language || null,
           idempotencyKey: pending.key,
-          estimatedDurationSeconds: 0,
+          estimatedDurationSeconds: pending.seconds || 0,
         })
       );
-      recording.acceptRecovered(result);
+      recording.acceptRecovered(result, pending);
     } catch (err) {
       /* NEVER TREAT A FAILED REQUEST AS EVIDENCE OF ABSENCE. This used
          to forget the key on ANY error, so a dropped connection told a
