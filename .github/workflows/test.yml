@@ -296,6 +296,14 @@ jobs:
           REQUIRE_BROWSER: "1"
         run: node scripts/test-served-headers.mjs
 
+      - name: Get it back keeps the recording's course, week and language
+        # The recovery card with a parked record, the note it saves, a
+        # retried summary, and a refused recording discarded from the
+        # error screen, recorded from Chromium's fake microphone.
+        env:
+          REQUIRE_BROWSER: "1"
+        run: node scripts/test-lecture-recovery.mjs
+
       - name: Run the three journeys
         # Against the live Supabase project with a dedicated test account
         # (see e2e/helpers.mjs for why its data cannot accumulate).
