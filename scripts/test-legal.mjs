@@ -36,7 +36,8 @@ import {
 } from "../src/aiMaterialTypes.js";
 import { AUDIO_DELETION_PROMISE } from "../src/aiNotesLogic.js";
 import { TIERS, allowanceForTier } from "../src/aiTextLimits.js";
-import { TIER_NAMES, resetLine, managedByStoreLine } from "../src/plansCopy.js";
+import { TIER_NAMES, resetLine, managedByStoreLine, refundLine } from "../src/plansCopy.js";
+import { AI_NOTES_COPY } from "../src/aiNotesCopy.js";
 import { RESULT_RETENTION_DAYS, FAILED_RESULT_RETENTION_DAYS } from "../src/aiNotesRetention.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1942,6 +1943,117 @@ async function run() {
     for (const doc of ["public/privacy.html", "public/delete-account.html"]) {
       const text = fs.readFileSync(path.join(rootDir, doc), "utf8").replace(/\s+/g, " ");
       assert.match(text, /does not cancel|cannot cancel|Cancel it BEFORE/i, `${doc} does not say that deleting an account is not cancelling a subscription`);
+    }
+  });
+
+  await test("EVERY COMPANY OUR SERVER SENDS TO IS NAMED IN THE POLICY — read from the hosts the functions call", () => {
+    /* Read from the code rather than remembered: every https host an
+       Edge Function names, comments stripped. A new host fails here
+       until somebody decides whose it is and what the policy says.
+
+       WHAT IT CANNOT SEE: Supabase Auth sends its own emails through an
+       SMTP relay set in the dashboard, not in code. It is the company
+       the functions call (EMAIL-SETUP.md is the record), which is why
+       the policy names Resend for account emails; if the relay ever
+       moves, nothing here will notice. */
+    const HOSTS = {
+      "api.openai.com": "OpenAI",
+      "api.groq.com": "Groq",
+      "api.resend.com": "Resend",
+      "api.stripe.com": "Stripe",
+      "api.revenuecat.com": "RevenueCat",
+      // An adapter the function refuses while the consent list doesn't name it.
+      "api.deepgram.com": null,
+      // Our own site.
+      "www.uniplannerapp.com": null,
+      // Where a module is fetched from when a function is deployed; no request carries anything of a student's.
+      "esm.sh": null,
+    };
+    const found = new Set();
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.(ts|js)$/.test(e.name)) {
+          const code = fs.readFileSync(p, "utf8").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+          for (const m of code.matchAll(/https:\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi)) found.add(m[1].toLowerCase());
+        }
+      }
+    };
+    walk(path.join(rootDir, "supabase/functions"));
+    assert.ok(found.size > 0, "read no hosts out of supabase/functions, so this checked nothing");
+    const raw = page("privacy.html");
+    for (const host of [...found].sort()) {
+      assert.ok(host in HOSTS, `an Edge Function calls ${host} and this test does not know whose it is: declare it, and name the company in the policy if it receives anything of a student's`);
+      const company = HOSTS[host];
+      if (company) assert.ok(raw.includes(`<strong>${company}</strong>`), `an Edge Function sends to ${company} (${host}) and the privacy policy never names them`);
+    }
+  });
+
+  await test("THE TERMS SAY WHAT IS CHARGED WHEN A RESULT CAN'T BE USED — read from what the functions bill", () => {
+    /* Every priced outcome ai-text records, with what it charged. */
+    const fn = fs.readFileSync(path.join(rootDir, "supabase/functions/ai-text/index.ts"), "utf8");
+    const outcomes = [...fn.matchAll(/noteCost\("([a-z_]+)",\s*([^)]+)\)/g)].map((m) => ({ code: m[1], charged: m[2].trim() !== "0" }));
+    assert.ok(outcomes.length > 3, "read no priced outcomes out of ai-text, so this checked nothing");
+    const free = new Set(outcomes.filter((o) => !o.charged).map((o) => o.code));
+    const charged = [...new Set(outcomes.filter((o) => o.charged && o.code !== "delivered").map((o) => o.code))];
+    const terms = prose("terms.html");
+    assert.ok(free.has("ai_failed"), "unusable output is no longer free, so re-read what the Terms say about it");
+    assert.match(
+      terms,
+      /nothing is charged[^.]*(cannot|can't|could not) use|(cannot|can't|could not) use[^.]*nothing is charged/i,
+      "the Terms do not say a result the app cannot use is free, and ai-text charges nothing for it"
+    );
+    /* How the Terms describe each outcome that is charged although the
+       student is left without the result. A new charged code fails here
+       until somebody decides what the Terms say about it. */
+    const SAYS = { pages_unreadable: /too unclear to read[^.]*charged|charged[^.]*too unclear to read/i };
+    for (const code of charged) {
+      assert.ok(SAYS[code], `ai-text charges for ${code} and this test does not know how the Terms describe it: declare it`);
+      assert.match(terms, SAYS[code], `ai-text charges for ${code} and the Terms never say so`);
+    }
+    /* The lecture, as the app's own failure screen states it: the
+       transcription is counted, a retry charges only for the summary,
+       and a retry that fails charges nothing. */
+    const s = AI_NOTES_COPY.summaryFailed;
+    assert.match(s.billing, /counted/i, "the failure screen no longer says the transcription was charged, so re-read the Terms");
+    assert.match(terms, /summary fails[^.]*transcription is charged/i, "the app says a failed summary still charges the transcription, and the Terms don't");
+    assert.match(s.retryCost(2), /only charged for the summary/i);
+    assert.match(s.retryFailed, /Nothing has been charged/i);
+    assert.match(terms, /trying the summary again charges only for the summary, and nothing if that fails too/i, "the Terms don't say what trying the summary again costs");
+  });
+
+  await test("THE TERMS SAY WHEN A REFUNDED PLAN ENDS, PER PLATFORM — read from the plans panel", () => {
+    const web = refundLine("web");
+    const store = refundLine("ios");
+    assert.notEqual(web, store, "the panel says the same about a web and a store refund, so this compares nothing");
+    const when = (line) => (/the plan ends (.+?)(?:,| and |\.)/.exec(line) || [])[1];
+    assert.ok(when(web) && when(store), "couldn't read when the plan ends out of the panel's refund lines");
+    const terms = prose("terms.html");
+    assert.match(terms, new RegExp(`Apple or Google refunds[^.]*the plan ends ${when(store)}`, "i"), `the panel says a store refund ends the plan "${when(store)}", and the Terms don't`);
+    assert.match(terms, new RegExp(`card payment on the web is refunded in full, the plan ends ${when(web)}`, "i"), `the panel says a web refund ends the plan "${when(web)}", and the Terms don't`);
+  });
+
+  await test("EVERY DOCUMENT THAT OFFERS A BACKUP SAYS WHAT THE FILE LEAVES OUT", () => {
+    /* What the file is, read from the panel: the planner blob, and
+       nothing fetched. AI note text lives in its own table and archived
+       semesters in theirs (test-ai-store.mjs and test-archive.mjs show
+       neither is in the blob), so a file of the blob holds neither. */
+    const app = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    const panel = app.slice(app.indexOf("function BackupPanel("), app.indexOf("\n}\n", app.indexOf("function BackupPanel(")));
+    const download = panel.slice(panel.indexOf("const download = "), panel.indexOf("const pickFile"));
+    assert.ok(download.length > 100, "couldn't find the backup's download step, so this checked nothing");
+    assert.match(download, /JSON\.stringify\(\{\s*app:\s*"university-planner",\s*exportedAt:\s*nowISO\(\),\s*data\s*\}/, "the backup no longer writes the planner blob, so re-read what it holds");
+    assert.doesNotMatch(download, /fetch|supabase|fetchNote|listArchives|fetchArchive/, "the backup now fetches something, so re-read what it leaves out");
+    const LEAVES_OUT = /leaves out the full text of your AI notes and any semesters you have archived/i;
+    const sentence = panel.replace(/\{\/\*[\s\S]*?\*\/\}/g, " ").replace(/\s+/g, " ");
+    assert.match(sentence, LEAVES_OUT, "the backup panel doesn't say the file leaves out AI note text and archived semesters");
+    assert.doesNotMatch(sentence, /drawings/i, "the backup panel still lists drawings, which were removed");
+    const docs = ["privacy.html", "terms.html", "support.html", "delete-account.html"];
+    for (const f of docs) {
+      const text = prose(f);
+      assert.match(text, /\bbackup\b|\bexport\b/i, `${f} no longer mentions a backup, so this checked nothing there`);
+      assert.match(text, LEAVES_OUT, `${f} offers a backup and doesn't say the file leaves out AI note text and archived semesters`);
     }
   });
 

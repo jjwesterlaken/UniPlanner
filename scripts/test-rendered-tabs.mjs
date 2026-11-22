@@ -220,6 +220,24 @@ async function run() {
       `free variables — these will throw ReferenceError when the line runs:\n        ${found.join("\n        ")}`
     );
   });
+  await test("EVERY TAB THE APP'S OWN WORDS NAME IS A TAB IN THE NAVIGATION", () => {
+    /* "Sign in from the Account tab" was still on screen after that tab
+       became Settings. The labels are read from the navigation's own
+       lists, and every "the X tab" left in src/ once comments are
+       stripped is copy, so each must name one of them. Needs no browser. */
+    const src = fs.readFileSync(path.join(rootDir, "src/PlannerApp.jsx"), "utf8");
+    const block = src.slice(src.indexOf("const TABS = ["), src.indexOf("const ALL_TAB_IDS"));
+    const labels = new Set([...block.matchAll(/label:\s*"([^"]+)"/g)].map((m) => m[1]));
+    assert.ok(labels.has("Settings") && labels.size >= 6, `read ${labels.size} tab labels, so the navigation lists were not found`);
+    const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+    const named = [];
+    for (const f of fs.readdirSync(path.join(rootDir, "src")).filter((f) => /\.(js|jsx)$/.test(f))) {
+      for (const m of strip(fs.readFileSync(path.join(rootDir, "src", f), "utf8")).matchAll(/\bthe ([A-Z][\w-]*) tab\b/g)) named.push({ f, tab: m[1] });
+    }
+    assert.ok(named.length > 0, "found no tab named in the app's words, so this checked nothing");
+    const wrong = named.filter((n) => !labels.has(n.tab)).map((n) => `${n.f}: "the ${n.tab} tab"`);
+    assert.deepEqual(wrong, [], `the app names a tab the navigation doesn't have:\n        ${wrong.join("\n        ")}`);
+  });
   const browser = await launch();
   if (!browser) {
     const message = 'no Chromium — skipping (npx playwright install chromium, or REQUIRE_BROWSER=1 to fail)';
@@ -1846,6 +1864,77 @@ async function run() {
     await free.close();
     assert.equal(box, 1, "the control: the confirmation did not open, so the absence below proves nothing");
     assert.equal(none, 0, "a free account is warned about a subscription it does not have");
+  });
+
+  /* THE DOCUMENTS SEND A STUDENT SOMEWHERE, so the places have to
+     exist. Every "A -> B -> C" in bold in the four documents is walked
+     in the built app: A is a tab in the navigation, each later step a
+     section heading on that tab, and the last may instead be a button
+     inside the section before it. Two documents told students to use
+     "Account -> Back up my planner": there is no Account tab, and no
+     control by that name. */
+  await test("EVERY MENU PATH THE DOCUMENTS GIVE LEADS TO A REAL CONTROL — walked in the built app", async () => {
+    const paths = [];
+    for (const f of ["privacy.html", "terms.html", "support.html", "delete-account.html"]) {
+      const html = fs.readFileSync(path.join(rootDir, "public", f), "utf8");
+      for (const hit of html.matchAll(/<strong>([^<]*?(?:&rarr;|→)[^<]*?)<\/strong>/g)) {
+        paths.push({ f, steps: hit[1].split(/&rarr;|→/).map((s) => s.replace(/\s+/g, " ").trim()) });
+      }
+    }
+    assert.ok(paths.length > 0, "found no menu paths in the documents, so this walked nothing");
+    /* Paths in somebody else's app, by their exact text, with whose.
+       Each must still be in a document, or the excuse is stale. */
+    const ELSEWHERE = { "Settings -> your name -> Subscriptions": "the iPhone's own Settings app, where Apple manages a subscription" };
+    for (const text of Object.keys(ELSEWHERE)) {
+      assert.ok(paths.some((p) => p.steps.join(" -> ") === text), `"${text}" is excused as ${ELSEWHERE[text]}, and no document gives it any more`);
+    }
+    const ours = paths.filter((p) => !(p.steps.join(" -> ") in ELSEWHERE));
+    assert.ok(ours.length > 0, "every path in the documents is excused, so this walked nothing");
+    const m = await mountAccount({ native: false });
+    const problems = [];
+    const walked = [];
+    for (const { f, steps } of ours) {
+      const [tabName, ...rest] = steps;
+      const shown = `${f}: "${steps.join(" -> ")}"`;
+      const nav = m.page.getByRole("button", { name: tabName, exact: true });
+      const visible = await nav.evaluateAll((els) => els.findIndex((e) => e.offsetParent !== null));
+      if (visible < 0) {
+        problems.push(`${shown}: there is no tab called "${tabName}"`);
+        continue;
+      }
+      await nav.nth(visible).click();
+      let scope = null;
+      let reached = true;
+      for (let i = 0; i < rest.length; i++) {
+        const step = rest[i];
+        const heading = (scope || m.page).getByRole("heading", { name: step, exact: true });
+        if ((await heading.count()) > 0) {
+          scope = heading.first().locator("xpath=ancestor::section[1]");
+          continue;
+        }
+        if (i === rest.length - 1 && scope && (await scope.getByRole("button", { name: step, exact: true }).count()) > 0) continue;
+        problems.push(`${shown}: ${scope ? `nothing called "${step}" in that section` : `no section called "${step}" on ${tabName}`}`);
+        reached = false;
+        break;
+      }
+      if (reached) walked.push(shown);
+    }
+    await m.close();
+    assert.deepEqual(m.errors, [], m.errors.join("\n        "));
+    assert.deepEqual(problems, [], problems.join("\n        "));
+    assert.equal(walked.length, ours.length);
+  });
+
+  await test("THE BACKUP PANEL SAYS WHAT THE FILE LEAVES OUT, as rendered", async () => {
+    const m = await mountAccount({ native: false });
+    const card = m.page.getByRole("button", { name: "Save a backup", exact: true }).locator("xpath=ancestor::div[.//p[normalize-space()='Backup']][1]");
+    const found = await within(4000, async () => (await card.count()) > 0);
+    const text = found ? (await card.innerText()).replace(/\s+/g, " ") : "";
+    await m.close();
+    assert.deepEqual(m.errors, [], m.errors.join("\n        "));
+    assert.ok(found, "the Backup panel has no Save a backup button, so nothing below was read");
+    assert.match(text, /leaves out the full text of your AI notes and any semesters you have archived/i, `the Backup panel doesn't say what the file leaves out: "${text}"`);
+    assert.doesNotMatch(text, /drawings/i, "the Backup panel still lists drawings, which were removed");
   });
 
   await browser.close();
