@@ -1097,6 +1097,55 @@ async function run() {
     );
   });
 
+  /* ---------- a return from checkout, and the deletion notice ---------- */
+
+  await test("a return from Stripe Checkout is recognised by its two values and nothing else", () => {
+    assert.equal(plans.checkoutReturn("?checkout=done"), "done");
+    assert.equal(plans.checkoutReturn("?ref=mail&checkout=cancelled"), "cancelled");
+    for (const other of ["", "?checkout=", "?checkout=paid", "?checkouts=done", "?x=checkout%3Ddone"]) {
+      assert.equal(plans.checkoutReturn(other), null, `"${other}" read as a return from checkout`);
+    }
+  });
+
+  await test("taking the parameter off the address keeps everything else, the hash included", () => {
+    assert.equal(
+      plans.withoutCheckout("https://www.uniplannerapp.com/app/?ref=mail&checkout=done#type=recovery"),
+      "/app/?ref=mail#type=recovery"
+    );
+    assert.equal(plans.withoutCheckout("https://www.uniplannerapp.com/app/?checkout=cancelled"), "/app/");
+  });
+
+  await test("the return URLs the server sends are the ones the client recognises", async () => {
+    /* Two halves of one contract in two runtimes: a renamed parameter on
+       either side would land a student back in the app with nothing
+       following their payment. */
+    const server = await import(pathToFileURL(path.join(rootDir, "supabase/functions/_shared/stripe.ts")).href);
+    assert.equal(plans.checkoutReturn(new URL(server.CHECKOUT_SUCCESS_URL).search), "done");
+    assert.equal(plans.checkoutReturn(new URL(server.CHECKOUT_CANCEL_URL).search), "cancelled");
+  });
+
+  await test("the activating notice names Stripe on the web and the store on a phone", () => {
+    assert.match(copy.activatingNotice("web"), /Stripe/);
+    assert.doesNotMatch(copy.activatingNotice("web"), /store/i, "a web purchase is told it is waiting for a store");
+    assert.equal(copy.activatingNotice(undefined), copy.ACTIVATING_NOTICE);
+  });
+
+  await test("the deletion notice names the plan and who takes the payment, warns on an unknown read, and is silent with nothing to cancel", () => {
+    for (const tier of ["ai", "ai_max"]) {
+      for (const [store, who] of [["stripe", /Stripe/], ["app_store", /App Store/], ["play_store", /Google Play/]]) {
+        const line = copy.deletionSubscriptionLine({ tier, store });
+        assert.ok(line && line.includes(copy.TIER_NAMES[tier]), `${tier}/${store}: "${line}" does not name the plan`);
+        assert.match(line, who, `${tier}/${store}: "${line}" does not say who takes the payment`);
+        assert.match(line, /doesn't cancel/, `${tier}/${store}: "${line}" does not say deleting leaves it running`);
+      }
+    }
+    /* A FAILED READ STILL WARNS: hiding the warning from the one student
+       it is for is the worse failure. */
+    assert.match(copy.deletionSubscriptionLine({ tier: null, store: null }) || "", /doesn't cancel/);
+    assert.equal(copy.deletionSubscriptionLine({ tier: "free", store: "stripe" }), null, "an ended subscription is warned about");
+    assert.equal(copy.deletionSubscriptionLine({ tier: "ai", store: null }), null, "a gift with no store behind it is warned about");
+  });
+
   fs.rmSync(tmpDir, { recursive: true, force: true });
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

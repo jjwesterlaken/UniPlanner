@@ -193,7 +193,8 @@ import {
 import { escapeHtml, isConverted, isLectureNote, convertPatch } from "./aiNoteConvert.js";
 import { noteCache } from "./noteCache.js";
 import { deleteAccount, confirmationMatches, DELETE_CONFIRMATION_PHRASE } from "./accountDeletion.js";
-import { PlansPanel } from "./plans.jsx";
+import { PlansPanel, DeletionSubscriptionNotice } from "./plans.jsx";
+import { checkoutReturn } from "./purchasePlans.js";
 import { configurePurchases, logOutPurchases } from "./purchases.js";
 import {
   nextReadState,
@@ -4411,6 +4412,7 @@ function AccountPanel({ session, syncing, syncError, lastSyncedAt, onSignIn, onS
                   This removes your planner, your notes and everything we hold, on every device.
                   It can't be undone. Back up your planner first if you want to keep any of it.
                 </p>
+                <DeletionSubscriptionNotice session={session} />
                 <label className={`${labelCls} mt-3 text-rose-800`}>
                   Type {DELETE_CONFIRMATION_PHRASE} to confirm
                 </label>
@@ -5424,6 +5426,10 @@ const ALL_TAB_IDS = [...TABS.flatMap((t) => t.members), SETTINGS_TAB.id];
    which is the only screen that answers "what do I have to do". */
 const TAB_KEY = "uni-planner-tab";
 const readLastTab = () => {
+  /* A return from Stripe Checkout (`?checkout=`) opens on Settings,
+     where the plans are, whatever tab was open before. PlansPanel takes
+     the parameter off the address, so the next load is the usual one. */
+  if (typeof window !== "undefined" && checkoutReturn(window.location.search)) return SETTINGS_TAB.id;
   try {
     const saved = localStorage.getItem(TAB_KEY);
     return ALL_TAB_IDS.includes(saved) ? saved : "planner";

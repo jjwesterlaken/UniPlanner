@@ -30,6 +30,12 @@
    student would be paying twice. This closes the door we control; the
    other direction is not ours to refuse and is a support note in
    BILLING-PLAN rather than a guess here.
+
+   AND A SECOND ONE: an account already holding a running CARD
+   subscription cannot start another. Checkout makes a new subscription
+   each time it completes, so "buying" the other plan left a student
+   holding both and paying for both. A plan is changed in the Customer
+   Portal (`stripe_subscription_active`, and the panel says where).
    ================================================================== */
 
 import { corsHeaders, jsonResponse } from "../ai-notes/_shared/cors.ts";
@@ -39,7 +45,9 @@ import { recordFailure } from "../_shared/failureLog.ts";
 import {
   CHECKOUT_CANCEL_URL,
   CHECKOUT_SUCCESS_URL,
+  customerSubscriptionsQuery,
   lookupKeyFor,
+  RUNNING_SUBSCRIPTION_STATUSES,
   stripeFailureCode,
   stripeRequest,
 } from "../_shared/stripe.ts";
@@ -106,6 +114,35 @@ export async function handle(req: Request): Promise<Response> {
     if (profile.tier !== "free" && profile.store && profile.store !== "stripe") {
       logStage("refused", { reason: "store_subscription_active", store: profile.store });
       return jsonResponse({ ok: false, code: "store_subscription_active", store: profile.store }, 409);
+    }
+
+    /* ---- one card subscription per account ---- */
+    /* TWO READS, AND EITHER ONE REFUSES. The profile is the webhook's
+       record, so it is asked first and costs nothing. Stripe is asked
+       as well, because it knows about a payment the webhook has not
+       delivered yet: the student who pays, comes back, and taps again
+       before the plan has landed is exactly the one who would end up
+       with two. A FAILED READ REFUSES TOO. Going ahead on a list Stripe
+       never gave us is how the second subscription gets made, and a
+       retry costs the student a minute. */
+    if (profile.tier !== "free" && profile.store === "stripe") {
+      logStage("refused", { reason: "stripe_subscription_active", from: "profile" });
+      return jsonResponse({ ok: false, code: "stripe_subscription_active" }, 409);
+    }
+    if (profile.stripe_customer_id) {
+      stage = "subscription_lookup";
+      const subs = await stripeRequest(customerSubscriptionsQuery(profile.stripe_customer_id), { secretKey });
+      if (!subs.ok) {
+        logFailure(stage, subs.error);
+        return jsonResponse({ ok: false, code: stripeFailureCode(subs) }, 503);
+      }
+      const running = ((subs.data.data as Array<{ status?: string }>) || []).filter((s) =>
+        RUNNING_SUBSCRIPTION_STATUSES.includes(String(s && s.status))
+      );
+      if (running.length) {
+        logStage("refused", { reason: "stripe_subscription_active", from: "stripe", running: running.length });
+        return jsonResponse({ ok: false, code: "stripe_subscription_active" }, 409);
+      }
     }
 
     /* ---- which price ---- */

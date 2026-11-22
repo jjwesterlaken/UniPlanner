@@ -640,6 +640,18 @@ export function cancellationKind(input: {
   return { kind: "immediate", anomaly: true, secondsLost };
 }
 
+/* A SUBSCRIPTION THAT IS STILL RUNNING, in the sense that matters to a
+   second checkout: one that will charge again, or can be resumed and
+   then charge. `incomplete` is not here: its first payment never went
+   through, so it has charged nothing, and refusing a retry with another
+   card for the 23 hours it takes to expire would read as checkout being
+   broken. `canceled` and `incomplete_expired` are over. */
+export const RUNNING_SUBSCRIPTION_STATUSES: readonly string[] = ["active", "trialing", "past_due", "unpaid", "paused"];
+
+/** The list query for every subscription a customer holds, ended ones included. */
+export const customerSubscriptionsQuery = (customerId: string) =>
+  `/subscriptions?customer=${encodeURIComponent(customerId)}&status=all&limit=100`;
+
 /** The list query that finds an invoice from the payment intent that paid it. */
 export const invoicePaymentsQuery = (paymentIntentId: string) =>
   `/invoice_payments?payment[type]=payment_intent&payment[payment_intent]=${encodeURIComponent(paymentIntentId)}&limit=1`;
